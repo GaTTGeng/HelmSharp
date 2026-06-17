@@ -15,4 +15,4 @@ Please include:
 
 ## Supported Versions
 
-Until the first stable public release, security fixes target the latest `main` branch and the latest published package version.
+Security fixes target the latest `master` branch, the active `develop` branch, and the latest published package version.

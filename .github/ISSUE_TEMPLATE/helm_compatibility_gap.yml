@@ -1,0 +1,55 @@
+name: Helm Compatibility Gap
+description: Report behavior that differs from Helm CLI
+labels: ["compatibility", "helm"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for behavior that can be compared directly with Helm CLI.
+
+  - type: input
+    id: helm-version
+    attributes:
+      label: Helm CLI version
+      placeholder: "v3.15.0"
+    validations:
+      required: true
+
+  - type: input
+    id: helmsharp-version
+    attributes:
+      label: HelmSharp version
+      placeholder: "1.0.1"
+    validations:
+      required: true
+
+  - type: textarea
+    id: chart
+    attributes:
+      label: Minimal chart or template
+      description: Provide the smallest chart, template, and values needed to reproduce the difference.
+      render: yaml
+    validations:
+      required: true
+
+  - type: textarea
+    id: helm-output
+    attributes:
+      label: Helm CLI output
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: helmsharp-output
+    attributes:
+      label: HelmSharp output
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Include command arguments, OS, target framework, and any other relevant context.
