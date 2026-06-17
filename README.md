@@ -81,6 +81,8 @@ sealed class StaticHelmOptionsProvider : IHelmOptionsProvider
 }
 ```
 
+More complete examples are available in [examples](examples/README.md).
+
 Install or upgrade a release:
 
 ```csharp
@@ -133,6 +135,13 @@ await foreach (var line in client.UpgradeInstallStreamAsync(new HelmUpgradeInsta
 ## Known Scope
 
 HelmSharp is not a full Helm CLI clone. Some advanced Helm behaviors, edge-case template functions, plugins, provenance verification flows, OCI authentication flows, and uncommon Kubernetes resource types may need additional implementation. Contributions that add compatibility with focused tests are welcome.
+
+## Documentation
+
+- [Getting started](docs/getting-started.md)
+- [API overview](docs/api-overview.md)
+- [Helm compatibility](docs/helm-compatibility.md)
+- [Roadmap](docs/roadmap.md)
 
 ## Build
 

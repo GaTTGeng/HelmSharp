@@ -121,7 +121,7 @@ internal sealed class HelmHookExecutor
             foreach (var evt in hookAnnotation.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             {
                 if (TryParseHookEvent(evt, out var hookEvent))
-                    hook.Events.Add(hookEvent.Value);
+                    hook.Events.Add(hookEvent);
             }
 
             if (annotations.TryGetValue("helm.sh/hook-delete-policy", out var delVal))
@@ -130,7 +130,7 @@ internal sealed class HelmHookExecutor
                 foreach (var policy in delPolicy.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                 {
                     if (TryParseDeletePolicy(policy, out var deletePolicy))
-                        hook.DeletePolicies.Add(deletePolicy.Value);
+                        hook.DeletePolicies.Add(deletePolicy);
                 }
             }
 
@@ -270,34 +270,60 @@ internal sealed class HelmHookExecutor
         }
     }
 
-    private static bool TryParseHookEvent(string value, out HelmHookEvent? result)
+    private static bool TryParseHookEvent(string value, out HelmHookEvent result)
     {
-        result = value.ToLowerInvariant() switch
+        switch (value.ToLowerInvariant())
         {
-            "pre-install" => HelmHookEvent.PreInstall,
-            "post-install" => HelmHookEvent.PostInstall,
-            "pre-upgrade" => HelmHookEvent.PreUpgrade,
-            "post-upgrade" => HelmHookEvent.PostUpgrade,
-            "pre-delete" => HelmHookEvent.PreDelete,
-            "post-delete" => HelmHookEvent.PostDelete,
-            "pre-rollback" => HelmHookEvent.PreRollback,
-            "post-rollback" => HelmHookEvent.PostRollback,
-            "test" => HelmHookEvent.Test,
-            _ => null
-        };
-        return result.HasValue;
+            case "pre-install":
+                result = HelmHookEvent.PreInstall;
+                return true;
+            case "post-install":
+                result = HelmHookEvent.PostInstall;
+                return true;
+            case "pre-upgrade":
+                result = HelmHookEvent.PreUpgrade;
+                return true;
+            case "post-upgrade":
+                result = HelmHookEvent.PostUpgrade;
+                return true;
+            case "pre-delete":
+                result = HelmHookEvent.PreDelete;
+                return true;
+            case "post-delete":
+                result = HelmHookEvent.PostDelete;
+                return true;
+            case "pre-rollback":
+                result = HelmHookEvent.PreRollback;
+                return true;
+            case "post-rollback":
+                result = HelmHookEvent.PostRollback;
+                return true;
+            case "test":
+                result = HelmHookEvent.Test;
+                return true;
+            default:
+                result = default;
+                return false;
+        }
     }
 
-    private static bool TryParseDeletePolicy(string value, out HelmHookDeletePolicy? result)
+    private static bool TryParseDeletePolicy(string value, out HelmHookDeletePolicy result)
     {
-        result = value.ToLowerInvariant() switch
+        switch (value.ToLowerInvariant())
         {
-            "before-hook-creation" => HelmHookDeletePolicy.BeforeHookCreation,
-            "hook-succeeded" => HelmHookDeletePolicy.HookSucceeded,
-            "hook-failed" => HelmHookDeletePolicy.HookFailed,
-            _ => null
-        };
-        return result.HasValue;
+            case "before-hook-creation":
+                result = HelmHookDeletePolicy.BeforeHookCreation;
+                return true;
+            case "hook-succeeded":
+                result = HelmHookDeletePolicy.HookSucceeded;
+                return true;
+            case "hook-failed":
+                result = HelmHookDeletePolicy.HookFailed;
+                return true;
+            default:
+                result = default;
+                return false;
+        }
     }
 
     private static IEnumerable<string> SplitDocuments(string manifest)

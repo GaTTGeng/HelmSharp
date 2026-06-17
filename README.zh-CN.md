@@ -81,6 +81,8 @@ sealed class StaticHelmOptionsProvider : IHelmOptionsProvider
 }
 ```
 
+更多完整示例见 [examples](examples/README.md)。
+
 安装或升级 Release：
 
 ```csharp
@@ -133,6 +135,13 @@ await foreach (var line in client.UpgradeInstallStreamAsync(new HelmUpgradeInsta
 ## 当前边界
 
 HelmSharp 不是完整的 Helm CLI 克隆。一些高级 Helm 行为、模板函数边界情况、插件、完整 provenance 校验流程、OCI 认证流程以及不常见 Kubernetes 资源类型仍可能需要补充实现。欢迎用聚焦的测试补齐兼容性。
+
+## 文档
+
+- [入门指南](docs/getting-started.md)
+- [API 概览](docs/api-overview.md)
+- [Helm 兼容性](docs/helm-compatibility.md)
+- [路线图](docs/roadmap.md)
 
 ## 构建
 
