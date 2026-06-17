@@ -30,8 +30,8 @@ There is no strict required format yet. Clear conventional names such as `fix/dr
 Maintainers publish by pushing a version tag such as:
 
 ```powershell
-git tag v1.0.0
-git push origin v1.0.0
+git tag 1.0.0
+git push origin 1.0.0
 ```
 
-The release workflow packs the projects and publishes packages to NuGet.org when `NUGET_API_KEY` is configured as a repository secret.
+The release workflow packs the projects and publishes packages to NuGet.org through NuGet Trusted Publishing. Maintainer setup and release steps are documented in [docs/maintainer-release.md](docs/maintainer-release.md).

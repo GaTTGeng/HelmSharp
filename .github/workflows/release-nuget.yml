@@ -19,9 +19,11 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 env:
   CONFIGURATION: Release
+  NUGET_USER: ${{ vars.NUGET_USER || github.repository_owner }}
 
 jobs:
   pack-and-publish:
@@ -86,18 +88,18 @@ jobs:
           path: artifacts/packages/*.nupkg
           if-no-files-found: error
 
+      - name: NuGet login
+        if: github.event_name == 'push' || inputs.publish == true
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ env.NUGET_USER }}
+
       - name: Publish to NuGet.org
         if: github.event_name == 'push' || inputs.publish == true
         shell: bash
-        env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
-          if [ -z "$NUGET_API_KEY" ]; then
-            echo "NUGET_API_KEY repository secret is required to publish to NuGet.org."
-            exit 1
-          fi
-
           dotnet nuget push artifacts/packages/*.nupkg \
-            --api-key "$NUGET_API_KEY" \
+            --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
