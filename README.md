@@ -157,7 +157,7 @@ This repository includes GitHub Actions workflows:
 - `.github/workflows/ci.yml` restores, builds, tests, packs, and uploads package artifacts on pushes and pull requests.
 - `.github/workflows/release-nuget.yml` packs release packages and can publish them to NuGet.org.
 
-NuGet.org publishing is maintainer-managed through NuGet Trusted Publishing; no long-lived NuGet API key is required in the repository.
+NuGet.org publishing is handled by maintainers through the release workflow.
 
 ## Contributing
 
