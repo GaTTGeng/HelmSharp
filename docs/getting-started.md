@@ -23,10 +23,18 @@ using HelmSharp.Chart;
 using HelmSharp.Engine;
 
 var chart = await HelmChartLoader.LoadAsync("path/to/chart", CancellationToken.None);
-var values = await HelmValues.BuildAsync(chart, null, null, new Dictionary<string, string>
-{
-    ["image.tag"] = "1.25"
-});
+var values = await HelmValues.BuildAsync(
+    chart,
+    valuesFile: null,
+    valuesContent: null,
+    setValues: new Dictionary<string, string>
+    {
+        ["image.tag"] = "1.25"
+    },
+    setFileValues: null,
+    setStringValues: null,
+    setJsonValues: null,
+    cancellationToken: CancellationToken.None);
 
 var renderer = new HelmTemplateRenderer(chart, "demo", "default", values);
 Console.WriteLine(renderer.Render());

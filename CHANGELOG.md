@@ -11,6 +11,7 @@ This project follows semantic versioning once stable releases begin.
 - Example projects for rendering charts and dry-run release workflows.
 - Open source SDK readiness documentation, including getting started, API overview, Helm compatibility, and roadmap pages.
 - GitHub issue templates for bug reports, feature requests, and Helm compatibility gaps.
+- README badges, NuGet package links, support policy, CODEOWNERS, and Dependabot configuration.
 
 ### Changed
 
