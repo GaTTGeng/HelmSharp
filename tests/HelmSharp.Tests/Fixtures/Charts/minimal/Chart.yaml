@@ -1,0 +1,6 @@
+apiVersion: v2
+name: minimal
+description: Minimal chart for Helm CLI golden tests
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
