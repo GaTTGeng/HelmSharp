@@ -1,0 +1,27 @@
+# Build outputs
+bin/
+obj/
+[Bb]uild/
+[Dd]ebug/
+[Rr]elease/
+artifacts/
+artifacts-*/
+artifacts*/
+TestResults/
+*.user
+*.suo
+*.rsuser
+
+# IDE files
+.idea/
+.vs/
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp

@@ -1,0 +1,103 @@
+name: Release NuGet
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+      - '*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: NuGet package version, for example 1.0.0 or 1.0.0-preview.1
+        required: true
+        type: string
+      publish:
+        description: Publish packages to NuGet.org
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  CONFIGURATION: Release
+
+jobs:
+  pack-and-publish:
+    name: Pack and publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+
+      - name: Resolve package version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+
+          if [[ ! "$version" =~ ^[0-9]+(\.[0-9]+){2}(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid package version: $version"
+            exit 1
+          fi
+
+          echo "PACKAGE_VERSION=$version" >> "$GITHUB_ENV"
+          echo "Resolved package version: $version"
+
+      - name: Restore
+        run: dotnet restore HelmSharp.sln
+
+      - name: Build
+        run: dotnet build HelmSharp.sln --configuration ${{ env.CONFIGURATION }} --no-restore
+
+      - name: Test
+        run: dotnet test HelmSharp.sln --configuration ${{ env.CONFIGURATION }} --no-build --no-restore
+
+      - name: Pack
+        run: >
+          dotnet pack HelmSharp.sln
+          --configuration ${{ env.CONFIGURATION }}
+          --no-build
+          --no-restore
+          --output artifacts/packages
+          -p:PackageVersion=${{ env.PACKAGE_VERSION }}
+          -p:ContinuousIntegrationBuild=true
+          -p:RepositoryUrl=${{ github.server_url }}/${{ github.repository }}
+          -p:RepositoryBranch=${{ github.ref_name }}
+          -p:RepositoryCommit=${{ github.sha }}
+
+      - name: Upload NuGet packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuget-packages-${{ env.PACKAGE_VERSION }}
+          path: artifacts/packages/*.nupkg
+          if-no-files-found: error
+
+      - name: Publish to NuGet.org
+        if: github.event_name == 'push' || inputs.publish == true
+        shell: bash
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          if [ -z "$NUGET_API_KEY" ]; then
+            echo "NUGET_API_KEY repository secret is required to publish to NuGet.org."
+            exit 1
+          fi
+
+          dotnet nuget push artifacts/packages/*.nupkg \
+            --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
