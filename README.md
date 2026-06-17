@@ -1,5 +1,10 @@
 # HelmSharp
 
+[![CI](https://github.com/MattGRP/HelmSharp/actions/workflows/ci.yml/badge.svg)](https://github.com/MattGRP/HelmSharp/actions/workflows/ci.yml)
+[![NuGet](https://img.shields.io/nuget/v/HelmSharp.Action.svg)](https://www.nuget.org/packages/HelmSharp.Action)
+[![NuGet Downloads](https://img.shields.io/nuget/dt/HelmSharp.Action.svg)](https://www.nuget.org/packages/HelmSharp.Action)
+[![License](https://img.shields.io/github/license/MattGRP/HelmSharp.svg)](LICENSE)
+
 [简体中文](README.zh-CN.md)
 
 HelmSharp is a managed .NET library for rendering Helm-style charts and driving Kubernetes release workflows without invoking the `helm` executable. It is intended for applications that need Helm-like behavior inside a .NET process: template rendering, values merging, chart packaging, repository operations, and release lifecycle operations against Kubernetes.
@@ -12,15 +17,15 @@ This repository is organized as several NuGet packages:
 
 | Package | Purpose |
 | --- | --- |
-| `HelmSharp.Action` | High-level Helm client API and release operations. |
-| `HelmSharp.Chart` | Chart loading, values merging, YAML helpers, chart metadata. |
-| `HelmSharp.Engine` | Helm-style template rendering. |
-| `HelmSharp.Kube` | Kubernetes manifest apply/delete/wait helpers. |
-| `HelmSharp.Release` | Helm release storage records backed by Kubernetes Secrets. |
-| `HelmSharp.Repo` | Chart repository, index, pull, and search helpers. |
-| `HelmSharp.Registry` | Registry-related extension point package. |
-| `HelmSharp.Storage` | Storage extension point package. |
-| `HelmSharp.PostRenderer` | Post-renderer extension point package. |
+| [`HelmSharp.Action`](https://www.nuget.org/packages/HelmSharp.Action) | High-level Helm client API and release operations. |
+| [`HelmSharp.Chart`](https://www.nuget.org/packages/HelmSharp.Chart) | Chart loading, values merging, YAML helpers, chart metadata. |
+| [`HelmSharp.Engine`](https://www.nuget.org/packages/HelmSharp.Engine) | Helm-style template rendering. |
+| [`HelmSharp.Kube`](https://www.nuget.org/packages/HelmSharp.Kube) | Kubernetes manifest apply/delete/wait helpers. |
+| [`HelmSharp.Release`](https://www.nuget.org/packages/HelmSharp.Release) | Helm release storage records backed by Kubernetes Secrets. |
+| [`HelmSharp.Repo`](https://www.nuget.org/packages/HelmSharp.Repo) | Chart repository, index, pull, and search helpers. |
+| [`HelmSharp.Registry`](https://www.nuget.org/packages/HelmSharp.Registry) | Registry-related extension point package. |
+| [`HelmSharp.Storage`](https://www.nuget.org/packages/HelmSharp.Storage) | Storage extension point package. |
+| [`HelmSharp.PostRenderer`](https://www.nuget.org/packages/HelmSharp.PostRenderer) | Post-renderer extension point package. |
 
 For most applications, start with `HelmSharp.Action`.
 
@@ -33,8 +38,6 @@ For most applications, start with `HelmSharp.Action`.
 - .NET Framework is not supported unless a future release adds a `netstandard` target.
 
 ## Installation
-
-After packages are published to NuGet.org:
 
 ```powershell
 dotnet add package HelmSharp.Action
@@ -80,6 +83,8 @@ sealed class StaticHelmOptionsProvider : IHelmOptionsProvider
         });
 }
 ```
+
+More complete examples are available in [examples](examples/README.md).
 
 Install or upgrade a release:
 
@@ -133,6 +138,15 @@ await foreach (var line in client.UpgradeInstallStreamAsync(new HelmUpgradeInsta
 ## Known Scope
 
 HelmSharp is not a full Helm CLI clone. Some advanced Helm behaviors, edge-case template functions, plugins, provenance verification flows, OCI authentication flows, and uncommon Kubernetes resource types may need additional implementation. Contributions that add compatibility with focused tests are welcome.
+
+## Documentation
+
+- [Getting started](docs/getting-started.md)
+- [API overview](docs/api-overview.md)
+- [Helm compatibility](docs/helm-compatibility.md)
+- [Roadmap](docs/roadmap.md)
+- [Support](SUPPORT.md)
+- [GitHub releases](https://github.com/MattGRP/HelmSharp/releases)
 
 ## Build
 
