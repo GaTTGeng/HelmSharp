@@ -1,15 +1,16 @@
 using HelmSharp.Chart;
 using HelmSharp.Engine;
 
-var chartPath = args.Length > 0
+var requestedChartPath = args.Length > 0
     ? args[0]
     : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "sample-chart"));
+var chartPath = ResolveChartPath(requestedChartPath);
 
-if (!Directory.Exists(chartPath) && !File.Exists(chartPath + ".tgz"))
+if (chartPath is null)
 {
     Console.WriteLine("Usage: RenderChart <chart-path>");
     Console.WriteLine();
-    Console.WriteLine("Provide a path to a Helm chart directory or .tgz archive.");
+    Console.WriteLine("Provide a path to a Helm chart directory, .tgz archive, or .tar.gz archive.");
     Console.WriteLine("When omitted, the example uses examples/sample-chart.");
     return;
 }
@@ -49,4 +50,18 @@ if (!string.IsNullOrWhiteSpace(notes))
 {
     Console.WriteLine("--- NOTES.txt ---");
     Console.WriteLine(notes);
+}
+
+static string? ResolveChartPath(string path)
+{
+    var fullPath = Path.GetFullPath(path);
+    if (Directory.Exists(fullPath) || File.Exists(fullPath))
+        return fullPath;
+
+    var tgzPath = fullPath + ".tgz";
+    if (File.Exists(tgzPath))
+        return tgzPath;
+
+    var tarGzPath = fullPath + ".tar.gz";
+    return File.Exists(tarGzPath) ? tarGzPath : null;
 }
