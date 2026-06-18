@@ -1,83 +1,91 @@
 # Helm Compatibility
 
-HelmSharp aims to implement a practical Helm-compatible subset for .NET applications. It is not a byte-for-byte replacement for the Helm CLI.
+HelmSharp provides a managed, Helm-compatible SDK for .NET. It aims to match user-visible Helm behavior where that behavior matters to rendering charts and managing Kubernetes releases, but it is not a byte-for-byte CLI replacement.
 
-## Supported areas
+> No Helm executable is required by consumers. The Helm CLI may be used in the test suite only as a compatibility reference.
 
-| Area | Status |
+See the [roadmap](roadmap.md) for delivery order and the [GitHub milestones](https://github.com/MattGRP/HelmSharp/milestones) for live progress.
+
+## Compatibility Contract
+
+HelmSharp considers a behavior supported when it:
+
+- works through a documented managed API;
+- is covered by a focused automated test;
+- behaves consistently across `net8.0`, `net9.0`, and `net10.0`;
+- matches Helm semantics for meaningful output, state, and failure behavior.
+
+Exact CLI wording, color, spacing, and plugin execution are not compatibility goals unless they affect chart output or automation.
+
+## Capability Snapshot
+
+| Area | Current level | Primary package |
+| --- | --- | --- |
+| Chart loading from directories and `.tgz` archives | **Supported** | `HelmSharp.Chart` |
+| Values files and `--set`-style overrides | **Partial** | `HelmSharp.Chart` |
+| Helm-style template rendering | **Partial** | `HelmSharp.Engine` |
+| Chart packaging and repository operations | **Partial** | `HelmSharp.Action`, `HelmSharp.Repo` |
+| Install, upgrade, rollback, and uninstall workflows | **Partial** | `HelmSharp.Action` |
+| Kubernetes apply, delete, and wait helpers | **Partial** | `HelmSharp.Kube` |
+| Release history backed by Kubernetes Secrets | **Supported** | `HelmSharp.Release` |
+| OCI registry and provenance workflows | **Planned** | `HelmSharp.Registry` |
+
+## Status Legend
+
+| Status | Meaning |
 | --- | --- |
-| Chart loading from directories and `.tgz` archives | Supported |
-| `values.yaml` and `--set`-style overrides | Supported |
-| Common Helm template control flow and functions | Partially supported |
-| Chart package creation | Supported |
-| Repository index, pull, and search helpers | Supported |
-| Kubernetes apply/delete/wait helpers | Supported for common resource workflows |
-| Release history in Kubernetes Secrets | Supported |
-| Install, upgrade, uninstall, rollback, status, history, manifest, values, hooks, notes | Supported through managed APIs |
+| **Supported** | Covered for common production use with no known major semantic gap. |
+| **Partial** | Useful implementation exists, but known Helm edge cases remain. |
+| **Planned** | API surface may exist, but behavior is incomplete or not production-ready. |
+| **Research** | The correct SDK design must be validated before implementation. |
 
-## Known gaps
+## Command and Behavior Matrix
 
-- Full Sprig and Helm template function parity is still in progress.
-- Plugin execution is intentionally not implemented as Helm CLI plugin loading.
-- OCI authentication and registry flows are extension points first and will need focused parity work.
-- Provenance verification is not complete Helm CLI parity.
-- Less common Kubernetes resource wait semantics may need additional implementation.
-
-Use focused tests when adding compatibility so behavior can be compared with Helm CLI output.
-
-## Compatibility Milestones
-
-GitHub milestones group parity work by user-visible Helm behavior:
-
-| Milestone | Scope |
-| --- | --- |
-| [M1: Helm Template Parity](https://github.com/MattGRP/HelmSharp/milestone/1) | `helm template`, values merge behavior, built-in template objects, common functions, subcharts, dependencies, and CLI output comparison tests. |
-| [M2: Chart Packaging and Repository Parity](https://github.com/MattGRP/HelmSharp/milestone/2) | `helm package`, `helm repo index`, `helm pull`, dependency lock/update/build, and chart archive layout. |
-| [M3: Release Lifecycle Parity](https://github.com/MattGRP/HelmSharp/milestone/6) | install, upgrade, rollback, uninstall, status, history, manifest, values, hooks, notes, and release Secret state transitions. |
-| [M4: Kubernetes Apply and Wait Semantics](https://github.com/MattGRP/HelmSharp/milestone/5) | resource identity, namespace handling, apply/delete behavior, wait semantics, Jobs, hook cleanup policies, and workload readiness. |
-| [M5: OCI and Provenance](https://github.com/MattGRP/HelmSharp/milestone/4) | OCI registry login/logout/pull/push, chart signing, provenance verification, and authentication flows. |
-| [M6: Public SDK Hardening](https://github.com/MattGRP/HelmSharp/milestone/3) | XML docs, API review, examples, docs site readiness, analyzer warnings, nullable cleanup, and compatibility matrix. |
-| [M7: Compatibility Expansion Research](https://github.com/MattGRP/HelmSharp/milestone/7) | `netstandard` and .NET Framework feasibility, dependency constraints, multi-targeting costs, and consumer compatibility requirements. |
-
-## Command Parity Matrix
-
-Status values:
-
-- Supported: implemented for common production use.
-- Partial: implemented for common cases, with known parity gaps.
-- Planned: not implemented or only present as an extension point.
-- Research: needs design validation before implementation.
-
-| Helm CLI area | HelmSharp API or package | Status | Milestone | Notes |
+| Helm area | HelmSharp API | Status | Track | Remaining work |
 | --- | --- | --- | --- | --- |
-| `helm template` | `HelmSharp.Action.TemplateAsync`, `HelmSharp.Engine` | Partial | M1 | Rendering, values, and common functions exist; deeper Helm/Sprig parity needs comparison tests. |
-| Values merging, `--set`, `--set-string`, `--set-json`, `--set-file` | `HelmSharp.Chart.HelmValues` | Partial | M1 | Common override forms exist; edge cases should be tested against Helm CLI. |
-| Chart dependencies and subcharts | `HelmSharp.Chart` | Partial | M1/M2 | Loader handles subcharts; dependency update/build parity needs focused work. |
-| `helm lint` | `HelmSharp.Action.LintAsync` | Partial | M1/M2 | Basic checks exist; Helm lint rule parity should be expanded. |
-| `helm package` | `HelmSharp.Action.PackageAsync` | Partial | M2 | Package creation exists; archive metadata and dependency handling need parity tests. |
-| `helm repo index` | `HelmSharp.Repo`, `HelmSharp.Action.RepoIndexAsync` | Partial | M2 | Index generation exists; merge and edge-case behavior should be compared with Helm. |
-| `helm pull` | `HelmSharp.Repo`, `HelmSharp.Action.PullAsync` | Partial | M2 | Repository pull exists; auth, provenance, and OCI cases are separate work. |
-| `helm dependency update/build/list` | `HelmSharp.Action.Dependency*` | Planned | M2 | APIs exist, but full Helm dependency behavior should be hardened. |
-| `helm install` / `helm upgrade --install` | `HelmSharp.Action.UpgradeInstallAsync` | Partial | M3/M4 | Managed release workflow exists; state transitions, hooks, waits, and rollback semantics need parity tests. |
-| `helm upgrade` | `HelmSharp.Action.UpgradeInstallAsync` | Partial | M3/M4 | Includes install-or-upgrade flow; upgrade-specific behavior should be split into parity cases. |
-| `helm rollback` | `HelmSharp.Action.RollbackAsync` | Partial | M3 | Release history rollback exists; cleanup and status transitions need coverage. |
-| `helm uninstall` | `HelmSharp.Action.UninstallAsync` | Partial | M3/M4 | Managed uninstall exists; resource deletion and history behavior need comparison tests. |
-| `helm status` | `HelmSharp.Action.StatusAsync` | Partial | M3 | Status output exists, but CLI formatting parity is not the primary SDK goal. |
-| `helm history` | `HelmSharp.Action.HistoryAsync` | Partial | M3 | Kubernetes Secret-backed history exists. |
-| `helm get manifest/values/hooks/notes/all` | `HelmSharp.Action.Get*Async` | Partial | M3 | APIs exist; output shape and revision behavior need parity cases. |
-| Hook execution and delete policies | `HelmSharp.Action.HelmHookExecutor` | Partial | M3/M4 | Common hook annotations are parsed; wait and cleanup semantics need hardening. |
-| Kubernetes apply/delete/wait | `HelmSharp.Kube` | Partial | M4 | Common resource workflows exist; readiness coverage should expand by resource kind. |
-| `helm registry login/logout` | `HelmSharp.Action.Registry*`, `HelmSharp.Registry` | Planned | M5 | Extension points exist; full OCI auth flow is future work. |
-| OCI chart pull/push | `HelmSharp.Registry` | Planned | M5 | Needs implementation and auth coverage. |
-| Provenance verification | `HelmSharp.Action.HelmProvenance` | Planned | M5 | Not complete Helm CLI parity. |
-| Plugins | `HelmSharp.Action.HelmPluginManager` | Research | M6 | SDK should not blindly execute Helm CLI plugins; define safe extension model first. |
+| `helm template` | `TemplateAsync`, `HelmTemplateRenderer` | **Partial** | M1 | Golden comparisons, built-in objects, functions, whitespace, and errors. |
+| Values merging and `--set*` | `HelmValues` | **Partial** | M1 | Precedence, type coercion, list syntax, and edge cases. |
+| Subcharts and dependencies | `HelmSharp.Chart` | **Partial** | M1/M2 | Value scope, globals, conditions, tags, and dependency workflows. |
+| `helm lint` | `LintAsync` | **Partial** | M1/M2 | Expand rule and failure parity. |
+| `helm package` | `PackageAsync` | **Partial** | M2 | Archive layout, metadata, and dependency cases. |
+| `helm repo index` | `RepoIndexAsync`, `HelmSharp.Repo` | **Partial** | M2 | Merge behavior and index edge cases. |
+| `helm pull` | `PullAsync`, `HelmSharp.Repo` | **Partial** | M2/M5 | Authentication, provenance, and OCI cases. |
+| `helm dependency update/build/list` | `Dependency*Async` | **Planned** | M2 | Lock files, repository resolution, and archive placement. |
+| `helm install` / `upgrade` | `UpgradeInstallAsync` | **Partial** | M3/M4 | State transitions, hooks, waits, failures, and rollback behavior. |
+| `helm rollback` | `RollbackAsync` | **Partial** | M3 | Revision transitions, cleanup, and failure recovery. |
+| `helm uninstall` | `UninstallAsync` | **Partial** | M3/M4 | Resource deletion, hooks, and retained history. |
+| `helm status` / `history` | `StatusAsync`, `HistoryAsync` | **Partial** | M3 | Revision selection and state reporting. |
+| `helm get` | `Get*Async` | **Partial** | M3 | Output shape, revision behavior, hooks, and notes. |
+| Hook execution | `HelmSharp.Action` hook pipeline | **Partial** | M3/M4 | Ordering, waits, failure handling, and delete policies. |
+| Kubernetes apply/delete/wait | `HelmSharp.Kube` | **Partial** | M4 | Readiness by kind, Jobs, namespaces, and deletion semantics. |
+| Registry login/logout and OCI pull/push | `Registry*`, `HelmSharp.Registry` | **Planned** | M5 | Secure credential handling and complete OCI flows. |
+| Provenance verification | `HelmProvenance` | **Planned** | M5 | Signing and Helm-compatible verification. |
+| Helm plugins | `HelmPluginManager` | **Research** | M6 | Define a safe managed extension model instead of executing CLI plugins. |
 
-## Issue Filing Guidance
+## Known Boundaries
 
-When opening a parity issue, include:
+- Full Sprig function parity is still in progress.
+- OCI authentication and registry operations are extension points rather than complete workflows.
+- Provenance verification is not yet Helm-compatible end to end.
+- Readiness behavior for less common Kubernetes resource kinds needs broader coverage.
+- Helm CLI plugins will not be loaded or executed blindly inside consumer processes.
 
-- Helm CLI version and HelmSharp version.
-- Minimal chart, template, and values needed to reproduce the behavior.
-- Exact Helm CLI command and output.
-- HelmSharp API call and output.
-- Expected milestone from the table above.
+## Verification Approach
+
+Compatibility work should use the smallest useful test:
+
+1. Unit tests for parsing, values, template functions, and deterministic helpers.
+2. Golden tests that compare normalized HelmSharp output with `helm template`.
+3. Kubernetes integration tests for apply, wait, hooks, and release state behavior.
+
+Normalization must remove only non-semantic differences, such as line endings or source comments. It must not hide YAML, ordering, whitespace, or value differences that consumers can observe.
+
+## Reporting a Gap
+
+Use the [Helm compatibility issue template](https://github.com/MattGRP/HelmSharp/issues/new?template=helm_compatibility_gap.yml) and include:
+
+- Helm CLI and HelmSharp versions;
+- a minimal chart, template, and values file;
+- the exact Helm command and output;
+- the equivalent HelmSharp API call and output;
+- the expected behavior and likely milestone.
