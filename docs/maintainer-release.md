@@ -7,7 +7,7 @@ This repository publishes NuGet packages with NuGet Trusted Publishing from GitH
 Create a trusted publishing policy on NuGet.org for this repository:
 
 - Package Owner: the NuGet.org account that owns the HelmSharp packages.
-- Repository Owner: `MattGRP`
+- Repository Owner: `GaTTGeng`
 - Repository: `HelmSharp`
 - Workflow File: `release-nuget.yml`
 - Environment: leave empty unless the workflow is later changed to use a GitHub environment.
@@ -38,7 +38,7 @@ To run a manual release, open the `Release NuGet` workflow, enter the package ve
 After fixing workflow configuration, re-run the failed workflow from GitHub Actions or with:
 
 ```powershell
-gh run rerun <run-id> --repo MattGRP/HelmSharp
+gh run rerun <run-id> --repo GaTTGeng/HelmSharp
 ```
 
 For the failed `1.0.1` release created before Trusted Publishing was configured, updating the `1.0.1` tag to a commit that contains the Trusted Publishing workflow will start a new release run.

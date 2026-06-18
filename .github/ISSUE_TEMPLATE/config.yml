@@ -1,8 +1,8 @@
 blank_issues_enabled: true
 contact_links:
   - name: Questions and usage help
-    url: https://github.com/MattGRP/HelmSharp/discussions
+    url: https://github.com/GaTTGeng/HelmSharp/discussions
     about: Ask usage questions and discuss design ideas in GitHub Discussions.
   - name: Security vulnerability
-    url: https://github.com/MattGRP/HelmSharp/security/advisories/new
+    url: https://github.com/GaTTGeng/HelmSharp/security/advisories/new
     about: Please report suspected vulnerabilities privately.

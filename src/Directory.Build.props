@@ -8,8 +8,8 @@
     <Description>Managed Helm-compatible chart renderer and Kubernetes release deployer for .NET</Description>
     <PackageTags>helm;kubernetes;k8s;chart;deploy;managed</PackageTags>
     <RepositoryType>git</RepositoryType>
-    <RepositoryUrl>https://github.com/MattGRP/HelmSharp</RepositoryUrl>
-    <PackageProjectUrl>https://github.com/MattGRP/HelmSharp</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/GaTTGeng/HelmSharp</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/GaTTGeng/HelmSharp</PackageProjectUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageReleaseNotes>See CHANGELOG.md for release notes and known scope.</PackageReleaseNotes>
