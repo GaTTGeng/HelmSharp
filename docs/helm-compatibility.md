@@ -4,7 +4,7 @@ HelmSharp provides a managed, Helm-compatible SDK for .NET. It aims to match use
 
 > No Helm executable is required by consumers. The Helm CLI may be used in the test suite only as a compatibility reference.
 
-See the [roadmap](roadmap.md) for delivery order and the [GitHub milestones](https://github.com/MattGRP/HelmSharp/milestones) for live progress.
+See the [roadmap](roadmap.md) for delivery order and the [GitHub milestones](https://github.com/GaTTGeng/HelmSharp/milestones) for live progress.
 
 ## Compatibility Contract
 
@@ -82,7 +82,7 @@ Normalization must remove only non-semantic differences, such as line endings or
 
 ## Reporting a Gap
 
-Use the [Helm compatibility issue template](https://github.com/MattGRP/HelmSharp/issues/new?template=helm_compatibility_gap.yml) and include:
+Use the [Helm compatibility issue template](https://github.com/GaTTGeng/HelmSharp/issues/new?template=helm_compatibility_gap.yml) and include:
 
 - Helm CLI and HelmSharp versions;
 - a minimal chart, template, and values file;

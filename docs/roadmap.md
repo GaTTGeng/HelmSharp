@@ -8,7 +8,7 @@ HelmSharp is evolving toward dependable Helm-compatible behavior for application
 
 **M1: Helm Template Parity** is the active workstream. The immediate goal is a repeatable compatibility harness that compares selected HelmSharp output with `helm template`, followed by focused fixes for values, built-in objects, template functions, whitespace, and subcharts.
 
-Track the live work in [M1 on GitHub](https://github.com/MattGRP/HelmSharp/milestone/1) or review the detailed [compatibility matrix](helm-compatibility.md).
+Track the live work in [M1 on GitHub](https://github.com/GaTTGeng/HelmSharp/milestone/1) or review the detailed [compatibility matrix](helm-compatibility.md).
 
 ## Delivery Principles
 
@@ -22,13 +22,13 @@ Track the live work in [M1 on GitHub](https://github.com/MattGRP/HelmSharp/miles
 
 | Phase | Status | Outcome |
 | --- | --- | --- |
-| [M1: Helm Template Parity](https://github.com/MattGRP/HelmSharp/milestone/1) | **Active** | Reliable `helm template` behavior for values, built-in objects, common functions, subcharts, and rendered output. |
-| [M2: Chart Packaging and Repository Parity](https://github.com/MattGRP/HelmSharp/milestone/2) | Planned | Predictable package archives, repository indexes, pulls, and dependency workflows. |
-| [M3: Release Lifecycle Parity](https://github.com/MattGRP/HelmSharp/milestone/6) | Planned | Consistent install, upgrade, rollback, uninstall, status, history, hooks, and release state transitions. |
-| [M4: Kubernetes Apply and Wait Semantics](https://github.com/MattGRP/HelmSharp/milestone/5) | Planned | Correct resource identity, namespace handling, readiness, Jobs, deletion, and hook cleanup behavior. |
-| [M5: OCI and Provenance](https://github.com/MattGRP/HelmSharp/milestone/4) | Planned | OCI authentication, chart pull/push, signing, and provenance verification. |
-| [M6: Public SDK Hardening](https://github.com/MattGRP/HelmSharp/milestone/3) | Ongoing | Stronger API documentation, examples, analyzers, nullable correctness, and package quality. |
-| [M7: Compatibility Expansion Research](https://github.com/MattGRP/HelmSharp/milestone/7) | Research | Evidence-based decision on `netstandard`, .NET Framework, and longer-term target frameworks. |
+| [M1: Helm Template Parity](https://github.com/GaTTGeng/HelmSharp/milestone/1) | **Active** | Reliable `helm template` behavior for values, built-in objects, common functions, subcharts, and rendered output. |
+| [M2: Chart Packaging and Repository Parity](https://github.com/GaTTGeng/HelmSharp/milestone/2) | Planned | Predictable package archives, repository indexes, pulls, and dependency workflows. |
+| [M3: Release Lifecycle Parity](https://github.com/GaTTGeng/HelmSharp/milestone/6) | Planned | Consistent install, upgrade, rollback, uninstall, status, history, hooks, and release state transitions. |
+| [M4: Kubernetes Apply and Wait Semantics](https://github.com/GaTTGeng/HelmSharp/milestone/5) | Planned | Correct resource identity, namespace handling, readiness, Jobs, deletion, and hook cleanup behavior. |
+| [M5: OCI and Provenance](https://github.com/GaTTGeng/HelmSharp/milestone/4) | Planned | OCI authentication, chart pull/push, signing, and provenance verification. |
+| [M6: Public SDK Hardening](https://github.com/GaTTGeng/HelmSharp/milestone/3) | Ongoing | Stronger API documentation, examples, analyzers, nullable correctness, and package quality. |
+| [M7: Compatibility Expansion Research](https://github.com/GaTTGeng/HelmSharp/milestone/7) | Research | Evidence-based decision on `netstandard`, .NET Framework, and longer-term target frameworks. |
 
 ## How Work Advances
 
@@ -43,4 +43,4 @@ Milestones may overlap where the behavior crosses subsystem boundaries. For exam
 
 ## Contributing
 
-Start with an existing milestone issue where possible. For a newly discovered Helm difference, use the [Helm compatibility issue template](https://github.com/MattGRP/HelmSharp/issues/new?template=helm_compatibility_gap.yml) and include a minimal chart, the exact Helm command, HelmSharp API usage, and both outputs.
+Start with an existing milestone issue where possible. For a newly discovered Helm difference, use the [Helm compatibility issue template](https://github.com/GaTTGeng/HelmSharp/issues/new?template=helm_compatibility_gap.yml) and include a minimal chart, the exact Helm command, HelmSharp API usage, and both outputs.
