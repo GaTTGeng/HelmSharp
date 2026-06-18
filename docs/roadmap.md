@@ -43,4 +43,4 @@ Milestones may overlap where the behavior crosses subsystem boundaries. For exam
 
 ## Contributing
 
-Start with an existing milestone issue where possible. For a newly discovered Helm difference, use the [Helm compatibility issue template](https://github.com/GaTTGeng/HelmSharp/issues/new?template=helm_compatibility_gap.yml) and include a minimal chart, the exact Helm command, HelmSharp API usage, and both outputs.
+Start with an existing milestone issue where possible. For a newly discovered Helm difference, [open a compatibility issue](https://github.com/GaTTGeng/HelmSharp/issues/new) and include a minimal chart, the exact Helm command, HelmSharp API usage, and both outputs.

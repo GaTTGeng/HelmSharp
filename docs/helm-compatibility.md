@@ -82,7 +82,7 @@ Normalization must remove only non-semantic differences, such as line endings or
 
 ## Reporting a Gap
 
-Use the [Helm compatibility issue template](https://github.com/GaTTGeng/HelmSharp/issues/new?template=helm_compatibility_gap.yml) and include:
+[Open a compatibility issue](https://github.com/GaTTGeng/HelmSharp/issues/new) and include:
 
 - Helm CLI and HelmSharp versions;
 - a minimal chart, template, and values file;
