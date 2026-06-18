@@ -1,0 +1,6 @@
+apiVersion: v2
+name: multi-doc
+description: Multi-document YAML fixture for Helm CLI golden tests
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

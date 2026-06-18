@@ -6,10 +6,14 @@ namespace HelmSharp.Tests;
 
 public class HelmTemplateGoldenTests
 {
-    [HelmCliFact]
-    public async Task Render_MinimalChart_MatchesHelmTemplate()
+    [HelmCliTheory]
+    [InlineData("minimal")]
+    [InlineData("helpers")]
+    [InlineData("multi-doc")]
+    [InlineData("notes")]
+    public async Task Render_FixtureChart_MatchesHelmTemplate(string fixtureName)
     {
-        var chartPath = TestFixtures.ChartPath("minimal");
+        var chartPath = TestFixtures.ChartPath(fixtureName);
         var expected = await HelmCliRunner.TemplateAsync(
             chartPath,
             "golden-release",
@@ -25,6 +29,24 @@ public class HelmTemplateGoldenTests
         Assert.Equal(
             NormalizeManifest(expected.Stdout),
             NormalizeManifest(renderer.Render()));
+    }
+
+    [Fact]
+    public async Task RenderNotes_NotesFixture_EmitsTemplatedNotes()
+    {
+        var chartPath = TestFixtures.ChartPath("notes");
+        var chart = await HelmChartLoader.LoadAsync(chartPath, CancellationToken.None);
+        var values = await HelmValues.BuildAsync(chart, null, null, null, null, null, null, CancellationToken.None);
+        var renderer = new HelmTemplateRenderer(chart, "golden-release", "golden-namespace", values);
+
+        var notes = HelmCliRunner.NormalizeLineEndings(renderer.RenderNotes());
+
+        Assert.Equal(
+            "Thank you for installing notes.\n\n"
+            + "Release: golden-release\n"
+            + "Namespace: golden-namespace\n"
+            + "Service port: 8080",
+            notes);
     }
 
     private static string NormalizeManifest(string manifest)
