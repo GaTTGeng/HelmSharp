@@ -7,8 +7,13 @@ internal static class HelmCliRunner
 {
     private static readonly TimeSpan AvailabilityTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(30);
+    private static readonly Lazy<bool> HelmAvailability = new(
+        DetectAvailability,
+        LazyThreadSafetyMode.ExecutionAndPublication);
 
-    public static bool IsAvailable()
+    public static bool IsAvailable() => HelmAvailability.Value;
+
+    private static bool DetectAvailability()
     {
         try
         {
@@ -72,11 +77,7 @@ internal static class HelmCliRunner
         }
         catch (OperationCanceledException)
         {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-                await process.WaitForExitAsync(CancellationToken.None);
-            }
+            await TerminateProcessAsync(process);
 
             await Task.WhenAll(stdout, stderr);
 
@@ -92,6 +93,23 @@ internal static class HelmCliRunner
             process.ExitCode,
             NormalizeLineEndings(output[0]),
             NormalizeLineEndings(output[1]));
+    }
+
+    private static async Task TerminateProcessAsync(Process process)
+    {
+        if (!process.HasExited)
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException) when (process.HasExited)
+            {
+                // The process exited between the HasExited check and Kill.
+            }
+        }
+
+        await process.WaitForExitAsync(CancellationToken.None);
     }
 
     public static string NormalizeLineEndings(string value)
