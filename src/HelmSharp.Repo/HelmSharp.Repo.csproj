@@ -7,10 +7,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="System.Net.Http" Version="4.3.4" />
-  </ItemGroup>
-
-  <ItemGroup>
     <ProjectReference Include="..\HelmSharp.Chart\HelmSharp.Chart.csproj" />
     <ProjectReference Include="..\HelmSharp.Registry\HelmSharp.Registry.csproj" />
   </ItemGroup>

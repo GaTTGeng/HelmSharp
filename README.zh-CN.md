@@ -1,5 +1,10 @@
 # HelmSharp
 
+[![CI](https://github.com/GaTTGeng/HelmSharp/actions/workflows/ci.yml/badge.svg)](https://github.com/GaTTGeng/HelmSharp/actions/workflows/ci.yml)
+[![NuGet](https://img.shields.io/nuget/v/HelmSharp.Action.svg)](https://www.nuget.org/packages/HelmSharp.Action)
+[![NuGet Downloads](https://img.shields.io/nuget/dt/HelmSharp.Action.svg)](https://www.nuget.org/packages/HelmSharp.Action)
+[![License](https://img.shields.io/github/license/GaTTGeng/HelmSharp.svg)](LICENSE)
+
 [English](README.md)
 
 HelmSharp 是一个面向 .NET 的托管 Helm 风格库，用于在不调用 `helm` 可执行文件的情况下渲染 Helm 风格 Chart 并驱动 Kubernetes Release 工作流。它适合需要在 .NET 进程内完成模板渲染、values 合并、Chart 打包、仓库操作和 Kubernetes 发布生命周期管理的应用。
@@ -12,15 +17,15 @@ HelmSharp 是一个面向 .NET 的托管 Helm 风格库，用于在不调用 `he
 
 | 包名 | 作用 |
 | --- | --- |
-| `HelmSharp.Action` | 高层 Helm Client API 和 Release 操作。 |
-| `HelmSharp.Chart` | Chart 加载、values 合并、YAML 帮助方法和元数据。 |
-| `HelmSharp.Engine` | Helm 风格模板渲染。 |
-| `HelmSharp.Kube` | Kubernetes manifest apply/delete/wait 帮助方法。 |
-| `HelmSharp.Release` | 基于 Kubernetes Secret 的 Helm Release 记录存储。 |
-| `HelmSharp.Repo` | Chart 仓库、索引、拉取和搜索能力。 |
-| `HelmSharp.Registry` | Registry 相关扩展点包。 |
-| `HelmSharp.Storage` | Storage 相关扩展点包。 |
-| `HelmSharp.PostRenderer` | Post-renderer 扩展点包。 |
+| [`HelmSharp.Action`](https://www.nuget.org/packages/HelmSharp.Action) | 高层 Helm Client API 和 Release 操作。 |
+| [`HelmSharp.Chart`](https://www.nuget.org/packages/HelmSharp.Chart) | Chart 加载、values 合并、YAML 帮助方法和元数据。 |
+| [`HelmSharp.Engine`](https://www.nuget.org/packages/HelmSharp.Engine) | Helm 风格模板渲染。 |
+| [`HelmSharp.Kube`](https://www.nuget.org/packages/HelmSharp.Kube) | Kubernetes manifest apply/delete/wait 帮助方法。 |
+| [`HelmSharp.Release`](https://www.nuget.org/packages/HelmSharp.Release) | 基于 Kubernetes Secret 的 Helm Release 记录存储。 |
+| [`HelmSharp.Repo`](https://www.nuget.org/packages/HelmSharp.Repo) | Chart 仓库、索引、拉取和搜索能力。 |
+| [`HelmSharp.Registry`](https://www.nuget.org/packages/HelmSharp.Registry) | Registry 相关扩展点包。 |
+| [`HelmSharp.Storage`](https://www.nuget.org/packages/HelmSharp.Storage) | Storage 相关扩展点包。 |
+| [`HelmSharp.PostRenderer`](https://www.nuget.org/packages/HelmSharp.PostRenderer) | Post-renderer 扩展点包。 |
 
 大多数应用可以从 `HelmSharp.Action` 开始。
 
@@ -33,8 +38,6 @@ HelmSharp 是一个面向 .NET 的托管 Helm 风格库，用于在不调用 `he
 - 当前不支持 .NET Framework，除非后续版本新增 `netstandard` target。
 
 ## 安装
-
-包发布到 NuGet.org 后：
 
 ```powershell
 dotnet add package HelmSharp.Action
@@ -80,6 +83,8 @@ sealed class StaticHelmOptionsProvider : IHelmOptionsProvider
         });
 }
 ```
+
+更多完整示例见 [examples](examples/README.md)。
 
 安装或升级 Release：
 
@@ -133,6 +138,15 @@ await foreach (var line in client.UpgradeInstallStreamAsync(new HelmUpgradeInsta
 ## 当前边界
 
 HelmSharp 不是完整的 Helm CLI 克隆。一些高级 Helm 行为、模板函数边界情况、插件、完整 provenance 校验流程、OCI 认证流程以及不常见 Kubernetes 资源类型仍可能需要补充实现。欢迎用聚焦的测试补齐兼容性。
+
+## 文档
+
+- [入门指南](docs/getting-started.md)
+- [API 概览](docs/api-overview.md)
+- [Helm 兼容性](docs/helm-compatibility.md)
+- [路线图](docs/roadmap.md)
+- [支持政策](SUPPORT.md)
+- [GitHub Releases](https://github.com/GaTTGeng/HelmSharp/releases)
 
 ## 构建
 

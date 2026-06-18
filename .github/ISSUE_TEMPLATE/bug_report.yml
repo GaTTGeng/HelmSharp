@@ -1,0 +1,67 @@
+name: Bug Report
+description: Report a bug in HelmSharp
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please fill in the details below so we can investigate.
+
+  - type: input
+    id: version
+    attributes:
+      label: HelmSharp Version
+      description: Which version of HelmSharp are you using?
+      placeholder: "1.0.1"
+    validations:
+      required: true
+
+  - type: input
+    id: dotnet-version
+    attributes:
+      label: .NET Version
+      description: Which .NET version are you targeting?
+      placeholder: "net8.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the bug clearly.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Provide a minimal set of steps or code to reproduce the issue.
+      placeholder: |
+        1. Load chart from ...
+        2. Call TemplateAsync with ...
+        3. Observe error ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or error output
+      description: Paste any stack traces, error messages, or relevant output.
+      render: shell
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Any other information that might help (OS, chart structure, Kubernetes version, etc.).
