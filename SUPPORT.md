@@ -6,13 +6,13 @@ HelmSharp is an open source project maintained through GitHub.
 
 Use GitHub Discussions for usage questions, design discussion, and broader roadmap topics:
 
-https://github.com/MattGRP/HelmSharp/discussions
+https://github.com/GaTTGeng/HelmSharp/discussions
 
 ## Bugs and compatibility gaps
 
 Open an issue when you have a reproducible bug or Helm compatibility difference:
 
-https://github.com/MattGRP/HelmSharp/issues
+https://github.com/GaTTGeng/HelmSharp/issues
 
 For Helm compatibility reports, include the Helm CLI version, HelmSharp version, a minimal chart or template, and both outputs.
 

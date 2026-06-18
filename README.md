@@ -1,9 +1,9 @@
 # HelmSharp
 
-[![CI](https://github.com/MattGRP/HelmSharp/actions/workflows/ci.yml/badge.svg)](https://github.com/MattGRP/HelmSharp/actions/workflows/ci.yml)
+[![CI](https://github.com/GaTTGeng/HelmSharp/actions/workflows/ci.yml/badge.svg)](https://github.com/GaTTGeng/HelmSharp/actions/workflows/ci.yml)
 [![NuGet](https://img.shields.io/nuget/v/HelmSharp.Action.svg)](https://www.nuget.org/packages/HelmSharp.Action)
 [![NuGet Downloads](https://img.shields.io/nuget/dt/HelmSharp.Action.svg)](https://www.nuget.org/packages/HelmSharp.Action)
-[![License](https://img.shields.io/github/license/MattGRP/HelmSharp.svg)](LICENSE)
+[![License](https://img.shields.io/github/license/GaTTGeng/HelmSharp.svg)](LICENSE)
 
 [简体中文](README.zh-CN.md)
 
@@ -146,7 +146,7 @@ HelmSharp is not a full Helm CLI clone. Some advanced Helm behaviors, edge-case 
 - [Helm compatibility](docs/helm-compatibility.md)
 - [Roadmap](docs/roadmap.md)
 - [Support](SUPPORT.md)
-- [GitHub releases](https://github.com/MattGRP/HelmSharp/releases)
+- [GitHub releases](https://github.com/GaTTGeng/HelmSharp/releases)
 
 ## Build
 
