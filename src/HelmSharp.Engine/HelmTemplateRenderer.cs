@@ -647,8 +647,8 @@ public sealed class HelmTemplateRenderer
         var head = tokens[0];
         if (head.StartsWith(".Files.", StringComparison.Ordinal))
             return EvaluateFilesMethod(head, tokens, context);
-        if (head.Equals(".Capabilities.APIVersions.Has", StringComparison.Ordinal))
-            return CapabilitiesHasApiVersion(tokens, context);
+        if (TryDispatchMethodCall(head, tokens, context, out var methodResult))
+            return methodResult;
 
         return head switch
         {
@@ -998,6 +998,7 @@ public sealed class HelmTemplateRenderer
         {
             current = current switch
             {
+                ApiVersionSet => null,
                 Dictionary<string, object?> dict when dict.TryGetValue(part, out var next) => next,
                 IDictionary<string, object?> dict when dict.TryGetValue(part, out var next) => next,
                 _ => null
@@ -1051,15 +1052,41 @@ public sealed class HelmTemplateRenderer
             value => string.Equals(ToTemplateString(value), apiVersion, StringComparison.Ordinal));
     }
 
-    private static List<object?> BuildApiVersions(IEnumerable<string>? apiVersions)
+    private bool TryDispatchMethodCall(
+        string head,
+        IReadOnlyList<string> tokens,
+        TemplateContext context,
+        out object? result)
+    {
+        result = null;
+        var lastDot = head.LastIndexOf('.');
+        if (lastDot <= 0)
+            return false;
+
+        var method = head[(lastDot + 1)..];
+        if (!method.Equals("Has", StringComparison.Ordinal))
+            return false;
+
+        var receiverToken = head[..lastDot];
+        var receiver = EvaluateToken(receiverToken, context);
+        if (receiver is not ApiVersionSet versionSet)
+            return false;
+
+        var arg = ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        result = versionSet.Has(arg);
+        return true;
+    }
+
+    private static ApiVersionSet BuildApiVersions(IEnumerable<string>? apiVersions)
     {
         var customVersions = apiVersions ?? [];
-        return DefaultApiVersions
+        var versions = DefaultApiVersions
             .Select(ToTemplateString)
             .Concat(customVersions)
             .Distinct(StringComparer.Ordinal)
             .Cast<object?>()
             .ToList();
+        return new ApiVersionSet(versions);
     }
 
     private static Dictionary<string, object?> ToTemplateKubeVersion(string? version)
@@ -1227,7 +1254,7 @@ public sealed class HelmTemplateRenderer
         };
     }
 
-    private static readonly List<object?> DefaultApiVersions =
+    private static readonly ApiVersionSet DefaultApiVersions = new(
     [
         "v1",
         "admissionregistration.k8s.io/v1",
@@ -1282,7 +1309,7 @@ public sealed class HelmTemplateRenderer
         "storage.k8s.io/v1alpha1",
         "apiextensions.k8s.io/v1beta1",
         "apiextensions.k8s.io/v1"
-    ];
+    ]);
 
     private static object? ResolveVariable(string token, TemplateContext context)
     {
@@ -2623,10 +2650,25 @@ public sealed class HelmTemplateRenderer
         public bool IsUpgrade { get; init; }
         public int Revision { get; init; } = 1;
         public string? KubeVersion { get; init; }
-        public List<object?>? ApiVersions { get; init; }
+        public ApiVersionSet? ApiVersions { get; init; }
         public string? CurrentTemplatePath { get; init; }
         public string? TemplateChartName { get; init; }
         public string? TemplateChartPath { get; init; }
         public List<HelmChartDependency> Dependencies { get; init; } = [];
     }
+}
+
+public sealed class ApiVersionSet : IReadOnlyList<object?>
+{
+    private readonly List<object?> _versions;
+
+    public ApiVersionSet(List<object?> versions) => _versions = versions;
+
+    public bool Has(string version)
+        => _versions.Any(v => string.Equals(v?.ToString(), version, StringComparison.Ordinal));
+
+    public int Count => _versions.Count;
+    public object? this[int index] => _versions[index];
+    public IEnumerator<object?> GetEnumerator() => _versions.GetEnumerator();
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 }
