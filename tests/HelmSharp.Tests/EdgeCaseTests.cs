@@ -356,6 +356,38 @@ public class EdgeCaseTests
     }
 
     [Fact]
+    public void SubchartTemplate_UsesParentQualifiedTemplatePaths()
+    {
+        var chart = new HelmChart { Name = "parent", Version = "1.0.0", ValuesYaml = "" };
+        var subchart = new HelmChart { Name = "child", Version = "1.0.0", ValuesYaml = "" };
+        subchart.Templates["templates/configmap.yaml"] = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: child
+            data:
+              templateName: {{ .Template.Name | quote }}
+              templateBasePath: {{ .Template.BasePath | quote }}
+            """;
+        chart.Subcharts["child"] = subchart;
+
+        var renderer = new HelmTemplateRenderer(
+            chart,
+            "rel",
+            "default",
+            new Dictionary<string, object?>());
+
+        var result = renderer.Render();
+
+        Assert.Contains(
+            "templateName: \"parent/charts/child/templates/configmap.yaml\"",
+            result);
+        Assert.Contains(
+            "templateBasePath: \"parent/charts/child/templates\"",
+            result);
+    }
+
+    [Fact]
     public void RangeWithVariables_PreservesContextAndSetsDot()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };

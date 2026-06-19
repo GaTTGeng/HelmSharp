@@ -121,7 +121,8 @@ public sealed class HelmTemplateRenderer
                 IsUpgrade = _root.IsUpgrade,
                 Revision = _root.Revision,
                 KubeVersion = _root.KubeVersion,
-                ApiVersions = _root.ApiVersions
+                ApiVersions = _root.ApiVersions,
+                TemplateChartPath = $"{_chart.Name}/charts/{name}"
             };
 
             foreach (var (path, content) in subchart.Templates)
@@ -973,8 +974,8 @@ public sealed class HelmTemplateRenderer
                 StringComparer.Ordinal),
             "Template" => new Dictionary<string, object?>
             {
-                ["Name"] = $"{context.Chart.Name}/{context.CurrentTemplatePath}",
-                ["BasePath"] = $"{context.Chart.Name}/templates"
+                ["Name"] = $"{context.TemplateChartPath ?? context.Chart.Name}/{context.CurrentTemplatePath}",
+                ["BasePath"] = $"{context.TemplateChartPath ?? context.Chart.Name}/templates"
             },
             _ => context.Dot
         };
@@ -2521,5 +2522,6 @@ public sealed class HelmTemplateRenderer
         public string? KubeVersion { get; init; }
         public List<object?>? ApiVersions { get; init; }
         public string? CurrentTemplatePath { get; init; }
+        public string? TemplateChartPath { get; init; }
     }
 }
