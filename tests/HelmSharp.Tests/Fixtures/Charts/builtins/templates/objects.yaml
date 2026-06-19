@@ -31,6 +31,8 @@ data:
   capabilities-kube-major: {{ .Capabilities.KubeVersion.Major | quote }}
   capabilities-kube-minor: {{ .Capabilities.KubeVersion.Minor | quote }}
   capabilities-has-v1: {{ .Capabilities.APIVersions.Has "v1" | quote }}
+  capabilities-has-coordination-v1: {{ .Capabilities.APIVersions.Has "coordination.k8s.io/v1" | quote }}
+  capabilities-has-resource-v1alpha2: {{ .Capabilities.APIVersions.Has "resource.k8s.io/v1alpha2" | quote }}
   capabilities-has-missing: {{ .Capabilities.APIVersions.Has "example.test/v1" | quote }}
   capabilities-helm-version-present: {{ not (empty .Capabilities.HelmVersion.Version) | quote }}
   template-name: {{ .Template.Name | quote }}
