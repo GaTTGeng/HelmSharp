@@ -1043,15 +1043,6 @@ public sealed class HelmTemplateRenderer
                 ? bytes
                 : Encoding.UTF8.GetBytes(ToTemplateString(value)));
 
-    private bool CapabilitiesHasApiVersion(
-        IReadOnlyList<string> tokens,
-        TemplateContext context)
-    {
-        var apiVersion = ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
-        return (context.ApiVersions ?? DefaultApiVersions).Any(
-            value => string.Equals(ToTemplateString(value), apiVersion, StringComparison.Ordinal));
-    }
-
     private bool TryDispatchMethodCall(
         string head,
         IReadOnlyList<string> tokens,
