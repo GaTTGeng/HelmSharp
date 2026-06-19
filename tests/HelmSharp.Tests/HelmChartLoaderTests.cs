@@ -38,6 +38,13 @@ public class HelmChartLoaderTests : IDisposable
               version: "17.x.x"
               repository: https://charts.bitnami.com/bitnami
               condition: redis.enabled
+              tags:
+              - cache
+              alias: cache
+              import-values:
+              - data
+              - child: service
+                parent: imported
             - name: postgresql
               version: "12.x.x"
               repository: https://charts.bitnami.com/bitnami
@@ -51,6 +58,14 @@ public class HelmChartLoaderTests : IDisposable
         Assert.Equal("17.x.x", chart.Dependencies[0].Version);
         Assert.Equal("https://charts.bitnami.com/bitnami", chart.Dependencies[0].Repository);
         Assert.Equal("redis.enabled", chart.Dependencies[0].Condition);
+        Assert.Equal(["cache"], chart.Dependencies[0].Tags);
+        Assert.Equal("cache", chart.Dependencies[0].Alias);
+        var importValues = Assert.IsType<List<object?>>(chart.Dependencies[0].ImportValues);
+        Assert.Equal("data", importValues[0]);
+        var importMapping = Assert.IsAssignableFrom<IDictionary<string, object?>>(
+            importValues[1]);
+        Assert.Equal("service", importMapping["child"]);
+        Assert.Equal("imported", importMapping["parent"]);
         Assert.Equal("postgresql", chart.Dependencies[1].Name);
         Assert.True(chart.Dependencies[1].Enabled);
     }

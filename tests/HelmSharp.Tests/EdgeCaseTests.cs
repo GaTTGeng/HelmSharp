@@ -299,6 +299,63 @@ public class EdgeCaseTests
     }
 
     [Fact]
+    public void ChartDependencies_ExposeCompleteDependencyShape()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Dependencies.Add(new HelmChartDependency
+        {
+            Name = "redis",
+            Version = "17.x.x",
+            Repository = "https://charts.example.test",
+            Condition = "redis.enabled",
+            Tags = ["cache"],
+            Enabled = false,
+            ImportValues =
+            [
+                "data",
+                new Dictionary<string, object?>
+                {
+                    ["child"] = "service",
+                    ["parent"] = "imported"
+                }
+            ],
+            Alias = "cache"
+        });
+        chart.Templates["templates/test.yaml"] = """
+            {{- $dependency := index .Chart.Dependencies 0 }}
+            {{- $mapping := index $dependency.ImportValues 1 }}
+            name: {{ $dependency.Name | quote }}
+            version: {{ $dependency.Version | quote }}
+            repository: {{ $dependency.Repository | quote }}
+            condition: {{ $dependency.Condition | quote }}
+            tag: {{ index $dependency.Tags 0 | quote }}
+            enabled: {{ $dependency.Enabled | quote }}
+            importString: {{ index $dependency.ImportValues 0 | quote }}
+            importChild: {{ $mapping.child | quote }}
+            importParent: {{ $mapping.parent | quote }}
+            alias: {{ $dependency.Alias | quote }}
+            """;
+        var renderer = new HelmTemplateRenderer(
+            chart,
+            "rel",
+            "default",
+            new Dictionary<string, object?>());
+
+        var result = renderer.Render();
+
+        Assert.Contains("name: \"redis\"", result);
+        Assert.Contains("version: \"17.x.x\"", result);
+        Assert.Contains("repository: \"https://charts.example.test\"", result);
+        Assert.Contains("condition: \"redis.enabled\"", result);
+        Assert.Contains("tag: \"cache\"", result);
+        Assert.Contains("enabled: \"false\"", result);
+        Assert.Contains("importString: \"data\"", result);
+        Assert.Contains("importChild: \"service\"", result);
+        Assert.Contains("importParent: \"imported\"", result);
+        Assert.Contains("alias: \"cache\"", result);
+    }
+
+    [Fact]
     public void RangeWithVariables_PreservesContextAndSetsDot()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };

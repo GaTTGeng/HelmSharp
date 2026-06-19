@@ -1104,7 +1104,10 @@ public sealed class HelmTemplateRenderer
             ["Version"] = dependency.Version ?? string.Empty,
             ["Repository"] = dependency.Repository ?? string.Empty,
             ["Condition"] = dependency.Condition ?? string.Empty,
-            ["Tags"] = dependency.Tags ?? new List<string>()
+            ["Tags"] = dependency.Tags ?? new List<string>(),
+            ["Enabled"] = dependency.Enabled,
+            ["ImportValues"] = dependency.ImportValues ?? new List<object?>(),
+            ["Alias"] = dependency.Alias ?? string.Empty
         };
 
     private static Dictionary<string, object?> ToTemplateMaintainer(object? maintainer)

@@ -116,9 +116,12 @@ public static class HelmChartLoader
                     Version = HelmYaml.GetString(depDict, "version"),
                     Repository = HelmYaml.GetString(depDict, "repository"),
                     Condition = HelmYaml.GetString(depDict, "condition"),
+                    Alias = HelmYaml.GetString(depDict, "alias"),
                 };
                 if (depDict.TryGetValue("tags", out var tagsObj) && tagsObj is IList<object?> tagsList)
                     depEntry.Tags = tagsList.Select(t => Convert.ToString(t) ?? string.Empty).ToList();
+                if (depDict.TryGetValue("import-values", out var importsObj) && importsObj is IList<object?> importsList)
+                    depEntry.ImportValues = importsList.ToList();
                 if (depDict.TryGetValue("enabled", out var enabledObj))
                     depEntry.Enabled = enabledObj switch
                     {
