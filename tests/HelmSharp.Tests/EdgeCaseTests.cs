@@ -299,6 +299,54 @@ public class EdgeCaseTests
     }
 
     [Fact]
+    public void APIVersionsHas_WorksWhenAssignedToVariable()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            {{- $apis := .Capabilities.APIVersions -}}
+            directHas: {{ .Capabilities.APIVersions.Has "batch/v1" }}
+            varHas: {{ $apis.Has "batch/v1" }}
+            varHasMissing: {{ $apis.Has "missing.example/v1" }}
+            varHasCustom: {{ $apis.Has "custom.test/v1" }}
+            """;
+        var renderer = new HelmTemplateRenderer(
+            chart,
+            "rel",
+            "default",
+            new Dictionary<string, object?>(),
+            null,
+            ["custom.test/v1"],
+            false);
+
+        var result = renderer.Render();
+        _output.WriteLine(result);
+
+        Assert.Contains("directHas: true", result);
+        Assert.Contains("varHas: true", result);
+        Assert.Contains("varHasMissing: false", result);
+        Assert.Contains("varHasCustom: true", result);
+    }
+
+    [Fact]
+    public void APIVersionsHas_WorksInIfConditionalViaVariable()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            {{- $apis := .Capabilities.APIVersions -}}
+            {{- if $apis.Has "batch/v1" }}batchEnabled: true{{ end }}
+            {{- if $apis.Has "missing/v1" }}missingEnabled: true{{ end }}
+            """;
+        var renderer = new HelmTemplateRenderer(
+            chart, "rel", "default", new Dictionary<string, object?>());
+
+        var result = renderer.Render();
+        _output.WriteLine(result);
+
+        Assert.Contains("batchEnabled: true", result);
+        Assert.DoesNotContain("missingEnabled", result);
+    }
+
+    [Fact]
     public void ChartDependencies_ExposeCompleteDependencyShape()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
