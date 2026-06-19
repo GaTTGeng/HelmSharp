@@ -263,6 +263,53 @@ public class EdgeCaseTests
     }
 
     [Fact]
+    public void RangeWithVariables_PreservesContextAndSetsDot()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            {{- range $index, $item := .Values.items }}
+            item-{{ $index }}:
+              variable: {{ $item.name | quote }}
+              dot: {{ .name | quote }}
+              isUpgrade: {{ .Release.IsUpgrade | quote }}
+              revision: {{ .Release.Revision | quote }}
+              kubeVersion: {{ .Capabilities.KubeVersion.Version | quote }}
+              hasCustomApi: {{ .Capabilities.APIVersions.Has "example.test/v1" | quote }}
+              templateName: {{ .Template.Name | quote }}
+            {{- end }}
+            """;
+        var values = new Dictionary<string, object?>
+        {
+            ["items"] = new List<object?>
+            {
+                new Dictionary<string, object?> { ["name"] = "first" },
+                new Dictionary<string, object?> { ["name"] = "second" }
+            }
+        };
+        var renderer = new HelmTemplateRenderer(
+            chart,
+            "rel",
+            "default",
+            values,
+            "v1.31.4",
+            ["example.test/v1"],
+            true,
+            7);
+
+        var result = renderer.Render();
+
+        Assert.Contains("item-0:", result);
+        Assert.Contains("item-1:", result);
+        Assert.Contains("variable: \"first\"", result);
+        Assert.Contains("dot: \"second\"", result);
+        Assert.Contains("isUpgrade: \"true\"", result);
+        Assert.Contains("revision: \"7\"", result);
+        Assert.Contains("kubeVersion: \"v1.31.4\"", result);
+        Assert.Contains("hasCustomApi: \"true\"", result);
+        Assert.Contains("templateName: \"test/templates/test.yaml\"", result);
+    }
+
+    [Fact]
     public void ReleaseObject()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };

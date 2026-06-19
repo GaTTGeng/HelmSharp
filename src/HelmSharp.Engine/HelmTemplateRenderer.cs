@@ -502,13 +502,25 @@ public sealed class HelmTemplateRenderer
                     var builder = new StringBuilder();
                     foreach (var kvp in dict)
                     {
-                        var iterCtx = new TemplateContext(
-                            context.Chart, context.ReleaseName, context.ReleaseNamespace,
-                            context.Values, context.Dot,
-                            new Dictionary<string, object?>(context.Variables, StringComparer.Ordinal));
+                        var iterCtx = CreateRangeContext(context, kvp.Value);
                         iterCtx.Variables[vars[0]] = kvp.Key;
                         iterCtx.Variables[vars[1]] = kvp.Value;
                         builder.Append(RenderSection(body, iterCtx));
+                    }
+                    return builder.ToString();
+                }
+
+                if (value is IEnumerable<object?> items)
+                {
+                    var builder = new StringBuilder();
+                    var index = 0;
+                    foreach (var item in items)
+                    {
+                        var iterCtx = CreateRangeContext(context, item);
+                        iterCtx.Variables[vars[0]] = index;
+                        iterCtx.Variables[vars[1]] = item;
+                        builder.Append(RenderSection(body, iterCtx));
+                        index++;
                     }
                     return builder.ToString();
                 }
@@ -532,10 +544,7 @@ public sealed class HelmTemplateRenderer
             var builder = new StringBuilder();
             foreach (var kvp in dict)
             {
-                var iterCtx = new TemplateContext(
-                    context.Chart, context.ReleaseName, context.ReleaseNamespace,
-                    context.Values, context.Dot,
-                    new Dictionary<string, object?>(context.Variables, StringComparer.Ordinal));
+                var iterCtx = CreateRangeContext(context, kvp.Value);
                 iterCtx.Variables[varName] = kvp.Value;
                 builder.Append(RenderSection(body, iterCtx));
             }
@@ -547,10 +556,7 @@ public sealed class HelmTemplateRenderer
             var builder = new StringBuilder();
             foreach (var item in items)
             {
-                var iterCtx = new TemplateContext(
-                    context.Chart, context.ReleaseName, context.ReleaseNamespace,
-                    context.Values, context.Dot,
-                    new Dictionary<string, object?>(context.Variables, StringComparer.Ordinal));
+                var iterCtx = CreateRangeContext(context, item);
                 iterCtx.Variables[varName] = item;
                 builder.Append(RenderSection(body, iterCtx));
             }
@@ -559,6 +565,13 @@ public sealed class HelmTemplateRenderer
 
         return string.Empty;
     }
+
+    private static TemplateContext CreateRangeContext(TemplateContext context, object? dot)
+        => context with
+        {
+            Dot = dot,
+            Variables = new Dictionary<string, object?>(context.Variables, StringComparer.Ordinal)
+        };
 
     private string RenderRange(object? value, string body, TemplateContext context)
     {
