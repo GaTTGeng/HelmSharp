@@ -229,6 +229,40 @@ public class EdgeCaseTests
     }
 
     [Fact]
+    public void BuiltInObjects_UseRequestedCapabilitiesAndReleaseState()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            kubeVersion: {{ .Capabilities.KubeVersion.Version | quote }}
+            kubeMajor: {{ .Capabilities.KubeVersion.Major | quote }}
+            kubeMinor: {{ .Capabilities.KubeVersion.Minor | quote }}
+            hasCustomApi: {{ .Capabilities.APIVersions.Has "example.test/v1" | quote }}
+            isInstall: {{ .Release.IsInstall | quote }}
+            isUpgrade: {{ .Release.IsUpgrade | quote }}
+            revision: {{ .Release.Revision | quote }}
+            """;
+        var renderer = new HelmTemplateRenderer(
+            chart,
+            "rel",
+            "default",
+            new Dictionary<string, object?>(),
+            "v1.31.4",
+            ["example.test/v1"],
+            true,
+            7);
+
+        var result = renderer.Render();
+
+        Assert.Contains("kubeVersion: \"v1.31.4\"", result);
+        Assert.Contains("kubeMajor: \"1\"", result);
+        Assert.Contains("kubeMinor: \"31\"", result);
+        Assert.Contains("hasCustomApi: \"true\"", result);
+        Assert.Contains("isInstall: \"false\"", result);
+        Assert.Contains("isUpgrade: \"true\"", result);
+        Assert.Contains("revision: \"7\"", result);
+    }
+
+    [Fact]
     public void ReleaseObject()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };

@@ -11,6 +11,7 @@ public class HelmTemplateGoldenTests
     [InlineData("helpers")]
     [InlineData("multi-doc")]
     [InlineData("notes")]
+    [InlineData("builtins")]
     public async Task Render_FixtureChart_MatchesHelmTemplate(string fixtureName)
     {
         var chartPath = TestFixtures.ChartPath(fixtureName);

@@ -1,0 +1,5 @@
+image:
+  repository: example.test/app
+  tag: latest
+emptyString: ""
+nullValue:

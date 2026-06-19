@@ -440,7 +440,14 @@ public class HelmClient : IHelmClient
         var chartPath = await ResolveChartPathAsync(request.Chart, null, options, cancellationToken);
         var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
         var values = await HelmValues.BuildAsync(chart, request.ValuesFile, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
-        var renderer = new HelmTemplateRenderer(chart, request.ReleaseName, ns, values);
+        var renderer = new HelmTemplateRenderer(
+            chart,
+            request.ReleaseName,
+            ns,
+            values,
+            request.KubeVersion,
+            request.ApiVersions,
+            request.IsUpgrade);
         var manifest = renderer.Render();
 
         // Output to directory if specified
@@ -477,7 +484,14 @@ public class HelmClient : IHelmClient
         var ns = request.Namespace ?? options.DefaultNamespace ?? "default";
         var chart = await HelmChartLoader.LoadAsync(request.Chart, cancellationToken);
         var values = await HelmValues.BuildAsync(chart, request.ValuesFile, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
-        var renderer = new HelmTemplateRenderer(chart, request.ReleaseName, ns, values);
+        var renderer = new HelmTemplateRenderer(
+            chart,
+            request.ReleaseName,
+            ns,
+            values,
+            request.KubeVersion,
+            request.ApiVersions,
+            request.IsUpgrade);
         var manifest = renderer.Render();
         var notes = renderer.RenderNotes();
         return Ok(manifest + "\n---\n# NOTES.txt:\n" + notes);

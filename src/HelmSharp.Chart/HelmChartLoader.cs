@@ -6,6 +6,10 @@ namespace HelmSharp.Chart;
 
 public sealed class HelmChart
 {
+    /// <summary>
+    /// Gets the chart metadata API version from Chart.yaml.
+    /// </summary>
+    public string ApiVersion { get; init; } = string.Empty;
     public string Name { get; init; } = string.Empty;
     public string Version { get; init; } = string.Empty;
     public string? AppVersion { get; init; }
@@ -58,6 +62,7 @@ public static class HelmChartLoader
         var metadata = HelmYaml.DeserializeDictionary(chartYaml);
         var chart = new HelmChart
         {
+            ApiVersion = HelmYaml.GetString(metadata, "apiVersion") ?? string.Empty,
             Name = HelmYaml.GetString(metadata, "name") ?? Path.GetFileNameWithoutExtension(chartPath),
             Version = HelmYaml.GetString(metadata, "version") ?? string.Empty,
             AppVersion = HelmYaml.GetString(metadata, "appVersion"),

@@ -17,6 +17,7 @@ This project follows semantic versioning once stable releases begin.
 
 - Replaced placeholder extension point classes with named public interfaces.
 - Expanded NuGet package metadata with repository, project URL, XML docs, symbols, and SourceLink settings.
+- Aligned built-in template objects with Helm for chart metadata, release state, capabilities, template paths, and chart files.
 
 ## [1.0.1] - 2026-06-17
 

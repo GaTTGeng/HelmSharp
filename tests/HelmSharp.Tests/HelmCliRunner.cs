@@ -37,7 +37,15 @@ internal static class HelmCliRunner
         string releaseNamespace,
         CancellationToken cancellationToken)
         => RunAsync(
-            ["template", releaseName, chartPath, "--namespace", releaseNamespace],
+            [
+                "template",
+                releaseName,
+                chartPath,
+                "--namespace",
+                releaseNamespace,
+                "--kube-version",
+                "v1.29.0"
+            ],
             CommandTimeout,
             cancellationToken);
 

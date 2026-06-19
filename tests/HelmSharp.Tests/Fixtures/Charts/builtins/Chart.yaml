@@ -1,0 +1,17 @@
+apiVersion: v2
+name: builtins
+description: Built-in template objects fixture
+type: application
+version: 1.2.3
+appVersion: "4.5.6"
+kubeVersion: ">= 1.20.0"
+home: https://example.test/builtins
+sources:
+  - https://example.test/source
+keywords:
+  - parity
+annotations:
+  example.test/owner: sdk
+maintainers:
+  - name: HelmSharp
+    email: helmsharp@example.test

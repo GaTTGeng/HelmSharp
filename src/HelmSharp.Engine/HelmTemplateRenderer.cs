@@ -28,6 +28,19 @@ public sealed class HelmTemplateRenderer
         string releaseName,
         string releaseNamespace,
         Dictionary<string, object?> values)
+        : this(chart, releaseName, releaseNamespace, values, null, null, false, 1)
+    {
+    }
+
+    public HelmTemplateRenderer(
+        HelmChart chart,
+        string releaseName,
+        string releaseNamespace,
+        Dictionary<string, object?> values,
+        string? kubeVersion,
+        IEnumerable<string>? apiVersions,
+        bool isUpgrade,
+        int revision = 1)
     {
         _chart = chart;
         _root = new TemplateContext(
@@ -36,7 +49,14 @@ public sealed class HelmTemplateRenderer
             releaseNamespace,
             values,
             values,
-            new Dictionary<string, object?>(StringComparer.Ordinal));
+            new Dictionary<string, object?>(StringComparer.Ordinal))
+        {
+            IsInstall = !isUpgrade,
+            IsUpgrade = isUpgrade,
+            Revision = revision,
+            KubeVersion = kubeVersion,
+            ApiVersions = apiVersions?.Cast<object?>().ToList()
+        };
     }
 
     public string Render()
@@ -66,7 +86,9 @@ public sealed class HelmTemplateRenderer
                 continue;
 
             var withoutDefines = StripDefines(content);
-            var rendered = RenderSection(withoutDefines, _root);
+            var rendered = RenderSection(
+                withoutDefines,
+                _root with { CurrentTemplatePath = path });
             if (string.IsNullOrWhiteSpace(rendered))
                 continue;
 
@@ -93,7 +115,14 @@ public sealed class HelmTemplateRenderer
             var subchartContext = new TemplateContext(
                 subchart, _root.ReleaseName, _root.ReleaseNamespace,
                 subchartValues, subchartValues,
-                new Dictionary<string, object?>(_root.Variables, StringComparer.Ordinal));
+                new Dictionary<string, object?>(_root.Variables, StringComparer.Ordinal))
+            {
+                IsInstall = _root.IsInstall,
+                IsUpgrade = _root.IsUpgrade,
+                Revision = _root.Revision,
+                KubeVersion = _root.KubeVersion,
+                ApiVersions = _root.ApiVersions
+            };
 
             foreach (var (path, content) in subchart.Templates)
             {
@@ -102,7 +131,9 @@ public sealed class HelmTemplateRenderer
                     continue;
 
                 var withoutDefines = StripDefines(content);
-                var rendered = RenderSection(withoutDefines, subchartContext);
+                var rendered = RenderSection(
+                    withoutDefines,
+                    subchartContext with { CurrentTemplatePath = path });
                 if (string.IsNullOrWhiteSpace(rendered))
                     continue;
 
@@ -216,7 +247,9 @@ public sealed class HelmTemplateRenderer
                 continue;
 
             var withoutDefines = StripDefines(content);
-            var rendered = RenderSection(withoutDefines, _root);
+            var rendered = RenderSection(
+                withoutDefines,
+                _root with { CurrentTemplatePath = path });
             return rendered.Trim();
         }
         return string.Empty;
@@ -593,6 +626,11 @@ public sealed class HelmTemplateRenderer
             return pipelineValue;
 
         var head = tokens[0];
+        if (head.StartsWith(".Files.", StringComparison.Ordinal))
+            return EvaluateFilesMethod(head, tokens, context);
+        if (head.Equals(".Capabilities.APIVersions.Has", StringComparison.Ordinal))
+            return CapabilitiesHasApiVersion(tokens, context);
+
         return head switch
         {
             // Template inclusion
@@ -843,8 +881,17 @@ public sealed class HelmTemplateRenderer
             return Unquote(token);
         if (token.StartsWith('\'') && token.EndsWith('\''))
             return token[1..^1];
-        if (token.StartsWith('(') && token.EndsWith(')'))
-            return EvaluatePipeline(token[1..^1].Trim(), context);
+        if (token.StartsWith('('))
+        {
+            var memberSeparator = token.LastIndexOf(").", StringComparison.Ordinal);
+            if (memberSeparator > 0)
+            {
+                var value = EvaluatePipeline(token[1..memberSeparator].Trim(), context);
+                return ResolveMembers(value, token[(memberSeparator + 2)..]);
+            }
+            if (token.EndsWith(')'))
+                return EvaluatePipeline(token[1..^1].Trim(), context);
+        }
         if (token == ".")
             return context.Dot;
         if (token == "true") return true;
@@ -868,17 +915,23 @@ public sealed class HelmTemplateRenderer
             "Values" => context.Values,
             "Chart" => new Dictionary<string, object?>
             {
-                ["Name"] = _chart.Name,
-                ["Version"] = _chart.Version,
-                ["AppVersion"] = _chart.AppVersion,
-                ["Description"] = _chart.Description ?? string.Empty,
-                ["Home"] = _chart.Home ?? string.Empty,
-                ["Sources"] = _chart.Sources ?? new List<object?>(),
-                ["Keywords"] = _chart.Keywords ?? new List<object?>(),
-                ["Maintainers"] = _chart.Maintainers ?? new List<object?>(),
-                ["Type"] = _chart.Type ?? "application",
-                ["Deprecated"] = _chart.Deprecated,
-                ["Annotations"] = _chart.Annotations ?? new Dictionary<string, object?>(StringComparer.Ordinal)
+                ["APIVersion"] = context.Chart.ApiVersion,
+                ["Name"] = context.Chart.Name,
+                ["Version"] = context.Chart.Version,
+                ["AppVersion"] = context.Chart.AppVersion ?? string.Empty,
+                ["Description"] = context.Chart.Description ?? string.Empty,
+                ["Home"] = context.Chart.Home ?? string.Empty,
+                ["Sources"] = context.Chart.Sources ?? new List<object?>(),
+                ["Keywords"] = context.Chart.Keywords ?? new List<object?>(),
+                ["Maintainers"] = context.Chart.Maintainers?
+                    .Select(ToTemplateMaintainer)
+                    .Cast<object?>()
+                    .ToList() ?? new List<object?>(),
+                ["Type"] = context.Chart.Type ?? "application",
+                ["Deprecated"] = context.Chart.Deprecated,
+                ["KubeVersion"] = context.Chart.KubeVersion ?? string.Empty,
+                ["Annotations"] = context.Chart.Annotations ?? new Dictionary<string, object?>(StringComparer.Ordinal),
+                ["Dependencies"] = context.Chart.Dependencies.Select(ToTemplateDependency).ToList()
             },
             "Release" => new Dictionary<string, object?>
             {
@@ -886,18 +939,19 @@ public sealed class HelmTemplateRenderer
                 ["Namespace"] = context.ReleaseNamespace,
                 ["Service"] = "Helm",
                 ["IsInstall"] = context.IsInstall,
-                ["IsUpgrade"] = context.IsUpgrade
+                ["IsUpgrade"] = context.IsUpgrade,
+                ["Revision"] = context.Revision
             },
             "Capabilities" => new Dictionary<string, object?>
             {
                 ["KubeVersion"] = new Dictionary<string, object?>
                 {
                     ["Version"] = context.KubeVersion ?? "v1.29.0",
-                    ["Major"] = "1",
-                    ["Minor"] = "29",
+                    ["Major"] = GetKubeVersionPart(context.KubeVersion, 0, "1"),
+                    ["Minor"] = GetKubeVersionPart(context.KubeVersion, 1, "29"),
                     ["GitVersion"] = context.KubeVersion ?? "v1.29.0"
                 },
-                ["APIVersions"] = context.ApiVersions ?? new List<object?>(),
+                ["APIVersions"] = context.ApiVersions ?? DefaultApiVersions,
                 ["HelmVersion"] = new Dictionary<string, object?>
                 {
                     ["Version"] = "chemical-ai-helm managed-0.3.0",
@@ -906,17 +960,28 @@ public sealed class HelmTemplateRenderer
                     ["GoVersion"] = "dotnet/9.0"
                 }
             },
-            "Files" => context.Files ?? new Dictionary<string, object?>(StringComparer.Ordinal),
+            "Files" => context.Chart.Files.ToDictionary(
+                pair => pair.Key,
+                pair => (object?)Encoding.UTF8.GetString(pair.Value),
+                StringComparer.Ordinal),
             "Template" => new Dictionary<string, object?>
             {
-                ["Name"] = $"templates/{context.CurrentTemplatePath}",
-                ["BasePath"] = "templates/"
+                ["Name"] = $"{context.Chart.Name}/{context.CurrentTemplatePath}",
+                ["BasePath"] = $"{context.Chart.Name}/templates"
             },
             _ => context.Dot
         };
 
         var skip = parts.FirstOrDefault() is "Values" or "Chart" or "Release" or "Capabilities" or "Files" or "Template" ? 1 : 0;
-        foreach (var part in parts.Skip(skip))
+        return ResolveMembers(current, parts.Skip(skip));
+    }
+
+    private static object? ResolveMembers(object? current, string path)
+        => ResolveMembers(current, path.Split('.', StringSplitOptions.RemoveEmptyEntries));
+
+    private static object? ResolveMembers(object? current, IEnumerable<string> parts)
+    {
+        foreach (var part in parts)
         {
             current = current switch
             {
@@ -928,6 +993,129 @@ public sealed class HelmTemplateRenderer
 
         return current;
     }
+
+    private object? EvaluateFilesMethod(
+        string head,
+        IReadOnlyList<string> tokens,
+        TemplateContext context)
+    {
+        var path = ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        return head switch
+        {
+            ".Files.Get" => context.Chart.Files.TryGetValue(path, out var content)
+                ? Encoding.UTF8.GetString(content)
+                : string.Empty,
+            ".Files.GetBytes" => context.Chart.Files.TryGetValue(path, out var content)
+                ? content
+                : Array.Empty<byte>(),
+            ".Files.Lines" => context.Chart.Files.TryGetValue(path, out var content)
+                ? HelmCliRunnerCompatibleLines(Encoding.UTF8.GetString(content))
+                : new List<object?>(),
+            _ => throw new NotSupportedException($"Helm files method '{head}' is not supported by the managed renderer.")
+        };
+    }
+
+    private static List<object?> HelmCliRunnerCompatibleLines(string content)
+    {
+        var normalized = content
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace("\r", "\n", StringComparison.Ordinal);
+        return normalized.Split('\n').Cast<object?>().ToList();
+    }
+
+    private static bool CapabilitiesHasApiVersion(
+        IReadOnlyList<string> tokens,
+        TemplateContext context)
+    {
+        var apiVersion = ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
+        return (context.ApiVersions ?? DefaultApiVersions).Any(
+            value => string.Equals(ToTemplateString(value), apiVersion, StringComparison.Ordinal));
+    }
+
+    private static string GetKubeVersionPart(string? version, int index, string fallback)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+            return fallback;
+
+        var normalized = version.Trim().TrimStart('v', 'V');
+        var prereleaseIndex = normalized.IndexOfAny(['-', '+']);
+        if (prereleaseIndex >= 0)
+            normalized = normalized[..prereleaseIndex];
+
+        var parts = normalized.Split('.');
+        return parts.Length > index && parts[index].Length > 0
+            ? parts[index]
+            : fallback;
+    }
+
+    private static Dictionary<string, object?> ToTemplateDependency(HelmChartDependency dependency)
+        => new(StringComparer.Ordinal)
+        {
+            ["Name"] = dependency.Name,
+            ["Version"] = dependency.Version ?? string.Empty,
+            ["Repository"] = dependency.Repository ?? string.Empty,
+            ["Condition"] = dependency.Condition ?? string.Empty,
+            ["Tags"] = dependency.Tags ?? new List<string>()
+        };
+
+    private static Dictionary<string, object?> ToTemplateMaintainer(object? maintainer)
+    {
+        if (maintainer is not IDictionary<string, object?> fields)
+            return new Dictionary<string, object?>(StringComparer.Ordinal);
+
+        return new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["Name"] = fields.TryGetValue("name", out var name) ? name : string.Empty,
+            ["Email"] = fields.TryGetValue("email", out var email) ? email : string.Empty,
+            ["Url"] = fields.TryGetValue("url", out var url) ? url : string.Empty
+        };
+    }
+
+    private static readonly List<object?> DefaultApiVersions =
+    [
+        "v1",
+        "admissionregistration.k8s.io/v1",
+        "admissionregistration.k8s.io/v1beta1",
+        "apiextensions.k8s.io/v1",
+        "apiextensions.k8s.io/v1beta1",
+        "apps/v1",
+        "apps/v1beta1",
+        "apps/v1beta2",
+        "authentication.k8s.io/v1",
+        "authentication.k8s.io/v1beta1",
+        "authorization.k8s.io/v1",
+        "authorization.k8s.io/v1beta1",
+        "autoscaling/v1",
+        "autoscaling/v2",
+        "autoscaling/v2beta1",
+        "autoscaling/v2beta2",
+        "batch/v1",
+        "batch/v1beta1",
+        "certificates.k8s.io/v1",
+        "certificates.k8s.io/v1beta1",
+        "coordination.k8s.io/v1beta1",
+        "discovery.k8s.io/v1",
+        "discovery.k8s.io/v1beta1",
+        "events.k8s.io/v1",
+        "events.k8s.io/v1beta1",
+        "extensions/v1beta1",
+        "flowcontrol.apiserver.k8s.io/v1alpha1",
+        "flowcontrol.apiserver.k8s.io/v1beta1",
+        "flowcontrol.apiserver.k8s.io/v1beta2",
+        "networking.k8s.io/v1",
+        "networking.k8s.io/v1beta1",
+        "node.k8s.io/v1",
+        "node.k8s.io/v1beta1",
+        "policy/v1",
+        "policy/v1beta1",
+        "rbac.authorization.k8s.io/v1",
+        "rbac.authorization.k8s.io/v1beta1",
+        "rbac.authorization.k8s.io/v1alpha1",
+        "scheduling.k8s.io/v1",
+        "scheduling.k8s.io/v1beta1",
+        "storage.k8s.io/v1",
+        "storage.k8s.io/v1beta1"
+    ];
 
     private static object? ResolveVariable(string token, TemplateContext context)
     {
@@ -2265,9 +2453,9 @@ public sealed class HelmTemplateRenderer
     {
         public bool IsInstall { get; init; } = true;
         public bool IsUpgrade { get; init; }
+        public int Revision { get; init; } = 1;
         public string? KubeVersion { get; init; }
         public List<object?>? ApiVersions { get; init; }
-        public Dictionary<string, object?>? Files { get; init; }
         public string? CurrentTemplatePath { get; init; }
     }
 }
