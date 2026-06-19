@@ -1042,11 +1042,11 @@ public sealed class HelmTemplateRenderer
                 ? bytes
                 : Encoding.UTF8.GetBytes(ToTemplateString(value)));
 
-    private static bool CapabilitiesHasApiVersion(
+    private bool CapabilitiesHasApiVersion(
         IReadOnlyList<string> tokens,
         TemplateContext context)
     {
-        var apiVersion = ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
+        var apiVersion = ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
         return (context.ApiVersions ?? DefaultApiVersions).Any(
             value => string.Equals(ToTemplateString(value), apiVersion, StringComparison.Ordinal));
     }

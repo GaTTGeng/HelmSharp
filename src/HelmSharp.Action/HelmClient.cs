@@ -285,11 +285,12 @@ public class HelmClient : IHelmClient
     internal static (bool IsUpgrade, int Revision) ResolveReleaseRenderState(
         IReadOnlyCollection<HelmReleaseRecord> history)
     {
-        var isUpgrade = history.Any(record =>
-            !string.Equals(record.Status, "uninstalled", StringComparison.OrdinalIgnoreCase));
-        var revision = history.Count == 0
-            ? 1
-            : history.Max(record => record.Revision) + 1;
+        if (history.Count == 0)
+            return (false, 1);
+
+        var latest = history.MaxBy(record => record.Revision)!;
+        var isUpgrade = !string.Equals(latest.Status, "uninstalled", StringComparison.OrdinalIgnoreCase);
+        var revision = latest.Revision + 1;
         return (isUpgrade, revision);
     }
 
