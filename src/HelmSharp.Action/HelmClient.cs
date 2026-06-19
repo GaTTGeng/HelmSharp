@@ -134,8 +134,8 @@ public class HelmClient : IHelmClient
                 values,
                 options.KubeVersion,
                 options.ApiVersions,
-                false,
-                1);
+                request.DryRunIsUpgrade,
+                request.DryRunRevision);
             var dryRunManifest = dryRunRenderer.Render();
             if (!string.IsNullOrWhiteSpace(dryRunManifest))
                 yield return dryRunManifest.TrimEnd();

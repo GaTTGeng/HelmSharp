@@ -236,6 +236,48 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task UpgradeInstallStreamAsync_DryRunUsesRequestedReleaseState()
+    {
+        var chartDir = Path.Combine(_tempDir, "dry-run-upgrade-chart");
+        Directory.CreateDirectory(Path.Combine(chartDir, "templates"));
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "Chart.yaml"), """
+            apiVersion: v2
+            name: dry-run-upgrade-chart
+            version: 0.1.0
+            """);
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "values.yaml"), string.Empty);
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: dry-run-upgrade-config
+            data:
+              isInstall: {{ .Release.IsInstall | quote }}
+              isUpgrade: {{ .Release.IsUpgrade | quote }}
+              revision: {{ .Release.Revision | quote }}
+            """);
+
+        var client = new HelmClient(new StaticHelmOptionsProvider());
+        var lines = new List<string>();
+        await foreach (var line in client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "dry-run-upgrade",
+            Chart = chartDir,
+            DryRun = true,
+            DryRunIsUpgrade = true,
+            DryRunRevision = 7
+        }))
+        {
+            lines.Add(line);
+        }
+
+        var output = string.Join('\n', lines);
+        Assert.Contains("isInstall: \"false\"", output);
+        Assert.Contains("isUpgrade: \"true\"", output);
+        Assert.Contains("revision: \"7\"", output);
+    }
+
+    [Fact]
     public void ResolveReleaseRenderState_UsesHistoryForUpgradeAndRevision()
     {
         var history = new List<HelmReleaseRecord>
