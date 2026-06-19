@@ -31,4 +31,9 @@ public class HelmExecutionOptions
     /// If null, the check is skipped.
     /// </summary>
     public string? KubeVersion { get; set; }
+
+    /// <summary>
+    /// Additional Kubernetes API versions exposed through template capabilities.
+    /// </summary>
+    public List<string>? ApiVersions { get; set; }
 }

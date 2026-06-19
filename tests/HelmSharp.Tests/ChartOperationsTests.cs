@@ -1,5 +1,6 @@
 using HelmSharp.Action;
 using HelmSharp.Chart;
+using HelmSharp.Release;
 
 namespace HelmSharp.Tests;
 
@@ -199,9 +200,20 @@ public class ChartOperationsTests : IDisposable
             kind: ConfigMap
             metadata:
               name: dry-run-config
+            data:
+              kubeVersion: {{ .Capabilities.KubeVersion.Version | quote }}
+              hasCustomApi: {{ .Capabilities.APIVersions.Has "example.test/v1" | quote }}
+              isInstall: {{ .Release.IsInstall | quote }}
+              isUpgrade: {{ .Release.IsUpgrade | quote }}
+              revision: {{ .Release.Revision | quote }}
             """);
 
-        var client = new HelmClient(new StaticHelmOptionsProvider());
+        var client = new HelmClient(new StaticHelmOptionsProvider(new HelmExecutionOptions
+        {
+            DefaultNamespace = "default",
+            KubeVersion = "1.31",
+            ApiVersions = ["example.test/v1"]
+        }));
         var lines = new List<string>();
         await foreach (var line in client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
         {
@@ -215,7 +227,41 @@ public class ChartOperationsTests : IDisposable
 
         var output = string.Join('\n', lines);
         Assert.Contains("kind: ConfigMap", output);
+        Assert.Contains("kubeVersion: \"v1.31.0\"", output);
+        Assert.Contains("hasCustomApi: \"true\"", output);
+        Assert.Contains("isInstall: \"true\"", output);
+        Assert.Contains("isUpgrade: \"false\"", output);
+        Assert.Contains("revision: \"1\"", output);
         Assert.Contains("Release dry-run dry run complete", output);
+    }
+
+    [Fact]
+    public void ResolveReleaseRenderState_UsesHistoryForUpgradeAndRevision()
+    {
+        var history = new List<HelmReleaseRecord>
+        {
+            new() { Revision = 1, Status = "superseded" },
+            new() { Revision = 3, Status = "deployed" }
+        };
+
+        var state = HelmClient.ResolveReleaseRenderState(history);
+
+        Assert.True(state.IsUpgrade);
+        Assert.Equal(4, state.Revision);
+    }
+
+    [Fact]
+    public void ResolveReleaseRenderState_UninstalledHistoryStartsInstallWithNextRevision()
+    {
+        var history = new List<HelmReleaseRecord>
+        {
+            new() { Revision = 2, Status = "uninstalled" }
+        };
+
+        var state = HelmClient.ResolveReleaseRenderState(history);
+
+        Assert.False(state.IsUpgrade);
+        Assert.Equal(3, state.Revision);
     }
 
     [Fact]
@@ -370,8 +416,20 @@ public class ChartOperationsTests : IDisposable
 
     private sealed class StaticHelmOptionsProvider : IHelmOptionsProvider
     {
+        private readonly HelmExecutionOptions _options;
+
+        public StaticHelmOptionsProvider()
+            : this(new HelmExecutionOptions { DefaultNamespace = "default" })
+        {
+        }
+
+        public StaticHelmOptionsProvider(HelmExecutionOptions options)
+        {
+            _options = options;
+        }
+
         public ValueTask<HelmExecutionOptions> GetHelmAsync(CancellationToken cancellationToken = default)
-            => ValueTask.FromResult(new HelmExecutionOptions { DefaultNamespace = "default" });
+            => ValueTask.FromResult(_options);
     }
 
     public void Dispose()
