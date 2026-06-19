@@ -2649,7 +2649,7 @@ public sealed class HelmTemplateRenderer
     }
 }
 
-public sealed class ApiVersionSet : IReadOnlyList<object?>
+internal sealed class ApiVersionSet : IReadOnlyList<object?>
 {
     private readonly List<object?> _versions;
 
