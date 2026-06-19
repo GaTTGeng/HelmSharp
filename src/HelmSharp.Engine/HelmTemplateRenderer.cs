@@ -627,14 +627,18 @@ public sealed class HelmTemplateRenderer
         for (var i = 0; i < parts.Count; i++)
         {
             value = i == 0
-                ? EvaluateExpression(parts[i], context, null)
-                : EvaluateExpression(parts[i], context, value);
+                ? EvaluateExpression(parts[i], context, null, hasPipelineValue: false)
+                : EvaluateExpression(parts[i], context, value, hasPipelineValue: true);
         }
 
         return value;
     }
 
-    private object? EvaluateExpression(string expression, TemplateContext context, object? pipelineValue)
+    private object? EvaluateExpression(
+        string expression,
+        TemplateContext context,
+        object? pipelineValue,
+        bool hasPipelineValue)
     {
         expression = expression.Trim();
         if (expression.Length == 0)
@@ -647,7 +651,7 @@ public sealed class HelmTemplateRenderer
         var head = tokens[0];
         if (head.StartsWith(".Files.", StringComparison.Ordinal))
             return EvaluateFilesMethod(head, tokens, context);
-        if (TryDispatchMethodCall(head, tokens, context, pipelineValue, out var methodResult))
+        if (TryDispatchMethodCall(head, tokens, context, pipelineValue, hasPipelineValue, out var methodResult))
             return methodResult;
 
         return head switch
@@ -1048,6 +1052,7 @@ public sealed class HelmTemplateRenderer
         IReadOnlyList<string> tokens,
         TemplateContext context,
         object? pipelineValue,
+        bool hasPipelineValue,
         out object? result)
     {
         result = null;
@@ -1065,7 +1070,7 @@ public sealed class HelmTemplateRenderer
             return false;
 
         var explicitArgCount = tokens.Count - 1;
-        var totalArgCount = explicitArgCount + (pipelineValue is null ? 0 : 1);
+        var totalArgCount = explicitArgCount + (hasPipelineValue ? 1 : 0);
         if (totalArgCount != 1)
             throw new InvalidOperationException(
                 $"wrong number of args for Has: want 1 got {totalArgCount}");
