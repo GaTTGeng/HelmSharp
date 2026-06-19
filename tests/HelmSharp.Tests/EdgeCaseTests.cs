@@ -347,6 +347,68 @@ public class EdgeCaseTests
     }
 
     [Fact]
+    public void APIVersionsHas_WithNoArgument_ThrowsArityError()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            result: {{ .Capabilities.APIVersions.Has }}
+            """;
+        var renderer = new HelmTemplateRenderer(
+            chart, "rel", "default", new Dictionary<string, object?>());
+
+        var ex = Assert.Throws<InvalidOperationException>(() => renderer.Render());
+        Assert.Equal("wrong number of args for Has: want 1 got 0", ex.Message);
+    }
+
+    [Fact]
+    public void APIVersionsHas_WithNoArgumentViaVariable_ThrowsArityError()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            {{- $apis := .Capabilities.APIVersions -}}
+            result: {{ $apis.Has }}
+            """;
+        var renderer = new HelmTemplateRenderer(
+            chart, "rel", "default", new Dictionary<string, object?>());
+
+        var ex = Assert.Throws<InvalidOperationException>(() => renderer.Render());
+        Assert.Equal("wrong number of args for Has: want 1 got 0", ex.Message);
+    }
+
+    [Fact]
+    public void APIVersionsHas_WithTooManyArguments_ThrowsArityError()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            result: {{ .Capabilities.APIVersions.Has "v1" "v2" }}
+            """;
+        var renderer = new HelmTemplateRenderer(
+            chart, "rel", "default", new Dictionary<string, object?>());
+
+        var ex = Assert.Throws<InvalidOperationException>(() => renderer.Render());
+        Assert.Equal("wrong number of args for Has: want 1 got 2", ex.Message);
+    }
+
+    [Fact]
+    public void APIVersionsHas_WithPipedArgument_ResolvesCorrectly()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            {{- $apis := .Capabilities.APIVersions -}}
+            piped: {{ "batch/v1" | $apis.Has }}
+            pipedMissing: {{ "missing/v1" | $apis.Has }}
+            """;
+        var renderer = new HelmTemplateRenderer(
+            chart, "rel", "default", new Dictionary<string, object?>());
+
+        var result = renderer.Render();
+        _output.WriteLine(result);
+
+        Assert.Contains("piped: true", result);
+        Assert.Contains("pipedMissing: false", result);
+    }
+
+    [Fact]
     public void ChartDependencies_ExposeCompleteDependencyShape()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };

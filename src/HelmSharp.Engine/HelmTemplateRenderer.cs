@@ -647,7 +647,7 @@ public sealed class HelmTemplateRenderer
         var head = tokens[0];
         if (head.StartsWith(".Files.", StringComparison.Ordinal))
             return EvaluateFilesMethod(head, tokens, context);
-        if (TryDispatchMethodCall(head, tokens, context, out var methodResult))
+        if (TryDispatchMethodCall(head, tokens, context, pipelineValue, out var methodResult))
             return methodResult;
 
         return head switch
@@ -1047,6 +1047,7 @@ public sealed class HelmTemplateRenderer
         string head,
         IReadOnlyList<string> tokens,
         TemplateContext context,
+        object? pipelineValue,
         out object? result)
     {
         result = null;
@@ -1063,8 +1064,15 @@ public sealed class HelmTemplateRenderer
         if (receiver is not ApiVersionSet versionSet)
             return false;
 
-        var arg = ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
-        result = versionSet.Has(arg);
+        var explicitArgCount = tokens.Count - 1;
+        var totalArgCount = explicitArgCount + (pipelineValue is null ? 0 : 1);
+        if (totalArgCount != 1)
+            throw new InvalidOperationException(
+                $"wrong number of args for Has: want 1 got {totalArgCount}");
+
+        var argToken = explicitArgCount == 1 ? tokens[1] : null;
+        var argValue = argToken is null ? pipelineValue : EvaluateToken(argToken, context);
+        result = versionSet.Has(ToTemplateString(argValue));
         return true;
     }
 
