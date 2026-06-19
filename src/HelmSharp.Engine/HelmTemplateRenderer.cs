@@ -55,7 +55,7 @@ public sealed class HelmTemplateRenderer
             IsUpgrade = isUpgrade,
             Revision = revision,
             KubeVersion = kubeVersion,
-            ApiVersions = apiVersions?.Cast<object?>().ToList()
+            ApiVersions = BuildApiVersions(apiVersions)
         };
     }
 
@@ -1043,6 +1043,17 @@ public sealed class HelmTemplateRenderer
         var apiVersion = ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
         return (context.ApiVersions ?? DefaultApiVersions).Any(
             value => string.Equals(ToTemplateString(value), apiVersion, StringComparison.Ordinal));
+    }
+
+    private static List<object?> BuildApiVersions(IEnumerable<string>? apiVersions)
+    {
+        var customVersions = apiVersions ?? [];
+        return DefaultApiVersions
+            .Select(ToTemplateString)
+            .Concat(customVersions)
+            .Distinct(StringComparer.Ordinal)
+            .Cast<object?>()
+            .ToList();
     }
 
     private static string GetKubeVersionPart(string? version, int index, string fallback)

@@ -236,6 +236,7 @@ public class EdgeCaseTests
             kubeVersion: {{ .Capabilities.KubeVersion.Version | quote }}
             kubeMajor: {{ .Capabilities.KubeVersion.Major | quote }}
             kubeMinor: {{ .Capabilities.KubeVersion.Minor | quote }}
+            hasDefaultApi: {{ .Capabilities.APIVersions.Has "v1" | quote }}
             hasCustomApi: {{ .Capabilities.APIVersions.Has "example.test/v1" | quote }}
             isInstall: {{ .Release.IsInstall | quote }}
             isUpgrade: {{ .Release.IsUpgrade | quote }}
@@ -256,6 +257,7 @@ public class EdgeCaseTests
         Assert.Contains("kubeVersion: \"v1.31.4\"", result);
         Assert.Contains("kubeMajor: \"1\"", result);
         Assert.Contains("kubeMinor: \"31\"", result);
+        Assert.Contains("hasDefaultApi: \"true\"", result);
         Assert.Contains("hasCustomApi: \"true\"", result);
         Assert.Contains("isInstall: \"false\"", result);
         Assert.Contains("isUpgrade: \"true\"", result);
