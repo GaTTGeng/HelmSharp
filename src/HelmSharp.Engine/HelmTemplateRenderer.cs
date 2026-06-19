@@ -55,7 +55,8 @@ public sealed class HelmTemplateRenderer
             IsUpgrade = isUpgrade,
             Revision = revision,
             KubeVersion = kubeVersion,
-            ApiVersions = BuildApiVersions(apiVersions)
+            ApiVersions = BuildApiVersions(apiVersions),
+            Dependencies = BuildEffectiveDependencies(chart.Dependencies, values)
         };
     }
 
@@ -99,17 +100,12 @@ public sealed class HelmTemplateRenderer
         // Render subchart templates
         foreach (var (name, subchart) in _chart.Subcharts)
         {
-            // Check if subchart is enabled
-            var isEnabled = true;
-            foreach (var dep in _chart.Dependencies)
-            {
-                if (string.Equals(dep.Name, name, StringComparison.OrdinalIgnoreCase))
-                {
-                    isEnabled = dep.Enabled;
-                    break;
-                }
-            }
-            if (!isEnabled) continue;
+            var matchingDependency = _root.Dependencies.FirstOrDefault(
+                dependency =>
+                    string.Equals(dependency.Name, name, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(dependency.Alias, name, StringComparison.OrdinalIgnoreCase));
+            if (_chart.Dependencies.Count > 0 && matchingDependency is null)
+                continue;
 
             var subchartValues = HelmValues.BuildSubchartValues(subchart, _root.Values, name);
             var subchartContext = new TemplateContext(
@@ -122,7 +118,8 @@ public sealed class HelmTemplateRenderer
                 Revision = _root.Revision,
                 KubeVersion = _root.KubeVersion,
                 ApiVersions = _root.ApiVersions,
-                TemplateChartPath = $"{_chart.Name}/charts/{name}"
+                TemplateChartPath = $"{_chart.Name}/charts/{name}",
+                Dependencies = BuildEffectiveDependencies(subchart.Dependencies, subchartValues)
             };
 
             foreach (var (path, content) in subchart.Templates)
@@ -945,7 +942,7 @@ public sealed class HelmTemplateRenderer
                 ["Deprecated"] = context.Chart.Deprecated,
                 ["KubeVersion"] = context.Chart.KubeVersion ?? string.Empty,
                 ["Annotations"] = context.Chart.Annotations ?? new Dictionary<string, object?>(StringComparer.Ordinal),
-                ["Dependencies"] = context.Chart.Dependencies.Select(ToTemplateDependency).ToList()
+                ["Dependencies"] = context.Dependencies.Select(ToTemplateDependency).ToList()
             },
             "Release" => new Dictionary<string, object?>
             {
@@ -1110,6 +1107,97 @@ public sealed class HelmTemplateRenderer
             ["ImportValues"] = dependency.ImportValues ?? new List<object?>(),
             ["Alias"] = dependency.Alias ?? string.Empty
         };
+
+    private static List<HelmChartDependency> BuildEffectiveDependencies(
+        IEnumerable<HelmChartDependency> dependencies,
+        IDictionary<string, object?> values)
+    {
+        var tags = values.TryGetValue("tags", out var tagsValue)
+            ? tagsValue as IDictionary<string, object?>
+            : null;
+        var result = new List<HelmChartDependency>();
+
+        foreach (var dependency in dependencies)
+        {
+            var enabled = EvaluateDependencyTags(dependency.Tags, tags);
+
+            foreach (var condition in (dependency.Condition ?? string.Empty)
+                         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (TryGetBooleanPath(values, condition, out var conditionValue))
+                {
+                    enabled = conditionValue;
+                    break;
+                }
+            }
+
+            if (!enabled)
+                continue;
+
+            result.Add(new HelmChartDependency
+            {
+                Name = dependency.Name,
+                Version = dependency.Version,
+                Repository = dependency.Repository,
+                Condition = dependency.Condition,
+                Tags = dependency.Tags?.ToList(),
+                Enabled = true,
+                ImportValues = dependency.ImportValues?.ToList(),
+                Alias = dependency.Alias
+            });
+        }
+
+        return result;
+    }
+
+    private static bool EvaluateDependencyTags(
+        IEnumerable<string>? dependencyTags,
+        IDictionary<string, object?>? valuesTags)
+    {
+        var hasTrue = false;
+        var hasFalse = false;
+
+        foreach (var tag in dependencyTags ?? [])
+        {
+            if (valuesTags?.TryGetValue(tag, out var value) != true || value is not bool enabled)
+                continue;
+
+            if (enabled)
+                hasTrue = true;
+            else
+                hasFalse = true;
+        }
+
+        return hasTrue || !hasFalse;
+    }
+
+    private static bool TryGetBooleanPath(
+        IDictionary<string, object?> values,
+        string path,
+        out bool result)
+    {
+        object? current = values;
+        foreach (var part in path.Split(
+                     '.',
+                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (current is not IDictionary<string, object?> dictionary ||
+                !dictionary.TryGetValue(part, out current))
+            {
+                result = false;
+                return false;
+            }
+        }
+
+        if (current is bool boolean)
+        {
+            result = boolean;
+            return true;
+        }
+
+        result = false;
+        return false;
+    }
 
     private static Dictionary<string, object?> ToTemplateMaintainer(object? maintainer)
     {
@@ -2523,5 +2611,6 @@ public sealed class HelmTemplateRenderer
         public List<object?>? ApiVersions { get; init; }
         public string? CurrentTemplatePath { get; init; }
         public string? TemplateChartPath { get; init; }
+        public List<HelmChartDependency> Dependencies { get; init; } = [];
     }
 }
