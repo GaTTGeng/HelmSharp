@@ -1127,7 +1127,10 @@ public sealed class HelmTemplateRenderer
 
         foreach (var dependency in dependencies)
         {
-            var enabled = EvaluateDependencyTags(dependency.Tags, tags);
+            var enabled = dependency.Enabled;
+            var tagOverride = EvaluateDependencyTags(dependency.Tags, tags);
+            if (tagOverride.HasValue)
+                enabled = tagOverride.Value;
 
             foreach (var condition in (dependency.Condition ?? string.Empty)
                          .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
@@ -1158,7 +1161,7 @@ public sealed class HelmTemplateRenderer
         return result;
     }
 
-    private static bool EvaluateDependencyTags(
+    private static bool? EvaluateDependencyTags(
         IEnumerable<string>? dependencyTags,
         IDictionary<string, object?>? valuesTags)
     {
@@ -1176,7 +1179,11 @@ public sealed class HelmTemplateRenderer
                 hasFalse = true;
         }
 
-        return hasTrue || !hasFalse;
+        if (hasTrue)
+            return true;
+        if (hasFalse)
+            return false;
+        return null;
     }
 
     private static bool TryGetBooleanPath(

@@ -309,7 +309,7 @@ public class EdgeCaseTests
             Repository = "https://charts.example.test",
             Condition = "redis.enabled",
             Tags = ["cache"],
-            Enabled = false,
+            Enabled = true,
             ImportValues =
             [
                 "data",
@@ -343,7 +343,7 @@ public class EdgeCaseTests
 
         var result = renderer.Render();
 
-        Assert.Contains("name: \"redis\"", result);
+        Assert.Contains("name: \"cache\"", result);
         Assert.Contains("version: \"17.x.x\"", result);
         Assert.Contains("repository: \"https://charts.example.test\"", result);
         Assert.Contains("condition: \"redis.enabled\"", result);
@@ -510,6 +510,71 @@ public class EdgeCaseTests
             expectedEnabled,
             result.Contains("name: child", StringComparison.Ordinal));
         Assert.True(chart.Dependencies[0].Enabled);
+    }
+
+    [Theory]
+    [InlineData(false, null, null, false)]
+    [InlineData(false, true, null, true)]
+    [InlineData(false, null, true, true)]
+    [InlineData(true, false, null, false)]
+    public void Dependencies_UseExplicitEnabledAsInitialState(
+        bool declaredEnabled,
+        bool? tagValue,
+        bool? conditionValue,
+        bool expectedEnabled)
+    {
+        var chart = new HelmChart { Name = "parent", Version = "1.0.0", ValuesYaml = "" };
+        chart.Dependencies.Add(new HelmChartDependency
+        {
+            Name = "child",
+            Version = "1.0.0",
+            Enabled = declaredEnabled,
+            Condition = "child.enabled",
+            Tags = ["optional"]
+        });
+        chart.Templates["templates/parent.yaml"] = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: parent
+            data:
+              dependencyCount: {{ len .Chart.Dependencies | quote }}
+            """;
+        var subchart = new HelmChart { Name = "child", Version = "1.0.0", ValuesYaml = "" };
+        subchart.Templates["templates/child.yaml"] = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: child
+            """;
+        chart.Subcharts["child"] = subchart;
+
+        var values = new Dictionary<string, object?>();
+        if (tagValue.HasValue)
+        {
+            values["tags"] = new Dictionary<string, object?>
+            {
+                ["optional"] = tagValue.Value
+            };
+        }
+        if (conditionValue.HasValue)
+        {
+            values["child"] = new Dictionary<string, object?>
+            {
+                ["enabled"] = conditionValue.Value
+            };
+        }
+
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default", values);
+        var result = renderer.Render();
+
+        Assert.Contains(
+            $"dependencyCount: \"{(expectedEnabled ? 1 : 0)}\"",
+            result);
+        Assert.Equal(
+            expectedEnabled,
+            result.Contains("name: child", StringComparison.Ordinal));
+        Assert.Equal(declaredEnabled, chart.Dependencies[0].Enabled);
     }
 
     [Fact]
