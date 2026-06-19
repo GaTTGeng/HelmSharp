@@ -1,0 +1,5 @@
+Thank you for installing {{ .Chart.Name }}.
+
+Release: {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+Service port: {{ .Values.service.port }}

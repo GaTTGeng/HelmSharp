@@ -1,0 +1,5 @@
+image:
+  repository: nginx
+  tag: "1.25"
+labels:
+  team: platform
