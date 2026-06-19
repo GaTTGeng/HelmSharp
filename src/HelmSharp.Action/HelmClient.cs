@@ -124,13 +124,21 @@ public class HelmClient : IHelmClient
         }
 
         var values = await HelmValues.BuildAsync(chart, request.ValuesFile, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
-        var renderer = new HelmTemplateRenderer(chart, request.ReleaseName, ns, values);
-        var manifest = renderer.Render();
 
         if (request.DryRun)
         {
-            if (!string.IsNullOrWhiteSpace(manifest))
-                yield return manifest.TrimEnd();
+            var dryRunRenderer = new HelmTemplateRenderer(
+                chart,
+                request.ReleaseName,
+                ns,
+                values,
+                options.KubeVersion,
+                options.ApiVersions,
+                request.DryRunIsUpgrade,
+                request.DryRunRevision);
+            var dryRunManifest = dryRunRenderer.Render();
+            if (!string.IsNullOrWhiteSpace(dryRunManifest))
+                yield return dryRunManifest.TrimEnd();
             yield return $"Release {request.ReleaseName} dry run complete";
             yield break;
         }
@@ -141,6 +149,20 @@ public class HelmClient : IHelmClient
             await KubernetesManifestApplier.EnsureNamespaceAsync(client, ns, cancellationToken);
             yield return $"Namespace {ns} is ready";
         }
+
+        var store = new HelmReleaseStore(client);
+        var existingHistory = await store.HistoryAsync(request.ReleaseName, ns, cancellationToken);
+        var (isUpgrade, revision) = ResolveReleaseRenderState(existingHistory);
+        var renderer = new HelmTemplateRenderer(
+            chart,
+            request.ReleaseName,
+            ns,
+            values,
+            options.KubeVersion,
+            options.ApiVersions,
+            isUpgrade,
+            revision);
+        var manifest = renderer.Render();
 
         // Pre-install CRDs from the chart's crds/ directory
         if (!request.SkipCRDs && chart.Crds.Count > 0)
@@ -167,10 +189,6 @@ public class HelmClient : IHelmClient
                 if (crdError is not null) yield return $"  CRD warning: {crdError}";
             }
         }
-
-        var store = new HelmReleaseStore(client);
-        var existingHistory = await store.HistoryAsync(request.ReleaseName, ns, cancellationToken);
-        var isUpgrade = existingHistory.Any(x => x.Status != "uninstalled");
 
         // Extract hooks from manifest
         var (mainManifest, hooks) = HelmHookExecutor.ExtractHooks(manifest, ns);
@@ -239,7 +257,6 @@ public class HelmClient : IHelmClient
                 yield return waitLine;
             }
         }
-        var revision = await store.NextRevisionAsync(request.ReleaseName, ns, cancellationToken);
         var status = isUpgrade ? "deployed" : "deployed";
         await store.SaveAsync(new HelmReleaseRecord
         {
@@ -263,6 +280,18 @@ public class HelmClient : IHelmClient
         }
 
         yield return $"Release {request.ReleaseName} revision {revision} deployed ({applied} resources)";
+    }
+
+    internal static (bool IsUpgrade, int Revision) ResolveReleaseRenderState(
+        IReadOnlyCollection<HelmReleaseRecord> history)
+    {
+        if (history.Count == 0)
+            return (false, 1);
+
+        var latest = history.MaxBy(record => record.Revision)!;
+        var isUpgrade = !string.Equals(latest.Status, "uninstalled", StringComparison.OrdinalIgnoreCase);
+        var revision = latest.Revision + 1;
+        return (isUpgrade, revision);
     }
 
     public async Task<CommandResult> UninstallAsync(
@@ -440,7 +469,14 @@ public class HelmClient : IHelmClient
         var chartPath = await ResolveChartPathAsync(request.Chart, null, options, cancellationToken);
         var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
         var values = await HelmValues.BuildAsync(chart, request.ValuesFile, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
-        var renderer = new HelmTemplateRenderer(chart, request.ReleaseName, ns, values);
+        var renderer = new HelmTemplateRenderer(
+            chart,
+            request.ReleaseName,
+            ns,
+            values,
+            request.KubeVersion,
+            request.ApiVersions,
+            request.IsUpgrade);
         var manifest = renderer.Render();
 
         // Output to directory if specified
@@ -477,7 +513,14 @@ public class HelmClient : IHelmClient
         var ns = request.Namespace ?? options.DefaultNamespace ?? "default";
         var chart = await HelmChartLoader.LoadAsync(request.Chart, cancellationToken);
         var values = await HelmValues.BuildAsync(chart, request.ValuesFile, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
-        var renderer = new HelmTemplateRenderer(chart, request.ReleaseName, ns, values);
+        var renderer = new HelmTemplateRenderer(
+            chart,
+            request.ReleaseName,
+            ns,
+            values,
+            request.KubeVersion,
+            request.ApiVersions,
+            request.IsUpgrade);
         var manifest = renderer.Render();
         var notes = renderer.RenderNotes();
         return Ok(manifest + "\n---\n# NOTES.txt:\n" + notes);
@@ -708,13 +751,16 @@ public class HelmClient : IHelmClient
         using var client = await CreateKubernetesClientAsync(options, request.KubeConfigPath, request.KubeConfigContent, cancellationToken);
         var store = new HelmReleaseStore(client);
 
-        var current = await store.GetLatestAsync(releaseName, ns, cancellationToken);
-        var currentManifest = current?.Manifest ?? string.Empty;
+        var history = await store.HistoryAsync(releaseName, ns, cancellationToken);
+        var currentManifest = history
+            .Where(record => string.Equals(record.Status, "deployed", StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(record => record.Revision)
+            .Select(record => record.Manifest)
+            .FirstOrDefault() ?? string.Empty;
 
         var chart = await HelmChartLoader.LoadAsync(request.Chart, cancellationToken);
         var values = await HelmValues.BuildAsync(chart, request.ValuesFile, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
-        var renderer = new HelmTemplateRenderer(chart, request.ReleaseName, ns, values);
-        var newManifest = renderer.Render();
+        var newManifest = RenderDiffManifest(chart, releaseName, ns, values, options, history);
 
         var output = new StringBuilder();
         output.AppendLine("=== Current Manifest ===");
@@ -722,6 +768,27 @@ public class HelmClient : IHelmClient
         output.AppendLine("=== New Manifest ===");
         output.AppendLine(newManifest);
         return Ok(output.ToString());
+    }
+
+    internal static string RenderDiffManifest(
+        HelmChart chart,
+        string releaseName,
+        string releaseNamespace,
+        Dictionary<string, object?> values,
+        HelmExecutionOptions options,
+        IReadOnlyCollection<HelmReleaseRecord> history)
+    {
+        var (isUpgrade, revision) = ResolveReleaseRenderState(history);
+        var renderer = new HelmTemplateRenderer(
+            chart,
+            releaseName,
+            releaseNamespace,
+            values,
+            options.KubeVersion,
+            options.ApiVersions,
+            isUpgrade,
+            revision);
+        return renderer.Render();
     }
 
     public async Task<CommandResult> LintAsync(

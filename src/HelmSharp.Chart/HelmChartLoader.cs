@@ -6,6 +6,10 @@ namespace HelmSharp.Chart;
 
 public sealed class HelmChart
 {
+    /// <summary>
+    /// Gets the chart metadata API version from Chart.yaml.
+    /// </summary>
+    public string ApiVersion { get; init; } = string.Empty;
     public string Name { get; init; } = string.Empty;
     public string Version { get; init; } = string.Empty;
     public string? AppVersion { get; init; }
@@ -45,19 +49,19 @@ public static class HelmChartLoader
 
     private static async Task<HelmChart> LoadFromFilesAsync(
         string chartPath,
-        Dictionary<string, string> files,
+        Dictionary<string, byte[]> files,
         string? chartDir,
         CancellationToken cancellationToken)
     {
-        var chartYaml = files.TryGetValue("Chart.yaml", out var exact)
-            ? exact
-            : files.FirstOrDefault(x => x.Key.EndsWith("/Chart.yaml", StringComparison.OrdinalIgnoreCase)).Value;
-        if (string.IsNullOrWhiteSpace(chartYaml))
+        var chartYamlBytes = FindFile(files, "Chart.yaml");
+        if (chartYamlBytes is null || chartYamlBytes.Length == 0)
             throw new InvalidOperationException($"Chart.yaml was not found in chart {chartPath}.");
 
+        var chartYaml = DecodeText(chartYamlBytes);
         var metadata = HelmYaml.DeserializeDictionary(chartYaml);
         var chart = new HelmChart
         {
+            ApiVersion = HelmYaml.GetString(metadata, "apiVersion") ?? string.Empty,
             Name = HelmYaml.GetString(metadata, "name") ?? Path.GetFileNameWithoutExtension(chartPath),
             Version = HelmYaml.GetString(metadata, "version") ?? string.Empty,
             AppVersion = HelmYaml.GetString(metadata, "appVersion"),
@@ -66,14 +70,14 @@ public static class HelmChartLoader
             Type = HelmYaml.GetString(metadata, "type"),
             Deprecated = string.Equals(HelmYaml.GetString(metadata, "deprecated"), "true", StringComparison.OrdinalIgnoreCase),
             KubeVersion = HelmYaml.GetString(metadata, "kubeVersion"),
-            ValuesYaml = FindFile(files, "values.yaml") ?? string.Empty
+            ValuesYaml = DecodeText(FindFile(files, "values.yaml"))
         };
 
         // Load Chart.lock if present
         var lockContent = FindFile(files, "Chart.lock");
         if (lockContent is not null)
         {
-            var lockDict = HelmYaml.DeserializeDictionary(lockContent);
+            var lockDict = HelmYaml.DeserializeDictionary(DecodeText(lockContent));
             if (lockDict.TryGetValue("dependencies", out var lockDeps) && lockDeps is IList<object?> lockDepsList)
             {
                 foreach (var lockDep in lockDepsList)
@@ -112,9 +116,12 @@ public static class HelmChartLoader
                     Version = HelmYaml.GetString(depDict, "version"),
                     Repository = HelmYaml.GetString(depDict, "repository"),
                     Condition = HelmYaml.GetString(depDict, "condition"),
+                    Alias = HelmYaml.GetString(depDict, "alias"),
                 };
                 if (depDict.TryGetValue("tags", out var tagsObj) && tagsObj is IList<object?> tagsList)
                     depEntry.Tags = tagsList.Select(t => Convert.ToString(t) ?? string.Empty).ToList();
+                if (depDict.TryGetValue("import-values", out var importsObj) && importsObj is IList<object?> importsList)
+                    depEntry.ImportValues = importsList.ToList();
                 if (depDict.TryGetValue("enabled", out var enabledObj))
                     depEntry.Enabled = enabledObj switch
                     {
@@ -139,7 +146,7 @@ public static class HelmChartLoader
                 normalized.StartsWith("templates/", StringComparison.Ordinal))
             {
                 if (!normalized.EndsWith("/", StringComparison.Ordinal))
-                    chart.Templates[normalized] = content;
+                    chart.Templates[normalized] = DecodeText(content);
                 continue;
             }
 
@@ -150,7 +157,7 @@ public static class HelmChartLoader
                 if (normalized.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) ||
                     normalized.EndsWith(".yml", StringComparison.OrdinalIgnoreCase))
                 {
-                    var crdDict = HelmYaml.DeserializeDictionary(content);
+                    var crdDict = HelmYaml.DeserializeDictionary(DecodeText(content));
                     if (crdDict.Count > 0) chart.Crds.Add(crdDict);
                 }
                 continue;
@@ -161,7 +168,7 @@ public static class HelmChartLoader
                 !normalized.Equals("values.yaml", StringComparison.OrdinalIgnoreCase) &&
                 !normalized.EndsWith("/", StringComparison.Ordinal))
             {
-                chart.Files[normalized] = System.Text.Encoding.UTF8.GetBytes(content);
+                chart.Files[normalized] = content;
             }
         }
 
@@ -231,22 +238,22 @@ public static class HelmChartLoader
         return chart;
     }
 
-    private static async Task<Dictionary<string, string>> LoadDirectoryAsync(string chartPath, CancellationToken cancellationToken)
+    private static async Task<Dictionary<string, byte[]>> LoadDirectoryAsync(string chartPath, CancellationToken cancellationToken)
     {
-        var files = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var files = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in Directory.EnumerateFiles(chartPath, "*", SearchOption.AllDirectories))
         {
             cancellationToken.ThrowIfCancellationRequested();
             var relative = NormalizePath(Path.GetRelativePath(chartPath, file));
-            files[relative] = await File.ReadAllTextAsync(file, Encoding.UTF8, cancellationToken);
+            files[relative] = await File.ReadAllBytesAsync(file, cancellationToken);
         }
 
         return files;
     }
 
-    private static async Task<Dictionary<string, string>> LoadArchiveAsync(string chartPath, CancellationToken cancellationToken)
+    private static async Task<Dictionary<string, byte[]>> LoadArchiveAsync(string chartPath, CancellationToken cancellationToken)
     {
-        var files = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var files = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
         await using var file = File.OpenRead(chartPath);
         await using Stream archive = chartPath.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase) ||
                                      chartPath.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase)
@@ -263,14 +270,13 @@ public static class HelmChartLoader
 
             using var memory = new MemoryStream();
             await entry.DataStream.CopyToAsync(memory, cancellationToken);
-            var text = Encoding.UTF8.GetString(memory.ToArray());
-            files[StripChartRoot(NormalizePath(entry.Name))] = text;
+            files[StripChartRoot(NormalizePath(entry.Name))] = memory.ToArray();
         }
 
         return files;
     }
 
-    private static string? FindFile(Dictionary<string, string> files, string fileName)
+    private static byte[]? FindFile(Dictionary<string, byte[]> files, string fileName)
     {
         if (files.TryGetValue(fileName, out var exact))
             return exact;
@@ -278,6 +284,9 @@ public static class HelmChartLoader
         return files.FirstOrDefault(x =>
             x.Key.EndsWith("/" + fileName, StringComparison.OrdinalIgnoreCase)).Value;
     }
+
+    private static string DecodeText(byte[]? content)
+        => content is null ? string.Empty : Encoding.UTF8.GetString(content);
 
     private static string StripChartRoot(string path)
     {

@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-{{ .Chart.Name }}
+  namespace: {{ .Release.Namespace }}
+data:
+  release-name: {{ .Release.Name | quote }}
+  release-namespace: {{ .Release.Namespace | quote }}
+  release-service: {{ .Release.Service | quote }}
+  release-is-install: {{ .Release.IsInstall | quote }}
+  release-is-upgrade: {{ .Release.IsUpgrade | quote }}
+  release-revision: {{ .Release.Revision | quote }}
+  chart-api-version: {{ .Chart.APIVersion | quote }}
+  chart-name: {{ .Chart.Name | quote }}
+  chart-version: {{ .Chart.Version | quote }}
+  chart-app-version: {{ .Chart.AppVersion | quote }}
+  chart-description: {{ .Chart.Description | quote }}
+  chart-home: {{ .Chart.Home | quote }}
+  chart-type: {{ .Chart.Type | quote }}
+  chart-deprecated: {{ .Chart.Deprecated | quote }}
+  chart-kube-version: {{ .Chart.KubeVersion | quote }}
+  chart-source: {{ index .Chart.Sources 0 | quote }}
+  chart-keyword: {{ index .Chart.Keywords 0 | quote }}
+  chart-maintainer-name: {{ (index .Chart.Maintainers 0).Name | quote }}
+  chart-maintainer-url: {{ (index .Chart.Maintainers 0).URL | quote }}
+  chart-annotation: {{ index .Chart.Annotations "example.test/owner" | quote }}
+  chart-dependencies-empty: {{ empty .Chart.Dependencies | quote }}
+  values-repository: {{ .Values.image.repository | quote }}
+  values-empty-default: {{ default "fallback" .Values.emptyString | quote }}
+  values-null-default: {{ default "fallback" .Values.nullValue | quote }}
+  capabilities-kube-version: {{ .Capabilities.KubeVersion.Version | quote }}
+  capabilities-kube-major: {{ .Capabilities.KubeVersion.Major | quote }}
+  capabilities-kube-minor: {{ .Capabilities.KubeVersion.Minor | quote }}
+  capabilities-has-v1: {{ .Capabilities.APIVersions.Has "v1" | quote }}
+  capabilities-has-coordination-v1: {{ .Capabilities.APIVersions.Has "coordination.k8s.io/v1" | quote }}
+  capabilities-has-resource-v1alpha2: {{ .Capabilities.APIVersions.Has "resource.k8s.io/v1alpha2" | quote }}
+  capabilities-has-missing: {{ .Capabilities.APIVersions.Has "example.test/v1" | quote }}
+  capabilities-helm-version-present: {{ not (empty .Capabilities.HelmVersion.Version) | quote }}
+  template-name: {{ .Template.Name | quote }}
+  template-base-path: {{ .Template.BasePath | quote }}
+  files-get: {{ .Files.Get "config/message.txt" | trim | quote }}
+  files-missing: {{ .Files.Get "config/missing.txt" | default "fallback" | quote }}
+  files-line-count: {{ len (.Files.Lines "config/lines.txt") | quote }}

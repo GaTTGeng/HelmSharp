@@ -83,6 +83,16 @@ public class HelmUpgradeInstallRequest
     public bool DryRun { get; set; }
 
     /// <summary>
+    /// If true, render a dry run with upgrade release state.
+    /// </summary>
+    public bool DryRunIsUpgrade { get; set; }
+
+    /// <summary>
+    /// Release revision exposed while rendering a dry run.
+    /// </summary>
+    public int DryRunRevision { get; set; } = 1;
+
+    /// <summary>
     /// If true, force resource replacement.
     /// </summary>
     public bool Force { get; set; }
