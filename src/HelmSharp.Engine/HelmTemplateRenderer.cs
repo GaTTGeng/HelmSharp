@@ -100,14 +100,21 @@ public sealed class HelmTemplateRenderer
         // Render subchart templates
         foreach (var (name, subchart) in _chart.Subcharts)
         {
+            var declaredDependency = _chart.Dependencies.FirstOrDefault(
+                dependency => string.Equals(dependency.Name, name, StringComparison.OrdinalIgnoreCase));
+            var subchartIdentity = declaredDependency?.Alias ?? name;
             var matchingDependency = _root.Dependencies.FirstOrDefault(
-                dependency =>
-                    string.Equals(dependency.Name, name, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(dependency.Alias, name, StringComparison.OrdinalIgnoreCase));
+                dependency => string.Equals(
+                    dependency.Name,
+                    subchartIdentity,
+                    StringComparison.OrdinalIgnoreCase));
             if (_chart.Dependencies.Count > 0 && matchingDependency is null)
                 continue;
 
-            var subchartValues = HelmValues.BuildSubchartValues(subchart, _root.Values, name);
+            var subchartValues = HelmValues.BuildSubchartValues(
+                subchart,
+                _root.Values,
+                subchartIdentity);
             var subchartContext = new TemplateContext(
                 subchart, _root.ReleaseName, _root.ReleaseNamespace,
                 subchartValues, subchartValues,
@@ -118,7 +125,8 @@ public sealed class HelmTemplateRenderer
                 Revision = _root.Revision,
                 KubeVersion = _root.KubeVersion,
                 ApiVersions = _root.ApiVersions,
-                TemplateChartPath = $"{_chart.Name}/charts/{name}",
+                TemplateChartName = subchartIdentity,
+                TemplateChartPath = $"{_chart.Name}/charts/{subchartIdentity}",
                 Dependencies = BuildEffectiveDependencies(subchart.Dependencies, subchartValues)
             };
 
@@ -927,7 +935,7 @@ public sealed class HelmTemplateRenderer
             "Chart" => new Dictionary<string, object?>
             {
                 ["APIVersion"] = context.Chart.ApiVersion,
-                ["Name"] = context.Chart.Name,
+                ["Name"] = context.TemplateChartName ?? context.Chart.Name,
                 ["Version"] = context.Chart.Version,
                 ["AppVersion"] = context.Chart.AppVersion ?? string.Empty,
                 ["Description"] = context.Chart.Description ?? string.Empty,
@@ -1136,7 +1144,7 @@ public sealed class HelmTemplateRenderer
 
             result.Add(new HelmChartDependency
             {
-                Name = dependency.Name,
+                Name = dependency.Alias ?? dependency.Name,
                 Version = dependency.Version,
                 Repository = dependency.Repository,
                 Condition = dependency.Condition,
@@ -2610,6 +2618,7 @@ public sealed class HelmTemplateRenderer
         public string? KubeVersion { get; init; }
         public List<object?>? ApiVersions { get; init; }
         public string? CurrentTemplatePath { get; init; }
+        public string? TemplateChartName { get; init; }
         public string? TemplateChartPath { get; init; }
         public List<HelmChartDependency> Dependencies { get; init; } = [];
     }

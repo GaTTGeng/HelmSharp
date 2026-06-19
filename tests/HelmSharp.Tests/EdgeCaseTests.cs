@@ -387,6 +387,72 @@ public class EdgeCaseTests
             result);
     }
 
+    [Fact]
+    public void AliasedSubchart_UsesAliasIdentityAndValues()
+    {
+        var chart = new HelmChart { Name = "parent", Version = "1.0.0", ValuesYaml = "" };
+        chart.Dependencies.Add(new HelmChartDependency
+        {
+            Name = "child",
+            Alias = "cache",
+            Version = "1.0.0",
+            Condition = "cache.enabled"
+        });
+        chart.Templates["templates/parent.yaml"] = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: parent
+            data:
+              dependencyName: {{ (index .Chart.Dependencies 0).Name | quote }}
+              dependencyAlias: {{ (index .Chart.Dependencies 0).Alias | quote }}
+            """;
+        var subchart = new HelmChart
+        {
+            Name = "child",
+            Version = "1.0.0",
+            ValuesYaml = "marker: default\n"
+        };
+        subchart.Templates["templates/child.yaml"] = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: child
+            data:
+              chartName: {{ .Chart.Name | quote }}
+              marker: {{ .Values.marker | quote }}
+              templateName: {{ .Template.Name | quote }}
+              templateBasePath: {{ .Template.BasePath | quote }}
+            """;
+        chart.Subcharts["child"] = subchart;
+        var values = new Dictionary<string, object?>
+        {
+            ["child"] = new Dictionary<string, object?>
+            {
+                ["marker"] = "original"
+            },
+            ["cache"] = new Dictionary<string, object?>
+            {
+                ["enabled"] = true,
+                ["marker"] = "alias"
+            }
+        };
+
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default", values);
+        var result = renderer.Render();
+
+        Assert.Contains("dependencyName: \"cache\"", result);
+        Assert.Contains("dependencyAlias: \"cache\"", result);
+        Assert.Contains("chartName: \"cache\"", result);
+        Assert.Contains("marker: \"alias\"", result);
+        Assert.Contains(
+            "templateName: \"parent/charts/cache/templates/child.yaml\"",
+            result);
+        Assert.Contains(
+            "templateBasePath: \"parent/charts/cache/templates\"",
+            result);
+    }
+
     [Theory]
     [InlineData(true, false, true)]
     [InlineData(false, true, false)]
