@@ -727,7 +727,7 @@ public sealed class HelmTemplateRenderer
             "genPrivateKey" => GenPrivateKey(tokens, context),
 
             // Encoding functions
-            "b64enc" => Convert.ToBase64String(Encoding.UTF8.GetBytes(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)))),
+            "b64enc" => Base64Encode(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "b64dec" => Encoding.UTF8.GetString(Convert.FromBase64String(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)))),
             "b32enc" => Base32Encode(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "b32dec" => Base32Decode(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
@@ -850,7 +850,7 @@ public sealed class HelmTemplateRenderer
             "toJson" => JsonSerialize(value),
             "lower" => ToTemplateString(value).ToLowerInvariant(),
             "upper" => ToTemplateString(value).ToUpperInvariant(),
-            "b64enc" => Convert.ToBase64String(Encoding.UTF8.GetBytes(ToTemplateString(value))),
+            "b64enc" => Base64Encode(value),
             "b64dec" => Encoding.UTF8.GetString(Convert.FromBase64String(ToTemplateString(value))),
             "trim" => ToTemplateString(value).Trim(),
             "sha256sum" => Sha256Sum(ToTemplateString(value)),
@@ -975,7 +975,7 @@ public sealed class HelmTemplateRenderer
             },
             "Files" => context.Chart.Files.ToDictionary(
                 pair => pair.Key,
-                pair => (object?)Encoding.UTF8.GetString(pair.Value),
+                pair => (object?)pair.Value,
                 StringComparer.Ordinal),
             "Template" => new Dictionary<string, object?>
             {
@@ -1035,6 +1035,12 @@ public sealed class HelmTemplateRenderer
             .Replace("\r", "\n", StringComparison.Ordinal);
         return normalized.Split('\n').Cast<object?>().ToList();
     }
+
+    private static string Base64Encode(object? value)
+        => Convert.ToBase64String(
+            value is byte[] bytes
+                ? bytes
+                : Encoding.UTF8.GetBytes(ToTemplateString(value)));
 
     private static bool CapabilitiesHasApiVersion(
         IReadOnlyList<string> tokens,
@@ -2426,6 +2432,7 @@ public sealed class HelmTemplateRenderer
             float f => f.ToString("G", CultureInfo.InvariantCulture),
             DateTimeOffset dto => dto.ToString("o", CultureInfo.InvariantCulture),
             DateTime dt => dt.ToString("o", CultureInfo.InvariantCulture),
+            byte[] bytes => Encoding.UTF8.GetString(bytes),
             _ => Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty
         };
 

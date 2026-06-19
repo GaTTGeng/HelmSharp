@@ -1,4 +1,5 @@
 using HelmSharp.Chart;
+using HelmSharp.Engine;
 
 namespace HelmSharp.Tests;
 
@@ -178,6 +179,45 @@ public class HelmChartLoaderTests : IDisposable
 
         Assert.Equal("archive-chart", chart.Name);
         Assert.Equal("0.5.0", chart.Version);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LoadAsync_PreservesRawFileBytes(bool useArchive)
+    {
+        var chartDir = CreateChartDir("binary-files", "1.0.0");
+        var expected = new byte[] { 0x00, 0x7F, 0x80, 0xC3, 0x28, 0xFF };
+        await File.WriteAllBytesAsync(Path.Combine(chartDir, "payload.bin"), expected);
+        await File.WriteAllTextAsync(
+            Path.Combine(chartDir, "templates", "deployment.yaml"),
+            """
+            apiVersion: v1
+            kind: Secret
+            metadata:
+              name: binary-files
+            data:
+              payload: {{ .Files.GetBytes "payload.bin" | b64enc }}
+            """);
+
+        var chartPath = chartDir;
+        if (useArchive)
+        {
+            chartPath = Path.Combine(_tempDir, "binary-files-1.0.0.tgz");
+            CreateTgz(chartDir, chartPath);
+        }
+
+        var chart = await HelmChartLoader.LoadAsync(chartPath, CancellationToken.None);
+        var renderer = new HelmTemplateRenderer(
+            chart,
+            "binary-files",
+            "default",
+            new Dictionary<string, object?>());
+
+        Assert.Equal(expected, chart.Files["payload.bin"]);
+        Assert.Contains(
+            $"payload: {Convert.ToBase64String(expected)}",
+            renderer.Render());
     }
 
     [Fact]
