@@ -957,13 +957,7 @@ public sealed class HelmTemplateRenderer
             },
             "Capabilities" => new Dictionary<string, object?>
             {
-                ["KubeVersion"] = new Dictionary<string, object?>
-                {
-                    ["Version"] = context.KubeVersion ?? "v1.29.0",
-                    ["Major"] = GetKubeVersionPart(context.KubeVersion, 0, "1"),
-                    ["Minor"] = GetKubeVersionPart(context.KubeVersion, 1, "29"),
-                    ["GitVersion"] = context.KubeVersion ?? "v1.29.0"
-                },
+                ["KubeVersion"] = ToTemplateKubeVersion(context.KubeVersion),
                 ["APIVersions"] = context.ApiVersions ?? DefaultApiVersions,
                 ["HelmVersion"] = new Dictionary<string, object?>
                 {
@@ -1062,20 +1056,45 @@ public sealed class HelmTemplateRenderer
             .ToList();
     }
 
-    private static string GetKubeVersionPart(string? version, int index, string fallback)
+    private static Dictionary<string, object?> ToTemplateKubeVersion(string? version)
     {
+        var normalized = NormalizeKubeVersion(version);
+        var coreVersion = normalized.TrimStart('v');
+        var suffixIndex = coreVersion.IndexOfAny(['-', '+']);
+        if (suffixIndex >= 0)
+            coreVersion = coreVersion[..suffixIndex];
+        var parts = coreVersion.Split('.');
+
+        return new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["Version"] = normalized,
+            ["Major"] = parts[0],
+            ["Minor"] = parts[1],
+            ["GitVersion"] = normalized
+        };
+    }
+
+    private static string NormalizeKubeVersion(string? version)
+    {
+        const string defaultVersion = "v1.29.0";
         if (string.IsNullOrWhiteSpace(version))
-            return fallback;
+            return defaultVersion;
 
-        var normalized = version.Trim().TrimStart('v', 'V');
-        var prereleaseIndex = normalized.IndexOfAny(['-', '+']);
-        if (prereleaseIndex >= 0)
-            normalized = normalized[..prereleaseIndex];
+        var match = Regex.Match(
+            version.Trim(),
+            @"^[vV]?(?<major>0|[1-9]\d*)(?:\.(?<minor>0|[1-9]\d*))?(?:\.(?<patch>0|[1-9]\d*))?(?<prerelease>-[0-9A-Za-z.-]+)?(?<build>\+[0-9A-Za-z.-]+)?$",
+            RegexOptions.CultureInvariant);
+        if (!match.Success)
+            throw new ArgumentException(
+                $"Kubernetes version '{version}' is not a valid semantic version.",
+                nameof(version));
 
-        var parts = normalized.Split('.');
-        return parts.Length > index && parts[index].Length > 0
-            ? parts[index]
-            : fallback;
+        var major = match.Groups["major"].Value;
+        var minor = match.Groups["minor"].Success ? match.Groups["minor"].Value : "0";
+        var patch = match.Groups["patch"].Success ? match.Groups["patch"].Value : "0";
+        return $"v{major}.{minor}.{patch}"
+               + match.Groups["prerelease"].Value
+               + match.Groups["build"].Value;
     }
 
     private static Dictionary<string, object?> ToTemplateDependency(HelmChartDependency dependency)

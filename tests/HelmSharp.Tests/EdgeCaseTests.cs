@@ -264,6 +264,40 @@ public class EdgeCaseTests
         Assert.Contains("revision: \"7\"", result);
     }
 
+    [Theory]
+    [InlineData("1.31", "v1.31.0", "1", "31")]
+    [InlineData("v1.31.4+vendor.2", "v1.31.4+vendor.2", "1", "31")]
+    [InlineData("V2.0.1-rc.1", "v2.0.1-rc.1", "2", "0")]
+    public void Capabilities_NormalizesRequestedKubeVersion(
+        string requestedVersion,
+        string expectedVersion,
+        string expectedMajor,
+        string expectedMinor)
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            version: {{ .Capabilities.KubeVersion.Version | quote }}
+            gitVersion: {{ .Capabilities.KubeVersion.GitVersion | quote }}
+            major: {{ .Capabilities.KubeVersion.Major | quote }}
+            minor: {{ .Capabilities.KubeVersion.Minor | quote }}
+            """;
+        var renderer = new HelmTemplateRenderer(
+            chart,
+            "rel",
+            "default",
+            new Dictionary<string, object?>(),
+            requestedVersion,
+            null,
+            false);
+
+        var result = renderer.Render();
+
+        Assert.Contains($"version: \"{expectedVersion}\"", result);
+        Assert.Contains($"gitVersion: \"{expectedVersion}\"", result);
+        Assert.Contains($"major: \"{expectedMajor}\"", result);
+        Assert.Contains($"minor: \"{expectedMinor}\"", result);
+    }
+
     [Fact]
     public void RangeWithVariables_PreservesContextAndSetsDot()
     {
