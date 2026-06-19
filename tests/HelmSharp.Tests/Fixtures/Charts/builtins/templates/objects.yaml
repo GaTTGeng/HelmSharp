@@ -22,6 +22,7 @@ data:
   chart-source: {{ index .Chart.Sources 0 | quote }}
   chart-keyword: {{ index .Chart.Keywords 0 | quote }}
   chart-maintainer-name: {{ (index .Chart.Maintainers 0).Name | quote }}
+  chart-maintainer-url: {{ (index .Chart.Maintainers 0).URL | quote }}
   chart-annotation: {{ index .Chart.Annotations "example.test/owner" | quote }}
   chart-dependencies-empty: {{ empty .Chart.Dependencies | quote }}
   values-repository: {{ .Values.image.repository | quote }}

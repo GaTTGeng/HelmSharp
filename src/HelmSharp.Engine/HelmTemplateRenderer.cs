@@ -1208,7 +1208,7 @@ public sealed class HelmTemplateRenderer
         {
             ["Name"] = fields.TryGetValue("name", out var name) ? name : string.Empty,
             ["Email"] = fields.TryGetValue("email", out var email) ? email : string.Empty,
-            ["Url"] = fields.TryGetValue("url", out var url) ? url : string.Empty
+            ["URL"] = fields.TryGetValue("url", out var url) ? url : string.Empty
         };
     }
 

@@ -15,3 +15,4 @@ annotations:
 maintainers:
   - name: HelmSharp
     email: helmsharp@example.test
+    url: https://example.test/maintainer
