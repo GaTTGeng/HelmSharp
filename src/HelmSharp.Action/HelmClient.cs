@@ -750,13 +750,16 @@ public class HelmClient : IHelmClient
         using var client = await CreateKubernetesClientAsync(options, request.KubeConfigPath, request.KubeConfigContent, cancellationToken);
         var store = new HelmReleaseStore(client);
 
-        var current = await store.GetLatestAsync(releaseName, ns, cancellationToken);
-        var currentManifest = current?.Manifest ?? string.Empty;
+        var history = await store.HistoryAsync(releaseName, ns, cancellationToken);
+        var currentManifest = history
+            .Where(record => string.Equals(record.Status, "deployed", StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(record => record.Revision)
+            .Select(record => record.Manifest)
+            .FirstOrDefault() ?? string.Empty;
 
         var chart = await HelmChartLoader.LoadAsync(request.Chart, cancellationToken);
         var values = await HelmValues.BuildAsync(chart, request.ValuesFile, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
-        var renderer = new HelmTemplateRenderer(chart, request.ReleaseName, ns, values);
-        var newManifest = renderer.Render();
+        var newManifest = RenderDiffManifest(chart, releaseName, ns, values, options, history);
 
         var output = new StringBuilder();
         output.AppendLine("=== Current Manifest ===");
@@ -764,6 +767,27 @@ public class HelmClient : IHelmClient
         output.AppendLine("=== New Manifest ===");
         output.AppendLine(newManifest);
         return Ok(output.ToString());
+    }
+
+    internal static string RenderDiffManifest(
+        HelmChart chart,
+        string releaseName,
+        string releaseNamespace,
+        Dictionary<string, object?> values,
+        HelmExecutionOptions options,
+        IReadOnlyCollection<HelmReleaseRecord> history)
+    {
+        var (isUpgrade, revision) = ResolveReleaseRenderState(history);
+        var renderer = new HelmTemplateRenderer(
+            chart,
+            releaseName,
+            releaseNamespace,
+            values,
+            options.KubeVersion,
+            options.ApiVersions,
+            isUpgrade,
+            revision);
+        return renderer.Render();
     }
 
     public async Task<CommandResult> LintAsync(

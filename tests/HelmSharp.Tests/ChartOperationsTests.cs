@@ -307,6 +307,52 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task RenderDiffManifest_UsesUpgradeReleaseStateAndCapabilities()
+    {
+        var chartDir = Path.Combine(_tempDir, "diff-chart");
+        Directory.CreateDirectory(Path.Combine(chartDir, "templates"));
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "Chart.yaml"), """
+            apiVersion: v2
+            name: diff-chart
+            version: 0.1.0
+            """);
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "values.yaml"), string.Empty);
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: diff-config
+            data:
+              kubeVersion: {{ .Capabilities.KubeVersion.Version | quote }}
+              hasCustomApi: {{ .Capabilities.APIVersions.Has "example.test/v1" | quote }}
+              isUpgrade: {{ .Release.IsUpgrade | quote }}
+              revision: {{ .Release.Revision | quote }}
+            """);
+        var chart = await HelmChartLoader.LoadAsync(chartDir, CancellationToken.None);
+        var history = new List<HelmReleaseRecord>
+        {
+            new() { Revision = 2, Status = "deployed" }
+        };
+
+        var manifest = HelmClient.RenderDiffManifest(
+            chart,
+            "diff-release",
+            "default",
+            new Dictionary<string, object?>(),
+            new HelmExecutionOptions
+            {
+                KubeVersion = "1.31",
+                ApiVersions = ["example.test/v1"]
+            },
+            history);
+
+        Assert.Contains("kubeVersion: \"v1.31.0\"", manifest);
+        Assert.Contains("hasCustomApi: \"true\"", manifest);
+        Assert.Contains("isUpgrade: \"true\"", manifest);
+        Assert.Contains("revision: \"3\"", manifest);
+    }
+
+    [Fact]
     public async Task PackageAsync_PackagedChartCanBeLoaded()
     {
         var client = new HelmClient(new StaticHelmOptionsProvider());
