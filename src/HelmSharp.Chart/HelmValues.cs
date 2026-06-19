@@ -14,13 +14,16 @@ public static class HelmValues
     {
         var result = HelmYaml.DeserializeDictionary(chart.ValuesYaml);
 
-        // Merge subchart default values under their dependency name
+        // Merge subchart default values under their alias (or directory name)
         foreach (var (name, subchart) in chart.Subcharts)
         {
+            var dependency = chart.Dependencies.FirstOrDefault(
+                d => string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase));
+            var key = dependency?.Alias ?? name;
             var subchartDefaults = HelmYaml.DeserializeDictionary(subchart.ValuesYaml);
-            if (!result.ContainsKey(name))
-                result[name] = subchartDefaults;
-            else if (result[name] is Dictionary<string, object?> existingDict &&
+            if (!result.ContainsKey(key))
+                result[key] = subchartDefaults;
+            else if (result[key] is Dictionary<string, object?> existingDict &&
                      subchartDefaults is Dictionary<string, object?> subDefaults)
                 MergeInto(existingDict, subDefaults);
         }
