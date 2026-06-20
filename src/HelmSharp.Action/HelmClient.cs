@@ -257,13 +257,12 @@ public class HelmClient : IHelmClient
                 yield return waitLine;
             }
         }
-        var status = isUpgrade ? "deployed" : "deployed";
         await store.SaveAsync(new HelmReleaseRecord
         {
             Name = request.ReleaseName,
             Namespace = ns,
             Revision = revision,
-            Status = status,
+            Status = "deployed",
             ChartName = chart.Name,
             ChartVersion = chart.Version,
             AppVersion = chart.AppVersion,
