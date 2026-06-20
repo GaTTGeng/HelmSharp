@@ -5,6 +5,12 @@ namespace HelmSharp.Tests;
 public class ApiVersionSetTests
 {
     [Fact]
+    public void Constructor_ThrowsOnNull()
+    {
+        Assert.Throws<ArgumentNullException>(() => new ApiVersionSet(null!));
+    }
+
+    [Fact]
     public void Constructor_TakesSnapshotOfInputList()
     {
         var source = new List<object?> { "v1" };
