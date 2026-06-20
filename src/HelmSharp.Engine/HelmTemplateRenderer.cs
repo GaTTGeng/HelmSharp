@@ -651,7 +651,7 @@ public sealed class HelmTemplateRenderer
         var head = tokens[0];
         if (head.StartsWith(".Files.", StringComparison.Ordinal))
             return EvaluateFilesMethod(head, tokens, context);
-        if (TryDispatchMethodCall(head, tokens, context, pipelineValue, hasPipelineValue, out var methodResult))
+        if (TryDispatchApiVersionsHas(head, tokens, context, pipelineValue, hasPipelineValue, out var methodResult))
             return methodResult;
 
         return head switch
@@ -1047,7 +1047,7 @@ public sealed class HelmTemplateRenderer
                 ? bytes
                 : Encoding.UTF8.GetBytes(ToTemplateString(value)));
 
-    private bool TryDispatchMethodCall(
+    private bool TryDispatchApiVersionsHas(
         string head,
         IReadOnlyList<string> tokens,
         TemplateContext context,
