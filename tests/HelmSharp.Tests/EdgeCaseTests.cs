@@ -423,6 +423,20 @@ public class EdgeCaseTests
     }
 
     [Fact]
+    public void APIVersionsHas_WithNilPipelineAsOnlyArgument_ThrowsInvalidValueError()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            out: {{ .Values.missing | .Capabilities.APIVersions.Has }}
+            """;
+        var renderer = new HelmTemplateRenderer(
+            chart, "rel", "default", new Dictionary<string, object?>());
+
+        var ex = Assert.Throws<InvalidOperationException>(() => renderer.Render());
+        Assert.Equal("invalid value; expected string", ex.Message);
+    }
+
+    [Fact]
     public void ChartDependencies_ExposeCompleteDependencyShape()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };

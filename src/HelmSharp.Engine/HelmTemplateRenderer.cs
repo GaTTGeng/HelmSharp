@@ -1077,6 +1077,8 @@ public sealed class HelmTemplateRenderer
 
         var argToken = explicitArgCount == 1 ? tokens[1] : null;
         var argValue = argToken is null ? pipelineValue : EvaluateToken(argToken, context);
+        if (argValue is null)
+            throw new InvalidOperationException("invalid value; expected string");
         result = versionSet.Has(ToTemplateString(argValue));
         return true;
     }
