@@ -42,6 +42,11 @@ jobs:
             9.0.x
             10.0.x
 
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.12.3
+
       - name: Resolve package version
         shell: bash
         run: |
