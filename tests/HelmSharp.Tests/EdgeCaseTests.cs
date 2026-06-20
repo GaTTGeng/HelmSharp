@@ -409,6 +409,34 @@ public class EdgeCaseTests
     }
 
     [Fact]
+    public void APIVersionsHas_WithNilPipelineAndExplicitArgument_ThrowsArityError()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            out: {{ .Values.missing | .Capabilities.APIVersions.Has "v1" }}
+            """;
+        var renderer = new HelmTemplateRenderer(
+            chart, "rel", "default", new Dictionary<string, object?>());
+
+        var ex = Assert.Throws<InvalidOperationException>(() => renderer.Render());
+        Assert.Equal("wrong number of args for Has: want 1 got 2", ex.Message);
+    }
+
+    [Fact]
+    public void APIVersionsHas_WithNilPipelineAsOnlyArgument_ThrowsInvalidValueError()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            out: {{ .Values.missing | .Capabilities.APIVersions.Has }}
+            """;
+        var renderer = new HelmTemplateRenderer(
+            chart, "rel", "default", new Dictionary<string, object?>());
+
+        var ex = Assert.Throws<InvalidOperationException>(() => renderer.Render());
+        Assert.Equal("invalid value; expected string", ex.Message);
+    }
+
+    [Fact]
     public void ChartDependencies_ExposeCompleteDependencyShape()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
