@@ -729,16 +729,17 @@ public sealed class HelmTemplateRenderer
             "println" => string.Join(' ', tokens.Skip(1).Select(t => TypeConverters.ToTemplateString(EvaluateToken(t, context)))),
 
             // Math functions
-            "add" => MathOp(tokens, context, pipelineValue, "+"),
-            "sub" => MathOp(tokens, context, pipelineValue, "-"),
-            "mul" => MathOp(tokens, context, pipelineValue, "*"),
-            "div" => MathOp(tokens, context, pipelineValue, "/"),
-            "mod" => MathOp(tokens, context, pipelineValue, "%"),
-            "max" => MathMax(tokens, context, pipelineValue),
-            "min" => MathMin(tokens, context, pipelineValue),
-            "ceil" => MathCeilFloor(tokens, context, pipelineValue, true),
-            "floor" => MathCeilFloor(tokens, context, pipelineValue, false),
-            "round" => MathRound(tokens, context, pipelineValue),
+            "add" => FoldMathArgs(tokens, context, pipelineValue, "+"),
+            "sub" => FoldMathArgs(tokens, context, pipelineValue, "-"),
+            "mul" => FoldMathArgs(tokens, context, pipelineValue, "*"),
+            "div" => FoldMathArgs(tokens, context, pipelineValue, "/"),
+            "mod" => FoldMathArgs(tokens, context, pipelineValue, "%"),
+            "max" => MathFunctions.MathMax(ResolveDoubleList(tokens, context, pipelineValue)),
+            "min" => MathFunctions.MathMin(ResolveDoubleList(tokens, context, pipelineValue)),
+            "ceil" => MathFunctions.Ceil(ResolveDoubleArg(tokens, context, pipelineValue, 1)),
+            "floor" => MathFunctions.Floor(ResolveDoubleArg(tokens, context, pipelineValue, 1)),
+            "round" => MathFunctions.Round(ResolveDoubleArg(tokens, context, pipelineValue, 1),
+                tokens.Count > 2 ? (int)TypeConverters.ToLong(EvaluateToken(tokens.ElementAtOrDefault(2), context)) : 0),
             "int64" => TypeConverters.ToLong(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "int" => (int)TypeConverters.ToLong(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "float64" => TypeConverters.ToDouble(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
@@ -1691,7 +1692,9 @@ public sealed class HelmTemplateRenderer
     // ────────────────────────────────────────────────────────────
     //  MATH FUNCTIONS
     // ────────────────────────────────────────────────────────────
-    private object? MathOp(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, string op)
+    //  MATH HELPERS — resolve args here, compute in MathFunctions
+    // ────────────────────────────────────────────────────────────
+    private object FoldMathArgs(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, string op)
     {
         var args = tokens.Skip(1).Select(t => EvaluateToken(t, context)).ToList();
         if (pipelineValue != null) args.Insert(0, pipelineValue);
@@ -1699,51 +1702,20 @@ public sealed class HelmTemplateRenderer
 
         var result = TypeConverters.ToDouble(args[0]);
         for (var i = 1; i < args.Count; i++)
-        {
-            var b = TypeConverters.ToDouble(args[i]);
-            result = op switch
-            {
-                "+" => result + b,
-                "-" => result - b,
-                "*" => result * b,
-                "/" => b != 0 ? result / b : 0,
-                "%" => b != 0 ? result % b : 0,
-                _ => result
-            };
-        }
+            result = (double)MathFunctions.MathOp(result, TypeConverters.ToDouble(args[i]), op);
 
         return result == Math.Floor(result) ? (long)result : result;
     }
 
-    private object? MathMax(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
+    private List<double> ResolveDoubleList(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
         var args = tokens.Skip(1).Select(t => TypeConverters.ToDouble(EvaluateToken(t, context))).ToList();
         if (pipelineValue != null) args.Insert(0, TypeConverters.ToDouble(pipelineValue));
-        var max = args.Max();
-        return max == Math.Floor(max) ? (long)max : max;
+        return args;
     }
 
-    private object? MathMin(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var args = tokens.Skip(1).Select(t => TypeConverters.ToDouble(EvaluateToken(t, context))).ToList();
-        if (pipelineValue != null) args.Insert(0, TypeConverters.ToDouble(pipelineValue));
-        var min = args.Min();
-        return min == Math.Floor(min) ? (long)min : min;
-    }
-
-    private object? MathCeilFloor(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, bool ceil)
-    {
-        var val = TypeConverters.ToDouble(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context));
-        var result = ceil ? Math.Ceiling(val) : Math.Floor(val);
-        return (long)result;
-    }
-
-    private object? MathRound(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var val = TypeConverters.ToDouble(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context));
-        var precision = tokens.Count > 2 ? (int)TypeConverters.ToLong(EvaluateToken(tokens.ElementAtOrDefault(2), context)) : 0;
-        return Math.Round(val, precision);
-    }
+    private double ResolveDoubleArg(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, int index)
+        => TypeConverters.ToDouble(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(index), context));
 
     // ────────────────────────────────────────────────────────────
     //  DATE FUNCTIONS
