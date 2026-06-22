@@ -139,7 +139,7 @@ await foreach (var line in client.UpgradeInstallStreamAsync(new HelmUpgradeInsta
 
 HelmSharp's template engine is continuously validated against real-world, publicly-available Helm charts using golden tests. Each chart is rendered by both `helm template` (reference) and HelmSharp's managed renderer; outputs are compared document-by-document after normalization.
 
-> **Last updated:** 2026-06-22 · **Helm version:** v3.12.3 · **Test framework:** net10.0
+> **Last updated:** 2026-06-22 · **HelmSharp version:** 1.0.3 · **Helm version:** v3.12.3 · **Test framework:** net10.0
 
 ### Summary
 

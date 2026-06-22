@@ -6,6 +6,42 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-06-22
+
+### :tada: Golden Test Milestone — 129/129 Templates Render Successfully
+
+HelmSharp now renders **all 129 templates across 5 real-world public Helm charts without a single parser exception**:
+
+| Chart | Version | Templates | Result |
+| --- | --- | --- | --- |
+| **ingress-nginx** | 4.12.1 | 42/42 | :white_check_mark: |
+| **cert-manager** | 1.17.1 | 41/41 | :white_check_mark: |
+| **external-dns** | 1.21.1 | 7/7 | :white_check_mark: |
+| **podinfo** | 6.14.0 | 21/21 | :white_check_mark: |
+| **metrics-server** | 3.13.1 | 18/18 | :white_check_mark: |
+| **Total** | — | **129/129 (100%)** | :white_check_mark: |
+
+This was achieved by fixing two parser bugs that blocked full-chart rendering (#50, #51). Output is structurally comparable to `helm template` — remaining differences are at the YAML formatting and value-evaluation level, not the parser level. A new golden test harness (`RealChartGoldenTests`) now runs as part of CI to prevent regressions.
+
+### Added
+
+- Real-chart golden test harness comparing HelmSharp against `helm template` for 5 public charts.
+- Golden test results and per-chart breakdown in README.
+
+### Fixed
+
+- **#51** — `SplitByTopLevel` now tracks parentheses depth so `|` inside `(...)` is not treated as a pipeline separator. Fixes `(empty .x)` and `($value | quote | len)` patterns.
+- **#50** — else-if chain reconstruction: C# string interpolation `{{- end }}` was producing `{- end }` (single braces) instead of `{{- end }}` (double braces), causing `RenderSection` to fail finding matching end tokens. Also now includes full remaining content rather than stopping at the first `else`/`end`, preserving multi-branch chains.
+- Per-template variable isolation: each template now receives a fresh `Variables` dictionary.
+- Removed dead code `ExtractUntilElseOrEnd`.
+- `SplitByTopLevel` quote toggling now guarded by `parenDepth == 0` for consistency with `SplitArguments`.
+
+### Changed
+
+- `Render()` accumulates `NotSupportedException` per-template rather than failing on the first one.
+- `IncludeTemplate` and `RenderSection` errors now include template name and block expression for diagnostics.
+- `GoldenResult.ToJson()` uses `System.Text.Json` serialization.
+
 ## [1.0.2] - 2026-06-20
 
 ### Added
