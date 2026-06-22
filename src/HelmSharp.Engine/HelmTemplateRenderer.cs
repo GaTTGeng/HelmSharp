@@ -456,11 +456,11 @@ public sealed class HelmTemplateRenderer
 
                 var replacement = keyword switch
                 {
-                    "if" => IsTruthy(EvaluatePipeline(blockExpr, context))
+                    "if" => TypeConverters.IsTruthy(EvaluatePipeline(blockExpr, context))
                         ? RenderSection(trueBody, context)
                         : RenderSection(falseBody, context),
                     "with" =>
-                        IsTruthy(EvaluatePipeline(blockExpr, context))
+                        TypeConverters.IsTruthy(EvaluatePipeline(blockExpr, context))
                             ? RenderSection(trueBody, context with { Dot = EvaluatePipeline(blockExpr, context) })
                             : RenderSection(falseBody, context),
                     "range" => RenderRangeExpression(blockExpr, trueBody, context),
@@ -482,7 +482,7 @@ public sealed class HelmTemplateRenderer
                 if (TryAssignVariable(expr, context, out var assigned))
                     rendered = assigned;
                 else
-                    rendered = ToTemplateString(EvaluatePipeline(expr, context));
+                    rendered = TypeConverters.ToTemplateString(EvaluatePipeline(expr, context));
 
                 // Apply left trim to rendered output if needed
                 if (leftTrim)
@@ -694,27 +694,27 @@ public sealed class HelmTemplateRenderer
             "fail" => FnFail(tokens, context),
 
             // String functions
-            "quote" => Quote(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "quote" => StringHelpers.Quote(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "squote" => Squote(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "cat" => Cat(tokens, context, pipelineValue),
-            "indent" => Indent(ToTemplateString(pipelineValue), GetInt(tokens, 1, context), false),
-            "nindent" => Indent(ToTemplateString(pipelineValue), GetInt(tokens, 1, context), true),
+            "indent" => StringHelpers.Indent(TypeConverters.ToTemplateString(pipelineValue), GetInt(tokens, 1, context), false),
+            "nindent" => StringHelpers.Indent(TypeConverters.ToTemplateString(pipelineValue), GetInt(tokens, 1, context), true),
             "replace" => Replace(tokens, context, pipelineValue),
             "plural" => Plural(tokens, context, pipelineValue),
-            "snakecase" => Snakecase(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
-            "camelcase" => Camelcase(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
-            "kebabcase" => Kebabcase(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "snakecase" => Snakecase(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "camelcase" => Camelcase(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "kebabcase" => Kebabcase(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "wrap" => Wrap(tokens, context, pipelineValue),
             "wrapWith" => WrapWith(tokens, context, pipelineValue),
-            "initials" => Initials(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "initials" => Initials(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "abbrev" => Abbrev(tokens, context, pipelineValue),
             "trunc" => Trunc(tokens, context, pipelineValue),
             "abbrevinitial" => Abbrevinitial(tokens, context, pipelineValue),
-            "untitle" => ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)).ToLowerInvariant(),
-            "title" => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
-            "upper" => ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)).ToUpperInvariant(),
-            "lower" => ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)).ToLowerInvariant(),
-            "trim" => ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)).Trim(),
+            "untitle" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)).ToLowerInvariant(),
+            "title" => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "upper" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)).ToUpperInvariant(),
+            "lower" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)).ToLowerInvariant(),
+            "trim" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)).Trim(),
             "trimAll" => TrimAll(tokens, context, pipelineValue),
             "trimSuffix" => TrimSuffix(tokens, context, pipelineValue),
             "trimPrefix" => TrimPrefix(tokens, context, pipelineValue),
@@ -723,10 +723,10 @@ public sealed class HelmTemplateRenderer
             "hasSuffix" => HasSuffix(tokens, context, pipelineValue),
             "repeat" => Repeat(tokens, context, pipelineValue),
             "substr" => Substr(tokens, context, pipelineValue),
-            "toString" => ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-            "atoi" => int.TryParse(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)), out var ai) ? ai : 0,
+            "toString" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "atoi" => int.TryParse(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)), out var ai) ? ai : 0,
             "printf" => Printf(tokens, context),
-            "println" => string.Join(' ', tokens.Skip(1).Select(t => ToTemplateString(EvaluateToken(t, context)))),
+            "println" => string.Join(' ', tokens.Skip(1).Select(t => TypeConverters.ToTemplateString(EvaluateToken(t, context)))),
 
             // Math functions
             "add" => MathOp(tokens, context, pipelineValue, "+"),
@@ -739,9 +739,9 @@ public sealed class HelmTemplateRenderer
             "ceil" => MathCeilFloor(tokens, context, pipelineValue, true),
             "floor" => MathCeilFloor(tokens, context, pipelineValue, false),
             "round" => MathRound(tokens, context, pipelineValue),
-            "int64" => ToLong(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-            "int" => (int)ToLong(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-            "float64" => ToDouble(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "int64" => TypeConverters.ToLong(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "int" => (int)TypeConverters.ToLong(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "float64" => TypeConverters.ToDouble(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
 
             // Date/time functions
             "now" => DateTimeOffset.UtcNow,
@@ -749,13 +749,13 @@ public sealed class HelmTemplateRenderer
             "dateInZone" => DateFormatInZone(tokens, context, pipelineValue),
             "duration" => DurationFormat(tokens, context, pipelineValue),
             "durationRound" => DurationRound(tokens, context, pipelineValue),
-            "unixEpoch" => ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "unixEpoch" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
 
             // Crypto / random functions
-            "sha256sum" => Sha256Sum(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
-            "sha1sum" => Sha1Sum(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
-            "adler32sum" => Adler32Sum(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
-            "bcrypt" => BCryptHash(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "sha256sum" => StringHelpers.Sha256Sum(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "sha1sum" => Sha1Sum(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "adler32sum" => Adler32Sum(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "bcrypt" => BCryptHash(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "randAlphaNum" => RandString(tokens, context, "alphanum"),
             "randAlpha" => RandString(tokens, context, "alpha"),
             "randNumeric" => RandString(tokens, context, "numeric"),
@@ -765,23 +765,23 @@ public sealed class HelmTemplateRenderer
 
             // Encoding functions
             "b64enc" => Base64Encode(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-            "b64dec" => Encoding.UTF8.GetString(Convert.FromBase64String(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)))),
-            "b32enc" => Base32Encode(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
-            "b32dec" => Base32Decode(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "b64dec" => Encoding.UTF8.GetString(Convert.FromBase64String(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)))),
+            "b32enc" => Base32Encode(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "b32dec" => Base32Decode(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
 
             // Environment
-            "env" => Environment.GetEnvironmentVariable(ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context))) ?? string.Empty,
-            "expandenv" => ExpandEnv(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "env" => Environment.GetEnvironmentVariable(TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context))) ?? string.Empty,
+            "expandenv" => ExpandEnv(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
 
             // Path functions
-            "dir" => Path.GetDirectoryName(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))) ?? string.Empty,
-            "base" => Path.GetFileName(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
-            "ext" => Path.GetExtension(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
-            "clean" => Path.GetFullPath(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
-            "isAbs" => Path.IsPathRooted(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "dir" => Path.GetDirectoryName(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))) ?? string.Empty,
+            "base" => Path.GetFileName(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "ext" => Path.GetExtension(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "clean" => Path.GetFullPath(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "isAbs" => Path.IsPathRooted(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
 
             // Semantic versioning
-            "semver" => ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "semver" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "semverCompare" => SemverCompare(tokens, context, pipelineValue),
 
             // Type / reflection
@@ -830,15 +830,15 @@ public sealed class HelmTemplateRenderer
 
             // Ternary / coalesce / logic
             "ternary" => Ternary(tokens, context, pipelineValue),
-            "coalesce" => tokens.Skip(1).Select(t => EvaluateToken(t, context)).FirstOrDefault(IsTruthy),
-            "empty" => !IsTruthy(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-            "not" => !IsTruthy(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-            "and" => tokens.Skip(1).All(t => IsTruthy(EvaluateToken(t, context))),
-            "or" => tokens.Skip(1).Any(t => IsTruthy(EvaluateToken(t, context))),
+            "coalesce" => tokens.Skip(1).Select(t => EvaluateToken(t, context)).FirstOrDefault(TypeConverters.IsTruthy),
+            "empty" => !TypeConverters.IsTruthy(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "not" => !TypeConverters.IsTruthy(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "and" => tokens.Skip(1).All(t => TypeConverters.IsTruthy(EvaluateToken(t, context))),
+            "or" => tokens.Skip(1).Any(t => TypeConverters.IsTruthy(EvaluateToken(t, context))),
 
             // Comparison
             "eq" => Eq(tokens, context, pipelineValue),
-            "ne" => !IsTruthy(Eq(tokens, context, pipelineValue)),
+            "ne" => !TypeConverters.IsTruthy(Eq(tokens, context, pipelineValue)),
             "lt" => CompareOp(tokens, context, pipelineValue, (a, b) => a < 0),
             "gt" => CompareOp(tokens, context, pipelineValue, (a, b) => a > 0),
             "le" => CompareOp(tokens, context, pipelineValue, (a, b) => a <= 0),
@@ -846,10 +846,10 @@ public sealed class HelmTemplateRenderer
 
             // JSON / YAML / TOML
             "toJson" => JsonSerialize(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-            "fromJson" => JsonDeserialize(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "fromJson" => JsonDeserialize(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "toPrettyJson" => JsonSerializePretty(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "toYaml" => HelmYaml.Serialize(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)).TrimEnd(),
-            "fromYaml" => HelmYaml.DeserializeDictionary(ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "fromYaml" => HelmYaml.DeserializeDictionary(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
 
             // Lookup
             "lookup" => Lookup(tokens, context),
@@ -868,7 +868,7 @@ public sealed class HelmTemplateRenderer
 
     private object? IncludeTemplate(IReadOnlyList<string> tokens, TemplateContext context)
     {
-        var name = Unquote(tokens.ElementAtOrDefault(1) ?? string.Empty);
+        var name = StringHelpers.Unquote(tokens.ElementAtOrDefault(1) ?? string.Empty);
         if (!_definedTemplates.TryGetValue(name, out var body))
             throw new NotSupportedException($"Included template '{name}' was not found.");
 
@@ -889,19 +889,19 @@ public sealed class HelmTemplateRenderer
     {
         return function switch
         {
-            "quote" => Quote(value),
+            "quote" => StringHelpers.Quote(value),
             "squote" => Squote(value),
             "toYaml" => HelmYaml.Serialize(value).TrimEnd(),
             "toJson" => JsonSerialize(value),
-            "lower" => ToTemplateString(value).ToLowerInvariant(),
-            "upper" => ToTemplateString(value).ToUpperInvariant(),
+            "lower" => TypeConverters.ToTemplateString(value).ToLowerInvariant(),
+            "upper" => TypeConverters.ToTemplateString(value).ToUpperInvariant(),
             "b64enc" => Base64Encode(value),
-            "b64dec" => Encoding.UTF8.GetString(Convert.FromBase64String(ToTemplateString(value))),
-            "trim" => ToTemplateString(value).Trim(),
-            "sha256sum" => Sha256Sum(ToTemplateString(value)),
-            "sha1sum" => Sha1Sum(ToTemplateString(value)),
-            "not" => !IsTruthy(value),
-            "empty" => !IsTruthy(value),
+            "b64dec" => Encoding.UTF8.GetString(Convert.FromBase64String(TypeConverters.ToTemplateString(value))),
+            "trim" => TypeConverters.ToTemplateString(value).Trim(),
+            "sha256sum" => StringHelpers.Sha256Sum(TypeConverters.ToTemplateString(value)),
+            "sha1sum" => Sha1Sum(TypeConverters.ToTemplateString(value)),
+            "not" => !TypeConverters.IsTruthy(value),
+            "empty" => !TypeConverters.IsTruthy(value),
             "len" => GetLength(value),
             "keys" => Keys(value),
             "values" => Values(value),
@@ -916,15 +916,15 @@ public sealed class HelmTemplateRenderer
             "deepCopy" => DeepCopy(value),
             "typeOf" => value?.GetType().FullName ?? "nil",
             "kindOf" => KindOf(value),
-            "toString" => ToTemplateString(value),
-            "int64" => ToLong(value),
-            "int" => (int)ToLong(value),
-            "float64" => ToDouble(value),
-            "title" => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(ToTemplateString(value)),
-            "untitle" => ToTemplateString(value).ToLowerInvariant(),
-            "snakecase" => Snakecase(ToTemplateString(value)),
-            "camelcase" => Camelcase(ToTemplateString(value)),
-            "kebabcase" => Kebabcase(ToTemplateString(value)),
+            "toString" => TypeConverters.ToTemplateString(value),
+            "int64" => TypeConverters.ToLong(value),
+            "int" => (int)TypeConverters.ToLong(value),
+            "float64" => TypeConverters.ToDouble(value),
+            "title" => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(TypeConverters.ToTemplateString(value)),
+            "untitle" => TypeConverters.ToTemplateString(value).ToLowerInvariant(),
+            "snakecase" => Snakecase(TypeConverters.ToTemplateString(value)),
+            "camelcase" => Camelcase(TypeConverters.ToTemplateString(value)),
+            "kebabcase" => Kebabcase(TypeConverters.ToTemplateString(value)),
             _ => throw new NotSupportedException($"Helm template function '{function}' is not supported by the managed renderer.")
         };
     }
@@ -936,7 +936,7 @@ public sealed class HelmTemplateRenderer
 
         token = token.Trim();
         if (token.StartsWith('"') && token.EndsWith('"'))
-            return Unquote(token);
+            return StringHelpers.Unquote(token);
         if (token.StartsWith('\'') && token.EndsWith('\''))
             return token[1..^1];
         if (token.StartsWith('('))
@@ -1052,7 +1052,7 @@ public sealed class HelmTemplateRenderer
         IReadOnlyList<string> tokens,
         TemplateContext context)
     {
-        var path = ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var path = TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
         return head switch
         {
             ".Files.Get" => context.Chart.Files.TryGetValue(path, out var content)
@@ -1080,7 +1080,7 @@ public sealed class HelmTemplateRenderer
         => Convert.ToBase64String(
             value is byte[] bytes
                 ? bytes
-                : Encoding.UTF8.GetBytes(ToTemplateString(value)));
+                : Encoding.UTF8.GetBytes(TypeConverters.ToTemplateString(value)));
 
     private bool TryDispatchApiVersionsHas(
         string head,
@@ -1114,7 +1114,7 @@ public sealed class HelmTemplateRenderer
         var argValue = argToken is null ? pipelineValue : EvaluateToken(argToken, context);
         if (argValue is null)
             throw new InvalidOperationException("invalid value; expected string");
-        result = versionSet.Has(ToTemplateString(argValue));
+        result = versionSet.Has(TypeConverters.ToTemplateString(argValue));
         return true;
     }
 
@@ -1515,7 +1515,7 @@ public sealed class HelmTemplateRenderer
     //  HELPER: parse int from token list
     // ────────────────────────────────────────────────────────────
     private int GetInt(IReadOnlyList<string> tokens, int index, TemplateContext context)
-        => (int)ToLong(EvaluateToken(tokens.ElementAtOrDefault(index), context));
+        => (int)TypeConverters.ToLong(EvaluateToken(tokens.ElementAtOrDefault(index), context));
 
     // ────────────────────────────────────────────────────────────
     //  HELPER: get pipeline value or first arg
@@ -1567,7 +1567,7 @@ public sealed class HelmTemplateRenderer
     {
         var def = EvaluateToken(tokens.ElementAtOrDefault(1), context);
         var val = pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context);
-        return IsTruthy(val) ? val : def;
+        return TypeConverters.IsTruthy(val) ? val : def;
     }
 
     // ────────────────────────────────────────────────────────────
@@ -1576,14 +1576,14 @@ public sealed class HelmTemplateRenderer
     private static object? FnFail(IReadOnlyList<string> tokens, TemplateContext context)
     {
         var msg = tokens.ElementAtOrDefault(1);
-        throw new InvalidOperationException(msg != null ? UnquoteStatic(msg) : "fail called");
+        throw new InvalidOperationException(msg != null ? StringHelpers.Unquote(msg) : "fail called");
     }
 
     // ────────────────────────────────────────────────────────────
     //  SQUOTE
     // ────────────────────────────────────────────────────────────
     private static string Squote(object? value)
-        => "'" + ToTemplateString(value).Replace("'", "\\'", StringComparison.Ordinal) + "'";
+        => "'" + TypeConverters.ToTemplateString(value).Replace("'", "\\'", StringComparison.Ordinal) + "'";
 
     // ────────────────────────────────────────────────────────────
     //  CAT
@@ -1591,9 +1591,9 @@ public sealed class HelmTemplateRenderer
     private string Cat(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
         var parts = new List<string>();
-        if (pipelineValue != null) parts.Add(ToTemplateString(pipelineValue));
+        if (pipelineValue != null) parts.Add(TypeConverters.ToTemplateString(pipelineValue));
         foreach (var t in tokens.Skip(1))
-            parts.Add(ToTemplateString(EvaluateToken(t, context)));
+            parts.Add(TypeConverters.ToTemplateString(EvaluateToken(t, context)));
         return string.Join(' ', parts);
     }
 
@@ -1602,10 +1602,10 @@ public sealed class HelmTemplateRenderer
     // ────────────────────────────────────────────────────────────
     private static string Plural(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var word = ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(3), context));
-        var plural = ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var singular = ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
-        var count = (int)ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(4), context));
+        var word = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(3), context));
+        var plural = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
+        var singular = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
+        var count = (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(4), context));
         return count == 1 ? singular : plural;
     }
 
@@ -1669,16 +1669,16 @@ public sealed class HelmTemplateRenderer
     // ────────────────────────────────────────────────────────────
     private static string Wrap(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var width = (int)ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var input = ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
+        var width = (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
+        var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
         return WrapText(input, width);
     }
 
     private static string WrapWith(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var width = (int)ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var indent = ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
-        var input = ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(3), context));
+        var width = (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
+        var indent = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
+        var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(3), context));
         return WrapText(input, width, indent);
     }
 
@@ -1711,15 +1711,15 @@ public sealed class HelmTemplateRenderer
 
     private static string Abbrev(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var maxWidth = (int)ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var input = ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
+        var maxWidth = (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
+        var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
         return input.Length <= maxWidth ? input : input[..maxWidth];
     }
 
     private static string Abbrevinitial(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var maxWidth = (int)ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var input = ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
+        var maxWidth = (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
+        var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
         var parts = input.Split('.', StringSplitOptions.RemoveEmptyEntries);
         var sb = new StringBuilder();
         foreach (var part in parts)
@@ -1735,8 +1735,8 @@ public sealed class HelmTemplateRenderer
     // ────────────────────────────────────────────────────────────
     private static string TrimAll(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var cutset = ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var input = ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
+        var cutset = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
+        var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
         foreach (var ch in cutset)
             input = input.Trim(ch);
         return input;
@@ -1744,15 +1744,15 @@ public sealed class HelmTemplateRenderer
 
     private static bool HasPrefix(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var prefix = ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var input = ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
+        var prefix = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
+        var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
         return input.StartsWith(prefix, StringComparison.Ordinal);
     }
 
     private static bool HasSuffix(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var suffix = ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var input = ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
+        var suffix = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
+        var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
         return input.EndsWith(suffix, StringComparison.Ordinal);
     }
 
@@ -1761,16 +1761,16 @@ public sealed class HelmTemplateRenderer
     // ────────────────────────────────────────────────────────────
     private static string Repeat(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var count = (int)ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var input = ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
+        var count = (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
+        var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
         return string.Concat(Enumerable.Repeat(input, count));
     }
 
     private static string Substr(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var start = (int)ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var length = (int)ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
-        var input = ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(3), context));
+        var start = (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
+        var length = (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
+        var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(3), context));
         if (start < 0) start = 0;
         if (start >= input.Length) return string.Empty;
         if (start + length > input.Length) length = input.Length - start;
@@ -1786,10 +1786,10 @@ public sealed class HelmTemplateRenderer
         if (pipelineValue != null) args.Insert(0, pipelineValue);
         if (args.Count == 0) return 0L;
 
-        var result = ToDouble(args[0]);
+        var result = TypeConverters.ToDouble(args[0]);
         for (var i = 1; i < args.Count; i++)
         {
-            var b = ToDouble(args[i]);
+            var b = TypeConverters.ToDouble(args[i]);
             result = op switch
             {
                 "+" => result + b,
@@ -1806,31 +1806,31 @@ public sealed class HelmTemplateRenderer
 
     private object? MathMax(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var args = tokens.Skip(1).Select(t => ToDouble(EvaluateToken(t, context))).ToList();
-        if (pipelineValue != null) args.Insert(0, ToDouble(pipelineValue));
+        var args = tokens.Skip(1).Select(t => TypeConverters.ToDouble(EvaluateToken(t, context))).ToList();
+        if (pipelineValue != null) args.Insert(0, TypeConverters.ToDouble(pipelineValue));
         var max = args.Max();
         return max == Math.Floor(max) ? (long)max : max;
     }
 
     private object? MathMin(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var args = tokens.Skip(1).Select(t => ToDouble(EvaluateToken(t, context))).ToList();
-        if (pipelineValue != null) args.Insert(0, ToDouble(pipelineValue));
+        var args = tokens.Skip(1).Select(t => TypeConverters.ToDouble(EvaluateToken(t, context))).ToList();
+        if (pipelineValue != null) args.Insert(0, TypeConverters.ToDouble(pipelineValue));
         var min = args.Min();
         return min == Math.Floor(min) ? (long)min : min;
     }
 
     private object? MathCeilFloor(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, bool ceil)
     {
-        var val = ToDouble(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var val = TypeConverters.ToDouble(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context));
         var result = ceil ? Math.Ceiling(val) : Math.Floor(val);
         return (long)result;
     }
 
     private object? MathRound(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var val = ToDouble(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context));
-        var precision = tokens.Count > 2 ? (int)ToLong(EvaluateToken(tokens.ElementAtOrDefault(2), context)) : 0;
+        var val = TypeConverters.ToDouble(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var precision = tokens.Count > 2 ? (int)TypeConverters.ToLong(EvaluateToken(tokens.ElementAtOrDefault(2), context)) : 0;
         return Math.Round(val, precision);
     }
 
@@ -1839,7 +1839,7 @@ public sealed class HelmTemplateRenderer
     // ────────────────────────────────────────────────────────────
     private static string DateFormat(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var fmt = ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
+        var fmt = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
         var val = pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context);
         if (val is DateTimeOffset dto) return dto.ToString(fmt, CultureInfo.InvariantCulture);
         if (val is DateTime dt) return dt.ToString(fmt, CultureInfo.InvariantCulture);
@@ -1848,8 +1848,8 @@ public sealed class HelmTemplateRenderer
 
     private static string DateFormatInZone(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var fmt = ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var zone = ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
+        var fmt = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
+        var zone = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
         var val = pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(3), context);
         try
         {
@@ -1863,14 +1863,14 @@ public sealed class HelmTemplateRenderer
 
     private static string DurationFormat(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var seconds = (long)ToLong(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
+        var seconds = (long)TypeConverters.ToLong(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
         var ts = TimeSpan.FromSeconds(seconds);
         return ts.ToString(@"d\d\ h\h\ m\m\ s\s", CultureInfo.InvariantCulture);
     }
 
     private static string DurationRound(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var seconds = (long)ToLong(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
+        var seconds = (long)TypeConverters.ToLong(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
         var ts = TimeSpan.FromSeconds(seconds);
         if (ts.TotalDays >= 1) return $"{(int)ts.TotalDays}d";
         if (ts.TotalHours >= 1) return $"{(int)ts.TotalHours}h";
@@ -1902,12 +1902,12 @@ public sealed class HelmTemplateRenderer
     {
         // BCrypt is not available in .NET BCL without a library.
         // Return a SHA256 hash as a reasonable fallback for non-security-critical templating.
-        return Sha256Sum(value);
+        return StringHelpers.Sha256Sum(value);
     }
 
     private static string RandString(IReadOnlyList<string> tokens, TemplateContext context, string charset)
     {
-        var length = tokens.Count > 1 ? (int)ToLong(EvaluateTokenStatic(tokens[1], context)) : 10;
+        var length = tokens.Count > 1 ? (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens[1], context)) : 10;
         var chars = charset switch
         {
             "alphanum" => "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
@@ -1924,14 +1924,14 @@ public sealed class HelmTemplateRenderer
 
     private static long RandInt(IReadOnlyList<string> tokens, TemplateContext context)
     {
-        var min = tokens.Count > 1 ? (int)ToLong(EvaluateTokenStatic(tokens[1], context)) : 0;
-        var max = tokens.Count > 2 ? (int)ToLong(EvaluateTokenStatic(tokens[2], context)) : int.MaxValue;
+        var min = tokens.Count > 1 ? (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens[1], context)) : 0;
+        var max = tokens.Count > 2 ? (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens[2], context)) : int.MaxValue;
         return RandomNumberGenerator.GetInt32(min, max);
     }
 
     private static string GenPrivateKey(IReadOnlyList<string> tokens, TemplateContext context)
     {
-        var algo = tokens.Count > 1 ? ToTemplateString(EvaluateTokenStatic(tokens[1], context)) : "rsa";
+        var algo = tokens.Count > 1 ? TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens[1], context)) : "rsa";
         // Return a placeholder — real key generation requires BouncyCastle or similar
         return $"-----BEGIN {algo.ToUpperInvariant()} PRIVATE KEY-----\n(managed-helm-placeholder)\n-----END {algo.ToUpperInvariant()} PRIVATE KEY-----";
     }
@@ -1999,8 +1999,8 @@ public sealed class HelmTemplateRenderer
     // ────────────────────────────────────────────────────────────
     private static bool SemverCompare(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var constraint = ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var version = ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
+        var constraint = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
+        var version = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
         // Basic semver comparison: supports ~, ^, >=, <=, >, <, =, x-range
         return SemverSatisfies(version, constraint);
     }
@@ -2082,7 +2082,7 @@ public sealed class HelmTemplateRenderer
     // ────────────────────────────────────────────────────────────
     private static bool TypeIs(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var typeName = ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
+        var typeName = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
         var val = pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context);
         return typeName switch
         {
@@ -2116,7 +2116,7 @@ public sealed class HelmTemplateRenderer
 
     private static bool KindIs(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var kind = ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
+        var kind = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
         var val = pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context);
         return KindOf(val) == kind;
     }
@@ -2203,14 +2203,14 @@ public sealed class HelmTemplateRenderer
     private static object? SortAlpha(object? value)
     {
         if (value is IList<object?> list)
-            return list.OrderBy(x => ToTemplateString(x), StringComparer.Ordinal).ToList();
+            return list.OrderBy(x => TypeConverters.ToTemplateString(x), StringComparer.Ordinal).ToList();
         return value;
     }
 
     private static object? Compact(object? value)
     {
         if (value is IList<object?> list)
-            return list.Where(IsTruthy).ToList();
+            return list.Where(TypeConverters.IsTruthy).ToList();
         return value;
     }
 
@@ -2222,7 +2222,7 @@ public sealed class HelmTemplateRenderer
             var result = new List<object?>();
             foreach (var item in list)
             {
-                var key = ToTemplateString(item);
+                var key = TypeConverters.ToTemplateString(item);
                 if (seen.Add(key))
                     result.Add(item);
             }
@@ -2234,15 +2234,15 @@ public sealed class HelmTemplateRenderer
     private object? Without(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
         var list = ToList(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context));
-        var exclude = tokens.Skip(2).Select(t => ToTemplateString(EvaluateToken(t, context))).ToHashSet(StringComparer.Ordinal);
-        return list.Where(x => !exclude.Contains(ToTemplateString(x))).ToList();
+        var exclude = tokens.Skip(2).Select(t => TypeConverters.ToTemplateString(EvaluateToken(t, context))).ToHashSet(StringComparer.Ordinal);
+        return list.Where(x => !exclude.Contains(TypeConverters.ToTemplateString(x))).ToList();
     }
 
     private object? Has(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
         var list = ToList(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context));
-        var needle = ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(2), context));
-        return list.Any(x => ToTemplateString(x) == needle);
+        var needle = TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(2), context));
+        return list.Any(x => TypeConverters.ToTemplateString(x) == needle);
     }
 
     private object? Concat(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
@@ -2268,7 +2268,7 @@ public sealed class HelmTemplateRenderer
     private object? Set(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
         var dict = pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context);
-        var key = ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(2), context));
+        var key = TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(2), context));
         var value = EvaluateToken(tokens.ElementAtOrDefault(3), context);
         if (dict is Dictionary<string, object?> d)
         {
@@ -2281,7 +2281,7 @@ public sealed class HelmTemplateRenderer
     private object? Unset(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
         var dict = pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context);
-        var key = ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(2), context));
+        var key = TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(2), context));
         if (dict is Dictionary<string, object?> d)
         {
             d.Remove(key);
@@ -2348,9 +2348,9 @@ public sealed class HelmTemplateRenderer
     private object? Pick(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
         var dict = pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context);
-        var keys = tokens.Skip(2).Select(t => ToTemplateString(EvaluateToken(t, context))).ToHashSet(StringComparer.Ordinal);
+        var keys = tokens.Skip(2).Select(t => TypeConverters.ToTemplateString(EvaluateToken(t, context))).ToHashSet(StringComparer.Ordinal);
         if (pipelineValue != null)
-            keys = tokens.Skip(1).Select(t => ToTemplateString(EvaluateToken(t, context))).ToHashSet(StringComparer.Ordinal);
+            keys = tokens.Skip(1).Select(t => TypeConverters.ToTemplateString(EvaluateToken(t, context))).ToHashSet(StringComparer.Ordinal);
         var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
         if (dict is IDictionary<string, object?> d)
         {
@@ -2364,9 +2364,9 @@ public sealed class HelmTemplateRenderer
     private object? Omit(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
         var dict = pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context);
-        var keys = tokens.Skip(2).Select(t => ToTemplateString(EvaluateToken(t, context))).ToHashSet(StringComparer.Ordinal);
+        var keys = tokens.Skip(2).Select(t => TypeConverters.ToTemplateString(EvaluateToken(t, context))).ToHashSet(StringComparer.Ordinal);
         if (pipelineValue != null)
-            keys = tokens.Skip(1).Select(t => ToTemplateString(EvaluateToken(t, context))).ToHashSet(StringComparer.Ordinal);
+            keys = tokens.Skip(1).Select(t => TypeConverters.ToTemplateString(EvaluateToken(t, context))).ToHashSet(StringComparer.Ordinal);
         var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
         if (dict is IDictionary<string, object?> d)
         {
@@ -2379,7 +2379,7 @@ public sealed class HelmTemplateRenderer
 
     private object? Pluck(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var key = ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var key = TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
         var dicts = tokens.Skip(2).Select(t => EvaluateToken(t, context));
         if (pipelineValue != null)
             dicts = tokens.Skip(1).Select(t => EvaluateToken(t, context));
@@ -2402,7 +2402,7 @@ public sealed class HelmTemplateRenderer
         var defaultVal = args[^1];
         for (var i = 1; i < args.Count - 1; i++)
         {
-            var key = ToTemplateString(args[i]);
+            var key = TypeConverters.ToTemplateString(args[i]);
             current = current switch
             {
                 Dictionary<string, object?> dict when dict.TryGetValue(key, out var next) => next,
@@ -2429,7 +2429,7 @@ public sealed class HelmTemplateRenderer
             if (a is double da && b is double db) return Math.Abs(da - db) < 1e-10;
             if (a is bool ba && b is bool bb) return ba == bb;
         }
-        return string.Equals(ToTemplateString(a), ToTemplateString(b), StringComparison.Ordinal);
+        return string.Equals(TypeConverters.ToTemplateString(a), TypeConverters.ToTemplateString(b), StringComparison.Ordinal);
     }
 
     private object? CompareOp(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, Func<int, int, bool> cmp)
@@ -2448,7 +2448,7 @@ public sealed class HelmTemplateRenderer
         if (a is long la && b is long lb) return la.CompareTo(lb);
         if (a is double da && b is double db) return da.CompareTo(db);
         if (a is int ia && b is int ib) return ia.CompareTo(ib);
-        return string.Compare(ToTemplateString(a), ToTemplateString(b), StringComparison.Ordinal);
+        return string.Compare(TypeConverters.ToTemplateString(a), TypeConverters.ToTemplateString(b), StringComparison.Ordinal);
     }
 
     // ────────────────────────────────────────────────────────────
@@ -2520,51 +2520,51 @@ public sealed class HelmTemplateRenderer
     // ────────────────────────────────────────────────────────────
     private string Replace(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var oldValue = ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
-        var newValue = ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(2), context));
-        var input = ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(3), context));
+        var oldValue = TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var newValue = TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(2), context));
+        var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(3), context));
         return input.Replace(oldValue, newValue, StringComparison.Ordinal);
     }
 
     private string Trunc(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var length = (int)ToLong(EvaluateToken(tokens.ElementAtOrDefault(1), context));
-        var input = ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context));
+        var length = (int)TypeConverters.ToLong(EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context));
         return input.Length <= length ? input : input[..Math.Max(0, length)];
     }
 
     private string TrimSuffix(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var suffix = ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
-        var input = ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context));
+        var suffix = TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context));
         return input.EndsWith(suffix, StringComparison.Ordinal) ? input[..^suffix.Length] : input;
     }
 
     private string TrimPrefix(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var prefix = ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
-        var input = ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context));
+        var prefix = TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context));
         return input.StartsWith(prefix, StringComparison.Ordinal) ? input[prefix.Length..] : input;
     }
 
     private bool Contains(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var needle = ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
-        var input = ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context));
+        var needle = TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context));
         return input.Contains(needle, StringComparison.Ordinal);
     }
 
     private string Printf(IReadOnlyList<string> tokens, TemplateContext context)
     {
-        var format = ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
-        var args = tokens.Skip(2).Select(t => ToTemplateString(EvaluateToken(t, context))).ToArray();
+        var format = TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var args = tokens.Skip(2).Select(t => TypeConverters.ToTemplateString(EvaluateToken(t, context))).ToArray();
         for (var i = 0; i < args.Length; i++)
         {
-            format = ReplaceFirst(format, "%s", "{" + i + "}");
-            format = ReplaceFirst(format, "%v", "{" + i + "}");
-            format = ReplaceFirst(format, "%d", "{" + i + "}");
-            format = ReplaceFirst(format, "%f", "{" + i + "}");
-            format = ReplaceFirst(format, "%q", "{" + i + "}");
+            format = StringHelpers.ReplaceFirst(format, "%s", "{" + i + "}");
+            format = StringHelpers.ReplaceFirst(format, "%v", "{" + i + "}");
+            format = StringHelpers.ReplaceFirst(format, "%d", "{" + i + "}");
+            format = StringHelpers.ReplaceFirst(format, "%f", "{" + i + "}");
+            format = StringHelpers.ReplaceFirst(format, "%q", "{" + i + "}");
         }
 
         return string.Format(format, args);
@@ -2572,9 +2572,9 @@ public sealed class HelmTemplateRenderer
 
     private object? Required(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var message = ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var message = TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
         var value = pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context);
-        if (!IsTruthy(value))
+        if (!TypeConverters.IsTruthy(value))
             throw new InvalidOperationException(string.IsNullOrWhiteSpace(message) ? "required value is missing" : message);
 
         return value;
@@ -2582,7 +2582,7 @@ public sealed class HelmTemplateRenderer
 
     private string Tpl(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var template = ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var template = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context));
         return RenderSection(template, context);
     }
 
@@ -2592,7 +2592,7 @@ public sealed class HelmTemplateRenderer
         var args = tokens.Skip(1).ToList();
         for (var i = 0; i < args.Count; i += 2)
         {
-            var key = ToTemplateString(EvaluateToken(args[i], context));
+            var key = TypeConverters.ToTemplateString(EvaluateToken(args[i], context));
             var value = i + 1 < args.Count ? EvaluateToken(args[i + 1], context) : null;
             dict[key] = value;
         }
@@ -2624,7 +2624,7 @@ public sealed class HelmTemplateRenderer
     private bool HasKey(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
         var dict = pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context);
-        var key = ToTemplateString(pipelineValue is null
+        var key = TypeConverters.ToTemplateString(pipelineValue is null
             ? EvaluateToken(tokens.ElementAtOrDefault(2), context)
             : EvaluateToken(tokens.ElementAtOrDefault(1), context));
         return dict switch
@@ -2640,12 +2640,12 @@ public sealed class HelmTemplateRenderer
         var trueValue = EvaluateToken(tokens.ElementAtOrDefault(1), context);
         var falseValue = EvaluateToken(tokens.ElementAtOrDefault(2), context);
         var test = pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(3), context);
-        return IsTruthy(test) ? trueValue : falseValue;
+        return TypeConverters.IsTruthy(test) ? trueValue : falseValue;
     }
 
     private static object? IndexOne(object? value, object? key)
     {
-        var keyString = ToTemplateString(key);
+        var keyString = TypeConverters.ToTemplateString(key);
         return value switch
         {
             Dictionary<string, object?> dict when dict.TryGetValue(keyString, out var next) => next,
@@ -2656,87 +2656,4 @@ public sealed class HelmTemplateRenderer
         };
     }
 
-    // ────────────────────────────────────────────────────────────
-    //  CORE HELPERS
-    // ────────────────────────────────────────────────────────────
-    private static string Sha256Sum(string value)
-    {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(value));
-        return Convert.ToHexString(bytes).ToLowerInvariant();
-    }
-
-    private static string ReplaceFirst(string text, string oldValue, string newValue)
-    {
-        var index = text.IndexOf(oldValue, StringComparison.Ordinal);
-        return index < 0 ? text : text[..index] + newValue + text[(index + oldValue.Length)..];
-    }
-
-    private static string Indent(string value, int spaces, bool prependNewLine)
-    {
-        var prefix = new string(' ', spaces);
-        var lines = value.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
-        var result = string.Join('\n', lines.Select(line => line.Length == 0 ? line : prefix + line));
-        return prependNewLine ? "\n" + result : result;
-    }
-
-    private static string Quote(object? value)
-        => "\"" + ToTemplateString(value).Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
-
-    private static string Unquote(string value)
-        => value.Length >= 2 && value.StartsWith('"') && value.EndsWith('"') ? value[1..^1] : value;
-
-    private static string UnquoteStatic(string value) => Unquote(value);
-
-    private static string ToTemplateString(object? value)
-        => value switch
-        {
-            null => string.Empty,
-            bool b => b ? "true" : "false",
-            long l => l.ToString(CultureInfo.InvariantCulture),
-            int i => i.ToString(CultureInfo.InvariantCulture),
-            double d => d.ToString("G", CultureInfo.InvariantCulture),
-            float f => f.ToString("G", CultureInfo.InvariantCulture),
-            DateTimeOffset dto => dto.ToString("o", CultureInfo.InvariantCulture),
-            DateTime dt => dt.ToString("o", CultureInfo.InvariantCulture),
-            byte[] bytes => Encoding.UTF8.GetString(bytes),
-            _ => Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty
-        };
-
-    private static long ToLong(object? value)
-        => value switch
-        {
-            long l => l,
-            int i => i,
-            double d => (long)d,
-            float f => (long)f,
-            string s when long.TryParse(s, out var l) => l,
-            string s when double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var d) => (long)d,
-            bool b => b ? 1 : 0,
-            _ => 0
-        };
-
-    private static double ToDouble(object? value)
-        => value switch
-        {
-            double d => d,
-            float f => f,
-            long l => l,
-            int i => i,
-            string s when double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var d) => d,
-            bool b => b ? 1.0 : 0.0,
-            _ => 0.0
-        };
-
-    private static bool IsTruthy(object? value)
-        => value switch
-        {
-            null => false,
-            bool b => b,
-            string s => !string.IsNullOrWhiteSpace(s) && !s.Equals("false", StringComparison.OrdinalIgnoreCase),
-            long l => l != 0,
-            int i => i != 0,
-            double d => d != 0.0,
-            IEnumerable<object?> e => e.Any(),
-            _ => true
-        };
 }
