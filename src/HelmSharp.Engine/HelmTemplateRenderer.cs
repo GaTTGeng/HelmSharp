@@ -317,197 +317,175 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         return string.Empty;
     }
 
-    private string RenderSection(string template, TemplateContext context)
+    /// <summary>
+    /// Parses template text into an AST document.
+    /// </summary>
+    private static TemplateDocumentNode ParseTemplate(string content)
+    {
+        var tokenizer = new TemplateTokenizer(content);
+        var parser = new TemplateParser(tokenizer.TokenizeFlat());
+        return parser.Parse();
+    }
+
+    /// <summary>
+    /// Renders an AST document by walking its children and evaluating actions.
+    /// </summary>
+    private string RenderDocument(TemplateDocumentNode doc, TemplateContext context)
     {
         var output = new StringBuilder();
-        var pos = 0;
 
-        while (pos < template.Length)
+        for (var i = 0; i < doc.Children.Count; i++)
         {
-            var tokenMatch = TokenRegex.Match(template, pos);
-            if (!tokenMatch.Success)
+            var node = doc.Children[i];
+
+            switch (node)
             {
-                output.Append(template[pos..]);
-                break;
-            }
-
-            // Check whitespace trimming markers
-            var leftTrim = tokenMatch.Value.StartsWith("{{-", StringComparison.Ordinal);
-            var rightTrim = tokenMatch.Value.EndsWith("-}}", StringComparison.Ordinal);
-
-            // Append text before this token (with left trim if needed)
-            if (tokenMatch.Index > pos)
-            {
-                var before = template[pos..tokenMatch.Index];
-                if (leftTrim)
-                    before = TrimTrailingWhitespace(before);
-                output.Append(before);
-            }
-
-            var expr = tokenMatch.Groups["expr"].Value.Trim();
-
-            if (expr == "else" || expr == "end")
-            {
-                // For else/end with left trim, also trim trailing whitespace from output
-                if (leftTrim)
+                case TextNode text:
                 {
-                    var current = output.ToString().TrimEnd();
-                    output.Clear();
-                    output.Append(current);
-                }
-                output.Append(tokenMatch.Value);
-                pos = tokenMatch.Index + tokenMatch.Length;
-                continue;
-            }
+                    var content = text.Content;
 
-            var isBlockStart = expr.StartsWith("if ", StringComparison.Ordinal) ||
-                               expr == "if" ||
-                               expr.StartsWith("with ", StringComparison.Ordinal) ||
-                               expr.StartsWith("range ", StringComparison.Ordinal);
+                    // Apply right trim from previous sibling (trim leading whitespace)
+                    if (i > 0 && HasRightTrim(doc.Children[i - 1]))
+                        content = TrimLeadingForRightTrim(content);
 
-            if (isBlockStart)
-            {
-                var keyword = expr.Split(' ', 2)[0];
-                var openMatch = tokenMatch;
-                var bodyStart = openMatch.Index + openMatch.Length;
-                var tokenMatches = TokenRegex.Matches(template, bodyStart);
-                var depth = 1;
-                var elseStartIdx = -1;
-                var elseEndIdx = -1;
-                var endTokenStart = -1;
-                var endTokenEnd = -1;
+                    // Apply left trim from next sibling (trim trailing whitespace)
+                    if (i + 1 < doc.Children.Count && HasLeftTrim(doc.Children[i + 1]))
+                        content = TrimTrailingWhitespace(content);
 
-                foreach (Match token in tokenMatches)
-                {
-                    var tokenExpr = token.Groups["expr"].Value.Trim();
-                    if (tokenExpr == "end")
-                    {
-                        depth--;
-                        if (depth == 0)
-                        {
-                            endTokenStart = token.Index;
-                            endTokenEnd = token.Index + token.Length;
-                            break;
-                        }
-                    }
-                    else if (tokenExpr.StartsWith("if ", StringComparison.Ordinal) || tokenExpr == "if" ||
-                             tokenExpr.StartsWith("with ", StringComparison.Ordinal) ||
-                             tokenExpr.StartsWith("range ", StringComparison.Ordinal) ||
-                             tokenExpr.StartsWith("define ", StringComparison.Ordinal))
-                    {
-                        depth++;
-                    }
-                    else if (tokenExpr.StartsWith("else if ", StringComparison.Ordinal) && depth == 1 && keyword == "if" && elseStartIdx < 0)
-                    {
-                        elseStartIdx = token.Index;
-                        elseEndIdx = token.Index + token.Length;
-                    }
-                    else if (tokenExpr == "else" && depth == 1 && elseStartIdx < 0)
-                    {
-                        elseStartIdx = token.Index;
-                        elseEndIdx = token.Index + token.Length;
-                    }
+                    output.Append(content);
+                    break;
                 }
 
-                if (endTokenStart < 0)
-                    throw new NotSupportedException(
-                        $"Template block '{keyword}' with expression '{expr}' is missing an end marker. " +
-                        $"Template length: {template.Length}. Excerpt from offset: '{template.Substring(0, Math.Min(200, template.Length))}'");
-
-                var blockExpr = expr.Length > keyword.Length ? expr[keyword.Length..].Trim() : string.Empty;
-                var trueBody = elseStartIdx >= 0
-                    ? template[bodyStart..elseStartIdx]
-                    : template[bodyStart..endTokenStart];
-
-                // Check if the else marker is from an "else if" — if so, reconstruct
-                // the false body as {{- if condition }}...{{- end }} so RenderSection can process it
-                var falseBody = string.Empty;
-                if (elseStartIdx >= 0)
+                case ActionNode action:
                 {
-                    var elseTokenValue = template[elseStartIdx..elseEndIdx];
-                    if (elseTokenValue.Trim().StartsWith("{{", StringComparison.Ordinal) &&
-                        elseTokenValue.Contains("else if", StringComparison.Ordinal))
-                    {
-                        // For "else if condition", reconstruct false body as:
-                        // {{- if condition }} <remaining content including else/else-if chain> {{- end }}
-                        var elseIfExpr = elseTokenValue;
-                        var elseIfMatch = System.Text.RegularExpressions.Regex.Match(
-                            elseIfExpr, @"else\s+if\s+(?<cond>.*?)\s*-?\}\}", System.Text.RegularExpressions.RegexOptions.Singleline);
-                        if (elseIfMatch.Success)
-                        {
-                            var condition = elseIfMatch.Groups["cond"].Value.Trim();
-                            var trimLeft = elseTokenValue.Contains("{{-");
-                            var prefix = trimLeft ? "{{- " : "{{ ";
-                            // Reconstruct: {{- if condition }}<everything from after else-if to end>{{- end }}
-                            // The remaining content already has balanced else/else-if/end blocks from the original chain.
-                            var remainingContent = template[elseEndIdx..endTokenStart];
-                            falseBody = $"{prefix}if {condition} }}}}{remainingContent}{{{{- end }}}}";
-                        }
-                        else
-                        {
-                            falseBody = template[elseEndIdx..endTokenStart];
-                        }
-                    }
-                    else
-                    {
-                        falseBody = template[elseEndIdx..endTokenStart];
-                    }
+                    output.Append(RenderActionNode(action, context));
+                    break;
                 }
 
-                var replacement = keyword switch
+                case BlockNode block:
                 {
-                    "if" => TypeConverters.IsTruthy(EvaluatePipeline(blockExpr, context))
-                        ? RenderSection(trueBody, context)
-                        : RenderSection(falseBody, context),
-                    "with" =>
-                        TypeConverters.IsTruthy(EvaluatePipeline(blockExpr, context))
-                            ? RenderSection(trueBody, context with { Dot = EvaluatePipeline(blockExpr, context) })
-                            : RenderSection(falseBody, context),
-                    "range" => RenderRangeExpression(blockExpr, trueBody, context),
-                    _ => string.Empty
-                };
-
-                output.Append(replacement);
-                pos = endTokenEnd;
-            }
-            else
-            {
-                if (expr.StartsWith("/*", StringComparison.Ordinal))
-                {
-                    pos = tokenMatch.Index + tokenMatch.Length;
-                    continue;
+                    output.Append(RenderBlockNode(block, context));
+                    break;
                 }
 
-                string rendered;
-                if (TryAssignVariable(expr, context, out var assigned))
-                    rendered = assigned;
-                else
-                    rendered = TypeConverters.ToTemplateString(EvaluatePipeline(expr, context));
-
-                // Apply left trim to rendered output if needed
-                if (leftTrim)
-                    rendered = rendered.TrimStart();
-
-                output.Append(rendered);
-                pos = tokenMatch.Index + tokenMatch.Length;
-            }
-
-            // Apply right trim: remove leading whitespace from next content
-            if (rightTrim && pos < template.Length)
-            {
-                // Find the next non-whitespace position
-                var nextPos = pos;
-                while (nextPos < template.Length && char.IsWhiteSpace(template[nextPos]) && template[nextPos] != '\n')
-                    nextPos++;
-                // If we stopped at a newline, consume it too
-                if (nextPos < template.Length && template[nextPos] == '\n')
-                    nextPos++;
-                pos = nextPos;
+                case CommentNode:
+                case DefineNode:
+                    // Comments produce no output; defines are extracted before rendering
+                    break;
             }
         }
 
         return output.ToString();
     }
+
+    /// <summary>
+    /// Renders a single action node (expression inside delimiters).
+    /// </summary>
+    private string RenderActionNode(ActionNode action, TemplateContext context)
+    {
+        var expr = action.Expression;
+
+        // Handle comment actions
+        if (expr.StartsWith("/*", StringComparison.Ordinal))
+            return string.Empty;
+
+        // Handle else/end pass-through (should not appear in properly parsed AST)
+        if (expr is "else" or "else if" or "end")
+            return $"{{{{ {expr} }}}}";
+
+        string rendered;
+
+        if (TryAssignVariable(expr, context, out var assigned))
+        {
+            rendered = assigned;
+        }
+        else
+        {
+            rendered = TypeConverters.ToTemplateString(EvaluatePipeline(expr, context));
+        }
+
+        // Apply left trim to rendered output
+        if (action.LeftTrim)
+            rendered = rendered.TrimStart();
+
+        return rendered;
+    }
+
+    /// <summary>
+    /// Renders a block node (if/with/range) by evaluating the condition and
+    /// walking the appropriate body.
+    /// </summary>
+    private string RenderBlockNode(BlockNode block, TemplateContext context)
+    {
+        return block.Keyword switch
+        {
+            "if" => RenderIfBlock(block, context),
+            "with" => RenderWithBlock(block, context),
+            "range" => RenderRangeBlock(block, context),
+            _ => string.Empty,
+        };
+    }
+
+    private string RenderIfBlock(BlockNode block, TemplateContext context)
+    {
+        if (TypeConverters.IsTruthy(EvaluatePipeline(block.Expression, context)))
+        {
+            return block.TrueBody is TemplateDocumentNode trueDoc
+                ? RenderDocument(trueDoc, context)
+                : string.Empty;
+        }
+
+        // Try else-if chain
+        foreach (var elseIf in block.ElseIfChain)
+        {
+            if (TypeConverters.IsTruthy(EvaluatePipeline(elseIf.Condition, context)))
+            {
+                return elseIf.Body is TemplateDocumentNode eiDoc
+                    ? RenderDocument(eiDoc, context)
+                    : string.Empty;
+            }
+        }
+
+        // Else body
+        return block.FalseBody is TemplateDocumentNode falseDoc
+            ? RenderDocument(falseDoc, context)
+            : string.Empty;
+    }
+
+    private string RenderWithBlock(BlockNode block, TemplateContext context)
+    {
+        var value = EvaluatePipeline(block.Expression, context);
+
+        if (TypeConverters.IsTruthy(value))
+        {
+            return block.TrueBody is TemplateDocumentNode trueDoc
+                ? RenderDocument(trueDoc, context with { Dot = value })
+                : string.Empty;
+        }
+
+        return block.FalseBody is TemplateDocumentNode falseDoc
+            ? RenderDocument(falseDoc, context)
+            : string.Empty;
+    }
+
+    private string RenderRangeBlock(BlockNode block, TemplateContext context)
+    {
+        // Serialize the true body back to text for RenderRangeExpression
+        var bodyText = block.TrueBody is TemplateDocumentNode trueDoc
+            ? trueDoc.SerializeToText()
+            : string.Empty;
+
+        return RenderRangeExpression(block.Expression, bodyText, context);
+    }
+
+    private string RenderSection(string template, TemplateContext context)
+    {
+        // AST-based rendering: parse template into AST, then walk and evaluate.
+        // Block boundaries are determined by parser structure rather than regex depth counting.
+        var doc = ParseTemplate(template);
+        return RenderDocument(doc, context);
+    }
+
 
     private static string TrimTrailingWhitespace(string value)
     {
@@ -516,6 +494,41 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             end--;
         return value[..end];
     }
+
+    /// <summary>
+    /// Applies right-trim to leading text content: removes leading horizontal whitespace
+    /// and consumes the first newline if present (matching Helm CLI behavior).
+    /// </summary>
+    private static string TrimLeadingForRightTrim(string content)
+    {
+        if (content.Length == 0)
+            return content;
+
+        var newStart = 0;
+        while (newStart < content.Length && char.IsWhiteSpace(content[newStart]) && content[newStart] != '\n')
+            newStart++;
+        if (newStart < content.Length && content[newStart] == '\n')
+            newStart++;
+        return content[newStart..];
+    }
+
+    /// <summary>Returns true if the node has a left-trim marker on its opening delimiter.</summary>
+    private static bool HasLeftTrim(TemplateNode node)
+        => node switch
+        {
+            ActionNode a => a.LeftTrim,
+            BlockNode b => b.LeftTrim,
+            _ => false,
+        };
+
+    /// <summary>Returns true if the node has a right-trim marker on its closing delimiter.</summary>
+    private static bool HasRightTrim(TemplateNode node)
+        => node switch
+        {
+            ActionNode a => a.RightTrim,
+            BlockNode b => b.RightTrim,
+            _ => false,
+        };
 
     private string RenderRangeExpression(string expression, string body, TemplateContext context)
     {

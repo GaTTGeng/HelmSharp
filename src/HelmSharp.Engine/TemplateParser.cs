@@ -152,7 +152,12 @@ public sealed class TemplateParser
         // Handle else-if chain
         while (stop.Keyword == "else if")
         {
-            var elseIfCondition = stop.Expression.Length > 7 ? stop.Expression[7..].Trim() : string.Empty;
+            // Skip past "else if" keyword accounting for leading whitespace
+            var elseTrimmed = stop.Expression.TrimStart();
+            var elseIfKeyword = "else if";
+            var elseIfCondition = elseTrimmed.StartsWith(elseIfKeyword, StringComparison.Ordinal) && elseTrimmed.Length > elseIfKeyword.Length
+                ? elseTrimmed[elseIfKeyword.Length..].Trim()
+                : string.Empty;
 
             var branchDoc = new TemplateDocumentNode();
             stop = ParseContent(branchDoc.Children, new HashSet<string> { "end", "else", "else if" });
