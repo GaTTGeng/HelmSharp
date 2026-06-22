@@ -1575,10 +1575,6 @@ public sealed class HelmTemplateRenderer
     }
 
     // ────────────────────────────────────────────────────────────
-    //  SQUOTE
-    // ────────────────────────────────────────────────────────────
-
-    // ────────────────────────────────────────────────────────────
     //  CAT
     // ────────────────────────────────────────────────────────────
     private string Cat(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
