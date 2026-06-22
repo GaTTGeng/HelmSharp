@@ -60,7 +60,7 @@ public sealed class HelmTemplateRenderer
             IsUpgrade = isUpgrade,
             Revision = revision,
             KubeVersion = kubeVersion,
-            ApiVersions = BuildApiVersions(apiVersions),
+            ApiVersions = BuildApiVersions(apiVersions, kubeVersion),
             Dependencies = BuildEffectiveDependencies(chart.Dependencies, values)
         };
     }
@@ -1003,7 +1003,7 @@ public sealed class HelmTemplateRenderer
             "Capabilities" => new Dictionary<string, object?>
             {
                 ["KubeVersion"] = ToTemplateKubeVersion(context.KubeVersion),
-                ["APIVersions"] = context.ApiVersions ?? DefaultApiVersions,
+                ["APIVersions"] = context.ApiVersions ?? GetDefaultApiVersions(context.KubeVersion),
                 ["HelmVersion"] = new Dictionary<string, object?>
                 {
                     ["Version"] = "chemical-ai-helm managed-0.3.0",
@@ -1118,14 +1118,13 @@ public sealed class HelmTemplateRenderer
         return true;
     }
 
-    private static ApiVersionSet BuildApiVersions(IEnumerable<string>? apiVersions)
+    private static ApiVersionSet BuildApiVersions(IEnumerable<string>? apiVersions, string? kubeVersion)
     {
+        var defaultVersions = GetDefaultApiVersions(kubeVersion);
         var customVersions = apiVersions ?? [];
-        var versions = DefaultApiVersions
-            .Select(ToTemplateString)
-            .Concat(customVersions)
-            .Distinct(StringComparer.Ordinal)
-            .Cast<object?>()
+        var versions = defaultVersions
+            .Concat<object?>(customVersions)
+            .DistinctBy(static v => v?.ToString(), StringComparer.Ordinal)
             .ToList();
         return new ApiVersionSet(versions);
     }
@@ -1295,61 +1294,115 @@ public sealed class HelmTemplateRenderer
         };
     }
 
-    private static readonly ApiVersionSet DefaultApiVersions = new(
+    /// <summary>
+    /// Catalog of Kubernetes API versions with removal metadata.
+    /// Each entry maps an API version string to the Kubernetes minor version
+    /// where it was removed (or null if still available in the latest release).
+    /// This is used to derive the default API version list for a given kubeVersion.
+    /// </summary>
+    private static readonly (string Version, int? RemovedMinor)[] ApiVersionCatalog =
     [
-        "v1",
-        "admissionregistration.k8s.io/v1",
-        "admissionregistration.k8s.io/v1alpha1",
-        "admissionregistration.k8s.io/v1beta1",
-        "internal.apiserver.k8s.io/v1alpha1",
-        "apps/v1",
-        "apps/v1beta1",
-        "apps/v1beta2",
-        "authentication.k8s.io/v1",
-        "authentication.k8s.io/v1alpha1",
-        "authentication.k8s.io/v1beta1",
-        "authorization.k8s.io/v1",
-        "authorization.k8s.io/v1beta1",
-        "autoscaling/v1",
-        "autoscaling/v2",
-        "autoscaling/v2beta1",
-        "autoscaling/v2beta2",
-        "batch/v1",
-        "batch/v1beta1",
-        "certificates.k8s.io/v1",
-        "certificates.k8s.io/v1beta1",
-        "certificates.k8s.io/v1alpha1",
-        "coordination.k8s.io/v1beta1",
-        "coordination.k8s.io/v1",
-        "discovery.k8s.io/v1",
-        "discovery.k8s.io/v1beta1",
-        "events.k8s.io/v1",
-        "events.k8s.io/v1beta1",
-        "extensions/v1beta1",
-        "flowcontrol.apiserver.k8s.io/v1alpha1",
-        "flowcontrol.apiserver.k8s.io/v1beta1",
-        "flowcontrol.apiserver.k8s.io/v1beta2",
-        "flowcontrol.apiserver.k8s.io/v1beta3",
-        "networking.k8s.io/v1",
-        "networking.k8s.io/v1alpha1",
-        "networking.k8s.io/v1beta1",
-        "node.k8s.io/v1",
-        "node.k8s.io/v1alpha1",
-        "node.k8s.io/v1beta1",
-        "policy/v1",
-        "policy/v1beta1",
-        "rbac.authorization.k8s.io/v1",
-        "rbac.authorization.k8s.io/v1beta1",
-        "rbac.authorization.k8s.io/v1alpha1",
-        "scheduling.k8s.io/v1alpha1",
-        "scheduling.k8s.io/v1beta1",
-        "scheduling.k8s.io/v1",
-        "storage.k8s.io/v1beta1",
-        "storage.k8s.io/v1",
-        "storage.k8s.io/v1alpha1",
-        "apiextensions.k8s.io/v1beta1",
-        "apiextensions.k8s.io/v1"
-    ]);
+        ("v1", null),
+        ("admissionregistration.k8s.io/v1", null),
+        ("admissionregistration.k8s.io/v1alpha1", null),
+        ("admissionregistration.k8s.io/v1beta1", 22),
+        ("internal.apiserver.k8s.io/v1alpha1", null),
+        ("apps/v1", null),
+        ("apps/v1beta1", 16),
+        ("apps/v1beta2", 16),
+        ("authentication.k8s.io/v1", null),
+        ("authentication.k8s.io/v1alpha1", null),
+        ("authentication.k8s.io/v1beta1", 22),
+        ("authorization.k8s.io/v1", null),
+        ("authorization.k8s.io/v1beta1", 22),
+        ("autoscaling/v1", null),
+        ("autoscaling/v2", null),
+        ("autoscaling/v2beta1", 26),
+        ("autoscaling/v2beta2", 26),
+        ("batch/v1", null),
+        ("batch/v1beta1", 25),
+        ("certificates.k8s.io/v1", null),
+        ("certificates.k8s.io/v1beta1", 22),
+        ("certificates.k8s.io/v1alpha1", null),
+        ("coordination.k8s.io/v1beta1", 22),
+        ("coordination.k8s.io/v1", null),
+        ("discovery.k8s.io/v1", null),
+        ("discovery.k8s.io/v1beta1", 25),
+        ("events.k8s.io/v1", null),
+        ("events.k8s.io/v1beta1", 25),
+        ("extensions/v1beta1", 22),
+        ("flowcontrol.apiserver.k8s.io/v1", null),
+        ("flowcontrol.apiserver.k8s.io/v1alpha1", null),
+        ("flowcontrol.apiserver.k8s.io/v1beta1", 26),
+        ("flowcontrol.apiserver.k8s.io/v1beta2", 29),
+        ("flowcontrol.apiserver.k8s.io/v1beta3", 32),
+        ("networking.k8s.io/v1", null),
+        ("networking.k8s.io/v1alpha1", 27),
+        ("networking.k8s.io/v1beta1", 22),
+        ("node.k8s.io/v1", null),
+        ("node.k8s.io/v1alpha1", null),
+        ("node.k8s.io/v1beta1", 25),
+        ("policy/v1", null),
+        ("policy/v1beta1", 25),
+        ("rbac.authorization.k8s.io/v1", null),
+        ("rbac.authorization.k8s.io/v1beta1", 22),
+        ("rbac.authorization.k8s.io/v1alpha1", 25),
+        ("scheduling.k8s.io/v1alpha1", 25),
+        ("scheduling.k8s.io/v1beta1", 22),
+        ("scheduling.k8s.io/v1", null),
+        ("storage.k8s.io/v1beta1", 22),
+        ("storage.k8s.io/v1", null),
+        ("storage.k8s.io/v1alpha1", 27),
+        ("apiextensions.k8s.io/v1beta1", 22),
+        ("apiextensions.k8s.io/v1", null),
+    ];
+
+    /// <summary>
+    /// Cached unfiltered set of all known API versions.
+    /// Used when kubeVersion is null or empty (backward-compatible path).
+    /// </summary>
+    private static readonly ApiVersionSet AllApiVersions =
+        new(ApiVersionCatalog.Select(x => (object?)x.Version));
+
+    /// <summary>
+    /// Returns the default API version set filtered by the configured Kubernetes
+    /// version. When <paramref name="kubeVersion"/> is null or empty, all known
+    /// API versions are included (backward-compatible behavior). When a version
+    /// is specified, API versions that were removed at or before that version
+    /// are excluded.
+    /// </summary>
+    private static ApiVersionSet GetDefaultApiVersions(string? kubeVersion)
+    {
+        if (string.IsNullOrWhiteSpace(kubeVersion))
+            return AllApiVersions;
+
+        var minor = ParseKubeMinorVersion(kubeVersion);
+        var versions = ApiVersionCatalog
+            .Where(x => x.RemovedMinor == null || minor < x.RemovedMinor.Value)
+            .Select(x => (object?)x.Version)
+            .ToList();
+        return new ApiVersionSet(versions);
+    }
+
+    /// <summary>
+    /// Extracts the minor version number from a kubeVersion string like
+    /// "v1.29.0" or "1.30.5", returning 29 or 30 respectively.
+    /// </summary>
+    private static int ParseKubeMinorVersion(string kubeVersion)
+    {
+        var normalized = NormalizeKubeVersion(kubeVersion);
+        var core = normalized.TrimStart('v');
+        var dotIndex = core.IndexOf('.');
+        var secondDotIndex = core.IndexOf('.', dotIndex + 1);
+        var minorSlice = secondDotIndex > dotIndex
+            ? core[(dotIndex + 1)..secondDotIndex]
+            : core[(dotIndex + 1)..];
+        if (int.TryParse(minorSlice, NumberStyles.Integer, CultureInfo.InvariantCulture, out var minor))
+            return minor;
+        throw new ArgumentException(
+            $"Cannot parse minor version from kubeVersion '{kubeVersion}'.",
+            nameof(kubeVersion));
+    }
 
     private static object? ResolveVariable(string token, TemplateContext context)
     {
