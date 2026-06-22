@@ -746,10 +746,17 @@ public sealed class HelmTemplateRenderer
 
             // Date/time functions
             "now" => DateTimeOffset.UtcNow,
-            "date" => DateFormat(tokens, context, pipelineValue),
-            "dateInZone" => DateFormatInZone(tokens, context, pipelineValue),
-            "duration" => DurationFormat(tokens, context, pipelineValue),
-            "durationRound" => DurationRound(tokens, context, pipelineValue),
+            "date" => DateTimeFunctions.Format(
+                TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+                pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context)),
+            "dateInZone" => DateTimeFunctions.FormatInZone(
+                TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+                TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(2), context)),
+                pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(3), context)),
+            "duration" => DateTimeFunctions.Duration(
+                (long)TypeConverters.ToLong(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "durationRound" => DateTimeFunctions.DurationRound(
+                (long)TypeConverters.ToLong(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "unixEpoch" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
 
             // Crypto / random functions
@@ -1717,49 +1724,6 @@ public sealed class HelmTemplateRenderer
     private double ResolveDoubleArg(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, int index)
         => TypeConverters.ToDouble(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(index), context));
 
-    // ────────────────────────────────────────────────────────────
-    //  DATE FUNCTIONS
-    // ────────────────────────────────────────────────────────────
-    private static string DateFormat(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var fmt = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var val = pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context);
-        if (val is DateTimeOffset dto) return dto.ToString(fmt, CultureInfo.InvariantCulture);
-        if (val is DateTime dt) return dt.ToString(fmt, CultureInfo.InvariantCulture);
-        return DateTimeOffset.UtcNow.ToString(fmt, CultureInfo.InvariantCulture);
-    }
-
-    private static string DateFormatInZone(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var fmt = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var zone = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
-        var val = pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(3), context);
-        try
-        {
-            var tz = TimeZoneInfo.FindSystemTimeZoneById(zone);
-            if (val is DateTimeOffset dto) return TimeZoneInfo.ConvertTime(dto, tz).ToString(fmt, CultureInfo.InvariantCulture);
-            if (val is DateTime dt) return TimeZoneInfo.ConvertTime(dt, tz).ToString(fmt, CultureInfo.InvariantCulture);
-        }
-        catch { }
-        return DateTimeOffset.UtcNow.ToString(fmt, CultureInfo.InvariantCulture);
-    }
-
-    private static string DurationFormat(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var seconds = (long)TypeConverters.ToLong(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var ts = TimeSpan.FromSeconds(seconds);
-        return ts.ToString(@"d\d\ h\h\ m\m\ s\s", CultureInfo.InvariantCulture);
-    }
-
-    private static string DurationRound(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var seconds = (long)TypeConverters.ToLong(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var ts = TimeSpan.FromSeconds(seconds);
-        if (ts.TotalDays >= 1) return $"{(int)ts.TotalDays}d";
-        if (ts.TotalHours >= 1) return $"{(int)ts.TotalHours}h";
-        if (ts.TotalMinutes >= 1) return $"{(int)ts.TotalMinutes}m";
-        return $"{(int)ts.TotalSeconds}s";
-    }
 
     // ────────────────────────────────────────────────────────────
     //  CRYPTO / RANDOM
