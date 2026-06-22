@@ -794,17 +794,17 @@ public sealed class HelmTemplateRenderer
 
             // List functions
             "list" => tokens.Skip(1).Select(t => EvaluateToken(t, context)).ToList(),
-            "first" => First(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-            "last" => Last(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-            "rest" => Rest(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-            "initial" => Initial(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "first" => CollectionsHelpers.First(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "last" => CollectionsHelpers.Last(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "rest" => CollectionsHelpers.Rest(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "initial" => CollectionsHelpers.Initial(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "prepend" => Prepend(tokens, context, pipelineValue),
             "append" => Append(tokens, context, pipelineValue),
             "mustAppend" => Append(tokens, context, pipelineValue),
-            "reverse" => Reverse(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-            "sortAlpha" => SortAlpha(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-            "compact" => Compact(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-            "uniq" => Uniq(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "reverse" => CollectionsHelpers.Reverse(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "sortAlpha" => CollectionsHelpers.SortAlpha(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "compact" => CollectionsHelpers.Compact(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "uniq" => CollectionsHelpers.Uniq(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "without" => Without(tokens, context, pipelineValue),
             "has" => Has(tokens, context, pipelineValue),
             "concat" => Concat(tokens, context, pipelineValue),
@@ -815,11 +815,11 @@ public sealed class HelmTemplateRenderer
             "set" => Set(tokens, context, pipelineValue),
             "unset" => Unset(tokens, context, pipelineValue),
             "hasKey" => HasKey(tokens, context, pipelineValue),
-            "keys" => Keys(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-            "values" => Values(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "keys" => CollectionsHelpers.Keys(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "values" => CollectionsHelpers.Values(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "merge" => MergeDicts(tokens, context),
             "mustMerge" => MergeDicts(tokens, context),
-            "deepCopy" => DeepCopy(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "deepCopy" => CollectionsHelpers.DeepCopy(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "pick" => Pick(tokens, context, pipelineValue),
             "omit" => Omit(tokens, context, pipelineValue),
             "pluck" => Pluck(tokens, context, pipelineValue),
@@ -903,17 +903,17 @@ public sealed class HelmTemplateRenderer
             "not" => !TypeConverters.IsTruthy(value),
             "empty" => !TypeConverters.IsTruthy(value),
             "len" => GetLength(value),
-            "keys" => Keys(value),
-            "values" => Values(value),
-            "first" => First(value),
-            "last" => Last(value),
-            "rest" => Rest(value),
-            "initial" => Initial(value),
-            "reverse" => Reverse(value),
-            "sortAlpha" => SortAlpha(value),
-            "compact" => Compact(value),
-            "uniq" => Uniq(value),
-            "deepCopy" => DeepCopy(value),
+            "keys" => CollectionsHelpers.Keys(value),
+            "values" => CollectionsHelpers.Values(value),
+            "first" => CollectionsHelpers.First(value),
+            "last" => CollectionsHelpers.Last(value),
+            "rest" => CollectionsHelpers.Rest(value),
+            "initial" => CollectionsHelpers.Initial(value),
+            "reverse" => CollectionsHelpers.Reverse(value),
+            "sortAlpha" => CollectionsHelpers.SortAlpha(value),
+            "compact" => CollectionsHelpers.Compact(value),
+            "uniq" => CollectionsHelpers.Uniq(value),
+            "deepCopy" => CollectionsHelpers.DeepCopy(value),
             "typeOf" => value?.GetType().FullName ?? "nil",
             "kindOf" => KindOf(value),
             "toString" => TypeConverters.ToTemplateString(value),
@@ -2071,24 +2071,10 @@ public sealed class HelmTemplateRenderer
         return a.Equals(b);
     }
 
-    // ────────────────────────────────────────────────────────────
-    //  LIST FUNCTIONS
-    // ────────────────────────────────────────────────────────────
-    private static object? First(object? value)
-        => value is IList<object?> { Count: > 0 } list ? list[0] : null;
-
-    private static object? Last(object? value)
-        => value is IList<object?> { Count: > 0 } list ? list[^1] : null;
-
-    private static object? Rest(object? value)
-        => value is IList<object?> { Count: > 0 } list ? list.Skip(1).ToList() : new List<object?>();
-
-    private static object? Initial(object? value)
-        => value is IList<object?> { Count: > 0 } list ? list.Take(list.Count - 1).ToList() : new List<object?>();
 
     private object? Prepend(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var list = ToList(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context));
+        var list = CollectionsHelpers.ToList(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context));
         var item = EvaluateToken(tokens.ElementAtOrDefault(1), context);
         var result = new List<object?> { item };
         result.AddRange(list);
@@ -2097,64 +2083,23 @@ public sealed class HelmTemplateRenderer
 
     private object? Append(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var list = ToList(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var list = CollectionsHelpers.ToList(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context));
         var item = EvaluateToken(tokens.ElementAtOrDefault(2), context);
         var result = new List<object?>(list) { item };
         return result;
     }
 
-    private static object? Reverse(object? value)
-    {
-        if (value is IList<object?> list)
-        {
-            var copy = new List<object?>(list);
-            copy.Reverse();
-            return copy;
-        }
-        return value;
-    }
-
-    private static object? SortAlpha(object? value)
-    {
-        if (value is IList<object?> list)
-            return list.OrderBy(x => TypeConverters.ToTemplateString(x), StringComparer.Ordinal).ToList();
-        return value;
-    }
-
-    private static object? Compact(object? value)
-    {
-        if (value is IList<object?> list)
-            return list.Where(TypeConverters.IsTruthy).ToList();
-        return value;
-    }
-
-    private static object? Uniq(object? value)
-    {
-        if (value is IList<object?> list)
-        {
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-            var result = new List<object?>();
-            foreach (var item in list)
-            {
-                var key = TypeConverters.ToTemplateString(item);
-                if (seen.Add(key))
-                    result.Add(item);
-            }
-            return result;
-        }
-        return value;
-    }
 
     private object? Without(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var list = ToList(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var list = CollectionsHelpers.ToList(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context));
         var exclude = tokens.Skip(2).Select(t => TypeConverters.ToTemplateString(EvaluateToken(t, context))).ToHashSet(StringComparer.Ordinal);
         return list.Where(x => !exclude.Contains(TypeConverters.ToTemplateString(x))).ToList();
     }
 
     private object? Has(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
-        var list = ToList(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var list = CollectionsHelpers.ToList(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context));
         var needle = TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(2), context));
         return list.Any(x => TypeConverters.ToTemplateString(x) == needle);
     }
@@ -2162,19 +2107,11 @@ public sealed class HelmTemplateRenderer
     private object? Concat(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
         var result = new List<object?>();
-        if (pipelineValue != null) result.AddRange(ToList(pipelineValue));
+        if (pipelineValue != null) result.AddRange(CollectionsHelpers.ToList(pipelineValue));
         foreach (var t in tokens.Skip(1))
-            result.AddRange(ToList(EvaluateToken(t, context)));
+            result.AddRange(CollectionsHelpers.ToList(EvaluateToken(t, context)));
         return result;
     }
-
-    private static List<object?> ToList(object? value)
-        => value switch
-        {
-            IList<object?> list => new List<object?>(list),
-            IEnumerable<object?> e => e.ToList(),
-            _ => new List<object?>()
-        };
 
     // ────────────────────────────────────────────────────────────
     //  DICT FUNCTIONS
@@ -2204,19 +2141,6 @@ public sealed class HelmTemplateRenderer
         return dict;
     }
 
-    private static object? Keys(object? value)
-    {
-        if (value is IDictionary<string, object?> dict)
-            return dict.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
-        return new List<object?>();
-    }
-
-    private static object? Values(object? value)
-    {
-        if (value is IDictionary<string, object?> dict)
-            return dict.Keys.OrderBy(k => k, StringComparer.Ordinal).Select(k => dict[k]).ToList();
-        return new List<object?>();
-    }
 
     private object? MergeDicts(IReadOnlyList<string> tokens, TemplateContext context)
     {
@@ -2225,39 +2149,11 @@ public sealed class HelmTemplateRenderer
         {
             var val = EvaluateToken(t, context);
             if (val is IDictionary<string, object?> dict)
-                MergeInto(result, dict);
+                CollectionsHelpers.MergeInto(result, dict);
         }
         return result;
     }
 
-    private static void MergeInto(Dictionary<string, object?> target, IDictionary<string, object?> source)
-    {
-        foreach (var kvp in source)
-        {
-            if (target.TryGetValue(kvp.Key, out var existing) &&
-                existing is Dictionary<string, object?> existingDict &&
-                kvp.Value is IDictionary<string, object?> valueDict)
-            {
-                MergeInto(existingDict, valueDict);
-                continue;
-            }
-            target[kvp.Key] = kvp.Value;
-        }
-    }
-
-    private static object? DeepCopy(object? value)
-    {
-        return value switch
-        {
-            Dictionary<string, object?> dict => dict.ToDictionary(
-                kvp => kvp.Key,
-                kvp => DeepCopy(kvp.Value),
-                StringComparer.OrdinalIgnoreCase),
-            IList<object?> list => list.Select(DeepCopy).ToList(),
-            string s => new string(s.AsSpan()),
-            _ => value
-        };
-    }
 
     private object? Pick(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
