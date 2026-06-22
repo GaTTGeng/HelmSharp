@@ -849,12 +849,12 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "or" => tokens.Skip(1).Any(t => TypeConverters.IsTruthy(EvaluateToken(t, context))),
 
             // Comparison
-            "eq" => Eq(tokens, context, pipelineValue),
-            "ne" => !TypeConverters.IsTruthy(Eq(tokens, context, pipelineValue)),
-            "lt" => CompareOp(tokens, context, pipelineValue, (a, b) => a < 0),
-            "gt" => CompareOp(tokens, context, pipelineValue, (a, b) => a > 0),
-            "le" => CompareOp(tokens, context, pipelineValue, (a, b) => a <= 0),
-            "ge" => CompareOp(tokens, context, pipelineValue, (a, b) => a >= 0),
+            "eq" => CoreFunctions.Eq(tokens, context, pipelineValue, this),
+            "ne" => !TypeConverters.IsTruthy(CoreFunctions.Eq(tokens, context, pipelineValue, this)),
+            "lt" => CoreFunctions.CompareOp(tokens, context, pipelineValue, (a, b) => a < 0, this),
+            "gt" => CoreFunctions.CompareOp(tokens, context, pipelineValue, (a, b) => a > 0, this),
+            "le" => CoreFunctions.CompareOp(tokens, context, pipelineValue, (a, b) => a <= 0, this),
+            "ge" => CoreFunctions.CompareOp(tokens, context, pipelineValue, (a, b) => a >= 0, this),
 
             // JSON / YAML / TOML
             "toJson" => SerializationFunctions.ToJson(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
@@ -1613,28 +1613,6 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
     // ────────────────────────────────────────────────────────────
     //  COMPARE OPS (lt, gt, le, ge)
     // ────────────────────────────────────────────────────────────
-    private object? Eq(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var a = pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context);
-        var b = EvaluateToken(tokens.ElementAtOrDefault(pipelineValue != null ? 1 : 2), context);
-        if (a is null && b is null) return true;
-        if (a is null || b is null) return false;
-        if (a.GetType() == b.GetType())
-        {
-            if (a is long la && b is long lb) return la == lb;
-            if (a is double da && b is double db) return Math.Abs(da - db) < 1e-10;
-            if (a is bool ba && b is bool bb) return ba == bb;
-        }
-        return string.Equals(TypeConverters.ToTemplateString(a), TypeConverters.ToTemplateString(b), StringComparison.Ordinal);
-    }
-
-    private object? CompareOp(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, Func<int, int, bool> cmp)
-    {
-        var a = pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context);
-        var b = EvaluateToken(tokens.ElementAtOrDefault(pipelineValue != null ? 1 : 2), context);
-        var result = TypeFunctions.CompareValues(a, b);
-        return cmp(result, 0);
-    }
 
     // ────────────────────────────────────────────────────────────
     // ────────────────────────────────────────────────────────────

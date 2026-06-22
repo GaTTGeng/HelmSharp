@@ -146,4 +146,29 @@ internal static class CoreFunctions
             result.AddRange(CollectionsHelpers.ToList(eval.EvaluateToken(t, context)));
         return result;
     }
+
+    // ── Comparison ──
+
+    public static object? Eq(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    {
+        var a = pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(1), context);
+        var b = eval.EvaluateToken(tokens.ElementAtOrDefault(pipelineValue != null ? 1 : 2), context);
+        if (a is null && b is null) return true;
+        if (a is null || b is null) return false;
+        if (a.GetType() == b.GetType())
+        {
+            if (a is long la && b is long lb) return la == lb;
+            if (a is double da && b is double db) return Math.Abs(da - db) < 1e-10;
+            if (a is bool ba && b is bool bb) return ba == bb;
+        }
+        return string.Equals(TypeConverters.ToTemplateString(a), TypeConverters.ToTemplateString(b), StringComparison.Ordinal);
+    }
+
+    public static object? CompareOp(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, Func<int, int, bool> cmp, IEvaluationContext eval)
+    {
+        var a = pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(1), context);
+        var b = eval.EvaluateToken(tokens.ElementAtOrDefault(pipelineValue != null ? 1 : 2), context);
+        var result = TypeFunctions.CompareValues(a, b);
+        return cmp(result, 0);
+    }
 }
