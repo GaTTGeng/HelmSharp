@@ -790,7 +790,9 @@ public sealed class HelmTemplateRenderer
 
             // Semantic versioning
             "semver" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-            "semverCompare" => SemverCompare(tokens, context, pipelineValue),
+            "semverCompare" => SemverFunctions.Satisfies(
+                TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context)),
+                TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context))),
 
             // Type / reflection
             "typeOf" => (pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))?.GetType().FullName ?? "nil",
@@ -855,9 +857,9 @@ public sealed class HelmTemplateRenderer
             "ge" => CompareOp(tokens, context, pipelineValue, (a, b) => a >= 0),
 
             // JSON / YAML / TOML
-            "toJson" => JsonSerialize(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-            "fromJson" => JsonDeserialize(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
-            "toPrettyJson" => JsonSerializePretty(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "toJson" => SerializationFunctions.ToJson(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "fromJson" => SerializationFunctions.FromJson(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "toPrettyJson" => SerializationFunctions.ToPrettyJson(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "toYaml" => HelmYaml.Serialize(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)).TrimEnd(),
             "fromYaml" => HelmYaml.DeserializeDictionary(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
 
@@ -902,7 +904,7 @@ public sealed class HelmTemplateRenderer
             "quote" => StringHelpers.Quote(value),
             "squote" => StringFunctions.Squote(value),
             "toYaml" => HelmYaml.Serialize(value).TrimEnd(),
-            "toJson" => JsonSerialize(value),
+            "toJson" => SerializationFunctions.ToJson(value),
             "lower" => TypeConverters.ToTemplateString(value).ToLowerInvariant(),
             "upper" => TypeConverters.ToTemplateString(value).ToUpperInvariant(),
             "b64enc" => EncodingHelpers.Base64Encode(value),
@@ -1762,88 +1764,6 @@ public sealed class HelmTemplateRenderer
     }
 
 
-    // ────────────────────────────────────────────────────────────
-    //  SEMVER
-    // ────────────────────────────────────────────────────────────
-    private static bool SemverCompare(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var constraint = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var version = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
-        // Basic semver comparison: supports ~, ^, >=, <=, >, <, =, x-range
-        return SemverSatisfies(version, constraint);
-    }
-
-    private static bool SemverSatisfies(string version, string constraint)
-    {
-        // Parse version
-        var vMatch = Regex.Match(version, @"^v?(\d+)\.(\d+)\.(\d+)");
-        if (!vMatch.Success) return false;
-        var vMajor = int.Parse(vMatch.Groups[1].Value);
-        var vMinor = int.Parse(vMatch.Groups[2].Value);
-        var vPatch = int.Parse(vMatch.Groups[3].Value);
-
-        constraint = constraint.Trim();
-
-        // Handle ">= X.Y.Z"
-        if (constraint.StartsWith(">="))
-        {
-            var c = ParseSemver(constraint[2..].Trim());
-            return CompareSemver(vMajor, vMinor, vPatch, c.Item1, c.Item2, c.Item3) >= 0;
-        }
-        if (constraint.StartsWith("<="))
-        {
-            var c = ParseSemver(constraint[2..].Trim());
-            return CompareSemver(vMajor, vMinor, vPatch, c.Item1, c.Item2, c.Item3) <= 0;
-        }
-        if (constraint.StartsWith(">"))
-        {
-            var c = ParseSemver(constraint[1..].Trim());
-            return CompareSemver(vMajor, vMinor, vPatch, c.Item1, c.Item2, c.Item3) > 0;
-        }
-        if (constraint.StartsWith("<"))
-        {
-            var c = ParseSemver(constraint[1..].Trim());
-            return CompareSemver(vMajor, vMinor, vPatch, c.Item1, c.Item2, c.Item3) < 0;
-        }
-        if (constraint.StartsWith("="))
-        {
-            var c = ParseSemver(constraint[1..].Trim());
-            return CompareSemver(vMajor, vMinor, vPatch, c.Item1, c.Item2, c.Item3) == 0;
-        }
-        // ~X.Y.Z := >=X.Y.Z <X.(Y+1).0
-        if (constraint.StartsWith('~'))
-        {
-            var c = ParseSemver(constraint[1..].Trim());
-            return CompareSemver(vMajor, vMinor, vPatch, c.Item1, c.Item2, c.Item3) >= 0 &&
-                   CompareSemver(vMajor, vMinor, vPatch, c.Item1, c.Item2 + 1, 0) < 0;
-        }
-        // ^X.Y.Z := >=X.Y.Z <(X+1).0.0
-        if (constraint.StartsWith('^'))
-        {
-            var c = ParseSemver(constraint[1..].Trim());
-            return CompareSemver(vMajor, vMinor, vPatch, c.Item1, c.Item2, c.Item3) >= 0 &&
-                   CompareSemver(vMajor, vMinor, vPatch, c.Item1 + 1, 0, 0) < 0;
-        }
-        // Exact match
-        {
-            var c = ParseSemver(constraint);
-            return CompareSemver(vMajor, vMinor, vPatch, c.Item1, c.Item2, c.Item3) == 0;
-        }
-    }
-
-    private static (int, int, int) ParseSemver(string v)
-    {
-        var m = Regex.Match(v, @"^v?(\d+)\.(\d+)\.(\d+)");
-        if (!m.Success) return (0, 0, 0);
-        return (int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value), int.Parse(m.Groups[3].Value));
-    }
-
-    private static int CompareSemver(int aMaj, int aMin, int aPat, int bMaj, int bMin, int bPat)
-    {
-        if (aMaj != bMaj) return aMaj.CompareTo(bMaj);
-        if (aMin != bMin) return aMin.CompareTo(bMin);
-        return aPat.CompareTo(bPat);
-    }
 
     // ────────────────────────────────────────────────────────────
     //  TYPE / REFLECTION
@@ -2067,45 +1987,6 @@ public sealed class HelmTemplateRenderer
         return string.Compare(TypeConverters.ToTemplateString(a), TypeConverters.ToTemplateString(b), StringComparison.Ordinal);
     }
 
-    // ────────────────────────────────────────────────────────────
-    //  JSON / YAML
-    // ────────────────────────────────────────────────────────────
-    private static string JsonSerialize(object? value)
-        => JsonSerializer.Serialize(value, new JsonSerializerOptions { PropertyNamingPolicy = null });
-
-    private static string JsonSerializePretty(object? value)
-        => JsonSerializer.Serialize(value, new JsonSerializerOptions { PropertyNamingPolicy = null, WriteIndented = true });
-
-    private static object? JsonDeserialize(string json)
-    {
-        try
-        {
-            var doc = JsonSerializer.Deserialize<JsonElement>(json);
-            return JsonElementToObject(doc);
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static object? JsonElementToObject(JsonElement element)
-    {
-        return element.ValueKind switch
-        {
-            JsonValueKind.String => element.GetString(),
-            JsonValueKind.Number => element.TryGetInt64(out var l) ? l : element.GetDouble(),
-            JsonValueKind.True => true,
-            JsonValueKind.False => false,
-            JsonValueKind.Null or JsonValueKind.Undefined => null,
-            JsonValueKind.Array => element.EnumerateArray().Select(JsonElementToObject).ToList(),
-            JsonValueKind.Object => element.EnumerateObject().ToDictionary(
-                p => p.Name,
-                p => JsonElementToObject(p.Value),
-                StringComparer.OrdinalIgnoreCase),
-            _ => null
-        };
-    }
 
     // ────────────────────────────────────────────────────────────
     //  LOOKUP
