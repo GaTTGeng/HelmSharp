@@ -1431,7 +1431,7 @@ public class HelmClient : IHelmClient
     /// Ordering matches Helm's precedence: <paramref name="valuesFile"/> comes first (lower
     /// precedence), <paramref name="valuesFiles"/> are applied after (higher precedence on
     /// conflict, since later files override earlier ones).
-    /// Duplicate paths (same file in both parameters) are silently deduplicated.
+    /// Exact string duplicates are silently deduplicated (does not resolve relative paths).
     /// </summary>
     private static IEnumerable<string>? CombineValuesFiles(string? valuesFile, List<string>? valuesFiles)
     {

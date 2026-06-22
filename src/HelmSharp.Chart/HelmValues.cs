@@ -68,6 +68,25 @@ public static class HelmValues
     }
 
     /// <summary>
+    /// Builds merged values. Convenience overload that accepts a single values file.
+    /// Equivalent to calling <see cref="BuildAsync(HelmChart,IEnumerable{string}?,string?,Dictionary{string,string}?,Dictionary{string,string}?,Dictionary{string,string}?,Dictionary{string,string}?,CancellationToken)"/>
+    /// with a single-element enumerable when <paramref name="valuesFile"/> is non-null.
+    /// </summary>
+    public static Task<Dictionary<string, object?>> BuildAsync(
+        HelmChart chart,
+        string? valuesFile,
+        string? valuesContent,
+        Dictionary<string, string>? setValues,
+        Dictionary<string, string>? setFileValues,
+        Dictionary<string, string>? setStringValues,
+        Dictionary<string, string>? setJsonValues,
+        CancellationToken cancellationToken)
+    {
+        var valuesFiles = valuesFile is not null ? new[] { valuesFile } : null;
+        return BuildAsync(chart, valuesFiles, valuesContent, setValues, setFileValues, setStringValues, setJsonValues, cancellationToken);
+    }
+
+    /// <summary>
     /// Builds scoped values for a subchart. Extracts the subchart's portion from parent values
     /// and merges with the subchart's own defaults.
     /// </summary>
