@@ -109,6 +109,8 @@ internal static class CollectionsHelpers
                 kvp => DeepCopy(kvp.Value),
                 StringComparer.OrdinalIgnoreCase),
             IList<object?> list => list.Select(DeepCopy).ToList(),
+            // Strings are immutable in both C# and Go — no defensive copy needed.
+            // Identical to Helm's deepCopy semantics.
             _ => value
         };
     }
