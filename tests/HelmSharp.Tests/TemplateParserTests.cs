@@ -248,6 +248,23 @@ public class TemplateParserTests
     }
 
     [Fact]
+    public void Parse_ElseIfChain_PreservesTrimMarkerPerBranch()
+    {
+        // {{- else if .B }} has left trim, {{ else if .C }} does not
+        var template = "{{ if .A }}a{{- else if .B }}b{{ else if .C }}c{{ end }}";
+        var tokens = new TemplateTokenizer(template).TokenizeFlat();
+        var parser = new TemplateParser(tokens);
+        var doc = parser.Parse();
+
+        var block = Assert.IsType<BlockNode>(doc.Children[0]);
+        Assert.Equal(2, block.ElseIfChain.Count);
+        Assert.True(block.ElseIfChain[0].TrimMarker,
+            "first else-if has {{- (left trim), TrimMarker should be true");
+        Assert.False(block.ElseIfChain[1].TrimMarker,
+            "second else-if has {{ (no trim), TrimMarker should be false");
+    }
+
+    [Fact]
     public void GetFirstWord_ElseIf_RecognizedAsCompound()
     {
         Assert.Equal("else if", TemplateParser.GetFirstWord("else if .A"));

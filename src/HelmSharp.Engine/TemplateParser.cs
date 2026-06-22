@@ -159,6 +159,9 @@ public sealed class TemplateParser
         // Handle else-if chain
         while (stop.Keyword == "else if")
         {
+            // Capture trim marker before ParseContent overwrites `stop`
+            var elseIfTrim = stop.LeftTrim;
+
             // Skip past "else if" keyword accounting for leading whitespace
             var elseTrimmed = stop.Expression.TrimStart();
             var elseIfKeyword = "else if";
@@ -173,7 +176,7 @@ public sealed class TemplateParser
             {
                 Condition = elseIfCondition,
                 Body = branchDoc,
-                TrimMarker = stop.LeftTrim,
+                TrimMarker = elseIfTrim,
             });
         }
 
