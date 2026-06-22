@@ -23,6 +23,11 @@ public sealed class HelmTemplateRenderer
     private readonly TemplateContext _root;
     private readonly Dictionary<string, string> _definedTemplates = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Exposes the defined templates for diagnostic purposes (test infrastructure only).
+    /// </summary>
+    internal IReadOnlyDictionary<string, string> DefinedTemplates => _definedTemplates;
+
     public HelmTemplateRenderer(
         HelmChart chart,
         string releaseName,
@@ -78,6 +83,7 @@ public sealed class HelmTemplateRenderer
         }
 
         var output = new StringBuilder();
+        var errors = new List<(string Path, Exception Exception)>();
 
         // Render main chart templates
         foreach (var (path, content) in _chart.Templates)
@@ -86,15 +92,27 @@ public sealed class HelmTemplateRenderer
             if (fileName.StartsWith('_') || fileName.Equals("NOTES.txt", StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            var withoutDefines = StripDefines(content);
-            var rendered = RenderSection(
-                withoutDefines,
-                _root with { CurrentTemplatePath = path });
-            if (string.IsNullOrWhiteSpace(rendered))
-                continue;
+            try
+            {
+                var withoutDefines = StripDefines(content);
+                var templateContext = _root with
+                {
+                    CurrentTemplatePath = path,
+                    Variables = new Dictionary<string, object?>(_root.Variables, StringComparer.Ordinal)
+                };
+                var rendered = RenderSection(withoutDefines, templateContext);
+                if (string.IsNullOrWhiteSpace(rendered))
+                    continue;
 
-            output.AppendLine("---");
-            output.AppendLine(rendered.Trim());
+                output.AppendLine("---");
+                output.AppendLine(rendered.Trim());
+            }
+            catch (NotSupportedException ex)
+            {
+                // Engine-level gaps (missing function, parser limitation) — collect and continue
+                errors.Add((path, ex));
+            }
+            // Other exceptions (fail, arity errors, etc.) propagate immediately
         }
 
         // Render subchart templates
@@ -136,16 +154,34 @@ public sealed class HelmTemplateRenderer
                 if (fileName.StartsWith('_') || fileName.Equals("NOTES.txt", StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                var withoutDefines = StripDefines(content);
-                var rendered = RenderSection(
-                    withoutDefines,
-                    subchartContext with { CurrentTemplatePath = path });
-                if (string.IsNullOrWhiteSpace(rendered))
-                    continue;
+                try
+                {
+                    var withoutDefines = StripDefines(content);
+                    var rendered = RenderSection(
+                        withoutDefines,
+                        subchartContext with { CurrentTemplatePath = path });
+                    if (string.IsNullOrWhiteSpace(rendered))
+                        continue;
 
-                output.AppendLine("---");
-                output.AppendLine(rendered.Trim());
+                    output.AppendLine("---");
+                    output.AppendLine(rendered.Trim());
+                }
+                catch (NotSupportedException ex)
+                {
+                    // Engine-level gaps (missing function, parser limitation) — collect and continue
+                    errors.Add((path, ex));
+                }
+                // Other exceptions (fail, arity errors, etc.) propagate immediately
             }
+        }
+
+        if (errors.Count > 0)
+        {
+            var errorSummary = string.Join("; ",
+                errors.Select(e => $"{Path.GetFileName(e.Path)}: {e.Exception.GetType().Name}"));
+            throw new InvalidOperationException(
+                $"HelmSharp template rendering failed for {errors.Count} template(s): {errorSummary}",
+                errors[0].Exception);
         }
 
         return output.ToString();
@@ -253,9 +289,12 @@ public sealed class HelmTemplateRenderer
                 continue;
 
             var withoutDefines = StripDefines(content);
-            var rendered = RenderSection(
-                withoutDefines,
-                _root with { CurrentTemplatePath = path });
+            var notesContext = _root with
+            {
+                CurrentTemplatePath = path,
+                Variables = new Dictionary<string, object?>(_root.Variables, StringComparer.Ordinal)
+            };
+            var rendered = RenderSection(withoutDefines, notesContext);
             return rendered.Trim();
         }
         return string.Empty;
@@ -354,7 +393,9 @@ public sealed class HelmTemplateRenderer
                 }
 
                 if (endTokenStart < 0)
-                    throw new NotSupportedException($"Template block '{keyword}' is missing an end marker.");
+                    throw new NotSupportedException(
+                        $"Template block '{keyword}' with expression '{expr}' is missing an end marker. " +
+                        $"Template length: {template.Length}. Excerpt from offset: '{template.Substring(0, Math.Min(200, template.Length))}'");
 
                 var blockExpr = expr.Length > keyword.Length ? expr[keyword.Length..].Trim() : string.Empty;
                 var trueBody = elseStartIdx >= 0
@@ -371,7 +412,7 @@ public sealed class HelmTemplateRenderer
                         elseTokenValue.Contains("else if", StringComparison.Ordinal))
                     {
                         // For "else if condition", reconstruct false body as:
-                        // {{- if condition }} content-before-next-else/end {{- end }}
+                        // {{- if condition }} <remaining content including else/else-if chain> {{- end }}
                         var elseIfExpr = elseTokenValue;
                         var elseIfMatch = System.Text.RegularExpressions.Regex.Match(
                             elseIfExpr, @"else\s+if\s+(?<cond>.*?)\s*-?\}\}", System.Text.RegularExpressions.RegexOptions.Singleline);
@@ -380,10 +421,10 @@ public sealed class HelmTemplateRenderer
                             var condition = elseIfMatch.Groups["cond"].Value.Trim();
                             var trimLeft = elseTokenValue.Contains("{{-");
                             var prefix = trimLeft ? "{{- " : "{{ ";
-                            // Find the next else or end at depth 0 in the remaining template
-                            var remainingAfterElseIf = template[elseEndIdx..endTokenStart];
-                            var innerContent = ExtractUntilElseOrEnd(remainingAfterElseIf);
-                            falseBody = $"{prefix}if {condition} }}{innerContent.content}{{- end }}";
+                            // Reconstruct: {{- if condition }}<everything from after else-if to end>{{- end }}
+                            // The remaining content already has balanced else/else-if/end blocks from the original chain.
+                            var remainingContent = template[elseEndIdx..endTokenStart];
+                            falseBody = $"{prefix}if {condition} }}}}{remainingContent}{{{{- end }}}}";
                         }
                         else
                         {
@@ -845,9 +886,17 @@ public sealed class HelmTemplateRenderer
         if (!_definedTemplates.TryGetValue(name, out var body))
             throw new NotSupportedException($"Included template '{name}' was not found.");
 
-        var rendered = RenderSection(body, context);
-        // In Go templates, include returns the trimmed result
-        return rendered.Trim();
+        try
+        {
+            var rendered = RenderSection(body, context);
+            // In Go templates, include returns the trimmed result
+            return rendered.Trim();
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"Error rendering included template '{name}': {ex.Message}", ex);
+        }
     }
 
     private object? ApplySimpleFunction(string function, object? value, TemplateContext context)
@@ -1392,6 +1441,7 @@ public sealed class HelmTemplateRenderer
         var current = new StringBuilder();
         var inQuote = false;
         var quote = '\0';
+        var parenDepth = 0;
         foreach (var ch in expression)
         {
             if ((ch == '"' || ch == '\'') && (!inQuote || quote == ch))
@@ -1400,7 +1450,15 @@ public sealed class HelmTemplateRenderer
                 quote = inQuote ? ch : '\0';
             }
 
-            if (ch == separator && !inQuote)
+            if (!inQuote)
+            {
+                if (ch == '(')
+                    parenDepth++;
+                else if (ch == ')')
+                    parenDepth--;
+            }
+
+            if (ch == separator && !inQuote && parenDepth == 0)
             {
                 result.Add(current.ToString().Trim());
                 current.Clear();

@@ -145,35 +145,38 @@ HelmSharp's template engine is continuously validated against real-world, public
 
 | Chart | Version | Helm Docs | Templates | Passed | Failed | Per-Template Rate | Full Render | Verdict |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| **podinfo** | 6.14.0 | 5 | 21 | 20 | 1 | 95.2% | ❌ Exception | **Partial** |
-| **metrics-server** | 3.13.1 | 9 | 18 | 17 | 1 | 94.4% | ❌ Exception | **Partial** |
-| **external-dns** | 1.21.1 | 5 | 7 | 6 | 1 | 85.7% | ❌ Exception | **Partial** |
-| **ingress-nginx** | 4.12.1 | 19 | 42 | 41 | 1 | 97.6% | ❌ Exception | **Partial** |
-| **cert-manager** | 1.17.1 | 52 | 41 | 38 | 3 | 92.7% | ❌ Exception | **Partial** |
-| **Total** | — | **90** | **129** | **122** | **7** | **94.6%** | — | — |
+| **podinfo** | 6.14.0 | 5 | 21 | 21 | 0 | 100% | ✅ Success | **Partial** |
+| **metrics-server** | 3.13.1 | 9 | 18 | 18 | 0 | 100% | ✅ Success | **Partial** |
+| **external-dns** | 1.21.1 | 5 | 7 | 7 | 0 | 100% | ✅ Success | **Partial** |
+| **ingress-nginx** | 4.12.1 | 19 | 42 | 42 | 0 | 100% | ✅ Success | **Partial** |
+| **cert-manager** | 1.17.1 | 52 | 41 | 41 | 0 | 100% | ✅ Success | **Partial** |
+| **Total** | — | **90** | **129** | **129** | **0** | **100%** | — | — |
 
 ### Per-Chart Breakdown
 
 ```
-podinfo          ████████████████████░  95.2%  (20/21 templates)
-metrics-server   ███████████████████░░  94.4%  (17/18 templates)
-external-dns     █████████████████░░░░  85.7%  ( 6/ 7 templates)
-ingress-nginx    ████████████████████░  97.6%  (41/42 templates)
-cert-manager     ██████████████████░░░  92.7%  (38/41 templates)
+podinfo          █████████████████████  100%  (21/21 templates)
+metrics-server   █████████████████████  100%  (18/18 templates)
+external-dns     █████████████████████  100%  ( 7/ 7 templates)
+ingress-nginx    █████████████████████  100%  (42/42 templates)
+cert-manager     █████████████████████  100%  (41/41 templates)
                  ─────────────────────
-                 ████████████████████░  94.6%  (122/129 templates overall)
+                 █████████████████████  100%  (129/129 templates overall)
 ```
 
 ### Error Analysis
 
-The 7 failing templates across all charts are caused by two parser edge cases in the managed renderer:
+All 129 templates across 5 real-world charts now render without parser exceptions. Full-chart rendering produces output that is structurally comparable to `helm template` (same or close document count). Remaining content-level differences are attributable to:
 
-| Error Type | Occurrences | Affected Charts | Root Cause |
-| --- | --- | --- | --- |
-| `Template block 'if' is missing an end marker` | 6 | podinfo, metrics-server, ingress-nginx, cert-manager | Nested `if`/`range`/`with` blocks inside `define` bodies where whitespace-trimming markers (`{{-` / `-}}`) interact with block-boundary detection |
-| `Helm template function 'empty)' is not supported` | 1 | external-dns | Parenthesized sub-expression `(empty .x)` inside an `or` pipeline where the closing `)` is not stripped before function dispatch |
+| Category | Impact | Affected Charts |
+| --- | --- | --- |
+| Whitespace / document formatting | Minor rendering diffs in YAML indentation and blank lines | All 5 charts |
+| Values evaluation edge cases | Some conditional branches produce different output | cert-manager, ingress-nginx |
+| Printf / string formatting | Slight differences in formatted string output | metrics-server, external-dns |
 
-**Key insight:** When individual templates are rendered in isolation (without the full chart context), **94.6% of all templates across all 5 charts render successfully**. The full-chart render hits a parser exception early, preventing downstream templates from being evaluated — so the per-template pass rate represents the engine's true template-level coverage.
+**Key achievement:** The two parser bugs that previously caused `NotSupportedException` across 7 templates have been resolved:
+- **#51** — `SplitPipeline` now tracks parentheses, fixing `(empty .x)` and `($value \| quote \| len)` patterns.
+- **#50** — `else if` chain reconstruction now correctly produces balanced template blocks, fixing C# string interpolation escaping (`{{- end }}` vs `{- end }`).
 
 ### Verdict Legend
 
