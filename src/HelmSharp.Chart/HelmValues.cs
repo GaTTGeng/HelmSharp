@@ -67,7 +67,6 @@ public static class HelmValues
         return result;
     }
 
-
     /// <summary>
     /// Builds scoped values for a subchart. Extracts the subchart's portion from parent values
     /// and merges with the subchart's own defaults.

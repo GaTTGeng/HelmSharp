@@ -333,8 +333,8 @@ public class HelmValuesTests
         }
         finally
         {
-            if (Directory.Exists(dir))
-                Directory.Delete(dir, recursive: true);
+            try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+            catch { /* best effort — Windows file locks may delay deletion */ }
         }
     }
 
@@ -363,8 +363,8 @@ public class HelmValuesTests
         }
         finally
         {
-            if (Directory.Exists(dir))
-                Directory.Delete(dir, recursive: true);
+            try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+            catch { /* best effort */ }
         }
     }
 }

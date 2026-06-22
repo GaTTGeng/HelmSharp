@@ -1428,17 +1428,19 @@ public class HelmClient : IHelmClient
 
     /// <summary>
     /// Combines a single values file path and a list of values file paths into one enumerable.
-    /// When both are set, <paramref name="valuesFile"/> comes first, followed by <paramref name="valuesFiles"/>.
+    /// Ordering matches Helm's precedence: <paramref name="valuesFile"/> comes first (lower
+    /// precedence), <paramref name="valuesFiles"/> are applied after (higher precedence on
+    /// conflict, since later files override earlier ones).
+    /// Duplicate paths (same file in both parameters) are silently deduplicated.
     /// </summary>
     private static IEnumerable<string>? CombineValuesFiles(string? valuesFile, List<string>? valuesFiles)
     {
+        var result = new List<string>();
         if (!string.IsNullOrWhiteSpace(valuesFile))
-        {
-            return valuesFiles is { Count: > 0 }
-                ? new[] { valuesFile }.Concat(valuesFiles)
-                : new[] { valuesFile };
-        }
-        return valuesFiles is { Count: > 0 } ? valuesFiles : null;
+            result.Add(valuesFile);
+        if (valuesFiles is { Count: > 0 })
+            result.AddRange(valuesFiles.Where(f => f != valuesFile));
+        return result.Count > 0 ? result : null;
     }
 
     private static CommandResult Ok(string output)
