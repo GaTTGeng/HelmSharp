@@ -20,7 +20,7 @@ internal static class DictFunctions
         return dict;
     }
 
-    public static object Set(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    public static object? Set(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
         var dict = pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(1), context);
         var key = TypeConverters.ToTemplateString(eval.EvaluateToken(tokens.ElementAtOrDefault(2), context));
