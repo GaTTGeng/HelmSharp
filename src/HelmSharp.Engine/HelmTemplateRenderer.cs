@@ -810,16 +810,16 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "last" => CollectionsHelpers.Last(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "rest" => CollectionsHelpers.Rest(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "initial" => CollectionsHelpers.Initial(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-            "prepend" => Prepend(tokens, context, pipelineValue),
-            "append" => Append(tokens, context, pipelineValue),
-            "mustAppend" => Append(tokens, context, pipelineValue),
+            "prepend" => CoreFunctions.Prepend(tokens, context, pipelineValue, this),
+            "append" => CoreFunctions.Append(tokens, context, pipelineValue, this),
+            "mustAppend" => CoreFunctions.Append(tokens, context, pipelineValue, this),
             "reverse" => CollectionsHelpers.Reverse(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "sortAlpha" => CollectionsHelpers.SortAlpha(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "compact" => CollectionsHelpers.Compact(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "uniq" => CollectionsHelpers.Uniq(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-            "without" => Without(tokens, context, pipelineValue),
-            "has" => Has(tokens, context, pipelineValue),
-            "concat" => Concat(tokens, context, pipelineValue),
+            "without" => CoreFunctions.Without(tokens, context, pipelineValue, this),
+            "has" => CoreFunctions.Has(tokens, context, pipelineValue, this),
+            "concat" => CoreFunctions.Concat(tokens, context, pipelineValue, this),
 
             // Dict functions
             "dict" => DictFunctions.Dict(tokens, context, this),
@@ -1608,47 +1608,6 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
     //  TYPE / REFLECTION
 
 
-
-    private object? Prepend(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var list = CollectionsHelpers.ToList(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context));
-        var item = EvaluateToken(tokens.ElementAtOrDefault(1), context);
-        var result = new List<object?> { item };
-        result.AddRange(list);
-        return result;
-    }
-
-    private object? Append(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var list = CollectionsHelpers.ToList(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context));
-        var item = EvaluateToken(tokens.ElementAtOrDefault(2), context);
-        var result = new List<object?>(list) { item };
-        return result;
-    }
-
-
-    private object? Without(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var list = CollectionsHelpers.ToList(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context));
-        var exclude = tokens.Skip(2).Select(t => TypeConverters.ToTemplateString(EvaluateToken(t, context))).ToHashSet(StringComparer.Ordinal);
-        return list.Where(x => !exclude.Contains(TypeConverters.ToTemplateString(x))).ToList();
-    }
-
-    private object? Has(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var list = CollectionsHelpers.ToList(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context));
-        var needle = TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(2), context));
-        return list.Any(x => TypeConverters.ToTemplateString(x) == needle);
-    }
-
-    private object? Concat(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var result = new List<object?>();
-        if (pipelineValue != null) result.AddRange(CollectionsHelpers.ToList(pipelineValue));
-        foreach (var t in tokens.Skip(1))
-            result.AddRange(CollectionsHelpers.ToList(EvaluateToken(t, context)));
-        return result;
-    }
 
 
     // ────────────────────────────────────────────────────────────

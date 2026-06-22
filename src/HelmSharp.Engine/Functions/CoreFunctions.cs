@@ -104,4 +104,46 @@ internal static class CoreFunctions
         }
         return string.Format(format, args);
     }
+
+    // ── List operations ──
+
+    public static object? Prepend(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    {
+        var list = CollectionsHelpers.ToList(pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(2), context));
+        var item = eval.EvaluateToken(tokens.ElementAtOrDefault(1), context);
+        var result = new List<object?> { item };
+        result.AddRange(list);
+        return result;
+    }
+
+    public static object? Append(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    {
+        var list = CollectionsHelpers.ToList(pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var item = eval.EvaluateToken(tokens.ElementAtOrDefault(2), context);
+        var result = new List<object?>(list) { item };
+        return result;
+    }
+
+    public static object? Without(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    {
+        var list = CollectionsHelpers.ToList(pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var exclude = tokens.Skip(2).Select(t => TypeConverters.ToTemplateString(eval.EvaluateToken(t, context))).ToHashSet(StringComparer.Ordinal);
+        return list.Where(x => !exclude.Contains(TypeConverters.ToTemplateString(x))).ToList();
+    }
+
+    public static object? Has(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    {
+        var list = CollectionsHelpers.ToList(pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var needle = TypeConverters.ToTemplateString(eval.EvaluateToken(tokens.ElementAtOrDefault(2), context));
+        return list.Any(x => TypeConverters.ToTemplateString(x) == needle);
+    }
+
+    public static object? Concat(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    {
+        var result = new List<object?>();
+        if (pipelineValue != null) result.AddRange(CollectionsHelpers.ToList(pipelineValue));
+        foreach (var t in tokens.Skip(1))
+            result.AddRange(CollectionsHelpers.ToList(eval.EvaluateToken(t, context)));
+        return result;
+    }
 }
