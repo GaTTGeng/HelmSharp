@@ -47,4 +47,53 @@ internal static class TypeFunctions
         }
         return a.Equals(b);
     }
+
+    public static bool TypeIs(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
+    {
+        var typeName = TypeConverters.ToTemplateString(HelmTemplateRenderer.EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
+        var val = pipelineValue ?? HelmTemplateRenderer.EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context);
+        return typeName switch
+        {
+            "string" => val is string,
+            "bool" => val is bool,
+            "int" => val is int or long,
+            "float64" => val is double or float,
+            "[]interface {}" => val is IList<object?>,
+            "map[string]interface {}" => val is IDictionary<string, object?>,
+            "nil" => val is null,
+            _ => false
+        };
+    }
+
+    public static bool TypeIsLike(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
+        => TypeIs(tokens, context, pipelineValue);
+
+    public static bool KindIs(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
+    {
+        var kind = TypeConverters.ToTemplateString(HelmTemplateRenderer.EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
+        var val = pipelineValue ?? HelmTemplateRenderer.EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context);
+        return KindOf(val) == kind;
+    }
+
+    public static int CompareValues(object? a, object? b)
+    {
+        if (a is null && b is null) return 0;
+        if (a is null) return -1;
+        if (b is null) return 1;
+        if (a is long la && b is long lb) return la.CompareTo(lb);
+        if (a is double da && b is double db) return da.CompareTo(db);
+        if (a is int ia && b is int ib) return ia.CompareTo(ib);
+        return string.Compare(TypeConverters.ToTemplateString(a), TypeConverters.ToTemplateString(b), StringComparison.Ordinal);
+    }
+
+    public static int GetLength(object? value)
+        => value switch
+        {
+            string s => s.Length,
+            System.Collections.ICollection c => c.Count,
+            IList<object?> l => l.Count,
+            IDictionary<string, object?> d => d.Count,
+            IEnumerable<object?> e => e.Count(),
+            _ => 0
+        };
 }

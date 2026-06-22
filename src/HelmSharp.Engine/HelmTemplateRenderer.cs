@@ -796,10 +796,10 @@ public sealed class HelmTemplateRenderer
 
             // Type / reflection
             "typeOf" => (pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))?.GetType().FullName ?? "nil",
-            "typeIs" => TypeIs(tokens, context, pipelineValue),
-            "typeIsLike" => TypeIsLike(tokens, context, pipelineValue),
+            "typeIs" => TypeFunctions.TypeIs(tokens, context, pipelineValue),
+            "typeIsLike" => TypeFunctions.TypeIsLike(tokens, context, pipelineValue),
             "kindOf" => TypeFunctions.KindOf(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-            "kindIs" => KindIs(tokens, context, pipelineValue),
+            "kindIs" => TypeFunctions.KindIs(tokens, context, pipelineValue),
             "deepEqual" => TypeFunctions.DeepEquals(
                 pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context),
                 EvaluateToken(tokens.ElementAtOrDefault(2), context)),
@@ -867,7 +867,7 @@ public sealed class HelmTemplateRenderer
             "lookup" => Lookup(tokens, context),
 
             // Len
-            "len" => GetLength(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "len" => TypeFunctions.GetLength(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
 
             // Auto
             "auto" => "auto",
@@ -914,7 +914,7 @@ public sealed class HelmTemplateRenderer
             "sha1sum" => EncodingHelpers.Sha1Sum(TypeConverters.ToTemplateString(value)),
             "not" => !TypeConverters.IsTruthy(value),
             "empty" => !TypeConverters.IsTruthy(value),
-            "len" => GetLength(value),
+            "len" => TypeFunctions.GetLength(value),
             "keys" => CollectionsHelpers.Keys(value),
             "values" => CollectionsHelpers.Values(value),
             "first" => CollectionsHelpers.First(value),
@@ -1635,34 +1635,6 @@ public sealed class HelmTemplateRenderer
 
     // ────────────────────────────────────────────────────────────
     //  TYPE / REFLECTION
-    // ────────────────────────────────────────────────────────────
-    private static bool TypeIs(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var typeName = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var val = pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context);
-        return typeName switch
-        {
-            "string" => val is string,
-            "bool" => val is bool,
-            "int" => val is int or long,
-            "float64" => val is double or float,
-            "[]interface {}" => val is IList<object?>,
-            "map[string]interface {}" => val is IDictionary<string, object?>,
-            "nil" => val is null,
-            _ => false
-        };
-    }
-
-    private static bool TypeIsLike(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-        => TypeIs(tokens, context, pipelineValue);
-
-
-    private static bool KindIs(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var kind = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var val = pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context);
-        return TypeFunctions.KindOf(val) == kind;
-    }
 
 
 
@@ -1840,21 +1812,9 @@ public sealed class HelmTemplateRenderer
     {
         var a = pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context);
         var b = EvaluateToken(tokens.ElementAtOrDefault(pipelineValue != null ? 1 : 2), context);
-        var result = CompareValues(a, b);
+        var result = TypeFunctions.CompareValues(a, b);
         return cmp(result, 0);
     }
-
-    private static int CompareValues(object? a, object? b)
-    {
-        if (a is null && b is null) return 0;
-        if (a is null) return -1;
-        if (b is null) return 1;
-        if (a is long la && b is long lb) return la.CompareTo(lb);
-        if (a is double da && b is double db) return da.CompareTo(db);
-        if (a is int ia && b is int ib) return ia.CompareTo(ib);
-        return string.Compare(TypeConverters.ToTemplateString(a), TypeConverters.ToTemplateString(b), StringComparison.Ordinal);
-    }
-
 
     // ────────────────────────────────────────────────────────────
     //  LOOKUP
@@ -1865,20 +1825,6 @@ public sealed class HelmTemplateRenderer
         // In managed mode, return empty dict — no cluster access during template rendering
         return new Dictionary<string, object?>(StringComparer.Ordinal);
     }
-
-    // ────────────────────────────────────────────────────────────
-    //  LEN
-    // ────────────────────────────────────────────────────────────
-    private static int GetLength(object? value)
-        => value switch
-        {
-            string s => s.Length,
-            ICollection c => c.Count,
-            IList<object?> l => l.Count,
-            IDictionary<string, object?> d => d.Count,
-            IEnumerable<object?> e => e.Count(),
-            _ => 0
-        };
 
     // ────────────────────────────────────────────────────────────
     //  STRING HELPERS
