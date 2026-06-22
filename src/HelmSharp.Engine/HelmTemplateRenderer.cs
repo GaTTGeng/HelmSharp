@@ -1331,6 +1331,7 @@ public sealed class HelmTemplateRenderer
         ("events.k8s.io/v1", null),
         ("events.k8s.io/v1beta1", 25),
         ("extensions/v1beta1", 22),
+        ("flowcontrol.apiserver.k8s.io/v1", null),
         ("flowcontrol.apiserver.k8s.io/v1alpha1", null),
         ("flowcontrol.apiserver.k8s.io/v1beta1", 26),
         ("flowcontrol.apiserver.k8s.io/v1beta2", 29),
@@ -1357,6 +1358,13 @@ public sealed class HelmTemplateRenderer
     ];
 
     /// <summary>
+    /// Cached unfiltered set of all known API versions.
+    /// Used when kubeVersion is null or empty (backward-compatible path).
+    /// </summary>
+    private static readonly ApiVersionSet AllApiVersions =
+        new(ApiVersionCatalog.Select(x => (object?)x.Version));
+
+    /// <summary>
     /// Returns the default API version set filtered by the configured Kubernetes
     /// version. When <paramref name="kubeVersion"/> is null or empty, all known
     /// API versions are included (backward-compatible behavior). When a version
@@ -1366,7 +1374,7 @@ public sealed class HelmTemplateRenderer
     private static ApiVersionSet GetDefaultApiVersions(string? kubeVersion)
     {
         if (string.IsNullOrWhiteSpace(kubeVersion))
-            return new ApiVersionSet(ApiVersionCatalog.Select(x => (object?)x.Version));
+            return AllApiVersions;
 
         var minor = ParseKubeMinorVersion(kubeVersion);
         var versions = ApiVersionCatalog
