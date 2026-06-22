@@ -94,7 +94,7 @@ public class RealChartGoldenTests
         try
         {
             chart = await HelmChartLoader.LoadAsync(chartPath, CancellationToken.None);
-            values = await HelmValues.BuildAsync(chart, null, null, null, null, null, null, CancellationToken.None);
+            values = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, null, null, null, null, null, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -130,7 +130,7 @@ public class RealChartGoldenTests
             {
                 // Create a minimal chart with just this template and its helpers
                 var singleChart = CreateSingleTemplateChart(chart, path);
-                var singleValues = await HelmValues.BuildAsync(singleChart, null, null, null, null, null, null, CancellationToken.None);
+                var singleValues = await HelmValues.BuildAsync(singleChart, (IEnumerable<string>?)null, null, null, null, null, null, CancellationToken.None);
                 var singleRenderer = new HelmTemplateRenderer(singleChart, "golden-release", "golden-namespace", singleValues);
                 var output = singleRenderer.Render();
                 templateResults.Add(new TemplateResult(path, true, output, null));

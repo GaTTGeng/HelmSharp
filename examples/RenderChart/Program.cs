@@ -26,7 +26,7 @@ Console.WriteLine();
 
 var values = await HelmValues.BuildAsync(
     chart: chart,
-    valuesFile: null,
+    valuesFiles: null,
     valuesContent: null,
     setValues: new Dictionary<string, string>
     {

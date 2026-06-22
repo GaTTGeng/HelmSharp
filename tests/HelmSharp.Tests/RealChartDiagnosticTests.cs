@@ -24,7 +24,7 @@ public class RealChartDiagnosticTests
         var chartPath = Path.Combine(
             AppContext.BaseDirectory, "Fixtures", "Charts", "real", "ingress-nginx");
         var chart = await HelmChartLoader.LoadAsync(chartPath, CancellationToken.None);
-        var values = await HelmValues.BuildAsync(chart, null, null, null, null, null, null, CancellationToken.None);
+        var values = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, null, null, null, null, null, CancellationToken.None);
         var renderer = new HelmTemplateRenderer(chart, "rel", "ns", values);
 
         // List all defined templates
@@ -85,7 +85,7 @@ public class RealChartDiagnosticTests
 
         try
         {
-            var singleValues = await HelmValues.BuildAsync(single, null, null, null, null, null, null, CancellationToken.None);
+            var singleValues = await HelmValues.BuildAsync(single, (IEnumerable<string>?)null, null, null, null, null, null, CancellationToken.None);
             var singleRenderer = new HelmTemplateRenderer(single, "rel", "ns", singleValues);
             var output = singleRenderer.Render();
             _output.WriteLine($"  RENDER OK: {output.Length} chars");
