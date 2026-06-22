@@ -354,30 +354,19 @@ public sealed record GoldenResult(
             Array.Empty<TemplateResult>(), "n/a");
 
     public string ToJson()
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("{");
-        sb.AppendLine($"  \"chart\": \"{ChartName}\",");
-        sb.AppendLine($"  \"verdict\": \"{Verdict}\",");
-        sb.AppendLine($"  \"helmDocCount\": {HelmDocCount},");
-        sb.AppendLine($"  \"matchedDocs\": {MatchedDocs},");
-        sb.AppendLine($"  \"contentDiffDocs\": {ContentDiffDocs},");
-        sb.AppendLine($"  \"passedTemplates\": {PassedTemplates},");
-        sb.AppendLine($"  \"failedTemplates\": {FailedTemplates},");
-        sb.AppendLine($"  \"totalTemplates\": {TotalTemplates},");
-        sb.AppendLine($"  \"durationMs\": {DurationMs},");
-        sb.AppendLine($"  \"fullRenderError\": \"{FullRenderError}\",");
-        sb.Append("  \"errorTypes\": {");
-        var first = true;
-        foreach (var (key, count) in ErrorTypes)
+        => System.Text.Json.JsonSerializer.Serialize(new
         {
-            if (!first) sb.Append(", ");
-            sb.Append($"\"{key}\": {count}");
-            first = false;
-        }
-        sb.AppendLine("},");
-        sb.AppendLine($"  \"summary\": \"{Summary}\"");
-        sb.AppendLine("}");
-        return sb.ToString();
-    }
+            chart = ChartName,
+            verdict = Verdict.ToString(),
+            helmDocCount = HelmDocCount,
+            matchedDocs = MatchedDocs,
+            contentDiffDocs = ContentDiffDocs,
+            passedTemplates = PassedTemplates,
+            failedTemplates = FailedTemplates,
+            totalTemplates = TotalTemplates,
+            durationMs = DurationMs,
+            fullRenderError = FullRenderError,
+            errorTypes = ErrorTypes,
+            summary = Summary
+        }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
 }

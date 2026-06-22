@@ -65,6 +65,19 @@ public sealed class HelmTemplateRenderer
         };
     }
 
+    /// <summary>
+    /// Renders all non-helper templates in the chart.
+    /// </summary>
+    /// <remarks>
+    /// <para>Exceptions of type <see cref="NotSupportedException"/> (missing template function,
+    /// parser limitations) are accumulated per-template rather than failing immediately.
+    /// This allows the engine to render as many templates as possible before throwing.
+    /// Other exceptions (e.g. <c>fail</c> calls, arity errors) propagate immediately.</para>
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when one or more templates fail with <see cref="NotSupportedException"/>.
+    /// The message lists each failing template and its exception type.
+    /// </exception>
     public string Render()
     {
         // Extract defines from main chart templates
@@ -159,7 +172,11 @@ public sealed class HelmTemplateRenderer
                     var withoutDefines = StripDefines(content);
                     var rendered = RenderSection(
                         withoutDefines,
-                        subchartContext with { CurrentTemplatePath = path });
+                        subchartContext with
+                        {
+                            CurrentTemplatePath = path,
+                            Variables = new Dictionary<string, object?>(subchartContext.Variables, StringComparer.Ordinal)
+                        });
                     if (string.IsNullOrWhiteSpace(rendered))
                         continue;
 
@@ -490,37 +507,6 @@ public sealed class HelmTemplateRenderer
         }
 
         return output.ToString();
-    }
-
-    private static (string content, int consumed) ExtractUntilElseOrEnd(string template)
-    {
-        var tokenMatches = TokenRegex.Matches(template);
-        var depth = 0;
-        foreach (Match token in tokenMatches)
-        {
-            var tokenExpr = token.Groups["expr"].Value.Trim();
-            if (tokenExpr == "end")
-            {
-                if (depth == 0)
-                    return (template[..token.Index], token.Index + token.Length);
-                depth--;
-            }
-            else if (tokenExpr == "else" && depth == 0)
-            {
-                return (template[..token.Index], token.Index);
-            }
-            else if (tokenExpr.StartsWith("else if ", StringComparison.Ordinal) && depth == 0)
-            {
-                return (template[..token.Index], token.Index);
-            }
-            else if (tokenExpr.StartsWith("if ", StringComparison.Ordinal) || tokenExpr == "if" ||
-                     tokenExpr.StartsWith("with ", StringComparison.Ordinal) ||
-                     tokenExpr.StartsWith("range ", StringComparison.Ordinal))
-            {
-                depth++;
-            }
-        }
-        return (template, template.Length);
     }
 
     private static string TrimTrailingWhitespace(string value)
@@ -1444,7 +1430,7 @@ public sealed class HelmTemplateRenderer
         var parenDepth = 0;
         foreach (var ch in expression)
         {
-            if ((ch == '"' || ch == '\'') && (!inQuote || quote == ch))
+            if ((ch == '"' || ch == '\'') && (!inQuote || quote == ch) && parenDepth == 0)
             {
                 inQuote = !inQuote;
                 quote = inQuote ? ch : '\0';

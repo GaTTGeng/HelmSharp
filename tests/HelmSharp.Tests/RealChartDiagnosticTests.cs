@@ -18,6 +18,7 @@ public class RealChartDiagnosticTests
     }
 
     [HelmCliFact]
+    [Trait("Category", "Diagnostic")]
     public async Task Diagnose_IngressNginx_ControllerPodDisruptionBudget()
     {
         var chartPath = Path.Combine(
@@ -96,6 +97,8 @@ public class RealChartDiagnosticTests
                 _output.WriteLine($"  INNER: {ex.InnerException.GetType().Name}: {ex.InnerException.Message}");
         }
 
-        Assert.True(true); // diagnostic only
+        // Diagnostic test: verifies template structure is sound. Does not assert on output content.
+        Assert.NotNull(chart);
+        Assert.True(chart.Templates.Count > 0, "Chart should have templates loaded");
     }
 }
