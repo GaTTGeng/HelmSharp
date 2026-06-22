@@ -695,18 +695,18 @@ public sealed class HelmTemplateRenderer
 
             // String functions
             "quote" => StringHelpers.Quote(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-            "squote" => Squote(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "squote" => StringFunctions.Squote(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "cat" => Cat(tokens, context, pipelineValue),
             "indent" => StringHelpers.Indent(TypeConverters.ToTemplateString(pipelineValue), GetInt(tokens, 1, context), false),
             "nindent" => StringHelpers.Indent(TypeConverters.ToTemplateString(pipelineValue), GetInt(tokens, 1, context), true),
             "replace" => Replace(tokens, context, pipelineValue),
             "plural" => Plural(tokens, context, pipelineValue),
-            "snakecase" => Snakecase(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
-            "camelcase" => Camelcase(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
-            "kebabcase" => Kebabcase(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "snakecase" => StringFunctions.Snakecase(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "camelcase" => StringFunctions.Camelcase(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "kebabcase" => StringFunctions.Kebabcase(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "wrap" => Wrap(tokens, context, pipelineValue),
             "wrapWith" => WrapWith(tokens, context, pipelineValue),
-            "initials" => Initials(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "initials" => StringFunctions.Initials(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "abbrev" => Abbrev(tokens, context, pipelineValue),
             "trunc" => Trunc(tokens, context, pipelineValue),
             "abbrevinitial" => Abbrevinitial(tokens, context, pipelineValue),
@@ -890,7 +890,7 @@ public sealed class HelmTemplateRenderer
         return function switch
         {
             "quote" => StringHelpers.Quote(value),
-            "squote" => Squote(value),
+            "squote" => StringFunctions.Squote(value),
             "toYaml" => HelmYaml.Serialize(value).TrimEnd(),
             "toJson" => JsonSerialize(value),
             "lower" => TypeConverters.ToTemplateString(value).ToLowerInvariant(),
@@ -922,9 +922,9 @@ public sealed class HelmTemplateRenderer
             "float64" => TypeConverters.ToDouble(value),
             "title" => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(TypeConverters.ToTemplateString(value)),
             "untitle" => TypeConverters.ToTemplateString(value).ToLowerInvariant(),
-            "snakecase" => Snakecase(TypeConverters.ToTemplateString(value)),
-            "camelcase" => Camelcase(TypeConverters.ToTemplateString(value)),
-            "kebabcase" => Kebabcase(TypeConverters.ToTemplateString(value)),
+            "snakecase" => StringFunctions.Snakecase(TypeConverters.ToTemplateString(value)),
+            "camelcase" => StringFunctions.Camelcase(TypeConverters.ToTemplateString(value)),
+            "kebabcase" => StringFunctions.Kebabcase(TypeConverters.ToTemplateString(value)),
             _ => throw new NotSupportedException($"Helm template function '{function}' is not supported by the managed renderer.")
         };
     }
@@ -1577,8 +1577,6 @@ public sealed class HelmTemplateRenderer
     // ────────────────────────────────────────────────────────────
     //  SQUOTE
     // ────────────────────────────────────────────────────────────
-    private static string Squote(object? value)
-        => "'" + TypeConverters.ToTemplateString(value).Replace("'", "\\'", StringComparison.Ordinal) + "'";
 
     // ────────────────────────────────────────────────────────────
     //  CAT
@@ -1604,60 +1602,6 @@ public sealed class HelmTemplateRenderer
         return count == 1 ? singular : plural;
     }
 
-    // ────────────────────────────────────────────────────────────
-    //  SNAKECASE / CAMELCASE / KEBABCASE
-    // ────────────────────────────────────────────────────────────
-    private static string Snakecase(string input)
-    {
-        if (string.IsNullOrEmpty(input)) return input;
-        var sb = new StringBuilder();
-        for (var i = 0; i < input.Length; i++)
-        {
-            if (char.IsUpper(input[i]))
-            {
-                if (i > 0) sb.Append('_');
-                sb.Append(char.ToLowerInvariant(input[i]));
-            }
-            else
-            {
-                sb.Append(input[i]);
-            }
-        }
-        return sb.ToString();
-    }
-
-    private static string Camelcase(string input)
-    {
-        if (string.IsNullOrEmpty(input)) return input;
-        var parts = input.Split('_', '-', StringSplitOptions.RemoveEmptyEntries);
-        var sb = new StringBuilder();
-        foreach (var part in parts)
-        {
-            if (part.Length == 0) continue;
-            sb.Append(char.ToUpperInvariant(part[0]));
-            if (part.Length > 1) sb.Append(part[1..].ToLowerInvariant());
-        }
-        return sb.ToString();
-    }
-
-    private static string Kebabcase(string input)
-    {
-        if (string.IsNullOrEmpty(input)) return input;
-        var sb = new StringBuilder();
-        for (var i = 0; i < input.Length; i++)
-        {
-            if (char.IsUpper(input[i]))
-            {
-                if (i > 0) sb.Append('-');
-                sb.Append(char.ToLowerInvariant(input[i]));
-            }
-            else
-            {
-                sb.Append(input[i]);
-            }
-        }
-        return sb.ToString();
-    }
 
     // ────────────────────────────────────────────────────────────
     //  WRAP / WRAPWITH
@@ -1666,7 +1610,7 @@ public sealed class HelmTemplateRenderer
     {
         var width = (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
         var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
-        return WrapText(input, width);
+        return StringFunctions.WrapText(input, width);
     }
 
     private static string WrapWith(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
@@ -1674,36 +1618,12 @@ public sealed class HelmTemplateRenderer
         var width = (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
         var indent = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
         var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(3), context));
-        return WrapText(input, width, indent);
-    }
-
-    private static string WrapText(string input, int width, string indent = "")
-    {
-        if (width <= 0 || string.IsNullOrEmpty(input)) return input;
-        var words = input.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        var sb = new StringBuilder();
-        var lineLen = 0;
-        foreach (var word in words)
-        {
-            if (lineLen > 0 && lineLen + 1 + word.Length > width)
-            {
-                sb.AppendLine();
-                sb.Append(indent);
-                lineLen = indent.Length;
-            }
-            if (lineLen > 0) { sb.Append(' '); lineLen++; }
-            sb.Append(word);
-            lineLen += word.Length;
-        }
-        return sb.ToString();
+        return StringFunctions.WrapText(input, width, indent);
     }
 
     // ────────────────────────────────────────────────────────────
     //  INITIALS / ABBREV / ABBREVINITIAL
     // ────────────────────────────────────────────────────────────
-    private static string Initials(string input)
-        => string.Join("", input.Split(' ', StringSplitOptions.RemoveEmptyEntries).Select(w => w.Length > 0 ? w[0].ToString() : ""));
-
     private static string Abbrev(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
         var maxWidth = (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
