@@ -130,7 +130,11 @@ public sealed class TemplateParser
 
     private BlockNode ParseBlock(string keyword, string expr, bool leftTrim, bool rightTrim)
     {
-        var condition = expr.Length > keyword.Length ? expr[keyword.Length..].Trim() : string.Empty;
+        // Skip past keyword in the trimmed expression to extract the condition
+        var trimmedExpr = expr.TrimStart();
+        var condition = trimmedExpr.StartsWith(keyword, StringComparison.Ordinal) && trimmedExpr.Length > keyword.Length
+            ? trimmedExpr[keyword.Length..].Trim()
+            : string.Empty;
 
         var block = new BlockNode
         {
@@ -219,7 +223,11 @@ public sealed class TemplateParser
 
     private static string ExtractQuotedFirstArg(string expr, string keyword)
     {
-        var remaining = expr[keyword.Length..].TrimStart();
+        // Trim leading whitespace, then skip past the keyword
+        var remaining = expr.TrimStart();
+        if (remaining.StartsWith(keyword, StringComparison.Ordinal))
+            remaining = remaining[keyword.Length..].TrimStart();
+
         if (remaining.Length >= 2)
         {
             var quote = remaining[0];
