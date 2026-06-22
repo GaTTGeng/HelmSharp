@@ -123,7 +123,8 @@ public class HelmClient : IHelmClient
             }
         }
 
-        var values = await HelmValues.BuildAsync(chart, request.ValuesFile, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
+        var valuesFiles = CombineValuesFiles(request.ValuesFile, request.ValuesFiles);
+        var values = await HelmValues.BuildAsync(chart, valuesFiles, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
 
         if (request.DryRun)
         {
@@ -467,7 +468,8 @@ public class HelmClient : IHelmClient
         var ns = request.Namespace ?? options.DefaultNamespace ?? "default";
         var chartPath = await ResolveChartPathAsync(request.Chart, null, options, cancellationToken);
         var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
-        var values = await HelmValues.BuildAsync(chart, request.ValuesFile, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
+        var valuesFiles = CombineValuesFiles(request.ValuesFile, request.ValuesFiles);
+        var values = await HelmValues.BuildAsync(chart, valuesFiles, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
         var renderer = new HelmTemplateRenderer(
             chart,
             request.ReleaseName,
@@ -511,7 +513,8 @@ public class HelmClient : IHelmClient
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
         var ns = request.Namespace ?? options.DefaultNamespace ?? "default";
         var chart = await HelmChartLoader.LoadAsync(request.Chart, cancellationToken);
-        var values = await HelmValues.BuildAsync(chart, request.ValuesFile, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
+        var valuesFiles = CombineValuesFiles(request.ValuesFile, request.ValuesFiles);
+        var values = await HelmValues.BuildAsync(chart, valuesFiles, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
         var renderer = new HelmTemplateRenderer(
             chart,
             request.ReleaseName,
@@ -758,7 +761,8 @@ public class HelmClient : IHelmClient
             .FirstOrDefault() ?? string.Empty;
 
         var chart = await HelmChartLoader.LoadAsync(request.Chart, cancellationToken);
-        var values = await HelmValues.BuildAsync(chart, request.ValuesFile, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
+        var valuesFiles = CombineValuesFiles(request.ValuesFile, request.ValuesFiles);
+        var values = await HelmValues.BuildAsync(chart, valuesFiles, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
         var newManifest = RenderDiffManifest(chart, releaseName, ns, values, options, history);
 
         var output = new StringBuilder();
@@ -813,7 +817,7 @@ public class HelmClient : IHelmClient
             if (chart.Templates.Count == 0)
                 warnings.Add("No templates found in chart");
 
-            var values = await HelmValues.BuildAsync(chart, null, valuesContent, setValues, null, null, null, cancellationToken);
+            var values = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, valuesContent, setValues, null, null, null, cancellationToken);
             var renderer = new HelmTemplateRenderer(chart, "lint-test", "default", values);
 
             try
@@ -868,7 +872,7 @@ public class HelmClient : IHelmClient
         var chartPathResolved = await ResolveChartPathAsync(chartPath, version,
             await _optionsProvider.GetHelmAsync(cancellationToken), cancellationToken);
         var chart = await HelmChartLoader.LoadAsync(chartPathResolved, cancellationToken);
-        var values = await HelmValues.BuildAsync(chart, null, valuesContent, setValues, null, null, null, cancellationToken);
+        var values = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, valuesContent, setValues, null, null, null, cancellationToken);
         var renderer = new HelmTemplateRenderer(chart, "show", "default", values);
         return Ok(renderer.Render());
     }
@@ -1420,6 +1424,23 @@ public class HelmClient : IHelmClient
                 // Best effort pruning
             }
         }
+    }
+
+    /// <summary>
+    /// Combines a single values file path and a list of values file paths into one enumerable.
+    /// Ordering matches Helm's precedence: <paramref name="valuesFile"/> comes first (lower
+    /// precedence), <paramref name="valuesFiles"/> are applied after (higher precedence on
+    /// conflict, since later files override earlier ones).
+    /// Exact string duplicates are silently deduplicated (does not resolve relative paths).
+    /// </summary>
+    private static IEnumerable<string>? CombineValuesFiles(string? valuesFile, List<string>? valuesFiles)
+    {
+        var result = new List<string>();
+        if (!string.IsNullOrWhiteSpace(valuesFile))
+            result.Add(valuesFile);
+        if (valuesFiles is { Count: > 0 })
+            result.AddRange(valuesFiles.Where(f => f != valuesFile));
+        return result.Count > 0 ? result : null;
     }
 
     private static CommandResult Ok(string output)

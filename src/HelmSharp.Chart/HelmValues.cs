@@ -2,9 +2,13 @@ namespace HelmSharp.Chart;
 
 public static class HelmValues
 {
+    /// <summary>
+    /// Builds merged values following Helm's precedence order (lowest to highest):
+    /// chart defaults → subchart defaults → values files (in order) → values content → --set-file → --set-string → --set → --set-json.
+    /// </summary>
     public static async Task<Dictionary<string, object?>> BuildAsync(
         HelmChart chart,
-        string? valuesFile,
+        IEnumerable<string>? valuesFiles,
         string? valuesContent,
         Dictionary<string, string>? setValues,
         Dictionary<string, string>? setFileValues,
@@ -28,22 +32,23 @@ public static class HelmValues
                 MergeInto(existingDict, subDefaults);
         }
 
-        if (!string.IsNullOrWhiteSpace(valuesFile))
+        // Multiple values files (equivalent to helm -f / --values, applied in order)
+        foreach (var filePath in valuesFiles ?? [])
         {
-            var fileContent = await File.ReadAllTextAsync(valuesFile, cancellationToken);
-            MergeInto(result, HelmYaml.DeserializeDictionary(fileContent));
+            if (!string.IsNullOrWhiteSpace(filePath))
+            {
+                var fileContent = await File.ReadAllTextAsync(filePath, cancellationToken);
+                MergeInto(result, HelmYaml.DeserializeDictionary(fileContent));
+            }
         }
 
+        // Inline values content (equivalent to helm --values with stdin or direct YAML)
         if (!string.IsNullOrWhiteSpace(valuesContent))
         {
             MergeInto(result, HelmYaml.DeserializeDictionary(valuesContent));
         }
 
-        // --set: coerce scalar types
-        foreach (var (key, value) in setValues ?? [])
-            SetPath(result, key, CoerceScalar(value));
-
-        // --set-file: raw file content as string
+        // --set-file: raw file content as string (LOWEST precedence among set flags)
         foreach (var (key, value) in setFileValues ?? [])
             SetPath(result, key, value);
 
@@ -51,11 +56,34 @@ public static class HelmValues
         foreach (var (key, value) in setStringValues ?? [])
             SetPath(result, key, value);
 
-        // --set-json: parse JSON values
+        // --set: coerce scalar types (higher precedence than set-file and set-string)
+        foreach (var (key, value) in setValues ?? [])
+            SetPath(result, key, CoerceScalar(value));
+
+        // --set-json: parse JSON values (HIGHEST precedence)
         foreach (var (key, value) in setJsonValues ?? [])
             SetPath(result, key, ParseJsonValue(value));
 
         return result;
+    }
+
+    /// <summary>
+    /// Builds merged values. Convenience overload that accepts a single values file.
+    /// Equivalent to calling <see cref="BuildAsync(HelmChart,IEnumerable{string}?,string?,Dictionary{string,string}?,Dictionary{string,string}?,Dictionary{string,string}?,Dictionary{string,string}?,CancellationToken)"/>
+    /// with a single-element enumerable when <paramref name="valuesFile"/> is non-null.
+    /// </summary>
+    public static Task<Dictionary<string, object?>> BuildAsync(
+        HelmChart chart,
+        string? valuesFile,
+        string? valuesContent,
+        Dictionary<string, string>? setValues,
+        Dictionary<string, string>? setFileValues,
+        Dictionary<string, string>? setStringValues,
+        Dictionary<string, string>? setJsonValues,
+        CancellationToken cancellationToken)
+    {
+        var valuesFiles = valuesFile is not null ? new[] { valuesFile } : null;
+        return BuildAsync(chart, valuesFiles, valuesContent, setValues, setFileValues, setStringValues, setJsonValues, cancellationToken);
     }
 
     /// <summary>

@@ -25,7 +25,7 @@ public class HelmValuesTests
             ["replicaCount"] = "3"
         };
 
-        var result = await HelmValues.BuildAsync(chart, null, null, setValues, null, null, null, CancellationToken.None);
+        var result = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, null, setValues, null, null, null, CancellationToken.None);
 
         var image = result["image"] as Dictionary<string, object?>;
         Assert.NotNull(image);
@@ -54,7 +54,7 @@ public class HelmValuesTests
               pullPolicy: Always
             """;
 
-        var result = await HelmValues.BuildAsync(chart, null, valuesContent, null, null, null, null, CancellationToken.None);
+        var result = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, valuesContent, null, null, null, null, CancellationToken.None);
 
         var image = result["image"] as Dictionary<string, object?>;
         Assert.NotNull(image);
@@ -74,7 +74,7 @@ public class HelmValuesTests
         };
 
         var result = await HelmValues.BuildAsync(
-            chart, null, "tag: \"2.0\"",
+            chart, (IEnumerable<string>?)null, "tag: \"2.0\"",
             new Dictionary<string, string> { ["tag"] = "3.0" },
             null, null, null, CancellationToken.None);
 
@@ -96,7 +96,7 @@ public class HelmValuesTests
             ["config.data"] = "file-content-here"
         };
 
-        var result = await HelmValues.BuildAsync(chart, null, null, null, setFileValues, null, null, CancellationToken.None);
+        var result = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, null, null, setFileValues, null, null, CancellationToken.None);
 
         var config = result["config"] as Dictionary<string, object?>;
         Assert.NotNull(config);
@@ -131,7 +131,7 @@ public class HelmValuesTests
         };
 
         var result = await HelmValues.BuildAsync(
-            chart, null, null,
+            chart, (IEnumerable<string>?)null, null,
             new Dictionary<string, string>
             {
                 ["count"] = "42",
@@ -154,7 +154,7 @@ public class HelmValuesTests
         };
 
         var result = await HelmValues.BuildAsync(
-            chart, null, null, null, null,
+            chart, (IEnumerable<string>?)null, null, null, null,
             new Dictionary<string, string> { ["count"] = "42" },
             null, CancellationToken.None);
 
@@ -183,7 +183,7 @@ public class HelmValuesTests
                 key3: added
             """;
 
-        var result = await HelmValues.BuildAsync(chart, null, valuesContent, null, null, null, null, CancellationToken.None);
+        var result = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, valuesContent, null, null, null, null, CancellationToken.None);
 
         var level1 = result["level1"] as Dictionary<string, object?>;
         Assert.NotNull(level1);
@@ -192,5 +192,179 @@ public class HelmValuesTests
         Assert.Equal("overridden", level2["key1"]);
         Assert.Equal("keep", level2["key2"]);
         Assert.Equal("added", level2["key3"]);
+    }
+
+    // ────────────────────────────────────────────────────────────
+    //  values precedence tests (#6)
+    // ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task BuildAsync_SetOverridesSetFile()
+    {
+        // Helm precedence: --set overrides --set-file
+        var chart = new HelmChart
+        {
+            Name = "test",
+            Version = "1.0.0",
+            ValuesYaml = "key: default"
+        };
+
+        var setFileValues = new Dictionary<string, string> { ["key"] = "from-set-file" };
+        var setValues = new Dictionary<string, string> { ["key"] = "from-set" };
+
+        var result = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, null, setValues, setFileValues, null, null, CancellationToken.None);
+
+        Assert.Equal("from-set", result["key"]); // --set wins over --set-file
+    }
+
+    [Fact]
+    public async Task BuildAsync_SetOverridesSetString()
+    {
+        // Helm precedence: --set overrides --set-string
+        var chart = new HelmChart
+        {
+            Name = "test",
+            Version = "1.0.0",
+            ValuesYaml = "key: default"
+        };
+
+        var setStringValues = new Dictionary<string, string> { ["key"] = "from-set-string" };
+        var setValues = new Dictionary<string, string> { ["key"] = "from-set" };
+
+        var result = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, null, setValues, null, setStringValues, null, CancellationToken.None);
+
+        Assert.Equal("from-set", result["key"]); // --set wins over --set-string
+    }
+
+    [Fact]
+    public async Task BuildAsync_SetStringOverridesSetFile()
+    {
+        // Helm precedence: --set-string overrides --set-file
+        var chart = new HelmChart
+        {
+            Name = "test",
+            Version = "1.0.0",
+            ValuesYaml = "key: default"
+        };
+
+        var setFileValues = new Dictionary<string, string> { ["key"] = "from-set-file" };
+        var setStringValues = new Dictionary<string, string> { ["key"] = "42" };
+
+        var result = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, null, null, setFileValues, setStringValues, null, CancellationToken.None);
+
+        Assert.Equal("42", result["key"]); // --set-string wins over --set-file (and no coercion, stays string)
+    }
+
+    [Fact]
+    public async Task BuildAsync_SetJsonHasHighestPrecedence()
+    {
+        // Helm precedence: --set-json overrides everything (highest)
+        var chart = new HelmChart
+        {
+            Name = "test",
+            Version = "1.0.0",
+            ValuesYaml = "key: default"
+        };
+
+        var setValues = new Dictionary<string, string> { ["key"] = "from-set" };
+        var setStringValues = new Dictionary<string, string> { ["key"] = "from-set-string" };
+        var setFileValues = new Dictionary<string, string> { ["key"] = "from-set-file" };
+        var setJsonValues = new Dictionary<string, string> { ["key"] = "\"json-value\"" };
+
+        var result = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, null, setValues, setFileValues, setStringValues, setJsonValues, CancellationToken.None);
+
+        Assert.Equal("json-value", result["key"]); // --set-json trumps all
+    }
+
+    [Fact]
+    public async Task BuildAsync_FullPrecedenceChain()
+    {
+        // Verify full precedence chain:
+        // chart defaults < values files < values content < set-file < set-string < set < set-json
+        var chart = new HelmChart
+        {
+            Name = "test",
+            Version = "1.0.0",
+            ValuesYaml = "precedence: chart-default\nfromValuesContent: x"
+        };
+
+        var valuesContent = "precedence: from-values-content\nfromSetFile: x\nfromSetString: x\nfromSet: x\nfromSetJson: x";
+        var setFileValues = new Dictionary<string, string> { ["precedence"] = "from-set-file", ["fromSetFile"] = "setfile-wins" };
+        var setStringValues = new Dictionary<string, string> { ["precedence"] = "from-set-string", ["fromSetString"] = "setstring-wins" };
+        var setValues = new Dictionary<string, string> { ["precedence"] = "from-set", ["fromSet"] = "set-wins" };
+        var setJsonValues = new Dictionary<string, string> { ["precedence"] = "\"from-set-json\"", ["fromSetJson"] = "\"setjson-wins\"" };
+
+        var result = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, valuesContent, setValues, setFileValues, setStringValues, setJsonValues, CancellationToken.None);
+
+        Assert.Equal("from-set-json", result["precedence"]); // --set-json wins overall
+        Assert.Equal("setfile-wins", result["fromSetFile"]);
+        Assert.Equal("setstring-wins", result["fromSetString"]);
+        Assert.Equal("set-wins", result["fromSet"]);
+        Assert.Equal("setjson-wins", result["fromSetJson"]);
+        Assert.Equal("x", result["fromValuesContent"]);
+    }
+
+    [Fact]
+    public async Task BuildAsync_MultipleValuesFiles_MergeInOrder()
+    {
+        // Multiple -f files: later files override earlier ones
+        var chart = new HelmChart
+        {
+            Name = "test",
+            Version = "1.0.0",
+            ValuesYaml = "key1: default\nkey2: default\nkey3: default"
+        };
+
+        // Write temp files
+        var dir = Path.Combine(Path.GetTempPath(), "helm-values-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var file1 = Path.Combine(dir, "values1.yaml");
+            var file2 = Path.Combine(dir, "values2.yaml");
+            await File.WriteAllTextAsync(file1, "key1: from-file1\nkey2: from-file1");
+            await File.WriteAllTextAsync(file2, "key1: from-file2\nkey3: from-file2");
+
+            var result = await HelmValues.BuildAsync(chart, new[] { file1, file2 }, null, null, null, null, null, CancellationToken.None);
+
+            Assert.Equal("from-file2", result["key1"]); // file2 overrides file1
+            Assert.Equal("from-file1", result["key2"]); // only in file1, preserved
+            Assert.Equal("from-file2", result["key3"]); // only in file2
+        }
+        finally
+        {
+            try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+            catch { /* best effort — Windows file locks may delay deletion */ }
+        }
+    }
+
+    [Fact]
+    public async Task BuildAsync_SingleValuesFile_BackwardCompatible()
+    {
+        // Single values file still works (via IEnumerable)
+        var chart = new HelmChart
+        {
+            Name = "test",
+            Version = "1.0.0",
+            ValuesYaml = "key: default"
+        };
+
+        var dir = Path.Combine(Path.GetTempPath(), "helm-values-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var file = Path.Combine(dir, "values.yaml");
+            await File.WriteAllTextAsync(file, "key: from-file");
+            await File.WriteAllTextAsync(Path.Combine(dir, "values2.yaml"), "key: should-not-load");
+
+            var result = await HelmValues.BuildAsync(chart, new[] { file }, null, null, null, null, null, CancellationToken.None);
+
+            Assert.Equal("from-file", result["key"]);
+        }
+        finally
+        {
+            try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+            catch { /* best effort */ }
+        }
     }
 }

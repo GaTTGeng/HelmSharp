@@ -24,7 +24,7 @@ public class HelmTemplateGoldenTests
         Assert.True(expected.ExitCode == 0, expected.Stderr);
 
         var chart = await HelmChartLoader.LoadAsync(chartPath, CancellationToken.None);
-        var values = await HelmValues.BuildAsync(chart, null, null, null, null, null, null, CancellationToken.None);
+        var values = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, null, null, null, null, null, CancellationToken.None);
         var renderer = new HelmTemplateRenderer(chart, "golden-release", "golden-namespace", values);
 
         Assert.Equal(
@@ -37,7 +37,7 @@ public class HelmTemplateGoldenTests
     {
         var chartPath = TestFixtures.ChartPath("notes");
         var chart = await HelmChartLoader.LoadAsync(chartPath, CancellationToken.None);
-        var values = await HelmValues.BuildAsync(chart, null, null, null, null, null, null, CancellationToken.None);
+        var values = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, null, null, null, null, null, CancellationToken.None);
         var renderer = new HelmTemplateRenderer(chart, "golden-release", "golden-namespace", values);
 
         var notes = HelmCliRunner.NormalizeLineEndings(renderer.RenderNotes());

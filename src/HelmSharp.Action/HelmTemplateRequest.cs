@@ -8,7 +8,17 @@ public class HelmTemplateRequest
 
     public string? Namespace { get; set; }
 
+    /// <summary>
+    /// Path to a single values file (equivalent to helm -f).
+    /// For multiple values files, use <see cref="ValuesFiles"/> instead.
+    /// </summary>
     public string? ValuesFile { get; set; }
+
+    /// <summary>
+    /// Paths to multiple values files (equivalent to helm -f file1 -f file2).
+    /// Applied in order; later files override earlier ones.
+    /// </summary>
+    public List<string>? ValuesFiles { get; set; }
 
     public Dictionary<string, string>? SetValues { get; set; }
 
