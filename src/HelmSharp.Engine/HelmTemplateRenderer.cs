@@ -1123,9 +1123,8 @@ public sealed class HelmTemplateRenderer
         var defaultVersions = GetDefaultApiVersions(kubeVersion);
         var customVersions = apiVersions ?? [];
         var versions = defaultVersions
-            .Select(v => (object?)v?.ToString())
-            .Concat(customVersions.Select(v => (object?)v))
-            .DistinctBy(v => v?.ToString(), StringComparer.Ordinal)
+            .Concat<object?>(customVersions)
+            .DistinctBy(static v => v?.ToString(), StringComparer.Ordinal)
             .ToList();
         return new ApiVersionSet(versions);
     }

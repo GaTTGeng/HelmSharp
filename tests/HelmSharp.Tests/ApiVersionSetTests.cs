@@ -129,7 +129,7 @@ public class ApiVersionSetTests
     }
 
     [Fact]
-    public void KubeVersion116_KeepsBetaApis()
+    public void KubeVersion116_ExcludesRemovedBetaApis()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
         chart.Templates["templates/test.yaml"] = """
