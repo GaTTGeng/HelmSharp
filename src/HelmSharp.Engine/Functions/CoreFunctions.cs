@@ -1,0 +1,107 @@
+namespace HelmSharp.Engine;
+
+/// <summary>
+/// Core template functions that require token evaluation via IEvaluationContext.
+/// </summary>
+internal static class CoreFunctions
+{
+    // ── Default / required / fail / tpl ──
+
+    public static object? Default(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    {
+        var def = eval.EvaluateToken(tokens.ElementAtOrDefault(1), context);
+        var val = pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(2), context);
+        return TypeConverters.IsTruthy(val) ? val : def;
+    }
+
+    public static object? FnFail(IReadOnlyList<string> tokens, TemplateContext context)
+    {
+        var msg = tokens.ElementAtOrDefault(1);
+        throw new InvalidOperationException(msg != null ? StringHelpers.Unquote(msg) : "fail called");
+    }
+
+    public static object? Required(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    {
+        var message = TypeConverters.ToTemplateString(eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var value = pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(2), context);
+        if (!TypeConverters.IsTruthy(value))
+            throw new InvalidOperationException(string.IsNullOrWhiteSpace(message) ? "required value is missing" : message);
+        return value;
+    }
+
+    public static string Tpl(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    {
+        var template = TypeConverters.ToTemplateString(pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        return eval.RenderSection(template, context);
+    }
+
+    public static object? Ternary(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    {
+        var trueValue = eval.EvaluateToken(tokens.ElementAtOrDefault(1), context);
+        var falseValue = eval.EvaluateToken(tokens.ElementAtOrDefault(2), context);
+        var test = pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(3), context);
+        return TypeConverters.IsTruthy(test) ? trueValue : falseValue;
+    }
+
+    // ── String manipulation ──
+
+    public static string Cat(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    {
+        var parts = new List<string>();
+        if (pipelineValue != null) parts.Add(TypeConverters.ToTemplateString(pipelineValue));
+        foreach (var t in tokens.Skip(1))
+            parts.Add(TypeConverters.ToTemplateString(eval.EvaluateToken(t, context)));
+        return string.Join(' ', parts);
+    }
+
+    public static string Replace(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    {
+        var oldValue = TypeConverters.ToTemplateString(eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var newValue = TypeConverters.ToTemplateString(eval.EvaluateToken(tokens.ElementAtOrDefault(2), context));
+        var input = TypeConverters.ToTemplateString(pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(3), context));
+        return input.Replace(oldValue, newValue, StringComparison.Ordinal);
+    }
+
+    public static string Trunc(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    {
+        var length = (int)TypeConverters.ToLong(eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var input = TypeConverters.ToTemplateString(pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(2), context));
+        return input.Length <= length ? input : input[..Math.Max(0, length)];
+    }
+
+    public static string TrimSuffix(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    {
+        var suffix = TypeConverters.ToTemplateString(eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var input = TypeConverters.ToTemplateString(pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(2), context));
+        return input.EndsWith(suffix, StringComparison.Ordinal) ? input[..^suffix.Length] : input;
+    }
+
+    public static string TrimPrefix(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    {
+        var prefix = TypeConverters.ToTemplateString(eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var input = TypeConverters.ToTemplateString(pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(2), context));
+        return input.StartsWith(prefix, StringComparison.Ordinal) ? input[prefix.Length..] : input;
+    }
+
+    public static bool Contains(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    {
+        var needle = TypeConverters.ToTemplateString(eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var input = TypeConverters.ToTemplateString(pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(2), context));
+        return input.Contains(needle, StringComparison.Ordinal);
+    }
+
+    public static string Printf(IReadOnlyList<string> tokens, TemplateContext context, IEvaluationContext eval)
+    {
+        var format = TypeConverters.ToTemplateString(eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var args = tokens.Skip(2).Select(t => TypeConverters.ToTemplateString(eval.EvaluateToken(t, context))).ToArray();
+        for (var i = 0; i < args.Length; i++)
+        {
+            format = StringHelpers.ReplaceFirst(format, "%s", "{" + i + "}");
+            format = StringHelpers.ReplaceFirst(format, "%v", "{" + i + "}");
+            format = StringHelpers.ReplaceFirst(format, "%d", "{" + i + "}");
+            format = StringHelpers.ReplaceFirst(format, "%f", "{" + i + "}");
+            format = StringHelpers.ReplaceFirst(format, "%q", "{" + i + "}");
+        }
+        return string.Format(format, args);
+    }
+}

@@ -688,18 +688,18 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "template" => IncludeTemplate(tokens, context),
 
             // Default / required / tpl
-            "default" => FnDefault(tokens, context, pipelineValue),
-            "required" => Required(tokens, context, pipelineValue),
-            "tpl" => Tpl(tokens, context, pipelineValue),
-            "fail" => FnFail(tokens, context),
+            "default" => CoreFunctions.Default(tokens, context, pipelineValue, this),
+            "required" => CoreFunctions.Required(tokens, context, pipelineValue, this),
+            "tpl" => CoreFunctions.Tpl(tokens, context, pipelineValue, this),
+            "fail" => CoreFunctions.FnFail(tokens, context),
 
             // String functions
             "quote" => StringHelpers.Quote(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "squote" => StringFunctions.Squote(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-            "cat" => Cat(tokens, context, pipelineValue),
+            "cat" => CoreFunctions.Cat(tokens, context, pipelineValue, this),
             "indent" => StringHelpers.Indent(TypeConverters.ToTemplateString(pipelineValue), GetInt(tokens, 1, context), false),
             "nindent" => StringHelpers.Indent(TypeConverters.ToTemplateString(pipelineValue), GetInt(tokens, 1, context), true),
-            "replace" => Replace(tokens, context, pipelineValue),
+            "replace" => CoreFunctions.Replace(tokens, context, pipelineValue, this),
             "plural" => TextFunctions.Plural(tokens, context, pipelineValue),
             "snakecase" => StringFunctions.Snakecase(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "camelcase" => StringFunctions.Camelcase(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
@@ -708,7 +708,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "wrapWith" => TextFunctions.WrapWith(tokens, context, pipelineValue),
             "initials" => StringFunctions.Initials(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "abbrev" => TextFunctions.Abbrev(tokens, context, pipelineValue),
-            "trunc" => Trunc(tokens, context, pipelineValue),
+            "trunc" => CoreFunctions.Trunc(tokens, context, pipelineValue, this),
             "abbrevinitial" => TextFunctions.Abbrevinitial(tokens, context, pipelineValue),
             "untitle" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)).ToLowerInvariant(),
             "title" => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
@@ -716,16 +716,16 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "lower" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)).ToLowerInvariant(),
             "trim" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)).Trim(),
             "trimAll" => TextFunctions.TrimAll(tokens, context, pipelineValue),
-            "trimSuffix" => TrimSuffix(tokens, context, pipelineValue),
-            "trimPrefix" => TrimPrefix(tokens, context, pipelineValue),
-            "contains" => Contains(tokens, context, pipelineValue),
+            "trimSuffix" => CoreFunctions.TrimSuffix(tokens, context, pipelineValue, this),
+            "trimPrefix" => CoreFunctions.TrimPrefix(tokens, context, pipelineValue, this),
+            "contains" => CoreFunctions.Contains(tokens, context, pipelineValue, this),
             "hasPrefix" => TextFunctions.HasPrefix(tokens, context, pipelineValue),
             "hasSuffix" => TextFunctions.HasSuffix(tokens, context, pipelineValue),
             "repeat" => TextFunctions.Repeat(tokens, context, pipelineValue),
             "substr" => TextFunctions.Substr(tokens, context, pipelineValue),
             "toString" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "atoi" => int.TryParse(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)), out var ai) ? ai : 0,
-            "printf" => Printf(tokens, context),
+            "printf" => CoreFunctions.Printf(tokens, context, this),
             "println" => string.Join(' ', tokens.Skip(1).Select(t => TypeConverters.ToTemplateString(EvaluateToken(t, context)))),
 
             // Math functions
@@ -841,7 +841,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "index" => DictFunctions.Index(tokens, context, pipelineValue, this),
 
             // Ternary / coalesce / logic
-            "ternary" => Ternary(tokens, context, pipelineValue),
+            "ternary" => CoreFunctions.Ternary(tokens, context, pipelineValue, this),
             "coalesce" => tokens.Skip(1).Select(t => EvaluateToken(t, context)).FirstOrDefault(TypeConverters.IsTruthy),
             "empty" => !TypeConverters.IsTruthy(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "not" => !TypeConverters.IsTruthy(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
@@ -1569,36 +1569,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         return token;
     }
 
-    // ────────────────────────────────────────────────────────────
-    //  DEFAULT
-    // ────────────────────────────────────────────────────────────
-    private object? FnDefault(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var def = EvaluateToken(tokens.ElementAtOrDefault(1), context);
-        var val = pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context);
-        return TypeConverters.IsTruthy(val) ? val : def;
-    }
 
-    // ────────────────────────────────────────────────────────────
-    //  FAIL
-    // ────────────────────────────────────────────────────────────
-    private static object? FnFail(IReadOnlyList<string> tokens, TemplateContext context)
-    {
-        var msg = tokens.ElementAtOrDefault(1);
-        throw new InvalidOperationException(msg != null ? StringHelpers.Unquote(msg) : "fail called");
-    }
-
-    // ────────────────────────────────────────────────────────────
-    //  CAT
-    // ────────────────────────────────────────────────────────────
-    private string Cat(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var parts = new List<string>();
-        if (pipelineValue != null) parts.Add(TypeConverters.ToTemplateString(pipelineValue));
-        foreach (var t in tokens.Skip(1))
-            parts.Add(TypeConverters.ToTemplateString(EvaluateToken(t, context)));
-        return string.Join(' ', parts);
-    }
 
 
     // ────────────────────────────────────────────────────────────
@@ -1707,7 +1678,6 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
     }
 
     // ────────────────────────────────────────────────────────────
-    //  STRING HELPERS
     // ────────────────────────────────────────────────────────────
     private string Replace(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
