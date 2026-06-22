@@ -9,7 +9,7 @@ using HelmSharp.Chart;
 
 namespace HelmSharp.Engine;
 
-public sealed class HelmTemplateRenderer
+public sealed class HelmTemplateRenderer : IEvaluationContext
 {
     private static readonly Regex DefineRegex = new(
         "{{-?\\s*define\\s+\"(?<name>[^\"]+)\"\\s*-?}}(?<body>.*?){{-?\\s*end\\s*-?}}",
@@ -822,23 +822,23 @@ public sealed class HelmTemplateRenderer
             "concat" => Concat(tokens, context, pipelineValue),
 
             // Dict functions
-            "dict" => Dict(tokens, context),
-            "get" => Get(tokens, context, pipelineValue),
-            "set" => Set(tokens, context, pipelineValue),
-            "unset" => Unset(tokens, context, pipelineValue),
-            "hasKey" => HasKey(tokens, context, pipelineValue),
+            "dict" => DictFunctions.Dict(tokens, context, this),
+            "get" => DictFunctions.Get(tokens, context, pipelineValue, this),
+            "set" => DictFunctions.Set(tokens, context, pipelineValue, this),
+            "unset" => DictFunctions.Unset(tokens, context, pipelineValue, this),
+            "hasKey" => DictFunctions.HasKey(tokens, context, pipelineValue, this),
             "keys" => CollectionsHelpers.Keys(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "values" => CollectionsHelpers.Values(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-            "merge" => MergeDicts(tokens, context),
-            "mustMerge" => MergeDicts(tokens, context),
+            "merge" => DictFunctions.MergeDicts(tokens, context, this),
+            "mustMerge" => DictFunctions.MergeDicts(tokens, context, this),
             "deepCopy" => CollectionsHelpers.DeepCopy(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-            "pick" => Pick(tokens, context, pipelineValue),
-            "omit" => Omit(tokens, context, pipelineValue),
-            "pluck" => Pluck(tokens, context, pipelineValue),
-            "dig" => Dig(tokens, context, pipelineValue),
+            "pick" => DictFunctions.Pick(tokens, context, pipelineValue, this),
+            "omit" => DictFunctions.Omit(tokens, context, pipelineValue, this),
+            "pluck" => DictFunctions.Pluck(tokens, context, pipelineValue, this),
+            "dig" => DictFunctions.Dig(tokens, context, pipelineValue, this),
 
             // Index (list/dict access)
-            "index" => Index(tokens, context, pipelineValue),
+            "index" => DictFunctions.Index(tokens, context, pipelineValue, this),
 
             // Ternary / coalesce / logic
             "ternary" => Ternary(tokens, context, pipelineValue),
@@ -864,7 +864,7 @@ public sealed class HelmTemplateRenderer
             "fromYaml" => HelmYaml.DeserializeDictionary(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
 
             // Lookup
-            "lookup" => Lookup(tokens, context),
+            "lookup" => DictFunctions.Lookup(tokens, context, this),
 
             // Len
             "len" => TypeFunctions.GetLength(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
@@ -1679,116 +1679,6 @@ public sealed class HelmTemplateRenderer
         return result;
     }
 
-    // ────────────────────────────────────────────────────────────
-    //  DICT FUNCTIONS
-    // ────────────────────────────────────────────────────────────
-    private object? Set(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var dict = pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context);
-        var key = TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(2), context));
-        var value = EvaluateToken(tokens.ElementAtOrDefault(3), context);
-        if (dict is Dictionary<string, object?> d)
-        {
-            d[key] = value;
-            return d;
-        }
-        return dict;
-    }
-
-    private object? Unset(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var dict = pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context);
-        var key = TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(2), context));
-        if (dict is Dictionary<string, object?> d)
-        {
-            d.Remove(key);
-            return d;
-        }
-        return dict;
-    }
-
-
-    private object? MergeDicts(IReadOnlyList<string> tokens, TemplateContext context)
-    {
-        var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-        foreach (var t in tokens.Skip(1))
-        {
-            var val = EvaluateToken(t, context);
-            if (val is IDictionary<string, object?> dict)
-                CollectionsHelpers.MergeInto(result, dict);
-        }
-        return result;
-    }
-
-
-    private object? Pick(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var dict = pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context);
-        var keys = tokens.Skip(2).Select(t => TypeConverters.ToTemplateString(EvaluateToken(t, context))).ToHashSet(StringComparer.Ordinal);
-        if (pipelineValue != null)
-            keys = tokens.Skip(1).Select(t => TypeConverters.ToTemplateString(EvaluateToken(t, context))).ToHashSet(StringComparer.Ordinal);
-        var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-        if (dict is IDictionary<string, object?> d)
-        {
-            foreach (var kvp in d)
-                if (keys.Contains(kvp.Key))
-                    result[kvp.Key] = kvp.Value;
-        }
-        return result;
-    }
-
-    private object? Omit(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var dict = pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context);
-        var keys = tokens.Skip(2).Select(t => TypeConverters.ToTemplateString(EvaluateToken(t, context))).ToHashSet(StringComparer.Ordinal);
-        if (pipelineValue != null)
-            keys = tokens.Skip(1).Select(t => TypeConverters.ToTemplateString(EvaluateToken(t, context))).ToHashSet(StringComparer.Ordinal);
-        var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-        if (dict is IDictionary<string, object?> d)
-        {
-            foreach (var kvp in d)
-                if (!keys.Contains(kvp.Key))
-                    result[kvp.Key] = kvp.Value;
-        }
-        return result;
-    }
-
-    private object? Pluck(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var key = TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
-        var dicts = tokens.Skip(2).Select(t => EvaluateToken(t, context));
-        if (pipelineValue != null)
-            dicts = tokens.Skip(1).Select(t => EvaluateToken(t, context));
-        var result = new List<object?>();
-        foreach (var d in dicts)
-        {
-            if (d is IDictionary<string, object?> dict && dict.TryGetValue(key, out var val))
-                result.Add(val);
-        }
-        return result;
-    }
-
-    private object? Dig(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var args = tokens.Skip(1).Select(t => EvaluateToken(t, context)).ToList();
-        if (pipelineValue != null) args.Insert(0, pipelineValue);
-        if (args.Count < 2) return null;
-
-        var current = args[0];
-        var defaultVal = args[^1];
-        for (var i = 1; i < args.Count - 1; i++)
-        {
-            var key = TypeConverters.ToTemplateString(args[i]);
-            current = current switch
-            {
-                Dictionary<string, object?> dict when dict.TryGetValue(key, out var next) => next,
-                IDictionary<string, object?> dict when dict.TryGetValue(key, out var next) => next,
-                _ => null
-            };
-            if (current is null) return defaultVal;
-        }
-        return current;
-    }
 
     // ────────────────────────────────────────────────────────────
     //  COMPARE OPS (lt, gt, le, ge)
@@ -1814,16 +1704,6 @@ public sealed class HelmTemplateRenderer
         var b = EvaluateToken(tokens.ElementAtOrDefault(pipelineValue != null ? 1 : 2), context);
         var result = TypeFunctions.CompareValues(a, b);
         return cmp(result, 0);
-    }
-
-    // ────────────────────────────────────────────────────────────
-    //  LOOKUP
-    // ────────────────────────────────────────────────────────────
-    private object? Lookup(IReadOnlyList<string> tokens, TemplateContext context)
-    {
-        // lookup "apiVersion" "kind" "namespace" "name"
-        // In managed mode, return empty dict — no cluster access during template rendering
-        return new Dictionary<string, object?>(StringComparer.Ordinal);
     }
 
     // ────────────────────────────────────────────────────────────
@@ -1897,54 +1777,6 @@ public sealed class HelmTemplateRenderer
         return RenderSection(template, context);
     }
 
-    private object Dict(IReadOnlyList<string> tokens, TemplateContext context)
-    {
-        var dict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-        var args = tokens.Skip(1).ToList();
-        for (var i = 0; i < args.Count; i += 2)
-        {
-            var key = TypeConverters.ToTemplateString(EvaluateToken(args[i], context));
-            var value = i + 1 < args.Count ? EvaluateToken(args[i + 1], context) : null;
-            dict[key] = value;
-        }
-
-        return dict;
-    }
-
-    private object? Index(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var value = pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context);
-        var keyTokens = pipelineValue is null ? tokens.Skip(2) : tokens.Skip(1);
-        foreach (var keyToken in keyTokens)
-        {
-            value = IndexOne(value, EvaluateToken(keyToken, context));
-        }
-
-        return value;
-    }
-
-    private object? Get(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var dict = pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context);
-        var key = pipelineValue is null
-            ? EvaluateToken(tokens.ElementAtOrDefault(2), context)
-            : EvaluateToken(tokens.ElementAtOrDefault(1), context);
-        return IndexOne(dict, key);
-    }
-
-    private bool HasKey(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var dict = pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context);
-        var key = TypeConverters.ToTemplateString(pipelineValue is null
-            ? EvaluateToken(tokens.ElementAtOrDefault(2), context)
-            : EvaluateToken(tokens.ElementAtOrDefault(1), context));
-        return dict switch
-        {
-            Dictionary<string, object?> d => d.ContainsKey(key),
-            IDictionary<string, object?> d => d.ContainsKey(key),
-            _ => false
-        };
-    }
 
     private object? Ternary(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
@@ -1954,17 +1786,11 @@ public sealed class HelmTemplateRenderer
         return TypeConverters.IsTruthy(test) ? trueValue : falseValue;
     }
 
-    private static object? IndexOne(object? value, object? key)
-    {
-        var keyString = TypeConverters.ToTemplateString(key);
-        return value switch
-        {
-            Dictionary<string, object?> dict when dict.TryGetValue(keyString, out var next) => next,
-            IDictionary<string, object?> dict when dict.TryGetValue(keyString, out var next) => next,
-            IReadOnlyList<object?> list when int.TryParse(keyString, out var index) && index >= 0 && index < list.Count => list[index],
-            IList<object?> list when int.TryParse(keyString, out var index) && index >= 0 && index < list.Count => list[index],
-            _ => null
-        };
-    }
 
+    // ── IEvaluationContext explicit implementation ──────────────
+    object? IEvaluationContext.EvaluateToken(string? token, TemplateContext context)
+        => EvaluateToken(token, context);
+
+    string IEvaluationContext.RenderSection(string template, TemplateContext context)
+        => RenderSection(template, context);
 }
