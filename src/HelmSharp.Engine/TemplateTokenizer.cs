@@ -27,12 +27,12 @@ public enum TokenKind
 /// <summary>
 /// A single token produced by <see cref="TemplateTokenizer"/>.
 /// </summary>
-public struct Token
+public sealed class Token
 {
     public TokenKind Kind { get; set; }
 
     /// <summary>Raw text value of this token.</summary>
-    public string Value { get; set; }
+    public string Value { get; set; } = string.Empty;
 
     /// <summary>Byte offset where this token starts in the original template.</summary>
     public int Offset { get; set; }
@@ -99,15 +99,19 @@ public sealed class TemplateTokenizer
             {
                 yield return ConsumeLeftDelim(leftTrim);
 
-                // Consume content until RightDelim
+                // Save position before consuming action content
+                var contentStartOffset = _pos;
+                var contentStartLine = _line;
+                var contentStartCol = _col;
+
                 var (content, rightTrim) = ConsumeActionContent();
                 yield return new Token
                 {
                     Kind = TokenKind.ActionContent,
                     Value = content,
-                    Offset = _pos - content.Length,
-                    Line = _line,
-                    Column = _col - content.Length,
+                    Offset = contentStartOffset,
+                    Line = contentStartLine,
+                    Column = contentStartCol,
                     LeftTrim = leftTrim,
                 };
 
@@ -124,6 +128,10 @@ public sealed class TemplateTokenizer
             else
             {
                 // Consume text until next {{ or EOF
+                var textStartOffset = _pos;
+                var textStartLine = _line;
+                var textStartCol = _col;
+
                 var text = ConsumeText();
                 if (text.Length > 0)
                 {
@@ -131,9 +139,9 @@ public sealed class TemplateTokenizer
                     {
                         Kind = TokenKind.Text,
                         Value = text,
-                        Offset = _pos - text.Length,
-                        Line = _line,
-                        Column = _col - text.Length,
+                        Offset = textStartOffset,
+                        Line = textStartLine,
+                        Column = textStartCol,
                     };
                 }
             }
@@ -252,9 +260,18 @@ public sealed class TemplateTokenizer
                         _col += 2;
                         break;
                     }
-                    sb.Append(_input[_pos]);
+                    var commentCh = _input[_pos];
+                    sb.Append(commentCh);
                     _pos++;
-                    _col++;
+                    if (commentCh == '\n')
+                    {
+                        _line++;
+                        _col = 1;
+                    }
+                    else
+                    {
+                        _col++;
+                    }
                 }
                 continue;
             }

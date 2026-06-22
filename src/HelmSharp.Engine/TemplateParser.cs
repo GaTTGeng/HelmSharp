@@ -70,6 +70,9 @@ public sealed class TemplateParser
             {
                 _pos++;
                 var leftTrim = token.LeftTrim;
+                var startLine = token.Line;
+                var startCol = token.Column;
+                var startOffset = token.Offset;
 
                 if (_pos >= _tokens.Count) break;
                 var ct = _tokens[_pos];
@@ -93,15 +96,15 @@ public sealed class TemplateParser
                 switch (keyword)
                 {
                     case "define":
-                        ParseDefine(expr, leftTrim, rightTrim);
+                        ParseDefine(expr, leftTrim, rightTrim, startOffset, startLine);
                         break;
                     case "if":
                     case "with":
                     case "range":
-                        children.Add(ParseBlock(keyword, expr, leftTrim, rightTrim));
+                        children.Add(ParseBlock(keyword, expr, leftTrim, rightTrim, startOffset, startLine));
                         break;
                     default:
-                        children.Add(MakeNode(expr, leftTrim, rightTrim));
+                        children.Add(MakeNode(expr, leftTrim, rightTrim, startOffset, startLine));
                         break;
                 }
                 continue;
@@ -113,7 +116,7 @@ public sealed class TemplateParser
         return new StopResult();
     }
 
-    private void ParseDefine(string expr, bool leftTrim, bool rightTrim)
+    private void ParseDefine(string expr, bool leftTrim, bool rightTrim, int startOffset, int startLine)
     {
         var name = ExtractQuotedFirstArg(expr, "define");
         var bodyDoc = new TemplateDocumentNode();
@@ -125,10 +128,12 @@ public sealed class TemplateParser
             Body = bodyDoc,
             LeftTrim = leftTrim,
             RightTrim = rightTrim,
+            StartOffset = startOffset,
+            StartLine = startLine,
         };
     }
 
-    private BlockNode ParseBlock(string keyword, string expr, bool leftTrim, bool rightTrim)
+    private BlockNode ParseBlock(string keyword, string expr, bool leftTrim, bool rightTrim, int startOffset, int startLine)
     {
         // Skip past keyword in the trimmed expression to extract the condition
         var trimmedExpr = expr.TrimStart();
@@ -142,6 +147,8 @@ public sealed class TemplateParser
             Expression = condition,
             LeftTrim = leftTrim,
             RightTrim = rightTrim,
+            StartOffset = startOffset,
+            StartLine = startLine,
         };
 
         // Parse true body
@@ -166,6 +173,7 @@ public sealed class TemplateParser
             {
                 Condition = elseIfCondition,
                 Body = branchDoc,
+                TrimMarker = stop.LeftTrim,
             });
         }
 
@@ -194,12 +202,19 @@ public sealed class TemplateParser
         };
     }
 
-    private static ActionNode MakeNode(string expr, bool leftTrim, bool rightTrim)
+    private static TemplateNode MakeNode(string expr, bool leftTrim, bool rightTrim, int startOffset, int startLine)
     {
         if (expr.TrimStart().StartsWith("/*", StringComparison.Ordinal))
-            return new ActionNode { Expression = "/* */", LeftTrim = leftTrim, RightTrim = rightTrim };
+            return new CommentNode { Content = expr.Trim(), StartOffset = startOffset, StartLine = startLine };
 
-        return new ActionNode { Expression = expr.Trim(), LeftTrim = leftTrim, RightTrim = rightTrim };
+        return new ActionNode
+        {
+            Expression = expr.Trim(),
+            LeftTrim = leftTrim,
+            RightTrim = rightTrim,
+            StartOffset = startOffset,
+            StartLine = startLine,
+        };
     }
 
     /// <summary>Returns the first whitespace-delimited word from an expression. Handles "else if" as one word.</summary>

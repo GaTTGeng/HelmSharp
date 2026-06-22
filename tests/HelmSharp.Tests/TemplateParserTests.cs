@@ -300,4 +300,43 @@ public class TemplateParserTests
         var text = doc.SerializeToText();
         Assert.Equal("{{- expr -}}", text);
     }
+
+    [Fact]
+    public void Parse_Comment_CreatesCommentNode()
+    {
+        var tokens = new TemplateTokenizer("{{/* this is a comment */}}").TokenizeFlat();
+        var parser = new TemplateParser(tokens);
+        var doc = parser.Parse();
+
+        Assert.Single(doc.Children);
+        var comment = Assert.IsType<CommentNode>(doc.Children[0]);
+        Assert.Contains("/*", comment.Content);
+    }
+
+    [Fact]
+    public void Parse_ActionNode_HasPositionSet()
+    {
+        var tokens = new TemplateTokenizer("{{ .Values.foo }}").TokenizeFlat();
+        var parser = new TemplateParser(tokens);
+        var doc = parser.Parse();
+
+        var action = Assert.IsType<ActionNode>(doc.Children[0]);
+        Assert.True(action.StartOffset >= 0);
+        Assert.True(action.StartLine > 0);
+    }
+
+    [Fact]
+    public void Tokenize_MultiLineContent_TracksCorrectStartPositions()
+    {
+        var tokenizer = new TemplateTokenizer("line1\n{{ .A }}\nline2\n{{ .B }}");
+        var tokens = tokenizer.TokenizeFlat().ToList();
+
+        // First text token should start at line 1
+        var text1 = tokens.First(t => t.Kind == TokenKind.Text && t.Value.Contains("line1"));
+        Assert.Equal(1, text1.Line);
+
+        // Second text token starts after `}}` on line 2 (includes the \n before line3's "line2")
+        var text2 = tokens.First(t => t.Kind == TokenKind.Text && t.Value.Contains("line2"));
+        Assert.Equal(2, text2.Line);
+    }
 }
