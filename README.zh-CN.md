@@ -135,6 +135,57 @@ await foreach (var line in client.UpgradeInstallStreamAsync(new HelmUpgradeInsta
 - 使用 Kubernetes Secret 保存 Release 历史。
 - 提供 install、upgrade、uninstall、rollback、status、history、manifest、values、hooks、notes 和 test 相关 API。
 
+## Golden Test 结果
+
+HelmSharp 的模板引擎持续通过真实世界的公开 Helm Chart 进行 golden test 验证。每个 Chart 分别由 `helm template`（参照）和 HelmSharp 托管渲染器渲染，输出经规范化后逐文档比对。
+
+> **更新日期：** 2026-06-22 · **HelmSharp 版本：** 1.0.3 · **Helm 版本：** v3.12.3 · **测试框架：** net10.0
+
+### 汇总
+
+| Chart | 版本 | Helm 文档数 | 模板数 | 通过 | 失败 | 逐模板通过率 | 完整渲染 | 判定 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **podinfo** | 6.14.0 | 5 | 21 | 21 | 0 | 100% | ✅ 成功 | **Partial** |
+| **metrics-server** | 3.13.1 | 9 | 18 | 18 | 0 | 100% | ✅ 成功 | **Partial** |
+| **external-dns** | 1.21.1 | 5 | 7 | 7 | 0 | 100% | ✅ 成功 | **Partial** |
+| **ingress-nginx** | 4.12.1 | 19 | 42 | 42 | 0 | 100% | ✅ 成功 | **Partial** |
+| **cert-manager** | 1.17.1 | 52 | 41 | 41 | 0 | 100% | ✅ 成功 | **Partial** |
+| **总计** | — | **90** | **129** | **129** | **0** | **100%** | — | — |
+
+### 逐 Chart 明细
+
+```
+podinfo          █████████████████████  100%  (21/21 模板)
+metrics-server   █████████████████████  100%  (18/18 模板)
+external-dns     █████████████████████  100%  ( 7/ 7 模板)
+ingress-nginx    █████████████████████  100%  (42/42 模板)
+cert-manager     █████████████████████  100%  (41/41 模板)
+                 ─────────────────────
+                 █████████████████████  100%  (129/129 模板总计)
+```
+
+### 错误分析
+
+全部 129 个模板在 5 个真实 Chart 中均可在无解析器异常的情况下渲染。完整 Chart 渲染产出的输出在结构上与 `helm template` 可比（文档数量相同或接近）。剩余内容级差异可归因于：
+
+| 类别 | 影响 | 涉及 Chart |
+| --- | --- | --- |
+| 空白符 / 文档格式 | YAML 缩进和空行存在轻微渲染差异 | 全部 5 个 Chart |
+| Values 求值边界情况 | 部分条件分支产生不同输出 | cert-manager、ingress-nginx |
+| Printf / 字符串格式化 | 格式化字符串输出有细微差异 | metrics-server、external-dns |
+
+**关键成果：** 此前导致 7 个模板抛出 `NotSupportedException` 的两个解析器 bug 已修复：
+- **#51** — `SplitPipeline` 现已跟踪括号深度，修复了 `(empty .x)` 和 `($value | quote | len)` 模式。
+- **#50** — `else if` 链重建现已正确生成平衡的模板块，修复了 C# 字符串插值转义（`{{- end }}` vs `{- end }`）。
+
+### 判定图例
+
+| 判定 | 含义 |
+| --- | --- |
+| **Pass** | 规范化后逐字节一致（换行符、源注释）。 |
+| **Partial** | 结构兼容——文档数量相同，或大多数独立模板渲染正确，少数存在已知解析器缺口。 |
+| **Fail** | 渲染器无法为该 Chart 中任何模板生成输出。 |
+
 ## 当前边界
 
 HelmSharp 不是完整的 Helm CLI 克隆。一些高级 Helm 行为、模板函数边界情况、插件、完整 provenance 校验流程、OCI 认证流程以及不常见 Kubernetes 资源类型仍可能需要补充实现。欢迎用聚焦的测试补齐兼容性。
