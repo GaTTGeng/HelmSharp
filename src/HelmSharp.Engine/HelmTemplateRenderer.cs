@@ -700,29 +700,29 @@ public sealed class HelmTemplateRenderer
             "indent" => StringHelpers.Indent(TypeConverters.ToTemplateString(pipelineValue), GetInt(tokens, 1, context), false),
             "nindent" => StringHelpers.Indent(TypeConverters.ToTemplateString(pipelineValue), GetInt(tokens, 1, context), true),
             "replace" => Replace(tokens, context, pipelineValue),
-            "plural" => Plural(tokens, context, pipelineValue),
+            "plural" => TextFunctions.Plural(tokens, context, pipelineValue),
             "snakecase" => StringFunctions.Snakecase(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "camelcase" => StringFunctions.Camelcase(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "kebabcase" => StringFunctions.Kebabcase(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
-            "wrap" => Wrap(tokens, context, pipelineValue),
-            "wrapWith" => WrapWith(tokens, context, pipelineValue),
+            "wrap" => TextFunctions.Wrap(tokens, context, pipelineValue),
+            "wrapWith" => TextFunctions.WrapWith(tokens, context, pipelineValue),
             "initials" => StringFunctions.Initials(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
-            "abbrev" => Abbrev(tokens, context, pipelineValue),
+            "abbrev" => TextFunctions.Abbrev(tokens, context, pipelineValue),
             "trunc" => Trunc(tokens, context, pipelineValue),
-            "abbrevinitial" => Abbrevinitial(tokens, context, pipelineValue),
+            "abbrevinitial" => TextFunctions.Abbrevinitial(tokens, context, pipelineValue),
             "untitle" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)).ToLowerInvariant(),
             "title" => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "upper" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)).ToUpperInvariant(),
             "lower" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)).ToLowerInvariant(),
             "trim" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)).Trim(),
-            "trimAll" => TrimAll(tokens, context, pipelineValue),
+            "trimAll" => TextFunctions.TrimAll(tokens, context, pipelineValue),
             "trimSuffix" => TrimSuffix(tokens, context, pipelineValue),
             "trimPrefix" => TrimPrefix(tokens, context, pipelineValue),
             "contains" => Contains(tokens, context, pipelineValue),
-            "hasPrefix" => HasPrefix(tokens, context, pipelineValue),
-            "hasSuffix" => HasSuffix(tokens, context, pipelineValue),
-            "repeat" => Repeat(tokens, context, pipelineValue),
-            "substr" => Substr(tokens, context, pipelineValue),
+            "hasPrefix" => TextFunctions.HasPrefix(tokens, context, pipelineValue),
+            "hasSuffix" => TextFunctions.HasSuffix(tokens, context, pipelineValue),
+            "repeat" => TextFunctions.Repeat(tokens, context, pipelineValue),
+            "substr" => TextFunctions.Substr(tokens, context, pipelineValue),
             "toString" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "atoi" => int.TryParse(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)), out var ai) ? ai : 0,
             "printf" => Printf(tokens, context),
@@ -764,12 +764,12 @@ public sealed class HelmTemplateRenderer
             "sha1sum" => EncodingHelpers.Sha1Sum(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "adler32sum" => EncodingHelpers.Adler32Sum(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "bcrypt" => EncodingHelpers.BCryptHash(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
-            "randAlphaNum" => RandString(tokens, context, "alphanum"),
-            "randAlpha" => RandString(tokens, context, "alpha"),
-            "randNumeric" => RandString(tokens, context, "numeric"),
-            "randAscii" => RandString(tokens, context, "ascii"),
-            "randInt" => RandInt(tokens, context),
-            "genPrivateKey" => GenPrivateKey(tokens, context),
+            "randAlphaNum" => TextFunctions.RandString(tokens, context, "alphanum"),
+            "randAlpha" => TextFunctions.RandString(tokens, context, "alpha"),
+            "randNumeric" => TextFunctions.RandString(tokens, context, "numeric"),
+            "randAscii" => TextFunctions.RandString(tokens, context, "ascii"),
+            "randInt" => TextFunctions.RandInt(tokens, context),
+            "genPrivateKey" => TextFunctions.GenPrivateKey(tokens, context),
 
             // Encoding functions
             "b64enc" => EncodingHelpers.Base64Encode(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
@@ -1530,8 +1530,10 @@ public sealed class HelmTemplateRenderer
     private static object? Pv(IReadOnlyList<string> tokens, int argIndex, TemplateContext context, object? pipelineValue)
         => pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(argIndex), context);
 
-    // Need a static overload for EvaluateToken
-    private static object? EvaluateTokenStatic(string? token, TemplateContext context)
+    /// <summary>
+    /// Static token evaluator accessible to extracted function helpers in the same assembly.
+    /// </summary>
+    internal static object? EvaluateTokenStatic(string? token, TemplateContext context)
     {
         // Minimal static version for use in helpers
         if (string.IsNullOrWhiteSpace(token)) return null;
@@ -1598,107 +1600,6 @@ public sealed class HelmTemplateRenderer
         return string.Join(' ', parts);
     }
 
-    // ────────────────────────────────────────────────────────────
-    //  PLURAL
-    // ────────────────────────────────────────────────────────────
-    private static string Plural(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var word = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(3), context));
-        var plural = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var singular = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
-        var count = (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(4), context));
-        return count == 1 ? singular : plural;
-    }
-
-
-    // ────────────────────────────────────────────────────────────
-    //  WRAP / WRAPWITH
-    // ────────────────────────────────────────────────────────────
-    private static string Wrap(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var width = (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
-        return StringFunctions.WrapText(input, width);
-    }
-
-    private static string WrapWith(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var width = (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var indent = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
-        var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(3), context));
-        return StringFunctions.WrapText(input, width, indent);
-    }
-
-    // ────────────────────────────────────────────────────────────
-    //  INITIALS / ABBREV / ABBREVINITIAL
-    // ────────────────────────────────────────────────────────────
-    private static string Abbrev(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var maxWidth = (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
-        return input.Length <= maxWidth ? input : input[..maxWidth];
-    }
-
-    private static string Abbrevinitial(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var maxWidth = (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
-        var parts = input.Split('.', StringSplitOptions.RemoveEmptyEntries);
-        var sb = new StringBuilder();
-        foreach (var part in parts)
-        {
-            if (sb.Length >= maxWidth) break;
-            sb.Append(part.Length > 0 ? part[0] : "");
-        }
-        return sb.ToString()[..Math.Min(sb.Length, maxWidth)];
-    }
-
-    // ────────────────────────────────────────────────────────────
-    //  TRIMALL / HASSUFFIX / HASPREFIX
-    // ────────────────────────────────────────────────────────────
-    private static string TrimAll(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var cutset = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
-        foreach (var ch in cutset)
-            input = input.Trim(ch);
-        return input;
-    }
-
-    private static bool HasPrefix(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var prefix = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
-        return input.StartsWith(prefix, StringComparison.Ordinal);
-    }
-
-    private static bool HasSuffix(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var suffix = TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
-        return input.EndsWith(suffix, StringComparison.Ordinal);
-    }
-
-    // ────────────────────────────────────────────────────────────
-    //  REPEAT / SUBSTR
-    // ────────────────────────────────────────────────────────────
-    private static string Repeat(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var count = (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
-        return string.Concat(Enumerable.Repeat(input, count));
-    }
-
-    private static string Substr(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
-    {
-        var start = (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
-        var length = (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens.ElementAtOrDefault(2), context));
-        var input = TypeConverters.ToTemplateString(pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(3), context));
-        if (start < 0) start = 0;
-        if (start >= input.Length) return string.Empty;
-        if (start + length > input.Length) length = input.Length - start;
-        return input.Substring(start, length);
-    }
 
     // ────────────────────────────────────────────────────────────
     //  MATH FUNCTIONS
@@ -1729,39 +1630,6 @@ public sealed class HelmTemplateRenderer
         => TypeConverters.ToDouble(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(index), context));
 
 
-    // ────────────────────────────────────────────────────────────
-    //  CRYPTO / RANDOM
-
-    private static string RandString(IReadOnlyList<string> tokens, TemplateContext context, string charset)
-    {
-        var length = tokens.Count > 1 ? (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens[1], context)) : 10;
-        var chars = charset switch
-        {
-            "alphanum" => "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-            "alpha" => "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
-            "numeric" => "0123456789",
-            "ascii" => "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()",
-            _ => "abcdefghijklmnopqrstuvwxyz"
-        };
-        var sb = new StringBuilder(length);
-        for (var i = 0; i < length; i++)
-            sb.Append(chars[RandomNumberGenerator.GetInt32(chars.Length)]);
-        return sb.ToString();
-    }
-
-    private static long RandInt(IReadOnlyList<string> tokens, TemplateContext context)
-    {
-        var min = tokens.Count > 1 ? (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens[1], context)) : 0;
-        var max = tokens.Count > 2 ? (int)TypeConverters.ToLong(EvaluateTokenStatic(tokens[2], context)) : int.MaxValue;
-        return RandomNumberGenerator.GetInt32(min, max);
-    }
-
-    private static string GenPrivateKey(IReadOnlyList<string> tokens, TemplateContext context)
-    {
-        var algo = tokens.Count > 1 ? TypeConverters.ToTemplateString(EvaluateTokenStatic(tokens[1], context)) : "rsa";
-        // Return a placeholder — real key generation requires BouncyCastle or similar
-        return $"-----BEGIN {algo.ToUpperInvariant()} PRIVATE KEY-----\n(managed-helm-placeholder)\n-----END {algo.ToUpperInvariant()} PRIVATE KEY-----";
-    }
 
 
 
