@@ -25,6 +25,86 @@ public abstract class TemplateNode
 public sealed class TemplateDocumentNode : TemplateNode
 {
     public List<TemplateNode> Children { get; init; } = new();
+
+    /// <summary>
+    /// Serializes this document back to raw template text (best-effort).
+    /// Used for extracting define bodies for the template registry.
+    /// </summary>
+    public string SerializeToText()
+    {
+        var sb = new System.Text.StringBuilder();
+        SerializeChildren(sb, Children);
+        return sb.ToString();
+    }
+
+    private static void SerializeChildren(System.Text.StringBuilder sb, List<TemplateNode> children)
+    {
+        foreach (var node in children)
+        {
+            switch (node)
+            {
+                case TextNode text:
+                    sb.Append(text.Content);
+                    break;
+                case ActionNode action:
+                    sb.Append(action.LeftTrim ? "{{- " : "{{ ");
+                    sb.Append(action.Expression);
+                    sb.Append(action.RightTrim ? " -}}" : " }}");
+                    break;
+                case BlockNode block:
+                    SerializeBlock(sb, block);
+                    break;
+                case CommentNode comment:
+                    sb.Append("{{/* ");
+                    sb.Append(comment.Content);
+                    sb.Append(" */}}");
+                    break;
+                case DefineNode define:
+                    sb.Append(define.LeftTrim ? "{{- define \"" : "{{ define \"");
+                    sb.Append(define.Name);
+                    sb.Append(define.RightTrim ? "\" -}}" : "\" }}");
+                    if (define.Body is TemplateDocumentNode bodyDoc)
+                        SerializeChildren(sb, bodyDoc.Children);
+                    sb.Append("{{ end }}");
+                    break;
+                case TemplateDocumentNode doc:
+                    SerializeChildren(sb, doc.Children);
+                    break;
+            }
+        }
+    }
+
+    private static void SerializeBlock(System.Text.StringBuilder sb, BlockNode block)
+    {
+        sb.Append(block.LeftTrim ? "{{- " : "{{ ");
+        sb.Append(block.Keyword);
+        if (!string.IsNullOrEmpty(block.Expression))
+        {
+            sb.Append(' ');
+            sb.Append(block.Expression);
+        }
+        sb.Append(block.RightTrim ? " -}}" : " }}");
+
+        if (block.TrueBody is TemplateDocumentNode trueDoc)
+            SerializeChildren(sb, trueDoc.Children);
+
+        foreach (var elseIf in block.ElseIfChain)
+        {
+            sb.Append(elseIf.TrimMarker ? "{{- else if " : "{{ else if ");
+            sb.Append(elseIf.Condition);
+            sb.Append(" }}");
+            if (elseIf.Body is TemplateDocumentNode eiDoc)
+                SerializeChildren(sb, eiDoc.Children);
+        }
+
+        if (block.FalseBody is TemplateDocumentNode falseDoc && falseDoc.Children.Count > 0)
+        {
+            sb.Append("{{ else }}");
+            SerializeChildren(sb, falseDoc.Children);
+        }
+
+        sb.Append("{{ end }}");
+    }
 }
 
 /// <summary>Raw text content between template actions.</summary>

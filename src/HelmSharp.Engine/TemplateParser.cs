@@ -1,46 +1,44 @@
 namespace HelmSharp.Engine;
 
 /// <summary>
-/// Parses a flat token stream from <see cref="TemplateTokenizer"/> into a nested AST.
+/// Returned by ParseContent when it stops at a boundary keyword.
 /// </summary>
-/// <remarks>
-/// <para>The parser handles structural template constructs:
-/// <c>define</c>/<c>end</c>, <c>if</c>/<c>else if</c>/<c>else</c>/<c>end</c>,
-/// <c>with</c>/<c>else</c>/<c>end</c>, <c>range</c>/<c>else</c>/<c>end</c>.</para>
-/// <para>
-/// Expression content inside actions is stored as raw strings — the existing
-/// evaluation engine handles expression parsing and evaluation.
-/// </para>
-/// </remarks>
+internal readonly struct StopResult
+{
+    /// <summary>The keyword: "end", "else", or "else if". Null if EOF.</summary>
+    public string? Keyword { get; init; }
+    /// <summary>Raw action expression that caused the stop.</summary>
+    public string Expression { get; init; }
+    /// <summary>Left trim marker on the stop action.</summary>
+    public bool LeftTrim { get; init; }
+    /// <summary>Right trim marker on the stop action.</summary>
+    public bool RightTrim { get; init; }
+}
+
+/// <summary>
+/// Parses a flat token stream from <see cref="TemplateTokenizer"/> into a nested AST.
+/// Uses recursive descent — block bodies are parsed by directly consuming tokens.
+/// </summary>
 public sealed class TemplateParser
 {
-    private readonly IEnumerator<Token> _tokens;
-    private Token _current;
-    private bool _hasCurrent;
+    private readonly List<Token> _tokens;
+    private int _pos;
 
-    // Define nodes extracted during parsing (collected for the renderer).
     private readonly Dictionary<string, DefineNode> _defines = new(StringComparer.Ordinal);
 
     public TemplateParser(IEnumerable<Token> tokens)
     {
-        _tokens = tokens.GetEnumerator();
-        Advance();
+        _tokens = tokens.ToList();
+        _pos = 0;
     }
 
-    /// <summary>
-    /// Returns the defines extracted during parsing, keyed by template name.
-    /// </summary>
     public IReadOnlyDictionary<string, DefineNode> Defines => _defines;
 
-    /// <summary>
-    /// Parses the full template into a <see cref="TemplateDocumentNode"/>.
-    /// </summary>
     public TemplateDocumentNode Parse()
     {
         var document = new TemplateDocumentNode();
-        ParseNodes(document.Children, stopAtEnd: false, isTopLevel: true);
+        ParseContent(document.Children, new HashSet<string> { "end", "else", "else if" });
 
-        // Update document-level position from children
         if (document.Children.Count > 0)
         {
             document.StartOffset = document.Children[0].StartOffset;
@@ -52,376 +50,185 @@ public sealed class TemplateParser
         return document;
     }
 
-    /// <summary>
-    /// Parse template content into children of a parent node. Returns true if
-    /// parsing stopped because of an <c>end</c> or <c>else</c>/<c>else if</c> keyword.
-    /// </summary>
-    private bool ParseNodes(List<TemplateNode> children, bool stopAtEnd, bool isTopLevel)
+    /// <summary>Parses content until EOF or a stop keyword. Returns the stop info.</summary>
+    private StopResult ParseContent(List<TemplateNode> children, HashSet<string> stopKeywords)
     {
-        while (_hasCurrent)
+        while (_pos < _tokens.Count)
         {
-            if (_current.Kind == TokenKind.EndOfFile)
+            var token = _tokens[_pos];
+
+            if (token.Kind == TokenKind.EndOfFile)
                 break;
 
-            if (_current.Kind == TokenKind.Text)
+            if (token.Kind == TokenKind.Text)
             {
                 children.Add(ParseText());
                 continue;
             }
 
-            if (_current.Kind == TokenKind.LeftDelim)
+            if (token.Kind == TokenKind.LeftDelim)
             {
-                var leftTrim = _current.LeftTrim;
-                var leftToken = _current;
-                Advance(); // consume LeftDelim
+                _pos++;
+                var leftTrim = token.LeftTrim;
 
-                // Skip to content — look for Identifier or Comment
-                while (_hasCurrent && _current.Kind != TokenKind.Identifier &&
-                       _current.Kind != TokenKind.Comment && _current.Kind != TokenKind.RightDelim &&
-                       _current.Kind != TokenKind.EndOfFile)
+                if (_pos >= _tokens.Count) break;
+                var ct = _tokens[_pos];
+                if (ct.Kind != TokenKind.ActionContent) break;
+
+                var expr = ct.Value;
+                _pos++;
+
+                var rightTrim = false;
+                if (_pos < _tokens.Count && _tokens[_pos].Kind == TokenKind.RightDelim)
                 {
-                    Advance();
+                    rightTrim = _tokens[_pos].RightTrim;
+                    _pos++;
                 }
 
-                if (!_hasCurrent || _current.Kind == TokenKind.EndOfFile)
-                    break;
+                var keyword = GetFirstWord(expr);
 
-                var keyword = _current.Kind == TokenKind.Identifier ? _current.Value : string.Empty;
+                if (stopKeywords.Contains(keyword))
+                    return new StopResult { Keyword = keyword, Expression = expr, LeftTrim = leftTrim, RightTrim = rightTrim };
 
                 switch (keyword)
                 {
                     case "define":
-                    {
-                        var defineNode = ParseDefine(leftTrim);
-                        _defines[defineNode.Name] = defineNode;
-                        // Define nodes are not added to children — they are extracted
+                        ParseDefine(expr, leftTrim, rightTrim);
                         break;
-                    }
-
-                    case "end":
-                        Advance(); // consume 'end'
-                        ConsumeUntilRightDelim(); // skip to and consume }}
-                        return true; // signal end-of-block
-
-                    case "else":
-                    case "else if":
-                        return true; // signal else/else-if boundary
-
                     case "if":
                     case "with":
                     case "range":
-                    {
-                        var blockNode = ParseBlock(keyword, leftTrim);
-                        children.Add(blockNode);
+                        children.Add(ParseBlock(keyword, expr, leftTrim, rightTrim));
                         break;
-                    }
-
                     default:
-                    {
-                        if (_current.Kind == TokenKind.Comment)
-                        {
-                            children.Add(ParseComment(leftTrim));
-                        }
-                        else
-                        {
-                            children.Add(ParseAction(keyword, leftTrim));
-                        }
+                        children.Add(MakeNode(expr, leftTrim, rightTrim));
                         break;
-                    }
                 }
                 continue;
             }
 
-            // Unexpected token — skip it
-            Advance();
+            _pos++;
         }
 
-        return false;
+        return new StopResult();
     }
 
-    private TextNode ParseText()
+    private void ParseDefine(string expr, bool leftTrim, bool rightTrim)
     {
-        var node = new TextNode
-        {
-            Content = _current.Value,
-            StartOffset = _current.Offset,
-            EndOffset = _current.Offset + _current.Value.Length,
-            StartLine = _current.Line,
-            EndLine = _current.Line,
-        };
-        Advance();
-        return node;
-    }
-
-    private DefineNode ParseDefine(bool leftTrim)
-    {
-        var startToken = _current; // 'define' keyword
-        Advance(); // consume 'define'
-
-        // Consume the template name (quoted string)
-        var nameToken = ConsumeNonRightDelim();
-        var name = Unquote(nameToken.Value);
-
-        // Consume any remaining tokens until RightDelim (the opening define tag's }})
-        var rightTrimOpen = ConsumeUntilRightDelim();
-
-        // Now parse the body until we hit {{ end }}
+        var name = ExtractQuotedFirstArg(expr, "define");
         var bodyDoc = new TemplateDocumentNode();
-        ParseNodes(bodyDoc.Children, stopAtEnd: true, isTopLevel: false);
+        ParseContent(bodyDoc.Children, new HashSet<string> { "end" });
 
-        var defineNode = new DefineNode
+        _defines[name] = new DefineNode
         {
             Name = name,
             Body = bodyDoc,
             LeftTrim = leftTrim,
-            RightTrim = rightTrimOpen,
-            StartOffset = startToken.Offset,
-            StartLine = startToken.Line,
+            RightTrim = rightTrim,
         };
-
-        // Update end position from body or use current position
-        if (bodyDoc.Children.Count > 0)
-        {
-            defineNode.EndOffset = bodyDoc.Children[^1].EndOffset;
-            defineNode.EndLine = bodyDoc.Children[^1].EndLine;
-        }
-
-        return defineNode;
     }
 
-    private BlockNode ParseBlock(string keyword, bool leftTrim)
+    private BlockNode ParseBlock(string keyword, string expr, bool leftTrim, bool rightTrim)
     {
-        var startToken = _current;
-        Advance(); // consume keyword (if/with/range)
-
-        // Build the expression string: everything until RightDelim
-        var exprBuilder = new System.Text.StringBuilder();
-        var hasRightTrim = false;
-
-        while (_hasCurrent && _current.Kind != TokenKind.RightDelim && _current.Kind != TokenKind.EndOfFile)
-        {
-            if (exprBuilder.Length > 0)
-                exprBuilder.Append(' ');
-            exprBuilder.Append(_current.Value);
-            Advance();
-        }
-
-        if (_hasCurrent && _current.Kind == TokenKind.RightDelim)
-        {
-            hasRightTrim = _current.RightTrim;
-            Advance();
-        }
-
-        // Parse true body until else/else-if/end
-        var trueBodyDoc = new TemplateDocumentNode();
-        var elseFound = ParseNodes(trueBodyDoc.Children, stopAtEnd: true, isTopLevel: false);
+        var condition = expr.Length > keyword.Length ? expr[keyword.Length..].Trim() : string.Empty;
 
         var block = new BlockNode
         {
             Keyword = keyword,
-            Expression = exprBuilder.ToString().Trim(),
+            Expression = condition,
             LeftTrim = leftTrim,
-            RightTrim = hasRightTrim,
-            TrueBody = trueBodyDoc,
-            StartOffset = startToken.Offset,
-            StartLine = startToken.Line,
+            RightTrim = rightTrim,
         };
 
-        // Handle else / else-if chain
-        if (elseFound && _hasCurrent && _current.Kind == TokenKind.Identifier)
+        // Parse true body
+        var trueBody = new TemplateDocumentNode();
+        var stop = ParseContent(trueBody.Children, new HashSet<string> { "end", "else", "else if" });
+        block.TrueBody = trueBody;
+
+        // Handle else-if chain
+        while (stop.Keyword == "else if")
         {
-            var elseKeyword = _current.Value;
+            var elseIfCondition = stop.Expression.Length > 7 ? stop.Expression[7..].Trim() : string.Empty;
 
-            if (elseKeyword == "else if")
-            {
-                ParseElseIfChain(block);
-            }
-            else if (elseKeyword == "else")
-            {
-                Advance(); // consume 'else'
-                ConsumeUntilRightDelim(); // consume }}
+            var branchDoc = new TemplateDocumentNode();
+            stop = ParseContent(branchDoc.Children, new HashSet<string> { "end", "else", "else if" });
 
-                var elseBodyDoc = new TemplateDocumentNode();
-                ParseNodes(elseBodyDoc.Children, stopAtEnd: true, isTopLevel: false);
-                block.FalseBody = elseBodyDoc;
-            }
+            block.ElseIfChain.Add(new ElseIfBranch
+            {
+                Condition = elseIfCondition,
+                Body = branchDoc,
+            });
         }
 
-        // Update end position
-        if (block.FalseBody is TemplateDocumentNode fd && fd.Children.Count > 0)
+        // Handle final else
+        if (stop.Keyword == "else")
         {
-            block.EndOffset = fd.Children[^1].EndOffset;
-            block.EndLine = fd.Children[^1].EndLine;
-        }
-        else if (trueBodyDoc.Children.Count > 0)
-        {
-            block.EndOffset = trueBodyDoc.Children[^1].EndOffset;
-            block.EndLine = trueBodyDoc.Children[^1].EndLine;
+            var elseDoc = new TemplateDocumentNode();
+            ParseContent(elseDoc.Children, new HashSet<string> { "end" });
+            block.FalseBody = elseDoc;
         }
 
         return block;
     }
 
-    private void ParseElseIfChain(BlockNode block)
+    private TextNode ParseText()
     {
-        while (_hasCurrent && _current.Kind == TokenKind.Identifier && _current.Value == "else if")
+        var t = _tokens[_pos];
+        _pos++;
+        return new TextNode
         {
-            Advance(); // consume 'else if'
-
-            // Build condition expression until RightDelim
-            var condBuilder = new System.Text.StringBuilder();
-            while (_hasCurrent && _current.Kind != TokenKind.RightDelim && _current.Kind != TokenKind.EndOfFile)
-            {
-                if (condBuilder.Length > 0)
-                    condBuilder.Append(' ');
-                condBuilder.Append(_current.Value);
-                Advance();
-            }
-
-            if (_hasCurrent && _current.Kind == TokenKind.RightDelim)
-                Advance(); // consume }}
-
-            var branchDoc = new TemplateDocumentNode();
-            var foundElseOrEnd = ParseNodes(branchDoc.Children, stopAtEnd: true, isTopLevel: false);
-
-            block.ElseIfChain.Add(new ElseIfBranch
-            {
-                Condition = condBuilder.ToString().Trim(),
-                Body = branchDoc,
-            });
-
-            // If we stopped at 'else', parse the final else body
-            if (foundElseOrEnd && _hasCurrent && _current.Kind == TokenKind.Identifier && _current.Value == "else")
-            {
-                Advance(); // consume 'else'
-                ConsumeUntilRightDelim();
-                var elseDoc = new TemplateDocumentNode();
-                ParseNodes(elseDoc.Children, stopAtEnd: true, isTopLevel: false);
-                block.FalseBody = elseDoc;
-                break;
-            }
-        }
-    }
-
-    private CommentNode ParseComment(bool leftTrim)
-    {
-        var node = new CommentNode
-        {
-            Content = _current.Value,
-            StartOffset = _current.Offset,
-            EndOffset = _current.Offset + _current.Value.Length,
-            StartLine = _current.Line,
-            EndLine = _current.Line,
-        };
-        Advance(); // consume comment
-        ConsumeUntilRightDelim(); // consume }}
-        return node;
-    }
-
-    private ActionNode ParseAction(string keyword, bool leftTrim)
-    {
-        var startToken = _current.Kind == TokenKind.Identifier ? _current : default;
-        var startOffset = _current.Offset;
-        var startLine = _current.Line;
-
-        // Build expression: keyword + remaining tokens until RightDelim
-        var exprBuilder = new System.Text.StringBuilder();
-        if (!string.IsNullOrEmpty(keyword))
-            exprBuilder.Append(keyword);
-
-        var rightTrim = false;
-
-        while (_hasCurrent && _current.Kind != TokenKind.RightDelim && _current.Kind != TokenKind.EndOfFile)
-        {
-            if (exprBuilder.Length > 0 && _current.Kind != TokenKind.Dot)
-                exprBuilder.Append(' ');
-
-            if (_current.Kind == TokenKind.LeftParen)
-            {
-                // Build sub-expression until matching )
-                exprBuilder.Append('(');
-                Advance();
-                var depth = 1;
-                while (_hasCurrent && depth > 0)
-                {
-                    if (_current.Kind == TokenKind.LeftParen) depth++;
-                    else if (_current.Kind == TokenKind.RightParen)
-                    {
-                        depth--;
-                        if (depth == 0)
-                        {
-                            exprBuilder.Append(')');
-                            Advance();
-                            break;
-                        }
-                    }
-                    exprBuilder.Append(_current.Value);
-                    Advance();
-                }
-                continue;
-            }
-
-            exprBuilder.Append(_current.Value);
-            Advance();
-        }
-
-        if (_hasCurrent && _current.Kind == TokenKind.RightDelim)
-        {
-            rightTrim = _current.RightTrim;
-            Advance(); // consume }}
-        }
-
-        return new ActionNode
-        {
-            Expression = exprBuilder.ToString().Trim(),
-            LeftTrim = leftTrim,
-            RightTrim = rightTrim,
-            StartOffset = startOffset,
-            EndOffset = _current.Offset,
-            StartLine = startLine,
-            EndLine = _current.Line,
+            Content = t.Value,
+            StartOffset = t.Offset,
+            EndOffset = t.Offset + t.Value.Length,
+            StartLine = t.Line,
+            EndLine = t.Line,
         };
     }
 
-    private Token ConsumeNonRightDelim()
+    private static ActionNode MakeNode(string expr, bool leftTrim, bool rightTrim)
     {
-        while (_hasCurrent && _current.Kind != TokenKind.RightDelim && _current.Kind != TokenKind.EndOfFile)
+        if (expr.TrimStart().StartsWith("/*", StringComparison.Ordinal))
+            return new ActionNode { Expression = "/* */", LeftTrim = leftTrim, RightTrim = rightTrim };
+
+        return new ActionNode { Expression = expr.Trim(), LeftTrim = leftTrim, RightTrim = rightTrim };
+    }
+
+    /// <summary>Returns the first whitespace-delimited word from an expression. Handles "else if" as one word.</summary>
+    internal static string GetFirstWord(string expr)
+    {
+        expr = expr.TrimStart();
+        if (expr.Length == 0) return string.Empty;
+
+        if (expr.StartsWith("else", StringComparison.Ordinal))
         {
-            var token = _current;
-            Advance();
-            return token;
+            var after = expr[4..].TrimStart();
+            if (after.StartsWith("if", StringComparison.Ordinal))
+            {
+                var c = after.Length > 2 ? after[2] : '\0';
+                if (!char.IsLetterOrDigit(c))
+                    return "else if";
+            }
+            return "else";
         }
-        return default;
+
+        var end = 0;
+        while (end < expr.Length && !char.IsWhiteSpace(expr[end]))
+            end++;
+        return expr[..end];
     }
 
-    private bool ConsumeUntilRightDelim()
+    private static string ExtractQuotedFirstArg(string expr, string keyword)
     {
-        var rightTrim = false;
-        while (_hasCurrent && _current.Kind != TokenKind.RightDelim && _current.Kind != TokenKind.EndOfFile)
-            Advance();
-
-        if (_hasCurrent && _current.Kind == TokenKind.RightDelim)
+        var remaining = expr[keyword.Length..].TrimStart();
+        if (remaining.Length >= 2)
         {
-            rightTrim = _current.RightTrim;
-            Advance();
+            var quote = remaining[0];
+            if (quote is '"' or '\'')
+            {
+                var i = remaining.IndexOf(quote, 1);
+                if (i > 0) return remaining[1..i];
+            }
         }
-
-        return rightTrim;
-    }
-
-    private static string Unquote(string value)
-    {
-        if (value.Length >= 2 &&
-            ((value[0] == '"' && value[^1] == '"') ||
-             (value[0] == '\'' && value[^1] == '\'')))
-            return value[1..^1];
-        return value;
-    }
-
-    private void Advance()
-    {
-        _hasCurrent = _tokens.MoveNext();
-        if (_hasCurrent)
-            _current = _tokens.Current;
+        return remaining;
     }
 }
