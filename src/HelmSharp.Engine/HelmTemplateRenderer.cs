@@ -917,6 +917,19 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             // In Go templates, include returns the trimmed result
             return rendered.Trim();
         }
+        catch (TemplateParseException)
+        {
+            // Preserve the exception type so the per-template error collection
+            // in Render() can catch and collect it, rather than aborting the
+            // entire chart render. See #63.
+            throw;
+        }
+        catch (NotSupportedException)
+        {
+            // Likewise: NotSupportedException is also collected per-template
+            // in Render() for engine-level gaps.
+            throw;
+        }
         catch (Exception ex)
         {
             throw new InvalidOperationException(

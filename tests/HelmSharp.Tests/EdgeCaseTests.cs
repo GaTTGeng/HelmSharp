@@ -1001,4 +1001,35 @@ public class EdgeCaseTests
         var ex = Assert.Throws<InvalidOperationException>(() => renderer.Render());
         Assert.IsType<TemplateParseException>(ex.InnerException);
     }
+
+    [Fact]
+    public void MalformedIncludedTemplate_CollectsTemplateParseExceptionPerTemplate()
+    {
+        // When a valid template includes a named template whose body is
+        // malformed, the TemplateParseException from IncludeTemplate should
+        // be preserved (not wrapped in InvalidOperationException) so that
+        // the per-template error collection in Render() can catch and
+        // collect it — the failing template should be reported but the
+        // remaining valid templates should still render.
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+
+        // Named template (define) with malformed body. Using bare {{ range }}
+        // (no pipeline) so ExtractDefines' depth counter does not treat it as a
+        // block opener (it checks StartsWith("range ")), but the AST parser
+        // does — producing TemplateParseException for missing 'end'.
+        chart.Templates["templates/_helpers.tpl"] =
+            "{{ define \"broken.helper\" }}{{ range }}{{ end }}{{ end }}";
+
+        // Template that includes the broken named template
+        chart.Templates["templates/deployment.yaml"] =
+            "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ include \"broken.helper\" . }}";
+
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>());
+
+        var ex = Assert.Throws<InvalidOperationException>(() => renderer.Render());
+        Assert.Contains("deployment.yaml", ex.Message);
+        Assert.Contains(nameof(TemplateParseException), ex.Message);
+        Assert.Contains("1 template(s)", ex.Message); // only deployment.yaml fails
+    }
 }
