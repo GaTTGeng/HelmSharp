@@ -11,10 +11,6 @@ namespace HelmSharp.Engine;
 
 public sealed class HelmTemplateRenderer : IEvaluationContext
 {
-    private static readonly Regex DefineRegex = new(
-        "{{-?\\s*define\\s+\"(?<name>[^\"]+)\"\\s*-?}}(?<body>.*?){{-?\\s*end\\s*-?}}",
-        RegexOptions.Compiled | RegexOptions.Singleline);
-
     private static readonly Regex TokenRegex = new(
         "{{-?\\s*(?<expr>.*?)\\s*-?}}",
         RegexOptions.Compiled | RegexOptions.Singleline);
