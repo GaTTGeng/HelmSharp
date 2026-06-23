@@ -26,6 +26,9 @@ public sealed class TemplateParser
 
     private readonly Dictionary<string, DefineNode> _defines = new(StringComparer.Ordinal);
 
+    private static readonly HashSet<string> EndOnly = new(StringComparer.Ordinal) { "end" };
+    private static readonly HashSet<string> EndElseElseIf = new(StringComparer.Ordinal) { "end", "else", "else if" };
+
     public TemplateParser(IEnumerable<Token> tokens)
     {
         _tokens = tokens.ToList();
@@ -37,7 +40,7 @@ public sealed class TemplateParser
     public TemplateDocumentNode Parse()
     {
         var document = new TemplateDocumentNode();
-        ParseContent(document.Children, new HashSet<string> { "end", "else", "else if" });
+        ParseContent(document.Children, EndElseElseIf);
 
         if (document.Children.Count > 0)
         {
@@ -120,7 +123,7 @@ public sealed class TemplateParser
     {
         var name = ExtractQuotedFirstArg(expr, "define");
         var bodyDoc = new TemplateDocumentNode();
-        var stop = ParseContent(bodyDoc.Children, new HashSet<string> { "end" });
+        var stop = ParseContent(bodyDoc.Children, EndOnly);
 
         if (stop.Keyword == null)
             throw new TemplateParseException(
@@ -158,7 +161,7 @@ public sealed class TemplateParser
 
         // Parse true body
         var trueBody = new TemplateDocumentNode();
-        var stop = ParseContent(trueBody.Children, new HashSet<string> { "end", "else", "else if" });
+        var stop = ParseContent(trueBody.Children, EndElseElseIf);
         block.TrueBody = trueBody;
 
         // Handle else-if chain
@@ -175,7 +178,7 @@ public sealed class TemplateParser
                 : string.Empty;
 
             var branchDoc = new TemplateDocumentNode();
-            stop = ParseContent(branchDoc.Children, new HashSet<string> { "end", "else", "else if" });
+            stop = ParseContent(branchDoc.Children, EndElseElseIf);
 
             block.ElseIfChain.Add(new ElseIfBranch
             {
@@ -189,7 +192,7 @@ public sealed class TemplateParser
         if (stop.Keyword == "else")
         {
             var elseDoc = new TemplateDocumentNode();
-            var elseStop = ParseContent(elseDoc.Children, new HashSet<string> { "end" });
+            var elseStop = ParseContent(elseDoc.Children, EndOnly);
             block.FalseBody = elseDoc;
 
             if (elseStop.Keyword == null)
