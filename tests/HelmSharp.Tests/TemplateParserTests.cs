@@ -356,4 +356,143 @@ public class TemplateParserTests
         var text2 = tokens.First(t => t.Kind == TokenKind.Text && t.Value.Contains("line2"));
         Assert.Equal(2, text2.Line);
     }
+
+    // ──────────────────────────────────────────────────────────
+    // Error handling tests — Issue #58
+    // ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Parse_MissingEndInIfBlock_ThrowsTemplateParseException()
+    {
+        var tokens = new TemplateTokenizer("{{ if .A }}content").TokenizeFlat();
+        var parser = new TemplateParser(tokens);
+
+        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        Assert.Contains("Missing 'end'", ex.Message);
+        Assert.Contains("'if'", ex.Message);
+        Assert.True(ex.Line > 0);
+        Assert.True(ex.Offset >= 0);
+    }
+
+    [Fact]
+    public void Parse_MissingEndInDefine_ThrowsTemplateParseException()
+    {
+        var tokens = new TemplateTokenizer("{{ define \"mytpl\" }}body").TokenizeFlat();
+        var parser = new TemplateParser(tokens);
+
+        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        Assert.Contains("Missing 'end'", ex.Message);
+        Assert.Contains("mytpl", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_MissingEndInWithBlock_ThrowsTemplateParseException()
+    {
+        var tokens = new TemplateTokenizer("{{ with .Values.data }}has data").TokenizeFlat();
+        var parser = new TemplateParser(tokens);
+
+        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        Assert.Contains("Missing 'end'", ex.Message);
+        Assert.Contains("'with'", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_MissingEndInRangeBlock_ThrowsTemplateParseException()
+    {
+        var tokens = new TemplateTokenizer("{{ range .Items }}item").TokenizeFlat();
+        var parser = new TemplateParser(tokens);
+
+        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        Assert.Contains("Missing 'end'", ex.Message);
+        Assert.Contains("'range'", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_MissingEndInElseBranch_ThrowsTemplateParseException()
+    {
+        var tokens = new TemplateTokenizer("{{ if .A }}yes{{ else }}no").TokenizeFlat();
+        var parser = new TemplateParser(tokens);
+
+        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        Assert.Contains("Missing 'end'", ex.Message);
+        Assert.Contains("'else'", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_MissingEndAfterElseIf_ThrowsTemplateParseException()
+    {
+        var tokens = new TemplateTokenizer("{{ if .A }}a{{ else if .B }}b").TokenizeFlat();
+        var parser = new TemplateParser(tokens);
+
+        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        Assert.Contains("Missing 'end'", ex.Message);
+        Assert.Contains("'if'", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_NestedBlockMissingOuterEnd_ThrowsTemplateParseException()
+    {
+        var template = "{{ if .A }}outer{{ if .B }}inner{{ end }}";
+        var tokens = new TemplateTokenizer(template).TokenizeFlat();
+        var parser = new TemplateParser(tokens);
+
+        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        Assert.Contains("Missing 'end'", ex.Message);
+        Assert.Contains("'if'", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_NestedBlockMissingInnerEnd_ConsumesOuterEnd()
+    {
+        // Inner block consumes outer's {{ end }}; outer reports missing end.
+        var template = "{{ if .A }}{{ if .B }}inner{{ end }}";
+        var tokens = new TemplateTokenizer(template).TokenizeFlat();
+        var parser = new TemplateParser(tokens);
+
+        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        Assert.Contains("Missing 'end'", ex.Message);
+        Assert.Contains("'if'", ex.Message);
+    }
+
+    [Fact]
+    public void Tokenize_UnclosedActionDelimiter_ThrowsTemplateParseException()
+    {
+        var tokenizer = new TemplateTokenizer("{{ .Values.foo");
+
+        var ex = Assert.Throws<TemplateParseException>(() => tokenizer.TokenizeFlat().ToList());
+        Assert.Contains("Unclosed action delimiter", ex.Message);
+        Assert.True(ex.Line > 0);
+        Assert.True(ex.Offset >= 0);
+    }
+
+    [Fact]
+    public void Tokenize_UnclosedActionDelimiterWithTrim_ThrowsTemplateParseException()
+    {
+        var tokenizer = new TemplateTokenizer("{{- .Values.foo");
+
+        var ex = Assert.Throws<TemplateParseException>(() => tokenizer.TokenizeFlat().ToList());
+        Assert.Contains("Unclosed action delimiter", ex.Message);
+    }
+
+    [Fact]
+    public void Tokenize_UnclosedActionDelimiterIncludesExcerptInMessage()
+    {
+        var tokenizer = new TemplateTokenizer("{{ include \"my.template\" .");
+
+        var ex = Assert.Throws<TemplateParseException>(() => tokenizer.TokenizeFlat().ToList());
+        Assert.Contains("include", ex.Message);
+        Assert.Contains("my.template", ex.Message);
+    }
+
+    [Fact]
+    public void Tokenize_MissingEndMarkerAtBlockEnd_DelimitersValid()
+    {
+        // The content is fine; parser (not tokenizer) should detect missing end
+        var template = "{{ if .A }}valid content";
+        var tokens = new TemplateTokenizer(template).TokenizeFlat().ToList();
+
+        // Tokenizer should succeed — the delimiter is properly closed
+        Assert.Contains(tokens, t => t.Kind == TokenKind.ActionContent);
+        Assert.Contains(tokens, t => t.Kind == TokenKind.RightDelim);
+    }
 }

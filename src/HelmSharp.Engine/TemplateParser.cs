@@ -120,7 +120,12 @@ public sealed class TemplateParser
     {
         var name = ExtractQuotedFirstArg(expr, "define");
         var bodyDoc = new TemplateDocumentNode();
-        ParseContent(bodyDoc.Children, new HashSet<string> { "end" });
+        var stop = ParseContent(bodyDoc.Children, new HashSet<string> { "end" });
+
+        if (stop.Keyword == null)
+            throw new TemplateParseException(
+                $"Missing 'end' for define \"{name}\"",
+                startLine, 1, startOffset);
 
         _defines[name] = new DefineNode
         {
@@ -184,9 +189,20 @@ public sealed class TemplateParser
         if (stop.Keyword == "else")
         {
             var elseDoc = new TemplateDocumentNode();
-            ParseContent(elseDoc.Children, new HashSet<string> { "end" });
+            var elseStop = ParseContent(elseDoc.Children, new HashSet<string> { "end" });
             block.FalseBody = elseDoc;
+
+            if (elseStop.Keyword == null)
+                throw new TemplateParseException(
+                    $"Missing 'end' for 'else' branch of '{keyword}' block",
+                    startLine, 1, startOffset);
         }
+
+        // If the last stop keyword was not "end" (EOF), the block is not closed
+        if (stop.Keyword == null)
+            throw new TemplateParseException(
+                $"Missing 'end' for '{keyword}' block",
+                startLine, 1, startOffset);
 
         return block;
     }
