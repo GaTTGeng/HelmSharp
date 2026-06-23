@@ -96,12 +96,12 @@ public sealed class TemplateParser
                 switch (keyword)
                 {
                     case "define":
-                        ParseDefine(expr, leftTrim, rightTrim, startOffset, startLine);
+                        ParseDefine(expr, leftTrim, rightTrim, startOffset, startLine, startCol);
                         break;
                     case "if":
                     case "with":
                     case "range":
-                        children.Add(ParseBlock(keyword, expr, leftTrim, rightTrim, startOffset, startLine));
+                        children.Add(ParseBlock(keyword, expr, leftTrim, rightTrim, startOffset, startLine, startCol));
                         break;
                     default:
                         children.Add(MakeNode(expr, leftTrim, rightTrim, startOffset, startLine));
@@ -116,7 +116,7 @@ public sealed class TemplateParser
         return new StopResult();
     }
 
-    private void ParseDefine(string expr, bool leftTrim, bool rightTrim, int startOffset, int startLine)
+    private void ParseDefine(string expr, bool leftTrim, bool rightTrim, int startOffset, int startLine, int startCol)
     {
         var name = ExtractQuotedFirstArg(expr, "define");
         var bodyDoc = new TemplateDocumentNode();
@@ -125,7 +125,7 @@ public sealed class TemplateParser
         if (stop.Keyword == null)
             throw new TemplateParseException(
                 $"Missing 'end' for define \"{name}\"",
-                startLine, 1, startOffset);
+                startLine, startCol, startOffset);
 
         _defines[name] = new DefineNode
         {
@@ -138,7 +138,7 @@ public sealed class TemplateParser
         };
     }
 
-    private BlockNode ParseBlock(string keyword, string expr, bool leftTrim, bool rightTrim, int startOffset, int startLine)
+    private BlockNode ParseBlock(string keyword, string expr, bool leftTrim, bool rightTrim, int startOffset, int startLine, int startCol)
     {
         // Skip past keyword in the trimmed expression to extract the condition
         var trimmedExpr = expr.TrimStart();
@@ -195,14 +195,14 @@ public sealed class TemplateParser
             if (elseStop.Keyword == null)
                 throw new TemplateParseException(
                     $"Missing 'end' for 'else' branch of '{keyword}' block",
-                    startLine, 1, startOffset);
+                    startLine, startCol, startOffset);
         }
 
         // If the last stop keyword was not "end" (EOF), the block is not closed
         if (stop.Keyword == null)
             throw new TemplateParseException(
                 $"Missing 'end' for '{keyword}' block",
-                startLine, 1, startOffset);
+                startLine, startCol, startOffset);
 
         return block;
     }

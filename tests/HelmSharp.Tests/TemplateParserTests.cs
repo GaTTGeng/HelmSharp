@@ -495,4 +495,36 @@ public class TemplateParserTests
         Assert.Contains(tokens, t => t.Kind == TokenKind.ActionContent);
         Assert.Contains(tokens, t => t.Kind == TokenKind.RightDelim);
     }
+
+    [Fact]
+    public void Parse_MissingEnd_ReportsCorrectColumnWithIndentation()
+    {
+        // 4 leading spaces, {{ starts at column 5
+        var tokens = new TemplateTokenizer("    {{ if .A }}content").TokenizeFlat();
+        var parser = new TemplateParser(tokens);
+
+        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        Assert.Equal(5, ex.Column);
+    }
+
+    [Fact]
+    public void Parse_MissingEndInDefine_ReportsCorrectColumn()
+    {
+        // {{ starts at column 1 (no leading whitespace)
+        var tokens = new TemplateTokenizer("{{ define \"mytpl\" }}body").TokenizeFlat();
+        var parser = new TemplateParser(tokens);
+
+        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        Assert.Equal(1, ex.Column);
+    }
+
+    [Fact]
+    public void Tokenize_UnclosedDelimiter_ReportsCorrectColumn()
+    {
+        // {{- starts at column 1
+        var tokenizer = new TemplateTokenizer("{{- .Values.foo");
+
+        var ex = Assert.Throws<TemplateParseException>(() => tokenizer.TokenizeFlat().ToList());
+        Assert.Equal(1, ex.Column);
+    }
 }
