@@ -13,6 +13,12 @@ internal readonly struct StopResult
     public bool LeftTrim { get; init; }
     /// <summary>Right trim marker on the stop action.</summary>
     public bool RightTrim { get; init; }
+    /// <summary>Line number of the stop action (1-based).</summary>
+    public int Line { get; init; }
+    /// <summary>Column number of the stop action (1-based).</summary>
+    public int Column { get; init; }
+    /// <summary>Byte offset of the stop action in the template.</summary>
+    public int Offset { get; init; }
 }
 
 /// <summary>
@@ -26,6 +32,9 @@ public sealed class TemplateParser
 
     private readonly Dictionary<string, DefineNode> _defines = new(StringComparer.Ordinal);
 
+    private static readonly HashSet<string> EndOnly = new(StringComparer.Ordinal) { "end" };
+    private static readonly HashSet<string> EndElseElseIf = new(StringComparer.Ordinal) { "end", "else", "else if" };
+
     public TemplateParser(IEnumerable<Token> tokens)
     {
         _tokens = tokens.ToList();
@@ -37,7 +46,7 @@ public sealed class TemplateParser
     public TemplateDocumentNode Parse()
     {
         var document = new TemplateDocumentNode();
-        ParseContent(document.Children, new HashSet<string> { "end", "else", "else if" });
+        ParseContent(document.Children, EndElseElseIf);
 
         if (document.Children.Count > 0)
         {
@@ -91,17 +100,17 @@ public sealed class TemplateParser
                 var keyword = GetFirstWord(expr);
 
                 if (stopKeywords.Contains(keyword))
-                    return new StopResult { Keyword = keyword, Expression = expr, LeftTrim = leftTrim, RightTrim = rightTrim };
+                    return new StopResult { Keyword = keyword, Expression = expr, LeftTrim = leftTrim, RightTrim = rightTrim, Line = startLine, Column = startCol, Offset = startOffset };
 
                 switch (keyword)
                 {
                     case "define":
-                        ParseDefine(expr, leftTrim, rightTrim, startOffset, startLine);
+                        ParseDefine(expr, leftTrim, rightTrim, startOffset, startLine, startCol);
                         break;
                     case "if":
                     case "with":
                     case "range":
-                        children.Add(ParseBlock(keyword, expr, leftTrim, rightTrim, startOffset, startLine));
+                        children.Add(ParseBlock(keyword, expr, leftTrim, rightTrim, startOffset, startLine, startCol));
                         break;
                     default:
                         children.Add(MakeNode(expr, leftTrim, rightTrim, startOffset, startLine));
@@ -116,11 +125,16 @@ public sealed class TemplateParser
         return new StopResult();
     }
 
-    private void ParseDefine(string expr, bool leftTrim, bool rightTrim, int startOffset, int startLine)
+    private void ParseDefine(string expr, bool leftTrim, bool rightTrim, int startOffset, int startLine, int startCol)
     {
         var name = ExtractQuotedFirstArg(expr, "define");
         var bodyDoc = new TemplateDocumentNode();
-        ParseContent(bodyDoc.Children, new HashSet<string> { "end" });
+        var stop = ParseContent(bodyDoc.Children, EndOnly);
+
+        if (stop.Keyword == null)
+            throw new TemplateParseException(
+                $"Missing 'end' for define \"{name}\"",
+                startLine, startCol, startOffset);
 
         _defines[name] = new DefineNode
         {
@@ -133,7 +147,7 @@ public sealed class TemplateParser
         };
     }
 
-    private BlockNode ParseBlock(string keyword, string expr, bool leftTrim, bool rightTrim, int startOffset, int startLine)
+    private BlockNode ParseBlock(string keyword, string expr, bool leftTrim, bool rightTrim, int startOffset, int startLine, int startCol)
     {
         // Skip past keyword in the trimmed expression to extract the condition
         var trimmedExpr = expr.TrimStart();
@@ -153,7 +167,7 @@ public sealed class TemplateParser
 
         // Parse true body
         var trueBody = new TemplateDocumentNode();
-        var stop = ParseContent(trueBody.Children, new HashSet<string> { "end", "else", "else if" });
+        var stop = ParseContent(trueBody.Children, EndElseElseIf);
         block.TrueBody = trueBody;
 
         // Handle else-if chain
@@ -170,7 +184,7 @@ public sealed class TemplateParser
                 : string.Empty;
 
             var branchDoc = new TemplateDocumentNode();
-            stop = ParseContent(branchDoc.Children, new HashSet<string> { "end", "else", "else if" });
+            stop = ParseContent(branchDoc.Children, EndElseElseIf);
 
             block.ElseIfChain.Add(new ElseIfBranch
             {
@@ -184,9 +198,20 @@ public sealed class TemplateParser
         if (stop.Keyword == "else")
         {
             var elseDoc = new TemplateDocumentNode();
-            ParseContent(elseDoc.Children, new HashSet<string> { "end" });
+            var elseStop = ParseContent(elseDoc.Children, EndOnly);
             block.FalseBody = elseDoc;
+
+            if (elseStop.Keyword == null)
+                throw new TemplateParseException(
+                    $"Missing 'end' for 'else' branch of '{keyword}' block",
+                    stop.Line, stop.Column, stop.Offset);
         }
+
+        // If the last stop keyword was not "end" (EOF), the block is not closed
+        if (stop.Keyword == null)
+            throw new TemplateParseException(
+                $"Missing 'end' for '{keyword}' block",
+                startLine, startCol, startOffset);
 
         return block;
     }

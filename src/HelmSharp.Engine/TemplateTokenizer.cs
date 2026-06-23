@@ -97,6 +97,11 @@ public sealed class TemplateTokenizer
             // Check for action delimiter
             if (TryMatchLeftDelim(out var leftTrim))
             {
+                // Save left delimiter position BEFORE consuming (used for error reporting)
+                var leftDelimOffset = _pos;
+                var leftDelimLine = _line;
+                var leftDelimCol = _col;
+
                 yield return ConsumeLeftDelim(leftTrim);
 
                 // Save position before consuming action content
@@ -104,7 +109,7 @@ public sealed class TemplateTokenizer
                 var contentStartLine = _line;
                 var contentStartCol = _col;
 
-                var (content, rightTrim) = ConsumeActionContent();
+                var (content, rightTrim) = ConsumeActionContent(leftDelimLine, leftDelimCol, leftDelimOffset);
                 yield return new Token
                 {
                     Kind = TokenKind.ActionContent,
@@ -187,7 +192,7 @@ public sealed class TemplateTokenizer
         };
     }
 
-    private (string content, bool rightTrim) ConsumeActionContent()
+    private (string content, bool rightTrim) ConsumeActionContent(int startLine, int startCol, int startOffset)
     {
         var sb = new StringBuilder();
         var rightTrim = false;
@@ -291,7 +296,14 @@ public sealed class TemplateTokenizer
             }
         }
 
-        return (sb.ToString(), false);
+        // Reached EOF without finding closing delimiter
+        var excerptEnd = Math.Min(startOffset + 60, _input.Length);
+        var excerpt = _input[startOffset..excerptEnd];
+        if (excerptEnd < _input.Length)
+            excerpt += "...";
+        throw new TemplateParseException(
+            $"Unclosed action delimiter starting with \"{excerpt.Trim()}\"",
+            startLine, startCol, startOffset);
     }
 
     private string ConsumeText()
