@@ -533,4 +533,76 @@ public class TemplateParserTests
         var ex = Assert.Throws<TemplateParseException>(() => tokenizer.TokenizeFlat().ToList());
         Assert.Equal(1, ex.Column);
     }
+
+    // ──────────────────────────────────────────────────────────
+    // ExtractQuotedFirstArg hardening — Issue #59
+    // ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Parse_DefineUnquotedName_ThrowsTemplateParseException()
+    {
+        var tokens = new TemplateTokenizer("{{ define mytpl }}body{{ end }}").TokenizeFlat();
+        var parser = new TemplateParser(tokens);
+
+        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        Assert.Contains("quoted", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("define", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_DefineUnquotedNameWithSpaces_ThrowsTemplateParseException()
+    {
+        // Unquoted name with trailing whitespace and extra tokens
+        var tokens = new TemplateTokenizer("{{ define mytpl . }}body{{ end }}").TokenizeFlat();
+        var parser = new TemplateParser(tokens);
+
+        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        Assert.Contains("quoted", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Parse_DefineEmptyName_ThrowsTemplateParseException()
+    {
+        // define with no name at all
+        var tokens = new TemplateTokenizer("{{ define }}body{{ end }}").TokenizeFlat();
+        var parser = new TemplateParser(tokens);
+
+        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        Assert.Contains("quoted", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Parse_DefineEmptyQuotedName_ThrowsTemplateParseException()
+    {
+        // define with empty quoted name (e.g. define "")
+        var tokens = new TemplateTokenizer("{{ define \"\" }}body{{ end }}").TokenizeFlat();
+        var parser = new TemplateParser(tokens);
+
+        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        Assert.Contains("empty", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Parse_DefineSingleQuotedName_Works()
+    {
+        // Single-quoted names should work (Go templates allow both)
+        var template = "{{ define 'mytpl' }}body content{{ end }}";
+        var tokens = new TemplateTokenizer(template).TokenizeFlat();
+        var parser = new TemplateParser(tokens);
+        var doc = parser.Parse();
+
+        Assert.Empty(doc.Children);
+        Assert.True(parser.Defines.ContainsKey("mytpl"));
+    }
+
+    [Fact]
+    public void Parse_DefineUnquotedName_ReportsCorrectPosition()
+    {
+        var tokens = new TemplateTokenizer("{{ define mytpl }}body{{ end }}").TokenizeFlat();
+        var parser = new TemplateParser(tokens);
+
+        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        Assert.True(ex.Line > 0);
+        Assert.True(ex.Offset >= 0);
+    }
 }

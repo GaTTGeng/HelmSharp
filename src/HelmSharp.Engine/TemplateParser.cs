@@ -128,6 +128,15 @@ public sealed class TemplateParser
     private void ParseDefine(string expr, bool leftTrim, bool rightTrim, int startOffset, int startLine, int startCol)
     {
         var name = ExtractQuotedFirstArg(expr, "define");
+        if (name is null)
+            throw new TemplateParseException(
+                $"The 'define' keyword requires a quoted template name (e.g. define \"name\")",
+                startLine, startCol, startOffset);
+        if (name.Length == 0)
+            throw new TemplateParseException(
+                "The 'define' keyword was given an empty template name.",
+                startLine, startCol, startOffset);
+
         var bodyDoc = new TemplateDocumentNode();
         var stop = ParseContent(bodyDoc.Children, EndOnly);
 
@@ -269,7 +278,12 @@ public sealed class TemplateParser
         return expr[..end];
     }
 
-    private static string ExtractQuotedFirstArg(string expr, string keyword)
+    /// <summary>
+    /// Extracts the first quoted argument after a keyword (e.g. the template name in
+    /// <c>define "mytpl"</c>). Returns <see langword="null"/> when the argument is not
+    /// quoted, since Go templates require quoted names for <c>define</c> and <c>template</c>.
+    /// </summary>
+    private static string? ExtractQuotedFirstArg(string expr, string keyword)
     {
         // Trim leading whitespace, then skip past the keyword
         var remaining = expr.TrimStart();
@@ -285,6 +299,6 @@ public sealed class TemplateParser
                 if (i > 0) return remaining[1..i];
             }
         }
-        return remaining;
+        return null;
     }
 }
