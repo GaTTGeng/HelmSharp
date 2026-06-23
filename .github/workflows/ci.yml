@@ -66,7 +66,6 @@ jobs:
           --no-build
           --no-restore
           --output artifacts/packages
-          -p:ContinuousIntegrationBuild=true
           -p:RepositoryUrl=${{ github.server_url }}/${{ github.repository }}
           -p:RepositoryBranch=${{ github.ref_name }}
           -p:RepositoryCommit=${{ github.sha }}

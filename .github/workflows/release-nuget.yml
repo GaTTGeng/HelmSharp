@@ -81,7 +81,6 @@ jobs:
           --no-restore
           --output artifacts/packages
           -p:PackageVersion=${{ env.PACKAGE_VERSION }}
-          -p:ContinuousIntegrationBuild=true
           -p:RepositoryUrl=${{ github.server_url }}/${{ github.repository }}
           -p:RepositoryBranch=${{ github.ref_name }}
           -p:RepositoryCommit=${{ github.sha }}

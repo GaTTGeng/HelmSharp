@@ -2,7 +2,7 @@
   <PropertyGroup>
     <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
     <IsPackable>true</IsPackable>
-    <Version>1.0.4</Version>
+    <Version>0.0.0-local</Version>
     <Authors>HelmSharp Contributors</Authors>
     <Company>HelmSharp</Company>
     <Description>Managed Helm-compatible chart renderer and Kubernetes release deployer for .NET</Description>
@@ -20,6 +20,10 @@
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(GITHUB_ACTIONS)' == 'true'">
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
   </PropertyGroup>
 
   <ItemGroup>
