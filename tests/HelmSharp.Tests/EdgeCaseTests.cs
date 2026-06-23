@@ -946,4 +946,38 @@ public class EdgeCaseTests
         Assert.Contains("key0: value0", result);
         Assert.Contains("key49: value49", result);
     }
+
+    [Fact]
+    public void MalformedTemplate_CollectsTemplateParseExceptionPerTemplate()
+    {
+        // A malformed template (missing end) should not abort the entire
+        // render — TemplateParseException is caught per-template, collected,
+        // and the remaining templates still get a chance to render before
+        // InvalidOperationException is thrown at the end.
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/broken.yaml"] = "{{ if true }}";
+        chart.Templates["templates/valid.yaml"] = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: test\n";
+
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>());
+
+        var ex = Assert.Throws<InvalidOperationException>(() => renderer.Render());
+        Assert.Contains("broken.yaml", ex.Message);
+        Assert.Contains(nameof(TemplateParseException), ex.Message);
+        Assert.Equal(1, ex.Message.Split("template(s):").Length - 1); // only 1 failing template
+    }
+
+    [Fact]
+    public void MalformedTemplate_InnerExceptionIsTemplateParseException()
+    {
+        // The first collected error should be exposed as the inner exception.
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/broken.yaml"] = "{{ if true }}";
+
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>());
+
+        var ex = Assert.Throws<InvalidOperationException>(() => renderer.Render());
+        Assert.IsType<TemplateParseException>(ex.InnerException);
+    }
 }

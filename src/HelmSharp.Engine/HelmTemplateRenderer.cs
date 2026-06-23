@@ -70,12 +70,14 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
     /// </summary>
     /// <remarks>
     /// <para>Exceptions of type <see cref="NotSupportedException"/> (missing template function,
-    /// parser limitations) are accumulated per-template rather than failing immediately.
+    /// parser limitations) and <see cref="TemplateParseException"/> (malformed template syntax)
+    /// are accumulated per-template rather than failing immediately.
     /// This allows the engine to render as many templates as possible before throwing.
     /// Other exceptions (e.g. <c>fail</c> calls, arity errors) propagate immediately.</para>
     /// </remarks>
     /// <exception cref="InvalidOperationException">
-    /// Thrown when one or more templates fail with <see cref="NotSupportedException"/>.
+    /// Thrown when one or more templates fail with <see cref="NotSupportedException"/>
+    /// or <see cref="TemplateParseException"/>.
     /// The message lists each failing template and its exception type.
     /// </exception>
     public string Render()
@@ -123,6 +125,12 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             catch (NotSupportedException ex)
             {
                 // Engine-level gaps (missing function, parser limitation) — collect and continue
+                errors.Add((path, ex));
+            }
+            catch (TemplateParseException ex)
+            {
+                // Malformed template syntax — collect and continue so the remaining
+                // templates in the chart can still render
                 errors.Add((path, ex));
             }
             // Other exceptions (fail, arity errors, etc.) propagate immediately
@@ -186,6 +194,12 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                 catch (NotSupportedException ex)
                 {
                     // Engine-level gaps (missing function, parser limitation) — collect and continue
+                    errors.Add((path, ex));
+                }
+                catch (TemplateParseException ex)
+                {
+                    // Malformed template syntax — collect and continue so the remaining
+                    // templates in the chart can still render
                     errors.Add((path, ex));
                 }
                 // Other exceptions (fail, arity errors, etc.) propagate immediately
