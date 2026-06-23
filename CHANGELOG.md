@@ -6,6 +6,38 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-06-23
+
+### :rocket: AST-Based Template Parsing
+
+This release introduces a **tokenizer and AST-based template parsing pipeline**, replacing the previous regex-driven approach. This is the foundational M1 architecture change that enables accurate Helm template compatibility:
+
+- **Tokenizer** (`HelmTokenizer`): Lexes Helm templates into a structured token stream (text, `{{`, `}}`, `|`, `:=`, identifiers, strings, numbers, operators, parentheses, etc.), preserving source positions for diagnostics.
+- **AST** (`AstBuilder`): Parses the token stream into an abstract syntax tree with nodes for `TemplateNode`, `TextNode`, `ActionNode`, `PipelineNode`, `CommandNode`, `FieldNode`, `IfNode`, `RangeNode`, `WithNode`, `DefineNode`, and `IncludeNode` — faithfully modeling Helm's template grammar.
+- **Malformed template error handling** (`#62`): The AST parser now produces structured `TemplateParseException` errors for malformed templates instead of cryptic low-level failures, with source location information for debugging.
+
+### :building_construction: Parse–Evaluation Layer Boundary
+
+- **`#57`** — Defined a clean separation between the parsing layer (tokenizer + AST) and the evaluation layer (rendering). Decomposed `HelmTemplateRenderer` into focused components: `TemplateParser` (orchestrates tokenize → AST), `TemplateEvaluator` (walks AST nodes), and `HelmTemplateRenderer` (public API facade). This boundary enables future optimizations like AST caching and incremental re-rendering.
+
+### Fixed
+
+- **#55** — Chart values now follow Helm's precedence rules (user-supplied `--values` files override `values.yaml`; later files override earlier ones). Multiple values files are now supported.
+- **#54** — `DefaultApiVersions` now adapts to `kubeVersion` in `Capabilities` (fixes `#49`). API versions are filtered based on the target Kubernetes version.
+- **#64** — `Render()` now collects `TemplateParseException` per-template, so a single broken template doesn't abort the entire chart render.
+- **#65** — `IncludeTemplate` now preserves `TemplateParseException` for structured per-template error reporting.
+- **#59** — `ExtractQuotedFirstArg` now requires quoted define names, aligning with Helm's `define`/`template` syntax.
+- **#66** — Removed dead `DefineRegex` static field.
+
+### Changed
+
+- `HelmTemplateRenderer` decomposed into `TemplateParser` + `TemplateEvaluator` with a clean public API surface.
+- Token positions tracked throughout the tokenizer for error diagnostics.
+
+### Docs
+
+- Synced golden test results to `README.zh-CN.md`.
+
 ## [1.0.3] - 2026-06-22
 
 ### :tada: Golden Test Milestone — 129/129 Templates Render Successfully
