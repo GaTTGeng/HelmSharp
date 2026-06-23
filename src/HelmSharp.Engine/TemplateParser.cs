@@ -13,6 +13,12 @@ internal readonly struct StopResult
     public bool LeftTrim { get; init; }
     /// <summary>Right trim marker on the stop action.</summary>
     public bool RightTrim { get; init; }
+    /// <summary>Line number of the stop action (1-based).</summary>
+    public int Line { get; init; }
+    /// <summary>Column number of the stop action (1-based).</summary>
+    public int Column { get; init; }
+    /// <summary>Byte offset of the stop action in the template.</summary>
+    public int Offset { get; init; }
 }
 
 /// <summary>
@@ -94,7 +100,7 @@ public sealed class TemplateParser
                 var keyword = GetFirstWord(expr);
 
                 if (stopKeywords.Contains(keyword))
-                    return new StopResult { Keyword = keyword, Expression = expr, LeftTrim = leftTrim, RightTrim = rightTrim };
+                    return new StopResult { Keyword = keyword, Expression = expr, LeftTrim = leftTrim, RightTrim = rightTrim, Line = startLine, Column = startCol, Offset = startOffset };
 
                 switch (keyword)
                 {
@@ -198,7 +204,7 @@ public sealed class TemplateParser
             if (elseStop.Keyword == null)
                 throw new TemplateParseException(
                     $"Missing 'end' for 'else' branch of '{keyword}' block",
-                    startLine, startCol, startOffset);
+                    stop.Line, stop.Column, stop.Offset);
         }
 
         // If the last stop keyword was not "end" (EOF), the block is not closed

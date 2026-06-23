@@ -410,12 +410,18 @@ public class TemplateParserTests
     [Fact]
     public void Parse_MissingEndInElseBranch_ThrowsTemplateParseException()
     {
+        // "{{ if .A }}yes{{ else }}no"
+        //  ^0          ^11  ^14 (offset 14 → column 15)
+        // Error should point at {{ else }}, not the {{ if }} at (1,1)
         var tokens = new TemplateTokenizer("{{ if .A }}yes{{ else }}no").TokenizeFlat();
         var parser = new TemplateParser(tokens);
 
         var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
         Assert.Contains("Missing 'end'", ex.Message);
         Assert.Contains("'else'", ex.Message);
+        Assert.Equal(15, ex.Column);
+        Assert.Equal(14, ex.Offset);
+        Assert.Equal(1, ex.Line);
     }
 
     [Fact]
