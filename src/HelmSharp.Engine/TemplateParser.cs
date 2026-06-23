@@ -128,9 +128,13 @@ public sealed class TemplateParser
     private void ParseDefine(string expr, bool leftTrim, bool rightTrim, int startOffset, int startLine, int startCol)
     {
         var name = ExtractQuotedFirstArg(expr, "define");
-        if (string.IsNullOrEmpty(name))
+        if (name is null)
             throw new TemplateParseException(
                 $"The 'define' keyword requires a quoted template name (e.g. define \"name\")",
+                startLine, startCol, startOffset);
+        if (name.Length == 0)
+            throw new TemplateParseException(
+                "The 'define' keyword was given an empty template name.",
                 startLine, startCol, startOffset);
 
         var bodyDoc = new TemplateDocumentNode();

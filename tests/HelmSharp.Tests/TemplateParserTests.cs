@@ -572,6 +572,17 @@ public class TemplateParserTests
     }
 
     [Fact]
+    public void Parse_DefineEmptyQuotedName_ThrowsTemplateParseException()
+    {
+        // define with empty quoted name (e.g. define "")
+        var tokens = new TemplateTokenizer("{{ define \"\" }}body{{ end }}").TokenizeFlat();
+        var parser = new TemplateParser(tokens);
+
+        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        Assert.Contains("empty", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Parse_DefineSingleQuotedName_Works()
     {
         // Single-quoted names should work (Go templates allow both)
