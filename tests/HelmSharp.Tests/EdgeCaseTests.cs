@@ -964,7 +964,28 @@ public class EdgeCaseTests
         var ex = Assert.Throws<InvalidOperationException>(() => renderer.Render());
         Assert.Contains("broken.yaml", ex.Message);
         Assert.Contains(nameof(TemplateParseException), ex.Message);
-        Assert.Equal(1, ex.Message.Split("template(s):").Length - 1); // only 1 failing template
+        Assert.Contains("1 template(s)", ex.Message); // only 1 failing template
+    }
+
+    [Fact]
+    public void MalformedSubchartTemplate_CollectsTemplateParseExceptionPerTemplate()
+    {
+        // A malformed template inside a subchart should also be caught
+        // per-template — covering the subchart loop catch block.
+        var chart = new HelmChart { Name = "parent", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/parent.yaml"] = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: parent\n";
+
+        var subchart = new HelmChart { Name = "child", Version = "1.0.0", ValuesYaml = "" };
+        subchart.Templates["templates/broken.yaml"] = "{{ if true }}";
+        subchart.Templates["templates/valid.yaml"] = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: child\n";
+        chart.Subcharts["child"] = subchart;
+
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>());
+
+        var ex = Assert.Throws<InvalidOperationException>(() => renderer.Render());
+        Assert.Contains("broken.yaml", ex.Message);
+        Assert.Contains(nameof(TemplateParseException), ex.Message);
     }
 
     [Fact]
