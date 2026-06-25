@@ -18,18 +18,10 @@ public static class HelmValues
     {
         var result = HelmYaml.DeserializeDictionary(chart.ValuesYaml);
 
-        // Merge subchart default values under their alias (or directory name)
-        foreach (var (name, subchart) in chart.Subcharts)
+        // Merge subchart default values under each dependency alias (or dependency name).
+        foreach (var (key, subchart) in GetSubchartValueInstances(chart))
         {
-            var dependency = chart.Dependencies.FirstOrDefault(
-                d => string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase));
-            var key = dependency?.Alias ?? name;
-            var subchartDefaults = HelmYaml.DeserializeDictionary(subchart.ValuesYaml);
-            if (!result.ContainsKey(key))
-                result[key] = subchartDefaults;
-            else if (result[key] is Dictionary<string, object?> existingDict &&
-                     subchartDefaults is Dictionary<string, object?> subDefaults)
-                MergeInto(existingDict, subDefaults);
+            MergeSubchartDefaults(result, key, subchart);
         }
 
         // Multiple values files (equivalent to helm -f / --values, applied in order)
@@ -65,6 +57,61 @@ public static class HelmValues
             SetPath(result, key, ParseJsonValue(value));
 
         return result;
+    }
+
+    private static IEnumerable<(string Key, HelmChart Chart)> GetSubchartValueInstances(HelmChart chart)
+    {
+        if (chart.Dependencies.Count == 0)
+        {
+            foreach (var (name, subchart) in chart.Subcharts)
+                yield return (name, subchart);
+            yield break;
+        }
+
+        foreach (var dependency in chart.Dependencies)
+        {
+            var key = dependency.Alias ?? dependency.Name;
+            if (TryGetSubchartForDependency(chart, dependency, key, out var subchart))
+                yield return (key, subchart);
+        }
+    }
+
+    private static bool TryGetSubchartForDependency(
+        HelmChart chart,
+        HelmChartDependency dependency,
+        string key,
+        out HelmChart subchart)
+    {
+        if (chart.Subcharts.TryGetValue(dependency.Name, out subchart!))
+            return true;
+
+        if (chart.Subcharts.TryGetValue(key, out subchart!))
+            return true;
+
+        foreach (var candidate in chart.Subcharts.Values)
+        {
+            if (string.Equals(candidate.Name, dependency.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                subchart = candidate;
+                return true;
+            }
+        }
+
+        subchart = null!;
+        return false;
+    }
+
+    private static void MergeSubchartDefaults(
+        Dictionary<string, object?> result,
+        string key,
+        HelmChart subchart)
+    {
+        var subchartDefaults = HelmYaml.DeserializeDictionary(subchart.ValuesYaml);
+        if (!result.ContainsKey(key))
+            result[key] = subchartDefaults;
+        else if (result[key] is Dictionary<string, object?> existingDict &&
+                 subchartDefaults is Dictionary<string, object?> subDefaults)
+            MergeInto(existingDict, subDefaults);
     }
 
     /// <summary>

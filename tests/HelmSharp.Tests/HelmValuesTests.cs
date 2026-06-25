@@ -82,6 +82,59 @@ public class HelmValuesTests
     }
 
     [Fact]
+    public async Task BuildAsync_MergesSubchartDefaultsForEveryAliasInstance()
+    {
+        var chart = new HelmChart
+        {
+            Name = "parent",
+            Version = "1.0.0",
+            ValuesYaml = ""
+        };
+        chart.Dependencies.Add(new HelmChartDependency
+        {
+            Name = "child",
+            Alias = "cache",
+            Version = "1.0.0"
+        });
+        chart.Dependencies.Add(new HelmChartDependency
+        {
+            Name = "child",
+            Alias = "session",
+            Version = "1.0.0"
+        });
+        chart.Subcharts["child"] = new HelmChart
+        {
+            Name = "child",
+            Version = "1.0.0",
+            ValuesYaml = """
+                marker: default
+                nested:
+                  enabled: true
+                """
+        };
+
+        var result = await HelmValues.BuildAsync(
+            chart,
+            (IEnumerable<string>?)null,
+            """
+            session:
+              marker: session-override
+            """,
+            null,
+            null,
+            null,
+            null,
+            CancellationToken.None);
+
+        var cache = Assert.IsType<Dictionary<string, object?>>(result["cache"]);
+        var session = Assert.IsType<Dictionary<string, object?>>(result["session"]);
+        Assert.Equal("default", cache["marker"]);
+        Assert.Equal("session-override", session["marker"]);
+        Assert.True(Assert.IsType<Dictionary<string, object?>>(cache["nested"]).ContainsKey("enabled"));
+        Assert.True(Assert.IsType<Dictionary<string, object?>>(session["nested"]).ContainsKey("enabled"));
+    }
+
+    [Fact]
     public async Task BuildAsync_SetFileValues()
     {
         var chart = new HelmChart
