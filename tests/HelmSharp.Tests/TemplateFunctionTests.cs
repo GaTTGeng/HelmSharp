@@ -114,6 +114,43 @@ public class TemplateFunctionTests
     }
 
     [Fact]
+    public void FilesMethods_RenderTextEmptyGlobSecretAndBinaryContent()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Files["config/app.txt"] = "alpha\nbeta\n"u8.ToArray();
+        chart.Files["config/empty.txt"] = [];
+        chart.Files["secrets/password.txt"] = "s3cr3t"u8.ToArray();
+        chart.Files["binary/payload.bin"] = [0x00, 0x01, 0xFE, 0xFF];
+        chart.Templates["templates/files.yaml"] = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: files
+            data:
+              get: {{ .Files.Get "config/app.txt" | quote }}
+              missing: {{ .Files.Get "missing.txt" | quote }}
+              lineCount: {{ len (.Files.Lines "config/app.txt") | quote }}
+              binary: {{ .Files.GetBytes "binary/payload.bin" | b64enc | quote }}
+              config: |-
+            {{ (.Files.Glob "config/*").AsConfig | nindent 4 }}
+              secrets: |-
+            {{ (.Files.Glob "secrets/*").AsSecrets | nindent 4 }}
+            """;
+
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>());
+        var result = renderer.Render();
+        _output.WriteLine(result);
+
+        Assert.Contains("get: \"alpha\\nbeta\\n\"", result);
+        Assert.Contains("missing: \"\"", result);
+        Assert.Contains("lineCount: \"3\"", result);
+        Assert.Contains("binary: \"AAH+/w==\"", result);
+        Assert.Contains("app.txt: |", result);
+        Assert.Contains("empty.txt: \"\"", result);
+        Assert.Contains("password.txt: czNjcjN0", result);
+    }
+
+    [Fact]
     public void NestedDefines_WithTrim()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };

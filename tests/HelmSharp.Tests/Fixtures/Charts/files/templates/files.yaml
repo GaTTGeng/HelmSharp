@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: files
+data:
+  get: {{ .Files.Get "config/app.txt" | quote }}
+  missing: {{ .Files.Get "missing.txt" | quote }}
+  lineCount: {{ len (.Files.Lines "config/app.txt") | quote }}
+  globbed: |-
+{{ (.Files.Glob "config/*").AsConfig | nindent 4 }}
+  allConfig: |-
+{{ .Files.AsConfig | nindent 4 }}
+  secrets: |-
+{{ (.Files.Glob "secrets/*").AsSecrets | nindent 4 }}

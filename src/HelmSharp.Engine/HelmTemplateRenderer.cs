@@ -1060,10 +1060,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                     ["GoVersion"] = "dotnet/9.0"
                 }
             },
-            "Files" => context.Chart.Files.ToDictionary(
-                pair => pair.Key,
-                pair => (object?)pair.Value,
-                StringComparer.Ordinal),
+            "Files" => new TemplateFiles(context.Chart.Files),
             "Template" => new Dictionary<string, object?>
             {
                 ["Name"] = $"{context.TemplateChartPath ?? context.Chart.Name}/{context.CurrentTemplatePath}",
@@ -1086,6 +1083,8 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             current = current switch
             {
                 ApiVersionSet => null,
+                TemplateFiles files when part.Equals("AsConfig", StringComparison.Ordinal) => files.AsConfig(),
+                TemplateFiles files when part.Equals("AsSecrets", StringComparison.Ordinal) => files.AsSecrets(),
                 Dictionary<string, object?> dict when dict.TryGetValue(part, out var next) => next,
                 IDictionary<string, object?> dict when dict.TryGetValue(part, out var next) => next,
                 _ => null
@@ -1112,6 +1111,9 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             ".Files.Lines" => context.Chart.Files.TryGetValue(path, out var content)
                 ? HelmCliRunnerCompatibleLines(Encoding.UTF8.GetString(content))
                 : new List<object?>(),
+            ".Files.Glob" => new TemplateFiles(context.Chart.Files).Glob(path),
+            ".Files.AsConfig" => new TemplateFiles(context.Chart.Files).AsConfig(),
+            ".Files.AsSecrets" => new TemplateFiles(context.Chart.Files).AsSecrets(),
             _ => throw new NotSupportedException($"Helm files method '{head}' is not supported by the managed renderer.")
         };
     }
@@ -1122,6 +1124,130 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             .Replace("\r\n", "\n", StringComparison.Ordinal)
             .Replace("\r", "\n", StringComparison.Ordinal);
         return normalized.Split('\n').Cast<object?>().ToList();
+    }
+
+    private sealed class TemplateFiles
+    {
+        private readonly Dictionary<string, byte[]> _files;
+
+        public TemplateFiles(IDictionary<string, byte[]> files)
+        {
+            _files = files.ToDictionary(
+                pair => NormalizeFilePath(pair.Key),
+                pair => pair.Value,
+                StringComparer.Ordinal);
+        }
+
+        private TemplateFiles(Dictionary<string, byte[]> files)
+        {
+            _files = files;
+        }
+
+        public TemplateFiles Glob(string pattern)
+        {
+            var regex = GlobToRegex(NormalizeFilePath(pattern));
+            var matches = _files
+                .Where(pair => regex.IsMatch(pair.Key))
+                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+            return new TemplateFiles(matches);
+        }
+
+        public string AsConfig()
+            => RenderYamlMap(encodeValues: false);
+
+        public string AsSecrets()
+            => RenderYamlMap(encodeValues: true);
+
+        private string RenderYamlMap(bool encodeValues)
+        {
+            var builder = new StringBuilder();
+            foreach (var (path, content) in _files.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+            {
+                var key = Path.GetFileName(path);
+                var value = encodeValues
+                    ? Convert.ToBase64String(content)
+                    : Encoding.UTF8.GetString(content);
+                AppendYamlEntry(builder, key, value);
+            }
+
+            return builder.ToString().TrimEnd();
+        }
+
+        private static void AppendYamlEntry(StringBuilder builder, string key, string value)
+        {
+            if (value.Length == 0)
+            {
+                builder.Append(key).AppendLine(": \"\"");
+                return;
+            }
+
+            var normalized = value
+                .Replace("\r\n", "\n", StringComparison.Ordinal)
+                .Replace("\r", "\n", StringComparison.Ordinal);
+            if (normalized.Contains('\n'))
+            {
+                builder.Append(key).AppendLine(": |");
+                var lines = normalized.Split('\n');
+                if (lines.Length > 0 && lines[^1].Length == 0)
+                    lines = lines[..^1];
+                foreach (var line in lines)
+                    builder.Append("  ").AppendLine(line);
+                return;
+            }
+
+            builder.Append(key).Append(": ").AppendLine(EscapeYamlScalar(normalized));
+        }
+
+        private static string EscapeYamlScalar(string value)
+            => NeedsQuotedScalar(value)
+                ? "\"" + value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal) + "\""
+                : value;
+
+        private static bool NeedsQuotedScalar(string value)
+            => value.Length == 0 ||
+               char.IsWhiteSpace(value[0]) ||
+               char.IsWhiteSpace(value[^1]) ||
+               value.Contains(':', StringComparison.Ordinal) ||
+               value.Contains('#', StringComparison.Ordinal) ||
+               value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+               value.Equals("false", StringComparison.OrdinalIgnoreCase) ||
+               value.Equals("null", StringComparison.OrdinalIgnoreCase);
+
+        private static Regex GlobToRegex(string pattern)
+        {
+            var builder = new StringBuilder("^");
+            for (var i = 0; i < pattern.Length; i++)
+            {
+                var ch = pattern[i];
+                if (ch == '*')
+                {
+                    if (i + 1 < pattern.Length && pattern[i + 1] == '*')
+                    {
+                        builder.Append(".*");
+                        i++;
+                    }
+                    else
+                    {
+                        builder.Append("[^/]*");
+                    }
+                    continue;
+                }
+
+                if (ch == '?')
+                {
+                    builder.Append("[^/]");
+                    continue;
+                }
+
+                builder.Append(Regex.Escape(ch.ToString()));
+            }
+
+            builder.Append('$');
+            return new Regex(builder.ToString(), RegexOptions.CultureInvariant);
+        }
+
+        private static string NormalizeFilePath(string path)
+            => path.Replace('\\', '/').TrimStart('/');
     }
 
 
