@@ -11,6 +11,8 @@ HelmSharp is a managed .NET library for rendering Helm-style charts and driving 
 
 The project is under active development. The API currently implements a practical Helm-compatible subset rather than a byte-for-byte replacement for Helm CLI.
 
+Documentation site: [https://gattgeng.github.io/HelmSharp/](https://gattgeng.github.io/HelmSharp/)
+
 ## Packages
 
 This repository is organized as several NuGet packages:
@@ -192,6 +194,7 @@ HelmSharp is not a full Helm CLI clone. Some advanced Helm behaviors, edge-case 
 
 ## Documentation
 
+- [Documentation site](https://gattgeng.github.io/HelmSharp/)
 - [Getting started](docs/getting-started.md)
 - [API overview](docs/api-overview.md)
 - [Helm compatibility](docs/helm-compatibility.md)
@@ -220,6 +223,7 @@ The NuGet package metadata is defined in `src/Directory.Build.props`. The packag
 This repository includes GitHub Actions workflows:
 
 - `.github/workflows/ci.yml` restores, builds, tests, packs, and uploads package artifacts on pushes and pull requests.
+- `.github/workflows/deploy-docs.yml` builds the VitePress documentation site and deploys it to GitHub Pages on pushes to `master`.
 - `.github/workflows/release-nuget.yml` packs release packages and can publish them to NuGet.org.
 
 NuGet.org publishing is handled by maintainers through the release workflow.

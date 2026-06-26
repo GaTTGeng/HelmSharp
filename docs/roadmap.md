@@ -2,11 +2,11 @@
 
 HelmSharp is evolving toward dependable Helm-compatible behavior for applications that need chart rendering and release workflows inside a .NET process.
 
-> The roadmap describes direction, not a release guarantee. GitHub milestones are the source of truth for current scope and issue progress.
+The roadmap describes direction, not a release guarantee. GitHub milestones are the source of truth for current scope and issue progress.
 
 ## Current Focus
 
-**M1: Helm Template Parity** is the active workstream. The immediate goal is a repeatable compatibility harness that compares selected HelmSharp output with `helm template`, followed by focused fixes for values, built-in objects, template functions, whitespace, and subcharts.
+**M1: Helm Template Parity** is the active workstream. The project now has repeatable golden tests against selected real-world charts, and current work continues to close gaps in values, built-in objects, template functions, whitespace, and subcharts.
 
 Track the live work in [M1 on GitHub](https://github.com/GaTTGeng/HelmSharp/milestone/1) or review the detailed [compatibility matrix](helm-compatibility.md).
 
@@ -40,6 +40,15 @@ A compatibility item is ready to leave a milestone when:
 4. Release builds and tests pass for `net8.0`, `net9.0`, and `net10.0`.
 
 Milestones may overlap where the behavior crosses subsystem boundaries. For example, install parity depends on both release lifecycle behavior in M3 and Kubernetes wait semantics in M4.
+
+## Documentation Track
+
+The documentation site is part of M6 public SDK hardening. The goals are:
+
+- keep install and quick-start content current with the published packages;
+- describe each package boundary clearly enough for consumers to choose dependencies;
+- publish compatibility status without overstating Helm parity;
+- make release, roadmap, and contribution links easy to find from the project site.
 
 ## Contributing
 

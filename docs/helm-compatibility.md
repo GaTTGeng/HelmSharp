@@ -1,21 +1,19 @@
 # Helm Compatibility
 
-HelmSharp provides a managed, Helm-compatible SDK for .NET. It aims to match user-visible Helm behavior where that behavior matters to rendering charts and managing Kubernetes releases, but it is not a byte-for-byte CLI replacement.
+HelmSharp provides a managed, Helm-compatible SDK for .NET. It aims to match user-visible Helm behavior where that behavior matters to chart rendering and Kubernetes release workflows, but it is not a byte-for-byte CLI replacement.
 
-> No Helm executable is required by consumers. The Helm CLI may be used in the test suite only as a compatibility reference.
-
-See the [roadmap](roadmap.md) for delivery order and the [GitHub milestones](https://github.com/GaTTGeng/HelmSharp/milestones) for live progress.
+No Helm executable is required by consumers. The Helm CLI is used only in the test suite as a compatibility reference.
 
 ## Compatibility Contract
 
 HelmSharp considers a behavior supported when it:
 
 - works through a documented managed API;
-- is covered by a focused automated test;
+- is covered by focused automated tests;
 - behaves consistently across `net8.0`, `net9.0`, and `net10.0`;
 - matches Helm semantics for meaningful output, state, and failure behavior.
 
-Exact CLI wording, color, spacing, and plugin execution are not compatibility goals unless they affect chart output or automation.
+Exact CLI wording, color, progress display, and plugin execution are not compatibility goals unless they affect chart output or automation.
 
 ## Capability Snapshot
 
@@ -39,6 +37,23 @@ Exact CLI wording, color, spacing, and plugin execution are not compatibility go
 | **Planned** | API surface may exist, but behavior is incomplete or not production-ready. |
 | **Research** | The correct SDK design must be validated before implementation. |
 
+## Real-Chart Golden Tests
+
+HelmSharp's template engine is validated against real public charts in addition to focused fixtures. The harness renders each chart with `helm template` and HelmSharp, then compares normalized output.
+
+Last published README snapshot:
+
+| Chart | Version | Templates | Passed | Failed | Per-template rate | Full render |
+| --- | --- | --- | --- | --- | --- | --- |
+| podinfo | 6.14.0 | 21 | 21 | 0 | 100% | Success |
+| metrics-server | 3.13.1 | 18 | 18 | 0 | 100% | Success |
+| external-dns | 1.21.1 | 7 | 7 | 0 | 100% | Success |
+| ingress-nginx | 4.12.1 | 42 | 42 | 0 | 100% | Success |
+| cert-manager | 1.17.1 | 41 | 41 | 0 | 100% | Success |
+| **Total** | - | **129** | **129** | **0** | **100%** | - |
+
+These results mean the selected charts render without parser exceptions. They do not mean every byte of output is identical to Helm CLI output. Current remaining differences are mostly around whitespace, document formatting, values evaluation edge cases, and string formatting details.
+
 ## Command and Behavior Matrix
 
 | Helm area | HelmSharp API | Status | Track | Remaining work |
@@ -46,7 +61,7 @@ Exact CLI wording, color, spacing, and plugin execution are not compatibility go
 | `helm template` | `TemplateAsync`, `HelmTemplateRenderer` | **Partial** | M1 | Golden comparisons, built-in objects, functions, whitespace, and errors. |
 | Values merging and `--set*` | `HelmValues` | **Partial** | M1 | Precedence, type coercion, list syntax, and edge cases. |
 | Subcharts and dependencies | `HelmSharp.Chart` | **Partial** | M1/M2 | Value scope, globals, conditions, tags, and dependency workflows. |
-| `helm lint` | `LintAsync` | **Partial** | M1/M2 | Expand rule and failure parity. |
+| `helm lint` | `LintAsync` | **Partial** | M1/M2 | Rule coverage and failure parity. |
 | `helm package` | `PackageAsync` | **Partial** | M2 | Archive layout, metadata, and dependency cases. |
 | `helm repo index` | `RepoIndexAsync`, `HelmSharp.Repo` | **Partial** | M2 | Merge behavior and index edge cases. |
 | `helm pull` | `PullAsync`, `HelmSharp.Repo` | **Partial** | M2/M5 | Authentication, provenance, and OCI cases. |

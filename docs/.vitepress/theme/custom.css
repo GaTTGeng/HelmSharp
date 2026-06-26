@@ -1,0 +1,21 @@
+:root {
+  --vp-c-brand-1: #2563eb;
+  --vp-c-brand-2: #1d4ed8;
+  --vp-c-brand-3: #60a5fa;
+  --vp-c-brand-soft: rgba(37, 99, 235, 0.14);
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(120deg, #2563eb 20%, #0f766e);
+}
+
+.VPHomeHero .main {
+  max-width: 720px;
+}
+
+.VPHomeFeatures .item .box {
+  border-radius: 8px;
+}
+
+.vp-doc table {
+  display: table;
+  width: 100%;
+}
