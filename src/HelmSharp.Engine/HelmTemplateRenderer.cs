@@ -133,19 +133,8 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         }
 
         // Render subchart templates
-        foreach (var (name, subchart) in _chart.Subcharts)
+        foreach (var (subchartIdentity, subchart) in GetSubchartRenderInstances())
         {
-            var declaredDependency = _chart.Dependencies.FirstOrDefault(
-                dependency => string.Equals(dependency.Name, name, StringComparison.OrdinalIgnoreCase));
-            var subchartIdentity = declaredDependency?.Alias ?? name;
-            var matchingDependency = _root.Dependencies.FirstOrDefault(
-                dependency => string.Equals(
-                    dependency.Name,
-                    subchartIdentity,
-                    StringComparison.OrdinalIgnoreCase));
-            if (_chart.Dependencies.Count > 0 && matchingDependency is null)
-                continue;
-
             var subchartValues = HelmValues.BuildSubchartValues(
                 subchart,
                 _root.Values,
@@ -212,6 +201,52 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         }
 
         return output.ToString();
+    }
+
+    private IEnumerable<(string Identity, HelmChart Chart)> GetSubchartRenderInstances()
+    {
+        if (_chart.Dependencies.Count == 0)
+        {
+            foreach (var (name, subchart) in _chart.Subcharts)
+                yield return (name, subchart);
+            yield break;
+        }
+
+        foreach (var dependency in _chart.Dependencies)
+        {
+            var identity = dependency.Alias ?? dependency.Name;
+            var enabled = _root.Dependencies.Any(
+                effective => string.Equals(effective.Name, identity, StringComparison.OrdinalIgnoreCase));
+            if (!enabled)
+                continue;
+
+            if (TryGetSubchartForDependency(dependency, identity, out var subchart))
+                yield return (identity, subchart);
+        }
+    }
+
+    private bool TryGetSubchartForDependency(
+        HelmChartDependency dependency,
+        string identity,
+        out HelmChart subchart)
+    {
+        if (_chart.Subcharts.TryGetValue(dependency.Name, out subchart!))
+            return true;
+
+        if (_chart.Subcharts.TryGetValue(identity, out subchart!))
+            return true;
+
+        foreach (var candidate in _chart.Subcharts.Values)
+        {
+            if (string.Equals(candidate.Name, dependency.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                subchart = candidate;
+                return true;
+            }
+        }
+
+        subchart = null!;
+        return false;
     }
 
     private void ExtractDefines(string content)

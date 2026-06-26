@@ -591,6 +591,71 @@ public class EdgeCaseTests
             result);
     }
 
+    [Fact]
+    public void AliasedSubchart_RendersEveryAliasInstanceOfSameDependency()
+    {
+        var chart = new HelmChart { Name = "parent", Version = "1.0.0", ValuesYaml = "" };
+        chart.Dependencies.Add(new HelmChartDependency
+        {
+            Name = "child",
+            Alias = "cache",
+            Version = "1.0.0",
+            Condition = "cache.enabled"
+        });
+        chart.Dependencies.Add(new HelmChartDependency
+        {
+            Name = "child",
+            Alias = "session",
+            Version = "1.0.0",
+            Condition = "session.enabled"
+        });
+
+        var subchart = new HelmChart
+        {
+            Name = "child",
+            Version = "1.0.0",
+            ValuesYaml = "marker: default\n"
+        };
+        subchart.Templates["templates/child.yaml"] = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: {{ .Chart.Name }}
+            data:
+              marker: {{ .Values.marker | quote }}
+              templateName: {{ .Template.Name | quote }}
+            """;
+        chart.Subcharts["child"] = subchart;
+
+        var values = new Dictionary<string, object?>
+        {
+            ["cache"] = new Dictionary<string, object?>
+            {
+                ["enabled"] = true,
+                ["marker"] = "cache-values"
+            },
+            ["session"] = new Dictionary<string, object?>
+            {
+                ["enabled"] = true,
+                ["marker"] = "session-values"
+            }
+        };
+
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default", values);
+        var result = renderer.Render();
+
+        Assert.Contains("name: cache", result);
+        Assert.Contains("marker: \"cache-values\"", result);
+        Assert.Contains(
+            "templateName: \"parent/charts/cache/templates/child.yaml\"",
+            result);
+        Assert.Contains("name: session", result);
+        Assert.Contains("marker: \"session-values\"", result);
+        Assert.Contains(
+            "templateName: \"parent/charts/session/templates/child.yaml\"",
+            result);
+    }
+
     [Theory]
     [InlineData(true, false, true)]
     [InlineData(false, true, false)]
