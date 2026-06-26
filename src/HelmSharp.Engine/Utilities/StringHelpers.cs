@@ -9,7 +9,15 @@ namespace HelmSharp.Engine;
 internal static class StringHelpers
 {
     public static string Quote(object? value)
-        => "\"" + TypeConverters.ToTemplateString(value).Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
+        => "\"" + EscapeQuotedString(TypeConverters.ToTemplateString(value)) + "\"";
+
+    private static string EscapeQuotedString(string value)
+        => value
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal)
+            .Replace("\r", "\\r", StringComparison.Ordinal)
+            .Replace("\n", "\\n", StringComparison.Ordinal)
+            .Replace("\t", "\\t", StringComparison.Ordinal);
 
     public static string Unquote(string value)
         => value.Length >= 2 && value.StartsWith('"') && value.EndsWith('"') ? value[1..^1] : value;
