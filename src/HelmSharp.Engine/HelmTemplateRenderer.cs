@@ -1128,6 +1128,14 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
 
     private sealed class TemplateFiles
     {
+        private static readonly Regex NumericScalarRegex = new(
+            @"^[+-]?(?:[0-9][0-9_]*)(?:\.[0-9_]+)?(?:[eE][+-]?[0-9]+)?$",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+        private static readonly Regex DateLikeScalarRegex = new(
+            @"^[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[Tt ].*)?$",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
         private readonly Dictionary<string, byte[]> _files;
 
         public TemplateFiles(IDictionary<string, byte[]> files)
@@ -1211,7 +1219,12 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                value.Contains('#', StringComparison.Ordinal) ||
                value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
                value.Equals("false", StringComparison.OrdinalIgnoreCase) ||
-               value.Equals("null", StringComparison.OrdinalIgnoreCase);
+               value.Equals("null", StringComparison.OrdinalIgnoreCase) ||
+               value.Equals("~", StringComparison.Ordinal) ||
+               value.Equals(".inf", StringComparison.OrdinalIgnoreCase) ||
+               value.Equals(".nan", StringComparison.OrdinalIgnoreCase) ||
+               NumericScalarRegex.IsMatch(value) ||
+               DateLikeScalarRegex.IsMatch(value);
 
         private static Regex GlobToRegex(string pattern)
         {

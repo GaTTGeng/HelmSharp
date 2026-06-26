@@ -118,6 +118,8 @@ public class TemplateFunctionTests
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
         chart.Files["config/app.txt"] = "alpha\nbeta\n"u8.ToArray();
+        chart.Files["config/count.txt"] = "1"u8.ToArray();
+        chart.Files["config/date.txt"] = "2024-01-01"u8.ToArray();
         chart.Files["config/empty.txt"] = [];
         chart.Files["secrets/password.txt"] = "s3cr3t"u8.ToArray();
         chart.Files["binary/payload.bin"] = [0x00, 0x01, 0xFE, 0xFF];
@@ -146,6 +148,8 @@ public class TemplateFunctionTests
         Assert.Contains("lineCount: \"3\"", result);
         Assert.Contains("binary: \"AAH+/w==\"", result);
         Assert.Contains("app.txt: |", result);
+        Assert.Contains("count.txt: \"1\"", result);
+        Assert.Contains("date.txt: \"2024-01-01\"", result);
         Assert.Contains("empty.txt: \"\"", result);
         Assert.Contains("password.txt: czNjcjN0", result);
     }
