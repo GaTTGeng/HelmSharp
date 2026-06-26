@@ -6,6 +6,19 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+### Fixed
+
+- Added managed renderer support for Helm `.Files.Glob`, `.Files.AsConfig`, and `.Files.AsSecrets` helpers.
+- Render aliased dependency instances independently and merge subchart defaults for every declared alias.
+
+### Changed
+
+- Bumped `Microsoft.NET.Test.Sdk` from 18.6.0 to 18.7.0.
+
+### Docs
+
+- Added a VitePress documentation site and GitHub Pages deployment workflow.
+
 ## [1.0.4] - 2026-06-23
 
 ### :rocket: AST-Based Template Parsing
