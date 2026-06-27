@@ -1224,32 +1224,26 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                 return;
             }
 
-            var normalized = value
-                .Replace("\r\n", "\n", StringComparison.Ordinal)
-                .Replace("\r", "\n", StringComparison.Ordinal);
-            if (normalized.Contains('\n'))
-            {
-                builder.Append(key).AppendLine(": |");
-                var lines = normalized.Split('\n');
-                if (lines.Length > 0 && lines[^1].Length == 0)
-                    lines = lines[..^1];
-                foreach (var line in lines)
-                    builder.Append("  ").AppendLine(line);
-                return;
-            }
-
-            builder.Append(key).Append(": ").AppendLine(EscapeYamlScalar(normalized));
+            builder.Append(key).Append(": ").AppendLine(EscapeYamlScalar(value));
         }
 
         private static string EscapeYamlScalar(string value)
             => NeedsQuotedScalar(value)
-                ? "\"" + value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal) + "\""
+                ? "\"" + value
+                    .Replace("\\", "\\\\", StringComparison.Ordinal)
+                    .Replace("\"", "\\\"", StringComparison.Ordinal)
+                    .Replace("\r", "\\r", StringComparison.Ordinal)
+                    .Replace("\n", "\\n", StringComparison.Ordinal)
+                    .Replace("\t", "\\t", StringComparison.Ordinal) + "\""
                 : value;
 
         private static bool NeedsQuotedScalar(string value)
             => value.Length == 0 ||
                char.IsWhiteSpace(value[0]) ||
                char.IsWhiteSpace(value[^1]) ||
+               value.Contains('\r', StringComparison.Ordinal) ||
+               value.Contains('\n', StringComparison.Ordinal) ||
+               value.Contains('\t', StringComparison.Ordinal) ||
                value.Contains(':', StringComparison.Ordinal) ||
                value.Contains('#', StringComparison.Ordinal) ||
                value.Equals("true", StringComparison.OrdinalIgnoreCase) ||

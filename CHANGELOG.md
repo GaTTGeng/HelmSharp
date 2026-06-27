@@ -9,6 +9,7 @@ This project follows semantic versioning once stable releases begin.
 ### Fixed
 
 - Added managed renderer support for Helm `.Files.Glob`, `.Files.AsConfig`, and `.Files.AsSecrets` helpers.
+- Preserved Helm-compatible `.Files.AsConfig` quoted scalar output for multiline and CRLF file content.
 - Render aliased dependency instances independently and merge subchart defaults for every declared alias.
 - Patched the docs Vite dependency resolution to clear Dependabot security alerts.
 
