@@ -21,6 +21,7 @@ This project follows semantic versioning once stable releases begin.
 ### Docs
 
 - Added a VitePress documentation site and GitHub Pages deployment workflow.
+- Reworked the VitePress documentation around user workflows and added Simplified Chinese localization.
 
 ## [1.0.4] - 2026-06-23
 

@@ -1,111 +1,80 @@
 # API Overview
 
-HelmSharp is split into small packages so applications can depend on only the layer they need. Start with `HelmSharp.Action` for command-like release workflows, and move down the stack when you need focused rendering, chart, repository, or storage behavior.
+Use the smallest layer that matches the problem you are solving. HelmSharp is split so render-only tools do not have to reference Kubernetes release workflow code.
 
-## Package Map
+## Which package should I start with?
 
-| Package | Main area | Typical use |
+| You want to... | Start with | Why |
 | --- | --- | --- |
-| [`HelmSharp.Action`](https://www.nuget.org/packages/HelmSharp.Action) | High-level client operations | Template, install, upgrade, uninstall, rollback, status, history, get, show, package, repo, and registry-oriented calls. |
-| [`HelmSharp.Chart`](https://www.nuget.org/packages/HelmSharp.Chart) | Chart model and values | Load chart directories or archives, read `Chart.yaml`, merge values, inspect dependencies, and work with YAML. |
-| [`HelmSharp.Engine`](https://www.nuget.org/packages/HelmSharp.Engine) | Template rendering | Render Helm-style templates and NOTES output with common built-in objects and functions. |
-| [`HelmSharp.Kube`](https://www.nuget.org/packages/HelmSharp.Kube) | Kubernetes operations | Apply, delete, identify, and wait for Kubernetes resources used by release workflows. |
-| [`HelmSharp.Release`](https://www.nuget.org/packages/HelmSharp.Release) | Release records | Persist Helm-style release history in Kubernetes Secrets. |
-| [`HelmSharp.Repo`](https://www.nuget.org/packages/HelmSharp.Repo) | Chart repositories | Work with repository indexes, chart pull, and search helpers. |
-| [`HelmSharp.PostRenderer`](https://www.nuget.org/packages/HelmSharp.PostRenderer) | Post-rendering | Extension point contracts for manifest transformations. |
-| [`HelmSharp.Registry`](https://www.nuget.org/packages/HelmSharp.Registry) | OCI registries | Extension point contracts for registry-oriented behavior. |
-| [`HelmSharp.Storage`](https://www.nuget.org/packages/HelmSharp.Storage) | Storage | Extension point contracts for release storage. |
+| Render a chart to YAML | `HelmSharp.Chart` + `HelmSharp.Engine` | Smallest path: load chart, build values, render manifests and NOTES. |
+| Offer Helm-like commands from an app | `HelmSharp.Action` | One facade for template, install, upgrade, rollback, uninstall, status, package, repo, and registry-style calls. |
+| Load and inspect charts | `HelmSharp.Chart` | Chart model, archive loading, values merging, dependency metadata, YAML helpers. |
+| Apply rendered resources | `HelmSharp.Kube` | Resource identity, create/update/delete helpers, wait behavior. |
+| Store release history | `HelmSharp.Release` | Helm-style release records backed by Kubernetes Secrets. |
+| Work with chart repositories | `HelmSharp.Repo` | Index, pull, and repository helper behavior. |
 
-## High-Level Client
-
-`HelmClient` is the main facade. It returns `CommandResult` for most operations so applications can handle `ExitCode`, `StandardOutput`, and `StandardError` consistently.
-
-```csharp
-using HelmSharp.Action;
-
-var client = new HelmClient(new StaticHelmOptionsProvider());
-
-var template = await client.TemplateAsync(new HelmTemplateRequest
-{
-    ReleaseName = "demo",
-    Namespace = "default",
-    Chart = @"C:\charts\my-chart"
-});
-
-var release = await client.UpgradeInstallAsync(new HelmUpgradeInstallRequest
-{
-    ReleaseName = "demo",
-    Namespace = "default",
-    Chart = @"C:\charts\my-chart",
-    DryRun = true
-});
-```
-
-The client currently covers:
-
-| Area | Representative APIs |
-| --- | --- |
-| Release lifecycle | `UpgradeInstallAsync`, `UpgradeInstallStreamAsync`, `UninstallAsync`, `RollbackAsync`, `ListReleasesAsync` |
-| Release inspection | `StatusAsync`, `HistoryAsync`, `GetValuesAsync`, `GetManifestAsync`, `GetNotesAsync`, `GetHooksAsync`, `GetAllAsync` |
-| Rendering | `TemplateAsync`, `TemplateWithNotesAsync`, `DiffAsync` |
-| Chart operations | `LintAsync`, `Show*Async`, `PackageAsync`, `CreateAsync`, `PullAsync`, `Dependency*Async` |
-| Repository operations | `RepoAddAsync`, `RepoRemoveAsync`, `RepoListAsync`, `RepoIndexAsync`, `RepoUpdateAsync`, `SearchRepoAsync` |
-| Registry operations | `RegistryLoginAsync`, `RegistryLogoutAsync`, `PushAsync` |
-
-## Request Objects
-
-`HelmTemplateRequest` describes render-only behavior. Common properties include:
-
-| Property | Purpose |
-| --- | --- |
-| `ReleaseName` | Release name exposed to templates through `.Release.Name`. |
-| `Chart` | Chart directory, `.tgz`, or `.tar.gz` path. |
-| `Namespace` | Namespace exposed to templates and used by release operations. |
-| `ValuesFile` / `ValuesFiles` | One or more values files. Later files override earlier files. |
-| `ValuesContent` | Inline YAML values content. |
-| `SetValues`, `SetStringValues`, `SetJsonValues`, `SetFileValues` | Helm-style command-line values overrides. |
-| `IncludeCRDs`, `ShowNotes`, `KubeVersion`, `ApiVersions` | Rendering options for CRDs, NOTES, and capabilities. |
-
-`HelmUpgradeInstallRequest` extends the workflow surface with properties such as `DryRun`, `CreateNamespace`, `Wait`, `WaitForJobs`, `TimeoutSeconds`, `Atomic`, `CleanupOnFail`, `ReuseValues`, `ResetValues`, `SkipCRDs`, `DisableHooks`, `KubeConfigPath`, and `KubeConfigContent`.
-
-## Options Provider
-
-`HelmClient` receives an `IHelmOptionsProvider`. A provider centralizes defaults such as namespace, field manager, and environment-specific settings:
-
-```csharp
-sealed class StaticHelmOptionsProvider : IHelmOptionsProvider
-{
-    public ValueTask<HelmExecutionOptions> GetHelmAsync(CancellationToken cancellationToken = default)
-        => ValueTask.FromResult(new HelmExecutionOptions
-        {
-            DefaultNamespace = "default",
-            FieldManager = "helmsharp"
-        });
-}
-```
-
-Applications can implement this interface with configuration, dependency injection, tenant settings, or per-request context.
-
-## Lower-Level Rendering
-
-When you only need rendering, use the chart and engine packages directly:
+## Render-only path
 
 ```csharp
 using HelmSharp.Chart;
 using HelmSharp.Engine;
 
-var chart = await HelmChartLoader.LoadAsync(@"C:\charts\my-chart", CancellationToken.None);
-var values = await HelmValues.BuildAsync(chart, null, null, null, null, null, null, CancellationToken.None);
+var chart = await HelmChartLoader.LoadAsync("/charts/my-chart", ct);
+var values = await HelmValues.BuildAsync(chart, null, null, null, null, null, null, ct);
 var renderer = new HelmTemplateRenderer(chart, "demo", "default", values);
 
-var manifest = renderer.Render();
+var manifests = renderer.Render();
 var notes = renderer.RenderNotes();
 ```
 
-This keeps Kubernetes and release storage out of the application path.
+This is the right path for preview APIs, validation systems, GitOps generators, and tools that never mutate a cluster.
 
-## Error Handling
+## Command-like path
 
-High-level operations report failures through `CommandResult.ExitCode` and `CommandResult.StandardError`. Template parse failures are surfaced with template context where possible so callers can diagnose chart-specific compatibility gaps.
+`HelmClient` returns `CommandResult` for most operations. That shape is useful when your product already thinks in commands, stdout/stderr, exit codes, or dry-run output.
 
-For compatibility-sensitive behavior, include the chart, values, HelmSharp version, Helm CLI version, and the expected Helm output when opening an issue.
+```csharp
+using HelmSharp.Action;
+
+var client = new HelmClient(optionsProvider);
+
+var template = await client.TemplateAsync(new HelmTemplateRequest
+{
+    ReleaseName = "demo",
+    Namespace = "default",
+    Chart = "/charts/my-chart"
+});
+
+var dryRun = await client.UpgradeInstallAsync(new HelmUpgradeInstallRequest
+{
+    ReleaseName = "demo",
+    Namespace = "default",
+    Chart = "/charts/my-chart",
+    DryRun = true
+});
+```
+
+## Request objects worth knowing
+
+| Request | Use it for |
+| --- | --- |
+| `HelmTemplateRequest` | Render manifests without applying them. |
+| `HelmUpgradeInstallRequest` | Install or upgrade a release, including dry runs. |
+| `HelmUninstallRequest` | Delete release resources and update release history. |
+| `HelmRollbackRequest` | Move a release back to an earlier revision. |
+| `HelmPackageRequest` | Create a chart archive. |
+| `HelmPullRequest` | Pull charts from repository-oriented sources. |
+
+Common render fields include `ReleaseName`, `Namespace`, `Chart`, `ValuesFile`, `ValuesFiles`, `ValuesContent`, `SetValues`, `SetStringValues`, `SetJsonValues`, `SetFileValues`, `IncludeCRDs`, `ShowNotes`, `KubeVersion`, and `ApiVersions`.
+
+## Options provider
+
+`IHelmOptionsProvider` is intentionally outside individual requests. It lets an application centralize defaults such as field manager, namespace policy, kubeconfig selection, and tenant-specific settings.
+
+For a production service, implement it from configuration or request context. For a small tool, a static provider is enough and can stay hidden near program startup.
+
+## Error handling
+
+High-level operations report failures through `CommandResult.ExitCode` and `CommandResult.StandardError`. Lower-level rendering APIs throw ordinary .NET exceptions for parse or compatibility failures.
+
+When diagnosing a chart difference, capture the chart path, values inputs, HelmSharp output, Helm CLI output, HelmSharp version, and Helm CLI version. That gives compatibility work a reproducible target.
