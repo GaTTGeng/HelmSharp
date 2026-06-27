@@ -1224,6 +1224,25 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                 return;
             }
 
+            // Files with CR (\r\n or \r) → quoted scalar with escaped control chars (Helm parity)
+            if (value.Contains('\r', StringComparison.Ordinal))
+            {
+                builder.Append(key).Append(": ").AppendLine(EscapeYamlScalar(value));
+                return;
+            }
+
+            // Files with LF only → block scalar (Helm parity)
+            if (value.Contains('\n', StringComparison.Ordinal))
+            {
+                builder.Append(key).AppendLine(": |");
+                var lines = value.Split('\n');
+                if (lines.Length > 0 && lines[^1].Length == 0)
+                    lines = lines[..^1];
+                foreach (var line in lines)
+                    builder.Append("  ").AppendLine(line);
+                return;
+            }
+
             builder.Append(key).Append(": ").AppendLine(EscapeYamlScalar(value));
         }
 

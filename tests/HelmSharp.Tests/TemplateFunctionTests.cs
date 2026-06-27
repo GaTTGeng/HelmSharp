@@ -147,7 +147,7 @@ public class TemplateFunctionTests
         Assert.Contains("missing: \"\"", result);
         Assert.Contains("lineCount: \"3\"", result);
         Assert.Contains("binary: \"AAH+/w==\"", result);
-        Assert.Contains("app.txt: \"alpha\\nbeta\\n\"", result);
+        Assert.Contains("app.txt: |\n      alpha\n      beta", result);
         Assert.Contains("count.txt: \"1\"", result);
         Assert.Contains("date.txt: \"2024-01-01\"", result);
         Assert.Contains("empty.txt: \"\"", result);
