@@ -1,55 +1,44 @@
-# HelmSharp Roadmap
+# Roadmap
 
-HelmSharp is evolving toward dependable Helm-compatible behavior for applications that need chart rendering and release workflows inside a .NET process.
+The roadmap is organized around what users need to trust HelmSharp in a .NET application: render the same chart, explain the same values, and mutate Kubernetes only when the application intentionally asks for it.
 
-The roadmap describes direction, not a release guarantee. GitHub milestones are the source of truth for current scope and issue progress.
+GitHub milestones remain the source of truth for issue-level scope.
 
-## Current Focus
+## Current focus
 
-**M1: Helm Template Parity** is the active workstream. The project now has repeatable golden tests against selected real-world charts, and current work continues to close gaps in values, built-in objects, template functions, whitespace, and subcharts.
+**M1: Helm Template Parity** is the active workstream. The project now has real-chart golden tests, and the next work is about closing remaining differences in values, built-in objects, template functions, whitespace, `.Files`, capabilities, and subcharts.
 
-Track the live work in [M1 on GitHub](https://github.com/GaTTGeng/HelmSharp/milestone/1) or review the detailed [compatibility matrix](helm-compatibility.md).
+Follow [M1 on GitHub](https://github.com/GaTTGeng/HelmSharp/milestone/1) or review the [compatibility page](helm-compatibility.md).
 
-## Delivery Principles
+## Delivery principles
 
-- Prefer managed .NET behavior over shelling out to the Helm CLI at runtime.
-- Measure compatibility with small, reproducible fixtures and Helm CLI reference output.
-- Prioritize common production workflows before rare CLI formatting details.
-- Keep public APIs stable, documented, and independently useful as SDK abstractions.
-- Treat Kubernetes mutation, authentication, and provenance as security-sensitive work.
+- Keep runtime behavior managed in .NET; do not shell out to Helm from consumer applications.
+- Use Helm CLI output as a test oracle, not as an SDK dependency.
+- Prefer common production chart behavior before rare terminal formatting details.
+- Make package boundaries clear so applications can depend on only what they use.
+- Treat Kubernetes mutation, credentials, OCI, and provenance as security-sensitive work.
 
-## Milestone Plan
+## Milestone plan
 
-| Phase | Status | Outcome |
+| Phase | Status | User outcome |
 | --- | --- | --- |
-| [M1: Helm Template Parity](https://github.com/GaTTGeng/HelmSharp/milestone/1) | **Active** | Reliable `helm template` behavior for values, built-in objects, common functions, subcharts, and rendered output. |
-| [M2: Chart Packaging and Repository Parity](https://github.com/GaTTGeng/HelmSharp/milestone/2) | Planned | Predictable package archives, repository indexes, pulls, and dependency workflows. |
-| [M3: Release Lifecycle Parity](https://github.com/GaTTGeng/HelmSharp/milestone/6) | Planned | Consistent install, upgrade, rollback, uninstall, status, history, hooks, and release state transitions. |
-| [M4: Kubernetes Apply and Wait Semantics](https://github.com/GaTTGeng/HelmSharp/milestone/5) | Planned | Correct resource identity, namespace handling, readiness, Jobs, deletion, and hook cleanup behavior. |
-| [M5: OCI and Provenance](https://github.com/GaTTGeng/HelmSharp/milestone/4) | Planned | OCI authentication, chart pull/push, signing, and provenance verification. |
-| [M6: Public SDK Hardening](https://github.com/GaTTGeng/HelmSharp/milestone/3) | Ongoing | Stronger API documentation, examples, analyzers, nullable correctness, and package quality. |
-| [M7: Compatibility Expansion Research](https://github.com/GaTTGeng/HelmSharp/milestone/7) | Research | Evidence-based decision on `netstandard`, .NET Framework, and longer-term target frameworks. |
+| [M1: Helm Template Parity](https://github.com/GaTTGeng/HelmSharp/milestone/1) | Active | Render common real-world charts from .NET with predictable Helm-compatible output. |
+| [M2: Chart Packaging and Repository Parity](https://github.com/GaTTGeng/HelmSharp/milestone/2) | Planned | Package, index, pull, and resolve chart dependencies without CLI handoffs. |
+| [M3: Release Lifecycle Parity](https://github.com/GaTTGeng/HelmSharp/milestone/6) | Planned | Install, upgrade, rollback, uninstall, status, history, and hook behavior users can reason about. |
+| [M4: Kubernetes Apply and Wait Semantics](https://github.com/GaTTGeng/HelmSharp/milestone/5) | Planned | Correct resource identity, namespace handling, readiness, Jobs, deletion, and hook cleanup. |
+| [M5: OCI and Provenance](https://github.com/GaTTGeng/HelmSharp/milestone/4) | Planned | Registry authentication, chart pull/push, signing, and verification. |
+| [M6: Public SDK Hardening](https://github.com/GaTTGeng/HelmSharp/milestone/3) | Ongoing | Better docs, examples, nullable correctness, package quality, and API polish. |
+| [M7: Compatibility Expansion Research](https://github.com/GaTTGeng/HelmSharp/milestone/7) | Research | Evidence-based decision on `netstandard`, .NET Framework, and longer target support. |
 
-## How Work Advances
+## How work graduates
 
-A compatibility item is ready to leave a milestone when:
+A compatibility item is ready when:
 
-1. The intended behavior is captured by a focused unit, integration, or golden test.
-2. Supported behavior and remaining gaps are reflected in the compatibility matrix.
-3. Public API changes include appropriate documentation and examples.
+1. The behavior is captured by a focused unit, integration, or golden test.
+2. The compatibility page says what is supported and what remains open.
+3. Public API changes have examples from a user point of view.
 4. Release builds and tests pass for `net8.0`, `net9.0`, and `net10.0`.
-
-Milestones may overlap where the behavior crosses subsystem boundaries. For example, install parity depends on both release lifecycle behavior in M3 and Kubernetes wait semantics in M4.
-
-## Documentation Track
-
-The documentation site is part of M6 public SDK hardening. The goals are:
-
-- keep install and quick-start content current with the published packages;
-- describe each package boundary clearly enough for consumers to choose dependencies;
-- publish compatibility status without overstating Helm parity;
-- make release, roadmap, and contribution links easy to find from the project site.
 
 ## Contributing
 
-Start with an existing milestone issue where possible. For a newly discovered Helm difference, [open a compatibility issue](https://github.com/GaTTGeng/HelmSharp/issues/new) and include a minimal chart, the exact Helm command, HelmSharp API usage, and both outputs.
+Start with an existing milestone issue when possible. For a newly found Helm difference, open a compatibility issue with a minimal chart, Helm command, HelmSharp API call, and both outputs.
