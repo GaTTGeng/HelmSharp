@@ -14,6 +14,7 @@ This project follows semantic versioning once stable releases begin.
 
 ### Changed
 
+- Hardened CI, documentation, and NuGet release workflows with PR validation, release tag guards, package caching, and symbol package publishing.
 - Bumped `Microsoft.NET.Test.Sdk` from 18.6.0 to 18.7.0.
 
 ### Docs

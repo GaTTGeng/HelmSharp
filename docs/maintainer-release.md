@@ -20,6 +20,10 @@ If the NuGet.org username differs from the GitHub repository owner, create a rep
 
 No `NUGET_API_KEY` repository secret is required.
 
+For branch protection, require the `CI / Build, test, and pack` status check before merging to `master`. Keep conversation resolution required.
+
+For Actions hardening, prefer allowing only GitHub-owned and verified Marketplace actions. If stricter supply-chain controls are required, pin third-party actions by full commit SHA and enable SHA pinning at the repository or organization level.
+
 ## Release a version
 
 Use NuGet SemVer tags without a leading `v`:
@@ -29,9 +33,9 @@ git tag 1.0.1
 git push origin 1.0.1
 ```
 
-The release workflow strips a leading `v` if one is used, but plain SemVer tags match the NuGet package version directly.
+The release workflow rejects tags with a leading `v`. A release tag must point to a commit reachable from `origin/master`.
 
-To run a manual release, open the `Release NuGet` workflow, enter the package version, and enable publishing.
+To run a manual release, open the `Release NuGet` workflow, enter the package version, and enable publishing. Manual prerelease package versions such as `1.0.1-preview.1` are supported; the workflow derives stable `AssemblyVersion` and `FileVersion` values from the numeric version core.
 
 ## Re-run a failed release
 
