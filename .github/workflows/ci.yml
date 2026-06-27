@@ -5,12 +5,15 @@ on:
     branches:
       - main
       - master
-      - develop
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CONFIGURATION: Release
@@ -32,6 +35,14 @@ jobs:
             8.0.x
             9.0.x
             10.0.x
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', '**/Directory.Packages.props', 'NuGet.config') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
 
       - name: Setup Helm
         uses: azure/setup-helm@v5
@@ -82,5 +93,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: nuget-packages
-          path: artifacts/packages/*.nupkg
+          path: |
+            artifacts/packages/*.nupkg
+            artifacts/packages/*.snupkg
           if-no-files-found: error

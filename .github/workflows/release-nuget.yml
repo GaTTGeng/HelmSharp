@@ -3,7 +3,6 @@ name: Release NuGet
 on:
   push:
     tags:
-      - 'v*.*.*'
       - '*.*.*'
   workflow_dispatch:
     inputs:
@@ -21,8 +20,13 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CONFIGURATION: Release
+  HELM_VERSION: v3.12.3
   NUGET_USER: ${{ vars.NUGET_USER || github.repository_owner }}
 
 jobs:
@@ -33,6 +37,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
@@ -42,10 +48,18 @@ jobs:
             9.0.x
             10.0.x
 
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', '**/Directory.Packages.props', 'NuGet.config') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
       - name: Setup Helm
         uses: azure/setup-helm@v5
         with:
-          version: v3.12.3
+          version: ${{ env.HELM_VERSION }}
 
       - name: Resolve package version
         shell: bash
@@ -53,7 +67,12 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             version="${{ inputs.version }}"
           else
-            version="${GITHUB_REF_NAME#v}"
+            if [[ "$GITHUB_REF_NAME" == v* ]]; then
+              echo "Release tags must use plain SemVer without a leading 'v': $GITHUB_REF_NAME"
+              exit 1
+            fi
+
+            version="$GITHUB_REF_NAME"
           fi
 
           if [[ ! "$version" =~ ^[0-9]+(\.[0-9]+){2}(-[0-9A-Za-z.-]+)?$ ]]; then
@@ -61,8 +80,22 @@ jobs:
             exit 1
           fi
 
+          assembly_version="${version%%[-+]*}.0"
+
           echo "PACKAGE_VERSION=$version" >> "$GITHUB_ENV"
+          echo "ASSEMBLY_FILE_VERSION=$assembly_version" >> "$GITHUB_ENV"
           echo "Resolved package version: $version"
+          echo "Resolved assembly/file version: $assembly_version"
+
+      - name: Validate release tag is on master
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          git fetch --no-tags origin master
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/master; then
+            echo "Release tag $GITHUB_REF_NAME must point to a commit reachable from origin/master."
+            exit 1
+          fi
 
       - name: Restore
         run: dotnet restore HelmSharp.sln
@@ -81,8 +114,8 @@ jobs:
           --no-restore
           --output artifacts/packages
           -p:PackageVersion=${{ env.PACKAGE_VERSION }}
-          -p:AssemblyVersion=${{ env.PACKAGE_VERSION }}
-          -p:FileVersion=${{ env.PACKAGE_VERSION }}
+          -p:AssemblyVersion=${{ env.ASSEMBLY_FILE_VERSION }}
+          -p:FileVersion=${{ env.ASSEMBLY_FILE_VERSION }}
           -p:RepositoryUrl=${{ github.server_url }}/${{ github.repository }}
           -p:RepositoryBranch=${{ github.ref_name }}
           -p:RepositoryCommit=${{ github.sha }}
@@ -91,7 +124,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: nuget-packages-${{ env.PACKAGE_VERSION }}
-          path: artifacts/packages/*.nupkg
+          path: |
+            artifacts/packages/*.nupkg
+            artifacts/packages/*.snupkg
           if-no-files-found: error
 
       - name: NuGet login
@@ -101,11 +136,15 @@ jobs:
         with:
           user: ${{ env.NUGET_USER }}
 
-      - name: Publish to NuGet.org
+      - name: Publish packages to NuGet.org
         if: github.event_name == 'push' || inputs.publish == true
         shell: bash
         run: |
           dotnet nuget push artifacts/packages/*.nupkg \
+            --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+          dotnet nuget push artifacts/packages/*.snupkg \
             --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate

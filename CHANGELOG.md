@@ -9,11 +9,13 @@ This project follows semantic versioning once stable releases begin.
 ### Fixed
 
 - Added managed renderer support for Helm `.Files.Glob`, `.Files.AsConfig`, and `.Files.AsSecrets` helpers.
+- Preserved Helm-compatible `.Files.AsConfig` quoted scalar output for multiline and CRLF file content.
 - Render aliased dependency instances independently and merge subchart defaults for every declared alias.
 - Patched the docs Vite dependency resolution to clear Dependabot security alerts.
 
 ### Changed
 
+- Hardened CI, documentation, and NuGet release workflows with PR validation, release tag guards, package caching, and symbol package publishing.
 - Bumped `Microsoft.NET.Test.Sdk` from 18.6.0 to 18.7.0.
 
 ### Docs
