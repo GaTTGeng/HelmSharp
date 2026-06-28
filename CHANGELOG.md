@@ -20,6 +20,7 @@ This project follows semantic versioning once stable releases begin.
 
 ### Fixed
 
+- Matched Helm failure boundaries for `fail`, missing template functions, required values, and malformed templates (#13).
 - Matched Helm/Sprig string slicing behavior for negative `trunc` lengths and `substr` end indexes (#10).
 - Render install and upgrade manifests before creating missing namespaces so render failures do not mutate the cluster (#32).
 - Render aliased dependency instances independently and merge subchart defaults for every declared alias.

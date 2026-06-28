@@ -14,10 +14,11 @@ internal static class CoreFunctions
         return TypeConverters.IsTruthy(val) ? val : def;
     }
 
-    public static object? FnFail(IReadOnlyList<string> tokens, TemplateContext context)
+    public static object? FnFail(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
-        var msg = tokens.ElementAtOrDefault(1);
-        throw new InvalidOperationException(msg != null ? StringHelpers.Unquote(msg) : "fail called");
+        var msg = pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(1), context);
+        var message = TypeConverters.ToTemplateString(msg);
+        throw new InvalidOperationException(message.Length > 0 ? message : "fail called");
     }
 
     public static object? Required(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
