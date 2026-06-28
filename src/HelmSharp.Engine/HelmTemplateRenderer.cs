@@ -934,8 +934,23 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                 ? ApplySimpleFunction(head, pipelineValue, context)
                 : tokens.Count > 1
                     ? throw new NotSupportedException($"Helm template function '{head}' is not supported by the managed renderer.")
-                    : EvaluateToken(expression, context)
+                    : IsResolvableTokenExpression(expression)
+                        ? EvaluateToken(expression, context)
+                        : throw new NotSupportedException($"Helm template function '{head}' is not supported by the managed renderer.")
         };
+    }
+
+    private static bool IsResolvableTokenExpression(string expression)
+    {
+        var token = expression.Trim();
+        if (token.Length == 0)
+            return true;
+        if (token is "true" or "false" or "nil")
+            return true;
+        if (token.StartsWith('"') || token.StartsWith('\'') || token.StartsWith('.') || token.StartsWith('$') || token.StartsWith('('))
+            return true;
+        return long.TryParse(token, out _) ||
+               double.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out _);
     }
 
     private object? IncludeTemplate(IReadOnlyList<string> tokens, TemplateContext context)
