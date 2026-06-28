@@ -333,6 +333,8 @@ public class TemplateFunctionTests
             trunc: {{ "hello world" | trunc 5 | quote }}
             truncTail: {{ "hello world" | trunc -5 | quote }}
             substr: {{ substr 1 5 "hello world" | quote }}
+            substrAllWithNegativeEnd: {{ substr 0 -1 "hello" | quote }}
+            substrTailWithNegativeEnd: {{ substr 2 -1 "hello" | quote }}
             """;
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?>());
@@ -345,6 +347,8 @@ public class TemplateFunctionTests
         Assert.Contains("trunc: \"hello\"", result);
         Assert.Contains("truncTail: \"world\"", result);
         Assert.Contains("substr: \"ello\"", result);
+        Assert.Contains("substrAllWithNegativeEnd: \"hello\"", result);
+        Assert.Contains("substrTailWithNegativeEnd: \"llo\"", result);
     }
 
     [Fact]

@@ -92,6 +92,7 @@ internal static class TextFunctions
         var input = TypeConverters.ToTemplateString(pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(3), context));
         if (start < 0) start = 0;
         if (start >= input.Length) return string.Empty;
+        if (end < 0) end = input.Length;
         if (end < start) return string.Empty;
         if (end > input.Length) end = input.Length;
         return input[start..end];
