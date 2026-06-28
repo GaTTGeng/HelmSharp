@@ -11,6 +11,7 @@ This project follows semantic versioning once stable releases begin.
 - Added managed renderer support for Helm `.Files.Glob`, `.Files.AsConfig`, and `.Files.AsSecrets` helpers.
 - Preserved Helm-compatible `.Files.AsConfig` quoted scalar output for multiline and CRLF file content.
 - Added a VitePress documentation site and GitHub Pages deployment workflow.
+- Added Helm CLI golden coverage for whitespace trimming, `indent`/`nindent`, YAML document separators, and NOTES rendering (#9).
 
 ### Changed
 
@@ -20,6 +21,7 @@ This project follows semantic versioning once stable releases begin.
 
 ### Fixed
 
+- Matched Helm whitespace behavior for block end trim markers, `nindent` output after `{{- ... }}`, and escaped newlines in quoted template strings (#9).
 - Matched Helm failure boundaries for `fail`, missing template functions, required values, and malformed templates (#13).
 - Matched Helm/Sprig string slicing behavior for negative `trunc` lengths and `substr` end indexes (#10).
 - Render install and upgrade manifests before creating missing namespaces so render failures do not mutate the cluster (#32).

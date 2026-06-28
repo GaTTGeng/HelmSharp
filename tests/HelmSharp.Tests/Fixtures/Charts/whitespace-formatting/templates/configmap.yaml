@@ -1,0 +1,30 @@
+{{- if .Values.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-{{ .Chart.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "whitespace-formatting.labels" . | nindent 4 }}
+data:
+  left-trim: "before {{- .Values.name }} after"
+  right-trim: "before {{ .Values.name -}} after"
+  both-trim: "before {{- .Values.name -}} after"
+  indent: |
+{{ "first\nsecond" | indent 4 }}
+  nindent: |{{ "third\nfourth" | nindent 4 }}
+{{- end }}
+---
+{{ if .Values.extraDocument -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-{{ .Chart.Name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: http
+{{- end }}

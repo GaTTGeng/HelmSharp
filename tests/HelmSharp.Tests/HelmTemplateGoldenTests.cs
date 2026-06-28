@@ -13,6 +13,7 @@ public class HelmTemplateGoldenTests
     [InlineData("notes")]
     [InlineData("builtins")]
     [InlineData("files")]
+    [InlineData("whitespace-formatting")]
     public async Task Render_FixtureChart_MatchesHelmTemplate(string fixtureName)
     {
         var chartPath = TestFixtures.ChartPath(fixtureName);
@@ -48,6 +49,26 @@ public class HelmTemplateGoldenTests
             + "Release: golden-release\n"
             + "Namespace: golden-namespace\n"
             + "Service port: 8080",
+            notes);
+    }
+
+    [Fact]
+    public async Task RenderNotes_WhitespaceFormattingFixture_EmitsTrimmedNotes()
+    {
+        var chartPath = TestFixtures.ChartPath("whitespace-formatting");
+        var chart = await HelmChartLoader.LoadAsync(chartPath, CancellationToken.None);
+        var values = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, null, null, null, null, null, CancellationToken.None);
+        var renderer = new HelmTemplateRenderer(chart, "golden-release", "golden-namespace", values);
+
+        var notes = HelmCliRunner.NormalizeLineEndings(renderer.RenderNotes());
+
+        Assert.Equal(
+            "Release golden-release rendered whitespace-formatting.\n\n"
+            + "Ports:\n"
+            + "  8080\n"
+            + "Lines:\n"
+            + "    first\n"
+            + "    second",
             notes);
     }
 
