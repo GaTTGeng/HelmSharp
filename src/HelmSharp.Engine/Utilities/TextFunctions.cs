@@ -91,9 +91,9 @@ internal static class TextFunctions
         var end = (int)TypeConverters.ToLong(eval.EvaluateToken(tokens.ElementAtOrDefault(2), context));
         var input = TypeConverters.ToTemplateString(pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(3), context));
         if (start < 0) start = 0;
-        if (start >= input.Length) return string.Empty;
         if (end < 0) end = input.Length;
-        if (end < start) return string.Empty;
+        if (start > input.Length || end < start)
+            throw new InvalidOperationException($"runtime error: slice bounds out of range [{start}:{Math.Min(end, input.Length)}]");
         if (end > input.Length) end = input.Length;
         return input[start..end];
     }

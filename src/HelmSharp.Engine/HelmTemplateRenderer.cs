@@ -749,7 +749,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "default" => CoreFunctions.Default(tokens, context, pipelineValue, this),
             "required" => CoreFunctions.Required(tokens, context, pipelineValue, this),
             "tpl" => CoreFunctions.Tpl(tokens, context, pipelineValue, this),
-            "fail" => CoreFunctions.FnFail(tokens, context),
+            "fail" => CoreFunctions.FnFail(tokens, context, pipelineValue, this),
 
             // String functions
             "quote" => StringHelpers.Quote(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
@@ -932,8 +932,25 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
 
             _ => pipelineValue is not null && tokens.Count == 1
                 ? ApplySimpleFunction(head, pipelineValue, context)
-                : EvaluateToken(expression, context)
+                : tokens.Count > 1
+                    ? throw new NotSupportedException($"Helm template function '{head}' is not supported by the managed renderer.")
+                    : IsResolvableTokenExpression(expression)
+                        ? EvaluateToken(expression, context)
+                        : throw new NotSupportedException($"Helm template function '{head}' is not supported by the managed renderer.")
         };
+    }
+
+    private static bool IsResolvableTokenExpression(string expression)
+    {
+        var token = expression.Trim();
+        if (token.Length == 0)
+            return true;
+        if (token is "true" or "false" or "nil")
+            return true;
+        if (token.StartsWith('"') || token.StartsWith('\'') || token.StartsWith('.') || token.StartsWith('$') || token.StartsWith('('))
+            return true;
+        return long.TryParse(token, out _) ||
+               double.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out _);
     }
 
     private object? IncludeTemplate(IReadOnlyList<string> tokens, TemplateContext context)

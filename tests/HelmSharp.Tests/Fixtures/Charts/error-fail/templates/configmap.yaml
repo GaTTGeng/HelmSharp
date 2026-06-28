@@ -1,0 +1,5 @@
+{{- fail (printf "render failed: %s" .Values.reason) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fail-error
