@@ -6,22 +6,23 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
-### Fixed
+### Added
 
 - Added managed renderer support for Helm `.Files.Glob`, `.Files.AsConfig`, and `.Files.AsSecrets` helpers.
 - Preserved Helm-compatible `.Files.AsConfig` quoted scalar output for multiline and CRLF file content.
-- Render aliased dependency instances independently and merge subchart defaults for every declared alias.
-- Patched the docs Vite dependency resolution to clear Dependabot security alerts.
+- Added a VitePress documentation site and GitHub Pages deployment workflow.
 
 ### Changed
 
 - Hardened CI, documentation, and NuGet release workflows with PR validation, release tag guards, package caching, and symbol package publishing.
 - Bumped `Microsoft.NET.Test.Sdk` from 18.6.0 to 18.7.0.
-
-### Docs
-
-- Added a VitePress documentation site and GitHub Pages deployment workflow.
 - Reworked the VitePress documentation around user workflows and added Simplified Chinese localization.
+
+### Fixed
+
+- Render install and upgrade manifests before creating missing namespaces so render failures do not mutate the cluster (#32).
+- Render aliased dependency instances independently and merge subchart defaults for every declared alias.
+- Patched the docs Vite dependency resolution to clear Dependabot security alerts.
 
 ## [1.0.4] - 2026-06-23
 
@@ -51,7 +52,7 @@ This release introduces a **tokenizer and AST-based template parsing pipeline**,
 - `HelmTemplateRenderer` decomposed into `TemplateParser` + `TemplateEvaluator` with a clean public API surface.
 - Token positions tracked throughout the tokenizer for error diagnostics.
 
-### Docs
+### Changed
 
 - Synced golden test results to `README.zh-CN.md`.
 
@@ -127,3 +128,9 @@ This was achieved by fixing two parser bugs that blocked full-chart rendering (#
 - Initial managed Helm-style chart rendering and Kubernetes release workflow implementation.
 - Open source project documentation.
 - GitHub Actions workflows for CI and NuGet release publishing.
+
+[Unreleased]: https://github.com/GaTTGeng/HelmSharp/compare/1.0.4...HEAD
+[1.0.4]: https://github.com/GaTTGeng/HelmSharp/compare/1.0.3...1.0.4
+[1.0.3]: https://github.com/GaTTGeng/HelmSharp/compare/1.0.2...1.0.3
+[1.0.2]: https://github.com/GaTTGeng/HelmSharp/compare/1.0.1...1.0.2
+[1.0.1]: https://github.com/GaTTGeng/HelmSharp/releases/tag/1.0.1
