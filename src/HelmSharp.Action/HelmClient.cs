@@ -7,6 +7,7 @@ using HelmSharp.Kube;
 using HelmSharp.Release;
 using HelmSharp.Repo;
 using k8s;
+using k8s.Autorest;
 using k8s.Models;
 
 namespace HelmSharp.Action;
@@ -17,10 +18,19 @@ namespace HelmSharp.Action;
 public class HelmClient : IHelmClient
 {
     private readonly IHelmOptionsProvider _optionsProvider;
+    private readonly Func<HelmExecutionOptions, string?, string?, CancellationToken, Task<k8s.Kubernetes>> _createKubernetesClientAsync;
 
     public HelmClient(IHelmOptionsProvider optionsProvider)
+        : this(optionsProvider, CreateKubernetesClientAsync)
+    {
+    }
+
+    internal HelmClient(
+        IHelmOptionsProvider optionsProvider,
+        Func<HelmExecutionOptions, string?, string?, CancellationToken, Task<k8s.Kubernetes>> createKubernetesClientAsync)
     {
         _optionsProvider = optionsProvider;
+        _createKubernetesClientAsync = createKubernetesClientAsync;
     }
 
     public Task<CommandResult> VersionAsync(CancellationToken cancellationToken = default)
@@ -34,7 +44,7 @@ public class HelmClient : IHelmClient
         CancellationToken cancellationToken = default)
     {
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
-        using var client = await CreateKubernetesClientAsync(options, null, null, cancellationToken);
+        using var client = await _createKubernetesClientAsync(options, null, null, cancellationToken);
         var store = new HelmReleaseStore(client);
         var releases = await store.ListAsync(@namespace ?? options.DefaultNamespace, allNamespaces, cancellationToken);
 
@@ -144,15 +154,14 @@ public class HelmClient : IHelmClient
             yield break;
         }
 
-        using var client = await CreateKubernetesClientAsync(options, request.KubeConfigPath, request.KubeConfigContent, cancellationToken);
-        if (request.CreateNamespace)
-        {
-            await KubernetesManifestApplier.EnsureNamespaceAsync(client, ns, cancellationToken);
-            yield return $"Namespace {ns} is ready";
-        }
-
+        using var client = await _createKubernetesClientAsync(options, request.KubeConfigPath, request.KubeConfigContent, cancellationToken);
         var store = new HelmReleaseStore(client);
-        var existingHistory = await store.HistoryAsync(request.ReleaseName, ns, cancellationToken);
+        var existingHistory = await LoadReleaseHistoryForUpgradeInstallAsync(
+            store,
+            request.ReleaseName,
+            ns,
+            request.CreateNamespace,
+            cancellationToken);
         var (isUpgrade, revision) = ResolveReleaseRenderState(existingHistory);
         var renderer = new HelmTemplateRenderer(
             chart,
@@ -164,6 +173,12 @@ public class HelmClient : IHelmClient
             isUpgrade,
             revision);
         var manifest = renderer.Render();
+
+        if (request.CreateNamespace)
+        {
+            await KubernetesManifestApplier.EnsureNamespaceAsync(client, ns, cancellationToken);
+            yield return $"Namespace {ns} is ready";
+        }
 
         // Pre-install CRDs from the chart's crds/ directory
         if (!request.SkipCRDs && chart.Crds.Count > 0)
@@ -294,6 +309,23 @@ public class HelmClient : IHelmClient
         return (isUpgrade, revision);
     }
 
+    private static async Task<List<HelmReleaseRecord>> LoadReleaseHistoryForUpgradeInstallAsync(
+        HelmReleaseStore store,
+        string releaseName,
+        string ns,
+        bool createNamespace,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await store.HistoryAsync(releaseName, ns, cancellationToken);
+        }
+        catch (HttpOperationException ex) when (createNamespace && (int)ex.Response.StatusCode == 404)
+        {
+            return [];
+        }
+    }
+
     public async Task<CommandResult> UninstallAsync(
         string releaseName,
         string? @namespace = null,
@@ -318,7 +350,7 @@ public class HelmClient : IHelmClient
 
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
         var ns = request.Namespace ?? options.DefaultNamespace ?? "default";
-        using var client = await CreateKubernetesClientAsync(options, request.KubeConfigPath, request.KubeConfigContent, cancellationToken);
+        using var client = await _createKubernetesClientAsync(options, request.KubeConfigPath, request.KubeConfigContent, cancellationToken);
         var store = new HelmReleaseStore(client);
         var latest = await store.GetLatestAsync(request.ReleaseName, ns, cancellationToken);
         if (latest is null)
@@ -363,7 +395,7 @@ public class HelmClient : IHelmClient
         CancellationToken cancellationToken = default)
     {
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
-        using var client = await CreateKubernetesClientAsync(options, null, null, cancellationToken);
+        using var client = await _createKubernetesClientAsync(options, null, null, cancellationToken);
         var store = new HelmReleaseStore(client);
         var latest = await store.GetLatestAsync(releaseName, @namespace ?? options.DefaultNamespace ?? "default", cancellationToken);
         if (latest is null)
@@ -391,7 +423,7 @@ public class HelmClient : IHelmClient
     {
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
         var ns = @namespace ?? options.DefaultNamespace ?? "default";
-        using var client = await CreateKubernetesClientAsync(options, null, null, cancellationToken);
+        using var client = await _createKubernetesClientAsync(options, null, null, cancellationToken);
         var store = new HelmReleaseStore(client);
 
         var current = await store.GetLatestAsync(releaseName, ns, cancellationToken);
@@ -534,7 +566,7 @@ public class HelmClient : IHelmClient
         CancellationToken cancellationToken = default)
     {
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
-        using var client = await CreateKubernetesClientAsync(options, null, null, cancellationToken);
+        using var client = await _createKubernetesClientAsync(options, null, null, cancellationToken);
         var store = new HelmReleaseStore(client);
         var history = await store.HistoryAsync(releaseName, @namespace ?? options.DefaultNamespace ?? "default", cancellationToken);
         return Ok(JsonSerializer.Serialize(history, JsonDefaults));
@@ -547,7 +579,7 @@ public class HelmClient : IHelmClient
         CancellationToken cancellationToken = default)
     {
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
-        using var client = await CreateKubernetesClientAsync(options, null, null, cancellationToken);
+        using var client = await _createKubernetesClientAsync(options, null, null, cancellationToken);
         var store = new HelmReleaseStore(client);
         var latest = await store.GetLatestAsync(releaseName, @namespace ?? options.DefaultNamespace ?? "default", cancellationToken);
         return latest is null
@@ -563,7 +595,7 @@ public class HelmClient : IHelmClient
     {
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
         var ns = @namespace ?? options.DefaultNamespace ?? "default";
-        using var client = await CreateKubernetesClientAsync(options, null, null, cancellationToken);
+        using var client = await _createKubernetesClientAsync(options, null, null, cancellationToken);
         var store = new HelmReleaseStore(client);
 
         var record = revision > 0
@@ -583,7 +615,7 @@ public class HelmClient : IHelmClient
     {
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
         var ns = @namespace ?? options.DefaultNamespace ?? "default";
-        using var client = await CreateKubernetesClientAsync(options, null, null, cancellationToken);
+        using var client = await _createKubernetesClientAsync(options, null, null, cancellationToken);
         var store = new HelmReleaseStore(client);
 
         var record = revision > 0
@@ -624,7 +656,7 @@ public class HelmClient : IHelmClient
     {
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
         var ns = @namespace ?? options.DefaultNamespace ?? "default";
-        using var client = await CreateKubernetesClientAsync(options, null, null, cancellationToken);
+        using var client = await _createKubernetesClientAsync(options, null, null, cancellationToken);
         var store = new HelmReleaseStore(client);
 
         var record = revision > 0
@@ -659,7 +691,7 @@ public class HelmClient : IHelmClient
     {
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
         var ns = @namespace ?? options.DefaultNamespace ?? "default";
-        using var client = await CreateKubernetesClientAsync(options, null, null, cancellationToken);
+        using var client = await _createKubernetesClientAsync(options, null, null, cancellationToken);
         var store = new HelmReleaseStore(client);
 
         var record = revision > 0
@@ -697,7 +729,7 @@ public class HelmClient : IHelmClient
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
         var ns = @namespace ?? options.DefaultNamespace ?? "default";
         var timeout = timeoutSeconds ?? options.TimeoutSeconds;
-        using var client = await CreateKubernetesClientAsync(options, null, null, cancellationToken);
+        using var client = await _createKubernetesClientAsync(options, null, null, cancellationToken);
         var store = new HelmReleaseStore(client);
 
         var latest = await store.GetLatestAsync(releaseName, ns, cancellationToken);
@@ -750,7 +782,7 @@ public class HelmClient : IHelmClient
     {
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
         var ns = request.Namespace ?? options.DefaultNamespace ?? "default";
-        using var client = await CreateKubernetesClientAsync(options, request.KubeConfigPath, request.KubeConfigContent, cancellationToken);
+        using var client = await _createKubernetesClientAsync(options, request.KubeConfigPath, request.KubeConfigContent, cancellationToken);
         var store = new HelmReleaseStore(client);
 
         var history = await store.HistoryAsync(releaseName, ns, cancellationToken);

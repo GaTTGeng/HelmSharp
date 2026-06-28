@@ -1,6 +1,8 @@
+using System.Net;
 using HelmSharp.Action;
 using HelmSharp.Chart;
 using HelmSharp.Release;
+using k8s;
 
 namespace HelmSharp.Tests;
 
@@ -278,6 +280,102 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task UpgradeInstallStreamAsync_RenderFailureDoesNotCreateNamespace()
+    {
+        var chartDir = Path.Combine(_tempDir, "broken-install-chart");
+        Directory.CreateDirectory(Path.Combine(chartDir, "templates"));
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "Chart.yaml"), """
+            apiVersion: v2
+            name: broken-install-chart
+            version: 0.1.0
+            """);
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "values.yaml"), string.Empty);
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: broken-install-config
+            data:
+              value: {{ fail "render failed" }}
+            """);
+
+        var handler = new RecordingKubernetesHandler(secretListStatus: HttpStatusCode.NotFound);
+        var client = new HelmClient(
+            new StaticHelmOptionsProvider(new HelmExecutionOptions { DefaultNamespace = "test-ns" }),
+            (_, _, _, _) => Task.FromResult(new Kubernetes(
+                new KubernetesClientConfiguration
+                {
+                    Host = "https://helmsharp.test",
+                    SkipTlsVerify = true
+                },
+                handler)));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var _ in client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+            {
+                ReleaseName = "broken-install",
+                Chart = chartDir,
+                CreateNamespace = true
+            }))
+            {
+            }
+        });
+
+        Assert.Contains("render failed", ex.Message);
+        Assert.Contains(handler.Requests, request =>
+            request.Method == HttpMethod.Get &&
+            request.PathAndQuery.StartsWith("/api/v1/namespaces/test-ns/secrets", StringComparison.Ordinal));
+        Assert.DoesNotContain(handler.Requests, request =>
+            request.Method == HttpMethod.Post &&
+            string.Equals(request.PathAndQuery, "/api/v1/namespaces", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task UpgradeInstallStreamAsync_CreateNamespaceTreatsMissingNamespaceHistoryAsInstall()
+    {
+        var chartDir = Path.Combine(_tempDir, "missing-namespace-chart");
+        Directory.CreateDirectory(Path.Combine(chartDir, "templates"));
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "Chart.yaml"), """
+            apiVersion: v2
+            name: missing-namespace-chart
+            version: 0.1.0
+            """);
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "values.yaml"), string.Empty);
+
+        var handler = new RecordingKubernetesHandler(secretListStatus: HttpStatusCode.NotFound);
+        var client = new HelmClient(
+            new StaticHelmOptionsProvider(new HelmExecutionOptions { DefaultNamespace = "test-ns" }),
+            (_, _, _, _) => Task.FromResult(new Kubernetes(
+                new KubernetesClientConfiguration
+                {
+                    Host = "https://helmsharp.test",
+                    SkipTlsVerify = true
+                },
+                handler)));
+
+        var lines = new List<string>();
+        await foreach (var line in client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "missing-namespace",
+            Chart = chartDir,
+            CreateNamespace = true
+        }))
+        {
+            lines.Add(line);
+        }
+
+        Assert.Contains("Namespace test-ns is ready", lines);
+        Assert.Contains("Release missing-namespace revision 1 deployed (0 resources)", lines);
+        Assert.Contains(handler.Requests, request =>
+            request.Method == HttpMethod.Get &&
+            request.PathAndQuery.StartsWith("/api/v1/namespaces/test-ns/secrets", StringComparison.Ordinal));
+        Assert.Contains(handler.Requests, request =>
+            request.Method == HttpMethod.Post &&
+            string.Equals(request.PathAndQuery, "/api/v1/namespaces", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ResolveReleaseRenderState_UsesHistoryForUpgradeAndRevision()
     {
         var history = new List<HelmReleaseRecord>
@@ -518,6 +616,94 @@ public class ChartOperationsTests : IDisposable
 
         public ValueTask<HelmExecutionOptions> GetHelmAsync(CancellationToken cancellationToken = default)
             => ValueTask.FromResult(_options);
+    }
+
+    private sealed class RecordingKubernetesHandler : DelegatingHandler
+    {
+        private readonly HttpStatusCode _secretListStatus;
+        private readonly List<(HttpMethod Method, string PathAndQuery)> _requests = [];
+
+        public RecordingKubernetesHandler(HttpStatusCode secretListStatus = HttpStatusCode.OK)
+        {
+            _secretListStatus = secretListStatus;
+        }
+
+        public IReadOnlyList<(HttpMethod Method, string PathAndQuery)> Requests => _requests;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            _requests.Add((request.Method, request.RequestUri?.PathAndQuery ?? string.Empty));
+
+            if (request.Method == HttpMethod.Get &&
+                request.RequestUri?.AbsolutePath.EndsWith("/secrets", StringComparison.Ordinal) == true)
+            {
+                var content = _secretListStatus == HttpStatusCode.OK
+                    ? """
+                      {
+                        "kind": "SecretList",
+                        "apiVersion": "v1",
+                        "metadata": {},
+                        "items": []
+                      }
+                      """
+                    : """
+                      {
+                        "kind": "Status",
+                        "apiVersion": "v1",
+                        "status": "Failure",
+                        "code": 404
+                      }
+                      """;
+
+                return Task.FromResult(JsonResponse(request, _secretListStatus, content));
+            }
+
+            if (request.Method == HttpMethod.Post &&
+                request.RequestUri?.AbsolutePath.EndsWith("/secrets", StringComparison.Ordinal) == true)
+            {
+                return Task.FromResult(JsonResponse(request, HttpStatusCode.Created, """
+                    {
+                      "kind": "Secret",
+                      "apiVersion": "v1",
+                      "metadata": { "name": "sh.helm.release.v1.test.v1" }
+                    }
+                    """));
+            }
+
+            if (request.Method == HttpMethod.Get &&
+                request.RequestUri?.AbsolutePath.StartsWith("/api/v1/namespaces/", StringComparison.Ordinal) == true)
+            {
+                return Task.FromResult(JsonResponse(request, HttpStatusCode.NotFound, """
+                    {
+                      "kind": "Status",
+                      "apiVersion": "v1",
+                      "status": "Failure",
+                      "code": 404
+                    }
+                    """));
+            }
+
+            if (request.Method == HttpMethod.Post &&
+                string.Equals(request.RequestUri?.AbsolutePath, "/api/v1/namespaces", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse(request, HttpStatusCode.Created, """
+                    {
+                      "kind": "Namespace",
+                      "apiVersion": "v1",
+                      "metadata": { "name": "test-ns" }
+                    }
+                    """));
+            }
+
+            return Task.FromResult(JsonResponse(request, HttpStatusCode.OK, "{}"));
+        }
+
+        private static HttpResponseMessage JsonResponse(HttpRequestMessage request, HttpStatusCode statusCode, string content)
+            => new(statusCode)
+            {
+                RequestMessage = request,
+                Content = new StringContent(content, System.Text.Encoding.UTF8, "application/json")
+            };
     }
 
     public void Dispose()

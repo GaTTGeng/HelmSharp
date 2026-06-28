@@ -20,6 +20,7 @@ This project follows semantic versioning once stable releases begin.
 
 ### Fixed
 
+- Render install and upgrade manifests before creating missing namespaces so render failures do not mutate the cluster (#32).
 - Render aliased dependency instances independently and merge subchart defaults for every declared alias.
 - Patched the docs Vite dependency resolution to clear Dependabot security alerts.
 
