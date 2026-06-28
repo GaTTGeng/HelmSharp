@@ -88,12 +88,14 @@ internal static class TextFunctions
     public static string Substr(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
         var start = (int)TypeConverters.ToLong(eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));
-        var length = (int)TypeConverters.ToLong(eval.EvaluateToken(tokens.ElementAtOrDefault(2), context));
+        var end = (int)TypeConverters.ToLong(eval.EvaluateToken(tokens.ElementAtOrDefault(2), context));
         var input = TypeConverters.ToTemplateString(pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(3), context));
         if (start < 0) start = 0;
         if (start >= input.Length) return string.Empty;
-        if (start + length > input.Length) length = input.Length - start;
-        return input.Substring(start, length);
+        if (end < 0) end = input.Length;
+        if (end < start) return string.Empty;
+        if (end > input.Length) end = input.Length;
+        return input[start..end];
     }
 
     // ── Crypto / random ──
