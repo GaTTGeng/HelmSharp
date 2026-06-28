@@ -66,7 +66,11 @@ internal static class CoreFunctions
     {
         var length = (int)TypeConverters.ToLong(eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));
         var input = TypeConverters.ToTemplateString(pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(2), context));
-        return input.Length <= length ? input : input[..Math.Max(0, length)];
+        if (length == 0)
+            return string.Empty;
+        if (Math.Abs(length) >= input.Length)
+            return input;
+        return length > 0 ? input[..length] : input[^Math.Abs(length)..];
     }
 
     public static string TrimSuffix(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
