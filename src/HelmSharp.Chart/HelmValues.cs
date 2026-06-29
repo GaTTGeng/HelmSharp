@@ -114,6 +114,7 @@ public static class HelmValues
         else if (result[key] is Dictionary<string, object?> existingDict &&
                  subchartDefaults is Dictionary<string, object?> subDefaults)
         {
+            // Merge parent overrides into a copy of subchart defaults so parent values take precedence
             MergeInto(subDefaults, existingDict);
             result[key] = subDefaults;
         }
