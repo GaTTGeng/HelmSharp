@@ -1,5 +1,5 @@
 ---
-title: Helm Compare
+title: Helm 对比
 sidebar: false
 navbar: true
 prev: false
@@ -7,7 +7,7 @@ next: false
 ---
 
 <script setup>
-import HelmCompare from './.vitepress/theme/components/HelmCompare.vue'
+import HelmCompare from '../.vitepress/theme/components/HelmCompare.vue'
 </script>
 
 <ClientOnly>
@@ -15,7 +15,6 @@ import HelmCompare from './.vitepress/theme/components/HelmCompare.vue'
 </ClientOnly>
 
 <style>
-/* When sidebar is hidden, VitePress shifts content left — recenter it */
 .VPDoc:not(.has-sidebar) .container {
   margin: 0 auto !important;
 }
