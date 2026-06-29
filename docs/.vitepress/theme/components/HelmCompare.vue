@@ -604,6 +604,47 @@ function syncDiffScroll(side: 'left' | 'right') {
   }
 }
 
+function scrollThumbStyle(side: 'left' | 'right'): Record<string, string> {
+  const max = side === 'left' ? leftScrollMax.value : rightScrollMax.value
+  const val = side === 'left' ? leftScrollValue.value : rightScrollValue.value
+  const pct = max > 0 ? Math.round((val / max) * 100) : 0
+  return { width: pct + '%' }
+}
+
+function onDiffTrackPointerDown(side: 'left' | 'right', e: PointerEvent) {
+  e.preventDefault()
+  const pane = side === 'left' ? leftDiffPaneRef.value : rightDiffPaneRef.value
+  if (!pane) return
+  const max = side === 'left' ? leftScrollMax.value : rightScrollMax.value
+  if (max === 0) return
+  const track = e.currentTarget as HTMLElement
+  const rect = track.getBoundingClientRect()
+  const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
+  const target = pct * max
+  if (side === 'left') {
+    leftScrollValue.value = target
+    pane.scrollLeft = target
+  } else {
+    rightScrollValue.value = target
+    pane.scrollLeft = target
+  }
+}
+
+function onDiffTrackKeydown(side: 'left' | 'right', e: KeyboardEvent) {
+  const pane = side === 'left' ? leftDiffPaneRef.value : rightDiffPaneRef.value
+  if (!pane) return
+  const step = 40
+  if (e.key === 'ArrowLeft') {
+    pane.scrollLeft = Math.max(0, pane.scrollLeft - step)
+    if (side === 'left') leftScrollValue.value = pane.scrollLeft
+    else rightScrollValue.value = pane.scrollLeft
+  } else if (e.key === 'ArrowRight') {
+    pane.scrollLeft = pane.scrollLeft + step
+    if (side === 'left') leftScrollValue.value = pane.scrollLeft
+    else rightScrollValue.value = pane.scrollLeft
+  }
+}
+
 function lineSimilarity(left: string, right: string): number {
   if (left === right) return 1
 
