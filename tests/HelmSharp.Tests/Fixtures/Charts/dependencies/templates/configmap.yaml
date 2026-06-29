@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: parent
+data:
+  childEnabled: {{ .Values.child.enabled | quote }}
+  parentMarker: {{ .Values.child.marker | quote }}
+  dependencyCount: {{ len .Chart.Dependencies | quote }}
+  dependencyName: {{ (index .Chart.Dependencies 0).Name | quote }}
+  childHelper: {{ include "child.shared" . | quote }}

@@ -1,0 +1,6 @@
+enabled: false
+marker: child-default
+nested:
+  source: child-default
+global:
+  shared: child-global

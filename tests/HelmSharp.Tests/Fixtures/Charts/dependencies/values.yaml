@@ -1,0 +1,9 @@
+global:
+  shared: parent-global
+child:
+  enabled: true
+  marker: parent-marker
+  nested:
+    source: parent
+tags:
+  optional: true

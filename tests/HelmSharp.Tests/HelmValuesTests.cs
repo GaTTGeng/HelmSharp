@@ -135,6 +135,57 @@ public class HelmValuesTests
     }
 
     [Fact]
+    public async Task BuildAsync_ParentSubchartValuesOverrideSubchartDefaults()
+    {
+        var chart = new HelmChart
+        {
+            Name = "parent",
+            Version = "1.0.0",
+            ValuesYaml = """
+                child:
+                  enabled: true
+                  marker: parent
+                  nested:
+                    source: parent
+                """
+        };
+        chart.Dependencies.Add(new HelmChartDependency
+        {
+            Name = "child",
+            Version = "1.0.0"
+        });
+        chart.Subcharts["child"] = new HelmChart
+        {
+            Name = "child",
+            Version = "1.0.0",
+            ValuesYaml = """
+                enabled: false
+                marker: default
+                nested:
+                  source: default
+                  retained: true
+                """
+        };
+
+        var result = await HelmValues.BuildAsync(
+            chart,
+            (IEnumerable<string>?)null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            CancellationToken.None);
+
+        var child = Assert.IsType<Dictionary<string, object?>>(result["child"]);
+        var nested = Assert.IsType<Dictionary<string, object?>>(child["nested"]);
+        Assert.True(Convert.ToBoolean(child["enabled"]));
+        Assert.Equal("parent", child["marker"]);
+        Assert.Equal("parent", nested["source"]);
+        Assert.True(Convert.ToBoolean(nested["retained"]));
+    }
+
+    [Fact]
     public async Task BuildAsync_SetFileValues()
     {
         var chart = new HelmChart

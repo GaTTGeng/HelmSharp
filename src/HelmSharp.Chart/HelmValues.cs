@@ -108,10 +108,15 @@ public static class HelmValues
     {
         var subchartDefaults = HelmYaml.DeserializeDictionary(subchart.ValuesYaml);
         if (!result.ContainsKey(key))
+        {
             result[key] = subchartDefaults;
+        }
         else if (result[key] is Dictionary<string, object?> existingDict &&
                  subchartDefaults is Dictionary<string, object?> subDefaults)
-            MergeInto(existingDict, subDefaults);
+        {
+            MergeInto(subDefaults, existingDict);
+            result[key] = subDefaults;
+        }
     }
 
     /// <summary>
