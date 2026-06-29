@@ -4,7 +4,8 @@ const englishNav = [
   { text: 'Guide', link: '/getting-started' },
   { text: 'API', link: '/api-overview' },
   { text: 'Compatibility', link: '/helm-compatibility' },
-  { text: 'Roadmap', link: '/roadmap' }
+  { text: 'Roadmap', link: '/roadmap' },
+  { text: 'Compare', link: '/compare' }
 ];
 
 const englishSidebar = [
@@ -15,7 +16,8 @@ const englishSidebar = [
       { text: 'Getting Started', link: '/getting-started' },
       { text: 'API Overview', link: '/api-overview' },
       { text: 'Helm Compatibility', link: '/helm-compatibility' },
-      { text: 'Roadmap', link: '/roadmap' }
+      { text: 'Roadmap', link: '/roadmap' },
+      { text: 'Compare', link: '/compare' }
     ]
   },
   {
@@ -32,7 +34,8 @@ const chineseNav = [
   { text: '指南', link: '/zh/getting-started' },
   { text: 'API', link: '/zh/api-overview' },
   { text: '兼容性', link: '/zh/helm-compatibility' },
-  { text: '路线图', link: '/zh/roadmap' }
+  { text: '路线图', link: '/zh/roadmap' },
+  { text: '对比', link: '/compare' }
 ];
 
 const chineseSidebar = [
@@ -43,7 +46,8 @@ const chineseSidebar = [
       { text: '快速开始', link: '/zh/getting-started' },
       { text: 'API 选择', link: '/zh/api-overview' },
       { text: 'Helm 兼容性', link: '/zh/helm-compatibility' },
-      { text: '路线图', link: '/zh/roadmap' }
+      { text: '路线图', link: '/zh/roadmap' },
+      { text: '对比工具', link: '/compare' }
     ]
   },
   {
