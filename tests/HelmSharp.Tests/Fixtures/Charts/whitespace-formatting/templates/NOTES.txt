@@ -1,0 +1,7 @@
+{{- if .Values.enabled }}
+Release {{ .Release.Name }} rendered {{ .Chart.Name }}.
+
+Ports:{{ .Values.service.port | nindent 2 }}
+Lines:
+{{ "first\nsecond" | indent 4 }}
+{{- end }}

@@ -1,0 +1,5 @@
+enabled: true
+extraDocument: true
+name: demo
+service:
+  port: "8080"

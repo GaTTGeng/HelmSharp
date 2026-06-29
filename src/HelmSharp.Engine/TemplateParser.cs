@@ -177,6 +177,10 @@ public sealed class TemplateParser
         // Parse true body
         var trueBody = new TemplateDocumentNode();
         var stop = ParseContent(trueBody.Children, EndElseElseIf);
+        if (rightTrim)
+            TrimLeadingForRightTrim(trueBody.Children);
+        if (stop.LeftTrim)
+            TrimTrailingWhitespace(trueBody.Children);
         block.TrueBody = trueBody;
 
         // Handle else-if chain
@@ -193,7 +197,12 @@ public sealed class TemplateParser
                 : string.Empty;
 
             var branchDoc = new TemplateDocumentNode();
+            var branchRightTrim = stop.RightTrim;
             stop = ParseContent(branchDoc.Children, EndElseElseIf);
+            if (branchRightTrim)
+                TrimLeadingForRightTrim(branchDoc.Children);
+            if (stop.LeftTrim)
+                TrimTrailingWhitespace(branchDoc.Children);
 
             block.ElseIfChain.Add(new ElseIfBranch
             {
@@ -207,13 +216,20 @@ public sealed class TemplateParser
         if (stop.Keyword == "else")
         {
             var elseDoc = new TemplateDocumentNode();
+            var elseRightTrim = stop.RightTrim;
             var elseStop = ParseContent(elseDoc.Children, EndOnly);
+            if (elseRightTrim)
+                TrimLeadingForRightTrim(elseDoc.Children);
+            if (elseStop.LeftTrim)
+                TrimTrailingWhitespace(elseDoc.Children);
             block.FalseBody = elseDoc;
 
             if (elseStop.Keyword == null)
                 throw new TemplateParseException(
                     $"Missing 'end' for 'else' branch of '{keyword}' block",
                     stop.Line, stop.Column, stop.Offset);
+
+            stop = elseStop;
         }
 
         // If the last stop keyword was not "end" (EOF), the block is not closed
@@ -222,7 +238,50 @@ public sealed class TemplateParser
                 $"Missing 'end' for '{keyword}' block",
                 startLine, startCol, startOffset);
 
+        block.EndRightTrim = stop.RightTrim;
         return block;
+    }
+
+    private static void TrimLeadingForRightTrim(List<TemplateNode> children)
+    {
+        if (children.FirstOrDefault() is not TextNode text)
+            return;
+
+        var content = text.Content;
+        var newStart = 0;
+        while (newStart < content.Length && char.IsWhiteSpace(content[newStart]) && content[newStart] != '\n')
+            newStart++;
+        if (newStart < content.Length && content[newStart] == '\n')
+            newStart++;
+
+        children[0] = new TextNode
+        {
+            Content = content[newStart..],
+            StartOffset = text.StartOffset,
+            EndOffset = text.EndOffset,
+            StartLine = text.StartLine,
+            EndLine = text.EndLine,
+        };
+    }
+
+    private static void TrimTrailingWhitespace(List<TemplateNode> children)
+    {
+        if (children.LastOrDefault() is not TextNode text)
+            return;
+
+        var content = text.Content;
+        var end = content.Length;
+        while (end > 0 && char.IsWhiteSpace(content[end - 1]))
+            end--;
+
+        children[^1] = new TextNode
+        {
+            Content = content[..end],
+            StartOffset = text.StartOffset,
+            EndOffset = text.EndOffset,
+            StartLine = text.StartLine,
+            EndLine = text.EndLine,
+        };
     }
 
     private TextNode ParseText()

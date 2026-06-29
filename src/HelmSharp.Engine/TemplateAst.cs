@@ -103,7 +103,7 @@ public sealed class TemplateDocumentNode : TemplateNode
             SerializeChildren(sb, falseDoc.Children);
         }
 
-        sb.Append("{{ end }}");
+        sb.Append(block.EndRightTrim ? "{{ end -}}" : "{{ end }}");
     }
 }
 
@@ -152,6 +152,9 @@ public sealed class BlockNode : TemplateNode
 
     /// <summary>True if the closing delimiter had a trim marker.</summary>
     public bool RightTrim { get; set; }
+
+    /// <summary>True if the closing delimiter of the matching <c>end</c> action had a trim marker.</summary>
+    public bool EndRightTrim { get; set; }
 
     /// <summary>The true branch body.</summary>
     public TemplateNode TrueBody { get; set; } = new TemplateDocumentNode();

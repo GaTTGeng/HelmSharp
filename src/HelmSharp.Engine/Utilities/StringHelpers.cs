@@ -20,7 +20,18 @@ internal static class StringHelpers
             .Replace("\t", "\\t", StringComparison.Ordinal);
 
     public static string Unquote(string value)
-        => value.Length >= 2 && value.StartsWith('"') && value.EndsWith('"') ? value[1..^1] : value;
+        => value.Length >= 2 && value.StartsWith('"') && value.EndsWith('"')
+            ? UnescapeQuotedString(value[1..^1])
+            : value;
+
+    private static string UnescapeQuotedString(string value)
+        => value
+            .Replace("\\\\", "\u0000", StringComparison.Ordinal)
+            .Replace("\\\"", "\"", StringComparison.Ordinal)
+            .Replace("\\n", "\n", StringComparison.Ordinal)
+            .Replace("\\r", "\r", StringComparison.Ordinal)
+            .Replace("\\t", "\t", StringComparison.Ordinal)
+            .Replace("\u0000", "\\", StringComparison.Ordinal);
 
     public static string Indent(string value, int spaces, bool prependNewLine)
     {

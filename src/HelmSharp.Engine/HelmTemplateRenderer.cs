@@ -449,10 +449,6 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             rendered = TypeConverters.ToTemplateString(EvaluatePipeline(expr, context));
         }
 
-        // Apply left trim to rendered output
-        if (action.LeftTrim)
-            rendered = rendered.TrimStart();
-
         return rendered;
     }
 
@@ -571,7 +567,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         => node switch
         {
             ActionNode a => a.RightTrim,
-            BlockNode b => b.RightTrim,
+            BlockNode b => b.EndRightTrim,
             _ => false,
         };
 
@@ -1779,7 +1775,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         if (string.IsNullOrWhiteSpace(token)) return null;
         token = token.Trim();
         if (token.StartsWith('"') && token.EndsWith('"'))
-            return token.Length >= 2 ? token[1..^1] : token;
+            return StringHelpers.Unquote(token);
         if (token.StartsWith('\'') && token.EndsWith('\''))
             return token[1..^1];
         if (token == ".") return context.Dot;

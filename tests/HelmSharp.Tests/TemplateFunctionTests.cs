@@ -609,6 +609,7 @@ public class TemplateFunctionTests
         _output.WriteLine(result);
         Assert.Contains("line1", result);
         Assert.Contains("line2", result);
+        Assert.DoesNotContain("\\n", result);
     }
 
     [Fact]
