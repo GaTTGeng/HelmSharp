@@ -160,7 +160,7 @@ Custom lightweight line-by-line diff algorithm:
 
 1. Build `HelmCompare` .NET project: `dotnet publish -c Release -r linux-x64 --self-contained`
 2. Build Docker image: `docker build -t helm-compare .`
-3. Push to server `124.222.25.118`: `docker save` / `scp` / `docker load`
+3. Push to target server: `docker save` / `scp` / `docker load`
 4. Run: `docker run -d -p 8090:8090 --name helm-compare helm-compare`
 5. VitePress page: build via `npm run docs:build` and deploy to GitHub Pages (existing workflow)
 

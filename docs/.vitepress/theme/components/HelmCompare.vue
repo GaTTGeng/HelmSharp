@@ -194,7 +194,7 @@ interface DiffLine {
   rightNum: number | null
 }
 
-const API_BASE = (typeof window !== 'undefined' && (window as any).__HELM_COMPARE_API__) || ''
+const API_BASE = import.meta.env.VITE_HELM_COMPARE_API || ''
 
 const state = ref('idle')
 const errorMessage = ref('')
