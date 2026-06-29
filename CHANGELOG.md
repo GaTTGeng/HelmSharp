@@ -12,6 +12,7 @@ This project follows semantic versioning once stable releases begin.
 - Preserved Helm-compatible `.Files.AsConfig` quoted scalar output for multiline and CRLF file content.
 - Added a VitePress documentation site and GitHub Pages deployment workflow.
 - Added Helm CLI golden coverage for whitespace trimming, `indent`/`nindent`, YAML document separators, and NOTES rendering (#9).
+- Added named-template golden coverage for current-dot `include` and `tpl` calls (#84).
 
 ### Changed
 
