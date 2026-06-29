@@ -1453,11 +1453,6 @@ function reset() {
   overflow-y: auto;
 }
 
-.diff-body::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-}
-
 .diff-pane {
   min-width: 0;
   overflow-x: auto;
