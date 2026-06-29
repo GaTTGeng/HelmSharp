@@ -3,6 +3,11 @@
     <div class="compare-header">
       <h1>{{ t.title }}</h1>
       <p class="compare-subtitle">{{ t.subtitle }}</p>
+      <div class="version-bar" v-if="helmSharpVersion || helmVersion">
+        <span class="version-badge" v-if="helmSharpVersion">HelmSharp {{ helmSharpVersion }}</span>
+        <span class="version-sep" v-if="helmSharpVersion && helmVersion">|</span>
+        <span class="version-badge" v-if="helmVersion">Helm {{ helmVersion }}</span>
+      </div>
     </div>
 
     <!-- Upload Section -->
@@ -128,10 +133,27 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useData } from 'vitepress'
 
 const { lang } = useData()
+
+// ── Version info (fetched from API health endpoint) ────────────────────
+const helmVersion = ref('')
+const helmSharpVersion = ref('')
+
+onMounted(async () => {
+  try {
+    const base = API_BASE || ''
+    const url = base ? `${base}/api/v1/health` : '/api/v1/health'
+    const res = await fetch(url)
+    const data = await res.json()
+    helmVersion.value = data.helmVersion || ''
+    helmSharpVersion.value = data.helmSharpVersion || ''
+  } catch {
+    // API not reachable, leave empty
+  }
+})
 
 const isZh = computed(() => lang.value === 'zh-CN')
 
@@ -401,6 +423,30 @@ function reset() {
 .compare-subtitle {
   color: var(--vp-c-text-2);
   font-size: 0.95rem;
+}
+
+.version-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.version-badge {
+  display: inline-block;
+  padding: 0.15rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+  background: var(--vp-c-brand-soft);
+  color: var(--vp-c-brand-1);
+}
+
+.version-sep {
+  color: var(--vp-c-text-3);
+  font-size: 0.8rem;
 }
 
 /* Upload */
