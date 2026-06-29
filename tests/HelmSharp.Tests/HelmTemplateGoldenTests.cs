@@ -14,6 +14,7 @@ public class HelmTemplateGoldenTests
     [InlineData("builtins")]
     [InlineData("files")]
     [InlineData("whitespace-formatting")]
+    [InlineData("named-templates")]
     public async Task Render_FixtureChart_MatchesHelmTemplate(string fixtureName)
     {
         var chartPath = TestFixtures.ChartPath(fixtureName);

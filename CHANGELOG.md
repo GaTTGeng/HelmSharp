@@ -21,6 +21,7 @@ This project follows semantic versioning once stable releases begin.
 
 ### Fixed
 
+- Matched Helm named template scope for `include`, `template`, `tpl`, and `$` root lookups (#8).
 - Matched Helm whitespace behavior for block end trim markers, `nindent` output after `{{- ... }}`, and escaped newlines in quoted template strings (#9).
 - Matched Helm failure boundaries for `fail`, missing template functions, required values, and malformed templates (#13).
 - Matched Helm/Sprig string slicing behavior for negative `trunc` lengths and `substr` end indexes (#10).

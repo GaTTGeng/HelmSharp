@@ -4,7 +4,7 @@ namespace HelmSharp.Action;
 
 /// <summary>
 /// Manages Helm plugins — install, list, uninstall, and run.
-/// Plugins are stored in ~/.chemical-ai-helm/plugins/.
+/// Plugins are stored in ~/.helmsharp/plugins/.
 /// </summary>
 public class HelmPluginManager
 {
@@ -14,7 +14,7 @@ public class HelmPluginManager
     {
         _pluginsDir = pluginsDir ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".chemical-ai-helm", "plugins");
+            ".helmsharp", "plugins");
         Directory.CreateDirectory(_pluginsDir);
     }
 

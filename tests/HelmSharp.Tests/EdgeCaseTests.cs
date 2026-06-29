@@ -225,7 +225,7 @@ public class EdgeCaseTests
         var result = renderer.Render();
         _output.WriteLine(result);
         Assert.Contains("v1.29.0", result);
-        Assert.Contains("chemical-ai-helm", result);
+        Assert.Contains("HelmSharp", result);
     }
 
     [Fact]

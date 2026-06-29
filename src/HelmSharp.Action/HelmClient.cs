@@ -34,7 +34,7 @@ public class HelmClient : IHelmClient
     }
 
     public Task<CommandResult> VersionAsync(CancellationToken cancellationToken = default)
-        => Task.FromResult(Ok("chemical-ai-helm managed-0.3.0"));
+        => Task.FromResult(Ok("HelmSharp 0.3.0"));
 
     public async Task<CommandResult> ListReleasesAsync(
         string? @namespace = null,
@@ -1098,7 +1098,7 @@ public class HelmClient : IHelmClient
     {
         var configDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".chemical-ai-helm", "registry");
+            ".helmsharp", "registry");
         Directory.CreateDirectory(configDir);
 
         var configFile = Path.Combine(configDir, "config.json");
@@ -1132,7 +1132,7 @@ public class HelmClient : IHelmClient
     {
         var configDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".chemical-ai-helm", "registry");
+            ".helmsharp", "registry");
         var configFile = Path.Combine(configDir, "config.json");
 
         if (!File.Exists(configFile))

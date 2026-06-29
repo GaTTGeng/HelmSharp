@@ -1,0 +1,6 @@
+apiVersion: v2
+name: named-templates
+description: Named template and tpl fixture for Helm CLI golden tests
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

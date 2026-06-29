@@ -17,11 +17,11 @@ public sealed class HelmChartRepository : IDisposable
 
     public HelmChartRepository(string? cacheDir = null)
     {
-        _cacheDir = cacheDir ?? Path.Combine(Path.GetTempPath(), "chemical-ai-helm", "cache");
+        _cacheDir = cacheDir ?? Path.Combine(Path.GetTempPath(), "helmsharp", "cache");
         Directory.CreateDirectory(_cacheDir);
 
         _httpClient = new HttpClient();
-        _httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("chemical-ai-helm", "0.3.0"));
+        _httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("helmsharp", "0.3.0"));
     }
 
     /// <summary>
