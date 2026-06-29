@@ -4,4 +4,5 @@ target:
 tpl:
   currentName: "{{ .name | default \"root\" }}"
   nested: "{{ include \"named.tplLine\" .Values.target }}"
+  currentDot: "{{ .name }}:{{ .label }}"
   release: "{{ .Release.Name }}:{{ .Values.target.name }}"

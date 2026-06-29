@@ -4,9 +4,11 @@ metadata:
   name: named-templates
 data:
   includeScoped: {{ include "named.line" .Values.target | quote }}
+  includeCurrentDot: {{ with .Values.target }}{{ include "named.line" . | quote }}{{ end }}
   includePiped: {{ include "named.line" .Values.target | upper | quote }}
   templateScoped: {{ template "named.line" .Values.target }}
   tplNested: {{ tpl .Values.tpl.nested . | quote }}
+  tplCurrentDot: {{ with dict "name" .Values.target.name "label" .Values.target.label "Template" .Template }}{{ tpl $.Values.tpl.currentDot . | quote }}{{ end }}
   tplRoot: {{ tpl .Values.tpl.release . | quote }}
   withTplRoot: {{ with .Values.target }}{{ tpl $.Values.tpl.currentName $ | quote }}{{ end }}
   block: |
