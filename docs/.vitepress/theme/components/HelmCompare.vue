@@ -36,7 +36,15 @@
         >
           <div v-if="!chartFile" class="drop-prompt">
             <div class="drop-icon">📦</div>
-            <div class="drop-text">{{ t.dropText }}<a href="javascript:void(0)" @click="triggerFileInput">{{ t.clickText }}</a> Helm Chart</div>
+            <div class="drop-text">
+              {{ t.dropText }}<a href="javascript:void(0)" @click="triggerFileInput">{{ t.clickText }}</a> Helm Chart
+              <template v-if="examples.length > 0">
+                <span class="drop-text-separator">·</span>
+                <button class="drop-example-link" type="button" @click.stop="examplesOpen = true">
+                  {{ t.examplesHeader }}
+                </button>
+              </template>
+            </div>
             <div class="drop-hint">{{ t.dropHint }}</div>
           </div>
           <div v-else class="file-info">
@@ -82,32 +90,52 @@
           <button class="btn-retry" @click="reset">{{ t.retry }}</button>
         </div>
       </div>
+    </div>
 
-      <!-- Quick Examples — separate right panel -->
-      <div class="examples-panel" v-if="examples.length > 0">
-        <div class="examples-header">{{ t.examplesHeader }}</div>
+    <div
+      class="examples-modal-backdrop"
+      v-if="examplesOpen"
+      @click.self="examplesOpen = false"
+    >
+      <div class="examples-modal" role="dialog" aria-modal="true" :aria-label="t.examplesHeader">
+        <div class="examples-modal-header">
+          <div>
+            <div class="examples-title">{{ t.examplesHeader }}</div>
+            <div class="examples-subtitle">{{ t.examplesSubtitle }}</div>
+          </div>
+          <button class="btn-modal-close" type="button" @click="examplesOpen = false">{{ t.close }}</button>
+        </div>
         <div class="examples-list">
-          <div
+          <button
             v-for="ex in examples"
             :key="ex.id"
             class="example-card"
+            type="button"
             @click="runExample(ex)"
           >
-            <div class="example-card-name">{{ ex.name }}</div>
-            <div class="example-card-source">{{ ex.source }}</div>
-            <div class="example-card-desc">{{ isZh && ex.descriptionZh ? ex.descriptionZh : ex.description }}</div>
-            <code class="example-card-values" v-if="ex.defaultValues">{{ ex.defaultValues }}</code>
-          </div>
+            <span class="example-card-mark" aria-hidden="true">{{ exampleInitial(ex.name) }}</span>
+            <span class="example-card-body">
+              <span class="example-card-name">{{ ex.name }}</span>
+              <span class="example-card-source">{{ ex.source }}</span>
+            </span>
+          </button>
         </div>
       </div>
     </div>
 
     <!-- Loading -->
-    <div class="loading-section" v-if="state === 'uploading' || state === 'rendering'">
+    <div class="loading-section" v-if="state === 'rendering'">
       <div class="loading-card">
-        <div class="spinner"></div>
-        <div class="loading-text">{{ state === 'uploading' ? t.uploading : t.rendering }}</div>
+        <div class="loading-text">{{ t.rendering }}</div>
         <div class="loading-hint">{{ t.loadingHint }}</div>
+        <div class="loading-dots" aria-hidden="true">
+          <span :class="{ active: loadingStep === 0 }"></span>
+          <span :class="{ active: loadingStep === 1 }"></span>
+          <span :class="{ active: loadingStep === 2 }"></span>
+        </div>
+        <div class="loading-progress" aria-hidden="true">
+          <span :style="{ width: `${loadingProgress}%` }"></span>
+        </div>
       </div>
     </div>
 
@@ -142,24 +170,96 @@
         <pre class="error-card-body">{{ result.helmSharpError }}</pre>
       </div>
 
-      <!-- Side-by-side Output -->
-      <div class="split-view" v-if="result.helmOutput || result.helmSharpOutput">
-        <div class="split-column">
-          <div class="split-column-header">
+      <!-- Aligned diff output -->
+      <div class="diff-view" v-if="result.helmOutput || result.helmSharpOutput">
+        <div class="diff-view-header">
+          <div class="diff-column-title">
             <span>Helm CLI</span>
             <span class="split-line-count" v-if="!result.helmError">{{ helmLineCount }} lines</span>
           </div>
-          <pre class="split-output" v-if="result.helmOutput"><code v-html="escapeHtml(result.helmOutput)"></code></pre>
-          <div class="split-error" v-if="result.helmError">{{ result.helmError }}</div>
-        </div>
-        <div class="split-divider"></div>
-        <div class="split-column">
-          <div class="split-column-header">
+          <div class="diff-column-title">
             <span>HelmSharp</span>
             <span class="split-line-count" v-if="!result.helmSharpError">{{ helmSharpLineCount }} lines</span>
           </div>
-          <pre class="split-output" v-if="result.helmSharpOutput"><code v-html="escapeHtml(result.helmSharpOutput)"></code></pre>
-          <div class="split-error" v-if="result.helmSharpError">{{ result.helmSharpError }}</div>
+        </div>
+
+        <div class="diff-error-row" v-if="result.helmError || result.helmSharpError">
+          <div class="split-error">{{ result.helmError }}</div>
+          <div class="split-error">{{ result.helmSharpError }}</div>
+        </div>
+
+        <div class="diff-body" v-else>
+          <div
+            ref="leftDiffPaneRef"
+            class="diff-pane"
+            :style="{ '--pane-content-width': leftPaneWidth }"
+            @scroll="syncDiffScroll('left')"
+          >
+            <div class="diff-pane-lines">
+              <div
+                v-for="(line, i) in alignedDiffRows"
+                :key="`left-${i}`"
+                class="aligned-diff-line"
+                :class="line.type"
+              >
+                <span class="line-num" :class="{ empty: line.leftNum === null }">{{ line.leftNum ?? '' }}</span>
+                <code class="line-content" v-html="line.leftHtml"></code>
+              </div>
+            </div>
+          </div>
+          <div
+            ref="rightDiffPaneRef"
+            class="diff-pane"
+            :style="{ '--pane-content-width': rightPaneWidth }"
+            @scroll="syncDiffScroll('right')"
+          >
+            <div class="diff-pane-lines">
+              <div
+                v-for="(line, i) in alignedDiffRows"
+                :key="`right-${i}`"
+                class="aligned-diff-line"
+                :class="line.type"
+              >
+                <span class="line-num" :class="{ empty: line.rightNum === null }">{{ line.rightNum ?? '' }}</span>
+                <code class="line-content" v-html="line.rightHtml"></code>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="diff-scrollbar-row" v-if="!result.helmError && !result.helmSharpError">
+          <div class="diff-scroll-cell">
+            <div
+              class="diff-scroll-track"
+              :class="{ disabled: leftScrollMax === 0 }"
+              role="slider"
+              tabindex="0"
+              aria-label="Scroll Helm CLI output horizontally"
+              aria-valuemin="0"
+              :aria-valuemax="leftScrollMax"
+              :aria-valuenow="Math.round(leftScrollValue)"
+              @pointerdown="onDiffTrackPointerDown('left', $event)"
+              @keydown="onDiffTrackKeydown('left', $event)"
+            >
+              <span class="diff-scroll-thumb" :style="scrollThumbStyle('left')"></span>
+            </div>
+          </div>
+          <div class="diff-scroll-cell">
+            <div
+              class="diff-scroll-track"
+              :class="{ disabled: rightScrollMax === 0 }"
+              role="slider"
+              tabindex="0"
+              aria-label="Scroll HelmSharp output horizontally"
+              aria-valuemin="0"
+              :aria-valuemax="rightScrollMax"
+              :aria-valuenow="Math.round(rightScrollValue)"
+              @pointerdown="onDiffTrackPointerDown('right', $event)"
+              @keydown="onDiffTrackKeydown('right', $event)"
+            >
+              <span class="diff-scroll-thumb" :style="scrollThumbStyle('right')"></span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -167,7 +267,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, nextTick, onMounted } from 'vue'
 import { useData } from 'vitepress'
 
 const { lang } = useData()
@@ -212,7 +312,6 @@ interface ExampleInfo {
 const examples = ref<ExampleInfo[]>([])
 
 async function runExample(example: ExampleInfo) {
-  state.value = 'uploading'
   errorMessage.value = ''
   result.value = null
   frontendValidation.value = ''
@@ -232,10 +331,15 @@ async function runExample(example: ExampleInfo) {
     chartFile.value = new File([blob], `${example.id}.tgz`, { type: 'application/gzip' })
     valuesContent.value = example.defaultValues || ''
     state.value = 'idle'
+    examplesOpen.value = false
   } catch (e: any) {
     state.value = 'error'
     errorMessage.value = t.value.connectFailed(e.message)
   }
+}
+
+function exampleInitial(name: string): string {
+  return name.trim().charAt(0).toUpperCase()
 }
 
 const isZh = computed(() => lang.value === 'zh-CN')
@@ -283,6 +387,8 @@ const t = computed(() => {
       ? '对比服务暂时无法连接，上传功能已禁用。请稍后重试或联系管理员。'
       : 'The compare service is currently unreachable. Upload has been disabled. Please try again later.',
     examplesHeader: zh ? '快速示例' : 'Quick Examples',
+    examplesSubtitle: zh ? '公共 chart 样例' : 'Public chart samples',
+    close: zh ? '关闭' : 'Close',
   }
 })
 
@@ -298,12 +404,14 @@ interface RenderResult {
   templatesCompared?: number
 }
 
-interface DiffLine {
-  type: 'equal' | 'added' | 'removed'
+interface AlignedDiffRow {
+  type: 'equal' | 'changed' | 'added' | 'removed'
   left: string
   right: string
   leftNum: number | null
   rightNum: number | null
+  leftHtml: string
+  rightHtml: string
 }
 
 const API_BASE = import.meta.env.VITE_HELM_COMPARE_API || ''
@@ -314,8 +422,17 @@ const chartFile = ref<File | null>(null)
 const valuesContent = ref('')
 const fileDropActive = ref(false)
 const frontendValidation = ref('')
+const examplesOpen = ref(false)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const result = ref<RenderResult | null>(null)
+const loadingProgress = ref(12)
+const loadingStep = ref(0)
+const leftDiffPaneRef = ref<HTMLElement | null>(null)
+const rightDiffPaneRef = ref<HTMLElement | null>(null)
+const leftScrollValue = ref(0)
+const rightScrollValue = ref(0)
+const leftScrollMax = ref(0)
+const rightScrollMax = ref(0)
 
 const canSubmit = computed(() => chartFile.value !== null && !frontendValidation.value)
 
@@ -343,57 +460,235 @@ const summaryDetail = computed(() => {
 
 const helmLineCount = computed(() => (result.value?.helmOutput || '').split('\n').length)
 const helmSharpLineCount = computed(() => (result.value?.helmSharpOutput || '').split('\n').length)
+const leftPaneWidth = computed(() => paneWidthFor(result.value?.helmOutput || ''))
+const rightPaneWidth = computed(() => paneWidthFor(result.value?.helmSharpOutput || ''))
 
-const diffLines = computed<DiffLine[]>(() => {
+const alignedDiffRows = computed<AlignedDiffRow[]>(() => {
   const r = result.value
   if (!r || !r.helmOutput || !r.helmSharpOutput || r.helmSharpError) return []
 
   const leftLines = r.helmOutput.split('\n')
   const rightLines = r.helmSharpOutput.split('\n')
-  const lcs = computeLCS(leftLines, rightLines)
-  return buildAlignment(leftLines, rightLines, lcs)
+  return alignDiffLines(leftLines, rightLines)
 })
 
-function computeLCS(a: string[], b: string[]): number[][] {
-  const m = a.length
-  const n = b.length
+function alignDiffLines(leftLines: string[], rightLines: string[]): AlignedDiffRow[] {
+  const m = leftLines.length
+  const n = rightLines.length
+  const gapPenalty = -1.2
   const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0))
+  const move: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0))
+
+  for (let i = 1; i <= m; i++) {
+    dp[i][0] = i * gapPenalty
+    move[i][0] = 1
+  }
+
+  for (let j = 1; j <= n; j++) {
+    dp[0][j] = j * gapPenalty
+    move[0][j] = 2
+  }
+
   for (let i = 1; i <= m; i++) {
     for (let j = 1; j <= n; j++) {
-      if (a[i - 1] === b[j - 1]) {
-        dp[i][j] = dp[i - 1][j - 1] + 1
+      const similarity = lineSimilarity(leftLines[i - 1], rightLines[j - 1])
+      const pairScore = similarity >= 0.48 ? similarity * 3 : -2.5
+      const diagonal = dp[i - 1][j - 1] + pairScore
+      const removed = dp[i - 1][j] + gapPenalty
+      const added = dp[i][j - 1] + gapPenalty
+
+      if (diagonal >= removed && diagonal >= added) {
+        dp[i][j] = diagonal
+        move[i][j] = 0
+      } else if (removed >= added) {
+        dp[i][j] = removed
+        move[i][j] = 1
       } else {
-        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1])
+        dp[i][j] = added
+        move[i][j] = 2
       }
     }
   }
-  return dp
-}
 
-function buildAlignment(a: string[], b: string[], dp: number[][]): DiffLine[] {
-  const result: DiffLine[] = []
-  let i = a.length
-  let j = b.length
+  const rows: AlignedDiffRow[] = []
+  let i = m
+  let j = n
 
   while (i > 0 || j > 0) {
-    if (i > 0 && j > 0 && a[i - 1] === b[j - 1]) {
-      result.unshift({ type: 'equal', left: a[i - 1], right: b[j - 1], leftNum: i, rightNum: j })
+    const currentMove = move[i][j]
+
+    if (i > 0 && j > 0 && currentMove === 0) {
+      const left = leftLines[i - 1]
+      const right = rightLines[j - 1]
+      const equal = left === right
+      rows.unshift({
+        type: equal ? 'equal' : 'changed',
+        left,
+        right,
+        leftNum: i,
+        rightNum: j,
+        leftHtml: equal ? escapeHtml(left) : inlineDiffHtml(left, right, 'left'),
+        rightHtml: equal ? escapeHtml(right) : inlineDiffHtml(left, right, 'right'),
+      })
       i--
       j--
-    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-      result.unshift({ type: 'added', left: '', right: b[j - 1], leftNum: null, rightNum: j })
-      j--
+    } else if (i > 0 && (j === 0 || currentMove === 1)) {
+      const left = leftLines[i - 1]
+      rows.unshift({
+        type: 'removed',
+        left,
+        right: '',
+        leftNum: i,
+        rightNum: null,
+        leftHtml: escapeHtml(left),
+        rightHtml: '',
+      })
+      i--
     } else {
-      result.unshift({ type: 'removed', left: a[i - 1], right: '', leftNum: i, rightNum: null })
-      i--
+      const right = rightLines[j - 1]
+      rows.unshift({
+        type: 'added',
+        left: '',
+        right,
+        leftNum: null,
+        rightNum: j,
+        leftHtml: '',
+        rightHtml: escapeHtml(right),
+      })
+      j--
     }
   }
 
-  return result
+  return rows
+}
+
+function paneWidthFor(output: string): string {
+  const longest = output
+    .split('\n')
+    .reduce((max, line) => Math.max(max, line.length + 7), 96)
+
+  return `${longest}ch`
+}
+
+function updateDiffScrollMetrics() {
+  const left = leftDiffPaneRef.value
+  const right = rightDiffPaneRef.value
+
+  leftScrollMax.value = left ? Math.max(0, left.scrollWidth - left.clientWidth) : 0
+  rightScrollMax.value = right ? Math.max(0, right.scrollWidth - right.clientWidth) : 0
+  leftScrollValue.value = left ? Math.min(left.scrollLeft, leftScrollMax.value) : 0
+  rightScrollValue.value = right ? Math.min(right.scrollLeft, rightScrollMax.value) : 0
+}
+
+function onDiffRangeInput(side: 'left' | 'right', event: Event) {
+  const value = Number((event.target as HTMLInputElement).value)
+  const pane = side === 'left' ? leftDiffPaneRef.value : rightDiffPaneRef.value
+  if (!pane) return
+
+  pane.scrollLeft = value
+  if (side === 'left') {
+    leftScrollValue.value = value
+  } else {
+    rightScrollValue.value = value
+  }
+}
+
+function syncDiffScroll(side: 'left' | 'right') {
+  const pane = side === 'left' ? leftDiffPaneRef.value : rightDiffPaneRef.value
+  if (!pane) return
+
+  if (side === 'left') {
+    leftScrollValue.value = pane.scrollLeft
+  } else {
+    rightScrollValue.value = pane.scrollLeft
+  }
+}
+
+function lineSimilarity(left: string, right: string): number {
+  if (left === right) return 1
+
+  const a = normalizeLine(left)
+  const b = normalizeLine(right)
+
+  if (a === b) return 0.96
+  if (!a || !b) return 0
+
+  let prefix = 0
+  const minLength = Math.min(a.length, b.length)
+  while (prefix < minLength && a[prefix] === b[prefix]) prefix++
+
+  let suffix = 0
+  while (
+    suffix < minLength - prefix &&
+    a[a.length - 1 - suffix] === b[b.length - 1 - suffix]
+  ) {
+    suffix++
+  }
+
+  const tokenScore = tokenSimilarity(a, b)
+  const edgeScore = (prefix + suffix) / Math.max(a.length, b.length)
+  const leftKey = yamlLikeKey(a)
+  const rightKey = yamlLikeKey(b)
+  const keyBonus = leftKey && leftKey === rightKey ? 0.18 : 0
+
+  return Math.min(1, tokenScore * 0.55 + edgeScore * 0.45 + keyBonus)
+}
+
+function normalizeLine(line: string): string {
+  return line.trim().replace(/\s+/g, ' ')
+}
+
+function yamlLikeKey(line: string): string {
+  const match = line.match(/^[-\s]*([A-Za-z0-9_.-]+)\s*:/)
+  return match ? match[1] : ''
+}
+
+function tokenSimilarity(left: string, right: string): number {
+  const leftTokens = tokenizeLine(left)
+  const rightTokens = tokenizeLine(right)
+  if (leftTokens.size === 0 || rightTokens.size === 0) return 0
+
+  let common = 0
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) common++
+  }
+
+  return (2 * common) / (leftTokens.size + rightTokens.size)
+}
+
+function tokenizeLine(line: string): Set<string> {
+  return new Set(line.split(/[^A-Za-z0-9_.-]+/).filter(Boolean))
+}
+
+function inlineDiffHtml(left: string, right: string, side: 'left' | 'right'): string {
+  const text = side === 'left' ? left : right
+  const other = side === 'left' ? right : left
+  let prefix = 0
+  const minLength = Math.min(text.length, other.length)
+
+  while (prefix < minLength && text[prefix] === other[prefix]) prefix++
+
+  let suffix = 0
+  while (
+    suffix < minLength - prefix &&
+    text[text.length - 1 - suffix] === other[other.length - 1 - suffix]
+  ) {
+    suffix++
+  }
+
+  const start = text.slice(0, prefix)
+  const changed = text.slice(prefix, text.length - suffix)
+  const end = suffix > 0 ? text.slice(text.length - suffix) : ''
+  const marker = side === 'left' ? 'removed' : 'added'
+  const highlighted = changed
+    ? `<span class="inline-diff ${marker}">${escapeHtml(changed)}</span>`
+    : ''
+
+  return `${escapeHtml(start)}${highlighted}${escapeHtml(end)}`
 }
 
 function escapeHtml(text: string): string {
-  if (!text) return '&nbsp;'
+  if (!text) return ''
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
@@ -453,8 +748,18 @@ function clearFile() {
 async function submitCompare() {
   if (!chartFile.value) return
 
-  state.value = 'uploading'
+  state.value = 'rendering'
   errorMessage.value = ''
+  const renderStartedAt = Date.now()
+  loadingProgress.value = 12
+  loadingStep.value = 0
+  const loadingTimer = window.setInterval(() => {
+    loadingStep.value = (loadingStep.value + 1) % 3
+    loadingProgress.value = Math.min(
+      94,
+      loadingProgress.value + Math.max(1.5, (94 - loadingProgress.value) * 0.08),
+    )
+  }, 90)
 
   try {
     const formData = new FormData()
@@ -479,11 +784,20 @@ async function submitCompare() {
       return
     }
 
+    const remainingLoadingMs = 1200 - (Date.now() - renderStartedAt)
+    if (remainingLoadingMs > 0) {
+      await new Promise(resolve => setTimeout(resolve, remainingLoadingMs))
+    }
+
     result.value = data as RenderResult
     state.value = 'done'
+    await nextTick()
+    updateDiffScrollMetrics()
   } catch (e: any) {
     state.value = 'error'
     errorMessage.value = t.value.connectFailed(e.message)
+  } finally {
+    window.clearInterval(loadingTimer)
   }
 }
 
@@ -491,19 +805,30 @@ function reset() {
   state.value = 'idle'
   result.value = null
   errorMessage.value = ''
+  leftScrollValue.value = 0
+  rightScrollValue.value = 0
+  leftScrollMax.value = 0
+  rightScrollMax.value = 0
 }
 </script>
 
 <style scoped>
 .compare-tool {
-  max-width: 100%;
+  width: 100%;
+  max-width: 1080px;
   margin: 0 auto;
   padding: 2rem 1.5rem 4rem;
+  box-sizing: border-box;
+}
+
+.compare-tool:has(.results-section) {
+  max-width: min(86vw, 1440px);
 }
 
 .compare-header {
   text-align: center;
   margin-bottom: 2rem;
+  animation: compareFadeDown 0.32s ease-out both;
 }
 
 .compare-header h1 {
@@ -603,10 +928,16 @@ function reset() {
   border: 2px dashed var(--vp-c-divider);
   border-radius: 8px;
   padding: 2.5rem 2rem;
+  min-height: 176px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
   cursor: pointer;
   transition: border-color 0.2s, background 0.2s;
   background: var(--vp-c-bg-soft);
+  animation: compareFadeUp 0.36s ease-out both;
+  box-sizing: border-box;
 }
 
 .drop-zone:hover,
@@ -629,6 +960,10 @@ function reset() {
   margin-bottom: 0.75rem;
 }
 
+.drop-prompt {
+  width: 100%;
+}
+
 .drop-text {
   font-size: 1rem;
   color: var(--vp-c-text-1);
@@ -638,6 +973,28 @@ function reset() {
   color: var(--vp-c-brand-1);
   font-weight: 600;
   text-decoration: underline;
+}
+
+.drop-text-separator {
+  color: var(--vp-c-text-3);
+  margin: 0 0.35rem;
+}
+
+.drop-example-link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--vp-c-brand-1);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.drop-example-link:hover,
+.drop-example-link:focus-visible {
+  color: var(--vp-c-brand-2);
 }
 
 .drop-hint {
@@ -651,17 +1008,23 @@ function reset() {
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  font-size: 1rem;
+  font-size: 1.15rem;
+  width: 100%;
+  min-width: 0;
+  flex-wrap: wrap;
 }
 
 .file-name {
   font-weight: 600;
   color: var(--vp-c-text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .file-size {
   color: var(--vp-c-text-3);
-  font-size: 0.85rem;
+  font-size: 0.95rem;
 }
 
 .btn-clear {
@@ -699,6 +1062,7 @@ function reset() {
 /* Values */
 .values-section {
   margin-top: 1.5rem;
+  animation: compareFadeUp 0.36s ease-out 0.05s both;
 }
 
 .values-label {
@@ -731,6 +1095,7 @@ function reset() {
 .submit-row {
   margin-top: 1.5rem;
   text-align: center;
+  animation: compareFadeUp 0.36s ease-out 0.1s both;
 }
 
 .btn-submit {
@@ -759,6 +1124,7 @@ function reset() {
   display: flex;
   justify-content: center;
   padding: 4rem 1rem;
+  animation: compareFadeUp 0.24s ease-out both;
 }
 .loading-card {
   text-align: center;
@@ -766,18 +1132,8 @@ function reset() {
   background: var(--vp-c-bg-soft);
   border: 1px solid var(--vp-c-divider);
   border-radius: 10px;
-}
-.spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid var(--vp-c-divider);
-  border-top-color: var(--vp-c-brand-1);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-  margin: 0 auto 1.25rem;
-}
-@keyframes spin {
-  to { transform: rotate(360deg); }
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.14);
+  animation: loadingCardEnter 0.28s ease-out both;
 }
 .loading-text {
   color: var(--vp-c-text-1);
@@ -790,7 +1146,53 @@ function reset() {
   font-size: 0.8rem;
 }
 
+.loading-dots {
+  display: flex;
+  justify-content: center;
+  gap: 0.35rem;
+  margin-top: 1rem;
+}
+
+.loading-dots span {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--vp-c-brand-1);
+  opacity: 0.35;
+  transform: scale(0.85);
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.loading-dots span.active {
+  opacity: 1;
+  transform: scale(1.25);
+}
+
+.loading-progress {
+  position: relative;
+  width: 220px;
+  height: 4px;
+  margin: 1.25rem auto 0;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--vp-c-divider);
+}
+
+.loading-progress span {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--vp-c-brand-1);
+  transition: width 0.16s ease;
+}
+
 /* Results */
+.results-section {
+  animation: compareFadeUp 0.28s ease-out both;
+}
+
 .results-toolbar {
   display: flex;
   align-items: center;
@@ -921,137 +1323,204 @@ function reset() {
   word-break: break-all;
 }
 
-/* Split view: Helm CLI left, HelmSharp right */
-.split-view {
-  display: flex;
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 8px;
-  overflow: auto;
-  max-height: calc(100vh - 280px);
-}
-.split-column {
-  flex: 1;
+/* Aligned diff view */
+.diff-view {
   display: flex;
   flex-direction: column;
-  min-width: 0;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  overflow: hidden;
+  max-height: calc(100vh - 260px);
+  background: var(--vp-c-bg);
 }
-.split-column-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0.5rem 1rem;
+
+.diff-view-header,
+.diff-error-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.diff-view-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  flex: 0 0 auto;
   background: var(--vp-c-bg-soft);
   border-bottom: 1px solid var(--vp-c-divider);
+}
+
+.diff-column-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.55rem 1rem;
   font-weight: 700;
   font-size: 0.85rem;
   color: var(--vp-c-text-1);
-  position: sticky;
-  top: 0;
-  z-index: 1;
 }
+
+.diff-column-title:first-child {
+  border-right: 1px solid var(--vp-c-divider);
+}
+
 .split-line-count {
   font-weight: 400;
   font-size: 0.75rem;
   color: var(--vp-c-text-3);
 }
-.split-divider {
-  width: 1px;
-  background: var(--vp-c-divider);
-  flex-shrink: 0;
-}
-.split-output {
-  flex: 1;
-  margin: 0;
-  padding: 0.75rem 1rem;
-  font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
-  font-size: 0.75rem;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-all;
-  background: var(--vp-c-bg);
-  color: var(--vp-c-text-1);
-}
+
 .split-error {
   padding: 0.75rem 1rem;
   color: #dc2626;
   font-size: 0.8rem;
   background: rgba(220, 38, 38, 0.05);
-  border-top: 1px solid rgba(220, 38, 38, 0.15);
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-/* Diff (legacy, kept for reference) */
-.diff-container-old {
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 6px;
-  overflow: hidden;
+.diff-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  flex: 1 1 auto;
+  min-height: 0;
+  font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  line-height: 1.55;
+  overflow-y: auto;
+  scrollbar-width: none;
 }
 
-.diff-header {
-  display: flex;
-  background: var(--vp-c-bg-soft);
-  border-bottom: 1px solid var(--vp-c-divider);
+.diff-body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
-.diff-header-left,
-.diff-header-right {
-  flex: 1;
-  padding: 0.5rem 1rem;
-  font-weight: 700;
-  font-size: 0.85rem;
-  text-align: center;
-  color: var(--vp-c-text-1);
+.diff-pane {
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
 }
 
-.diff-header-left {
+.diff-pane::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.diff-pane:first-child {
   border-right: 1px solid var(--vp-c-divider);
 }
 
-.diff-body {
-  font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
-  font-size: 0.78rem;
-  line-height: 1.55;
+.diff-pane-lines {
+  display: grid;
+  grid-auto-rows: 1.65em;
+  width: var(--pane-content-width);
+  min-width: 100%;
 }
 
-.diff-row {
-  display: flex;
-  min-height: 1.55em;
+.aligned-diff-line {
+  display: grid;
+  grid-template-columns: 3rem max-content;
+  align-items: start;
+  width: 100%;
+  min-width: 100%;
+  height: 1.65em;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.08);
 }
 
-.diff-row.equal {
+.diff-scrollbar-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  flex: 0 0 auto;
+  gap: 0;
+  padding: 0.55rem 0.75rem;
+  border-top: 1px solid var(--vp-c-divider);
+  background: var(--vp-c-bg-soft);
+}
+
+.diff-scroll-range {
+  width: 100%;
+  min-width: 0;
+  height: 18px;
+  margin: 0;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  accent-color: var(--vp-c-brand-1);
+}
+
+.diff-scroll-range:first-child {
+  padding-right: 0.75rem;
+  border-right: 1px solid var(--vp-c-divider);
+}
+
+.diff-scroll-range:last-child {
+  padding-left: 0.75rem;
+}
+
+.diff-scroll-range:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.diff-scroll-range::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.38);
+}
+
+.diff-scroll-range::-webkit-slider-thumb {
+  width: 30px;
+  height: 12px;
+  margin-top: -3px;
+  appearance: none;
+  border-radius: 999px;
+  background: var(--vp-c-brand-1);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.diff-scroll-range::-moz-range-track {
+  height: 6px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.38);
+}
+
+.diff-scroll-range::-moz-range-thumb {
+  width: 30px;
+  height: 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--vp-c-brand-1);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.aligned-diff-line.equal {
   background: transparent;
 }
 
-.diff-row.added {
+.aligned-diff-line.changed {
+  background: rgba(234, 179, 8, 0.06);
+}
+
+.aligned-diff-line.added {
   background: rgba(22, 163, 74, 0.08);
 }
 
-.diff-row.removed {
+.aligned-diff-line.removed {
   background: rgba(220, 38, 38, 0.08);
-}
-
-.diff-left,
-.diff-right {
-  flex: 1;
-  display: flex;
-  padding: 0 0.25rem;
-  min-width: 0;
-}
-
-.diff-left {
-  border-right: 1px solid var(--vp-c-divider);
 }
 
 .line-num {
   display: inline-block;
-  width: 2.5rem;
-  min-width: 2.5rem;
+  width: 3rem;
+  min-width: 3rem;
   text-align: right;
   padding-right: 0.5rem;
   color: var(--vp-c-text-3);
   user-select: none;
-  flex-shrink: 0;
+  box-sizing: border-box;
 }
 
 .line-num.empty {
@@ -1059,52 +1528,190 @@ function reset() {
 }
 
 .line-content {
+  display: inline;
   white-space: pre;
-  overflow-x: auto;
-  flex: 1;
+  padding-right: 0.75rem !important;
+  background: transparent !important;
+  border-radius: 0 !important;
+  color: var(--vp-c-text-1);
 }
 
-.diff-row.added .diff-right .line-content {
+.diff-pane:last-child .aligned-diff-line.added .line-content,
+.inline-diff.added {
   color: #16a34a;
 }
 
-.diff-row.removed .diff-left .line-content {
+.diff-pane:first-child .aligned-diff-line.removed .line-content,
+.inline-diff.removed {
   color: #dc2626;
 }
 
-/* Two-column layout: upload left, examples right panel */
+.inline-diff {
+  border-radius: 3px;
+  padding: 0.05rem 0.1rem;
+}
+
+.inline-diff.added {
+  background: rgba(22, 163, 74, 0.18);
+}
+
+.inline-diff.removed {
+  background: rgba(220, 38, 38, 0.18);
+}
+
 .compare-page-body {
   display: flex;
-  gap: 2.5rem;
-  align-items: flex-start;
+  justify-content: center;
 }
 .compare-main {
-  flex: 1;
+  width: 100%;
+  max-width: 720px;
   min-width: 0;
 }
-.examples-panel {
-  flex: 0 0 260px;
-  background: var(--vp-c-bg-soft);
+.examples-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: rgba(0, 0, 0, 0.48);
+  backdrop-filter: blur(6px);
+}
+.examples-modal {
+  width: min(760px, 100%);
+  max-height: min(78vh, 720px);
+  overflow-y: auto;
   border: 1px solid var(--vp-c-divider);
   border-radius: 8px;
+  background: var(--vp-c-bg);
+  box-shadow: 0 24px 72px rgba(0, 0, 0, 0.28);
   padding: 1rem;
-  max-height: 75vh;
-  overflow-y: auto;
-  position: sticky;
-  top: calc(var(--vp-nav-height) + 1rem);
+  animation: loadingCardEnter 0.2s ease-out both;
 }
-@media (max-width: 768px) {
-  .compare-page-body { flex-direction: column; }
-  .examples-panel { flex: none; position: static; max-height: none; }
+.examples-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.9rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--vp-c-divider);
 }
-.examples-header { font-size: 0.85rem; font-weight: 600; color: var(--vp-c-text-1); margin-bottom: 0.6rem; }
-.examples-list { display: flex; flex-direction: column; gap: 0.5rem; }
-.example-card { border: 1px solid var(--vp-c-divider); border-radius: 6px; padding: 0.6rem 0.75rem; cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; background: var(--vp-c-bg); }
-.example-card:hover { border-color: var(--vp-c-brand-1); box-shadow: 0 1px 6px var(--vp-c-brand-soft); }
-.example-card-name { font-weight: 700; font-size: 0.85rem; color: var(--vp-c-brand-1); }
-.example-card-source { font-size: 0.7rem; color: var(--vp-c-text-3); }
-.example-card-desc { font-size: 0.75rem; color: var(--vp-c-text-2); margin: 0.2rem 0; }
-.example-card-values { display: block; font-size: 0.68rem; font-family: monospace; background: var(--vp-c-bg-soft); padding: 0.2rem 0.4rem; border-radius: 3px; white-space: pre-wrap; max-height: 60px; overflow: hidden; }
+.examples-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--vp-c-text-1);
+  line-height: 1.2;
+}
+.examples-subtitle {
+  margin-top: 0.15rem;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--vp-c-text-3);
+}
+.btn-modal-close {
+  flex-shrink: 0;
+  min-height: 2rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 6px;
+  background: var(--vp-c-bg-soft);
+  color: var(--vp-c-text-2);
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.btn-modal-close:hover,
+.btn-modal-close:focus-visible {
+  border-color: var(--vp-c-brand-1);
+  color: var(--vp-c-brand-1);
+}
+.examples-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+.example-card {
+  display: grid;
+  grid-template-columns: 2.1rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.7rem;
+  width: 100%;
+  min-height: 4rem;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 6px;
+  padding: 0.65rem 0.75rem;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s, transform 0.15s;
+  background: var(--vp-c-bg-soft);
+  color: inherit;
+  font: inherit;
+}
+.example-card:hover {
+  border-color: var(--vp-c-brand-1);
+  background: color-mix(in srgb, var(--vp-c-brand-soft) 52%, var(--vp-c-bg));
+  transform: translateY(-1px);
+}
+.example-card:focus-visible {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 2px;
+}
+.example-card-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: 5px;
+  background: var(--vp-c-brand-soft);
+  color: var(--vp-c-brand-1);
+  font-size: 0.85rem;
+  font-weight: 800;
+  font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+  text-transform: uppercase;
+}
+.example-card-body {
+  display: block;
+  min-width: 0;
+}
+.example-card-name {
+  display: block;
+  font-weight: 700;
+  font-size: 0.88rem;
+  line-height: 1.2;
+  color: var(--vp-c-brand-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.example-card-source {
+  display: block;
+  margin-top: 0.1rem;
+  font-size: 0.72rem;
+  line-height: 1.2;
+  color: var(--vp-c-text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 520px) {
+  .examples-modal-backdrop {
+    align-items: flex-start;
+    padding: 1rem;
+  }
+
+  .examples-modal {
+    max-height: calc(100vh - 2rem);
+  }
+
+  .examples-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 
 /* All match */
 .all-match {
@@ -1123,5 +1730,99 @@ function reset() {
 .all-match-text {
   color: #16a34a;
   font-weight: 600;
+}
+
+@keyframes compareFadeDown {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes compareFadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes examplesRailEnter {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes loadingCardEnter {
+  from {
+    opacity: 0;
+    transform: scale(0.98) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes loadingCardPulse {
+  0%, 100% {
+    box-shadow: 0 16px 42px rgba(0, 0, 0, 0.14);
+  }
+  50% {
+    box-shadow: 0 18px 48px rgba(37, 99, 235, 0.22);
+  }
+}
+
+@keyframes loadingDot {
+  0%, 80%, 100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-5px);
+  }
+}
+
+@keyframes loadingProgress {
+  0% {
+    left: -45%;
+  }
+  55% {
+    left: 100%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .compare-header,
+  .drop-zone,
+  .values-section,
+  .submit-row,
+  .loading-section,
+  .loading-card,
+  .results-section,
+  .examples-panel {
+    animation: none;
+  }
+
+  .loading-dots span,
+  .loading-progress span {
+    animation-duration: 2s;
+  }
 }
 </style>
