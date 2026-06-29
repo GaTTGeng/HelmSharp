@@ -34,49 +34,13 @@ features:
 理解 HelmSharp 兼容性最快的方式是**亲眼看看**。上传你的 Helm Chart，HelmSharp 和 Helm CLI 并排渲染、实时 diff — 同一份输入，同一组 values，差距一目了然。
 
 <div class="compare-cta">
-  <a class="compare-cta-btn" href="/compare">
+  <a class="compare-cta-btn" href="../compare">
     <span class="compare-cta-icon">🔬</span>
     <span class="compare-cta-label">打开在线对比</span>
     <span class="compare-cta-arrow">→</span>
   </a>
 </div>
 
-<style>
-.compare-cta {
-  text-align: center;
-  margin: 2rem 0;
-}
-.compare-cta-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.6rem;
-  padding: 0.85rem 2rem;
-  font-size: 1.1rem;
-  font-weight: 700;
-  color: #fff;
-  background: linear-gradient(135deg, var(--vp-c-brand-1) 0%, #0f766e 100%);
-  border-radius: 10px;
-  text-decoration: none;
-  transition: transform 0.15s, box-shadow 0.15s;
-  box-shadow: 0 2px 12px rgba(37, 99, 235, 0.3);
-}
-.compare-cta-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 20px rgba(37, 99, 235, 0.45);
-  text-decoration: none !important;
-  color: #fff;
-}
-.compare-cta-icon {
-  font-size: 1.3rem;
-}
-.compare-cta-arrow {
-  font-size: 1.1rem;
-  transition: transform 0.15s;
-}
-.compare-cta-btn:hover .compare-cta-arrow {
-  transform: translateX(3px);
-}
-</style>
 
 ## HelmSharp 解决什么问题
 
