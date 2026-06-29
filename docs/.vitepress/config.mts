@@ -35,7 +35,7 @@ const chineseNav = [
   { text: 'API', link: '/zh/api-overview' },
   { text: '兼容性', link: '/zh/helm-compatibility' },
   { text: '路线图', link: '/zh/roadmap' },
-  { text: '对比', link: '/compare' }
+  { text: '对比', link: '/zh/compare' }
 ];
 
 const chineseSidebar = [

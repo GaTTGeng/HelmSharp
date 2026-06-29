@@ -10,6 +10,9 @@ hero:
       text: Start rendering
       link: /getting-started
     - theme: alt
+      text: 🔬 Live Compare
+      link: /compare
+    - theme: alt
       text: Check compatibility
       link: /helm-compatibility
 
@@ -21,8 +24,59 @@ features:
   - title: Release workflows when you need them
     details: Start with rendering, then opt into install, upgrade, rollback, uninstall, Kubernetes apply, wait behavior, and release history APIs.
   - title: Compatibility measured against Helm
-    details: Helm CLI output is used as a test oracle. The current real-chart suite renders 129/129 templates across five public charts.
+    details: Helm CLI output is used as a test oracle. The current real-chart suite renders 129/129 templates across five public charts. <br><br> **[🔬 Try the live comparison →](/compare)** to see how close HelmSharp gets on your own charts.
 ---
+
+---
+
+## 🔬 See HelmSharp in Action
+
+The fastest way to understand HelmSharp's compatibility is to **see it yourself**. Upload any Helm chart and watch HelmSharp and the real Helm CLI render it side-by-side — same input, same values, instant diff.
+
+<div class="compare-cta">
+  <a class="compare-cta-btn" href="/compare">
+    <span class="compare-cta-icon">🔬</span>
+    <span class="compare-cta-label">Launch Live Comparison</span>
+    <span class="compare-cta-arrow">→</span>
+  </a>
+</div>
+
+<style>
+.compare-cta {
+  text-align: center;
+  margin: 2rem 0;
+}
+.compare-cta-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.85rem 2rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, var(--vp-c-brand-1) 0%, #0f766e 100%);
+  border-radius: 10px;
+  text-decoration: none;
+  transition: transform 0.15s, box-shadow 0.15s;
+  box-shadow: 0 2px 12px rgba(37, 99, 235, 0.3);
+}
+.compare-cta-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 20px rgba(37, 99, 235, 0.45);
+  text-decoration: none !important;
+  color: #fff;
+}
+.compare-cta-icon {
+  font-size: 1.3rem;
+}
+.compare-cta-arrow {
+  font-size: 1.1rem;
+  transition: transform 0.15s;
+}
+.compare-cta-btn:hover .compare-cta-arrow {
+  transform: translateX(3px);
+}
+</style>
 
 ## The job HelmSharp is built for
 

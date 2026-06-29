@@ -21,7 +21,7 @@
       >
         <div v-if="!chartFile" class="drop-prompt">
           <div class="drop-icon">📦</div>
-          <div class="drop-text">{{ t.dropText }}<a href="javascript:void(0)" @click="triggerFileInput">{{ t.clickText }}</a>Helm Chart</div>
+          <div class="drop-text">{{ t.dropText }}<a href="javascript:void(0)" @click="triggerFileInput">{{ t.clickText }}</a> Helm Chart</div>
           <div class="drop-hint">{{ t.dropHint }}</div>
         </div>
         <div v-else class="file-info">
