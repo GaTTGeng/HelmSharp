@@ -335,13 +335,13 @@ function handleFile(file: File) {
   const name = file.name.toLowerCase()
 
   if (!name.endsWith('.tgz') && !name.endsWith('.tar.gz')) {
-    frontendValidation.value = '请上传 .tgz 格式的 Helm Chart 包'
+    frontendValidation.value = t.value.wrongFormat
     chartFile.value = null
     return
   }
 
   if (file.size > 10 * 1024 * 1024) {
-    frontendValidation.value = '文件大小不能超过 10 MB'
+    frontendValidation.value = t.value.fileTooBig
     chartFile.value = null
     return
   }
@@ -382,7 +382,7 @@ async function submitCompare() {
 
     if (!res.ok) {
       state.value = 'error'
-      errorMessage.value = data.error || `请求失败 (${res.status})`
+      errorMessage.value = data.error || t.value.requestFailed(res.status)
       return
     }
 
@@ -390,7 +390,7 @@ async function submitCompare() {
     state.value = 'done'
   } catch (e: any) {
     state.value = 'error'
-    errorMessage.value = `连接失败: ${e.message}`
+    errorMessage.value = t.value.connectFailed(e.message)
   }
 }
 
