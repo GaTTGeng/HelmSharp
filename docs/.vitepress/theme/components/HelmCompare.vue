@@ -104,8 +104,11 @@
 
     <!-- Loading -->
     <div class="loading-section" v-if="state === 'uploading' || state === 'rendering'">
-      <div class="spinner"></div>
-      <div class="loading-text">{{ state === 'uploading' ? t.uploading : t.rendering }}</div>
+      <div class="loading-card">
+        <div class="spinner"></div>
+        <div class="loading-text">{{ state === 'uploading' ? t.uploading : t.rendering }}</div>
+        <div class="loading-hint">{{ t.loadingHint }}</div>
+      </div>
     </div>
 
     <!-- Results -->
@@ -139,31 +142,25 @@
         <pre class="error-card-body">{{ result.helmSharpError }}</pre>
       </div>
 
-      <!-- Side-by-side Diff -->
-      <div class="diff-container" v-if="diffLines.length > 0">
-        <div class="diff-header">
-          <div class="diff-header-left">{{ t.headerLeft }}</div>
-          <div class="diff-header-right">{{ t.headerRight }}</div>
-        </div>
-        <div class="diff-body">
-          <div v-for="(line, idx) in diffLines" :key="idx" class="diff-row" :class="line.type">
-            <div class="diff-left">
-              <span class="line-num" v-if="line.leftNum">{{ line.leftNum }}</span>
-              <span class="line-num empty" v-else></span>
-              <span class="line-content" v-html="escapeHtml(line.left) || '&nbsp;'"></span>
-            </div>
-            <div class="diff-right">
-              <span class="line-num" v-if="line.rightNum">{{ line.rightNum }}</span>
-              <span class="line-num empty" v-else></span>
-              <span class="line-content" v-html="escapeHtml(line.right) || '&nbsp;'"></span>
-            </div>
+      <!-- Side-by-side Output -->
+      <div class="split-view" v-if="result.helmOutput || result.helmSharpOutput">
+        <div class="split-column">
+          <div class="split-column-header">
+            <span>Helm CLI</span>
+            <span class="split-line-count" v-if="!result.helmError">{{ helmLineCount }} lines</span>
           </div>
+          <pre class="split-output" v-if="result.helmOutput"><code v-html="escapeHtml(result.helmOutput)"></code></pre>
+          <div class="split-error" v-if="result.helmError">{{ result.helmError }}</div>
         </div>
-      </div>
-
-      <div class="all-match" v-if="!result.helmSharpError && diffLines.length > 0 && result.isMatch">
-        <div class="all-match-icon">✅</div>
-        <div class="all-match-text">{{ t.allMatchText }}</div>
+        <div class="split-divider"></div>
+        <div class="split-column">
+          <div class="split-column-header">
+            <span>HelmSharp</span>
+            <span class="split-line-count" v-if="!result.helmSharpError">{{ helmSharpLineCount }} lines</span>
+          </div>
+          <pre class="split-output" v-if="result.helmSharpOutput"><code v-html="escapeHtml(result.helmSharpOutput)"></code></pre>
+          <div class="split-error" v-if="result.helmSharpError">{{ result.helmSharpError }}</div>
+        </div>
       </div>
     </div>
   </div>
@@ -257,6 +254,7 @@ const t = computed(() => {
     valuesPlaceholder: 'replicaCount: 3\nimage:\n  tag: latest',
     submitBtn: zh ? '开始对比渲染' : 'Start Compare',
     uploading: zh ? '正在上传并渲染...' : 'Uploading and rendering...',
+    loadingHint: zh ? '较大 Chart 可能需要数十秒' : 'Large charts may take up to a minute',
     rendering: zh ? '渲染中...' : 'Rendering...',
     retry: zh ? '重试' : 'Retry',
     reupload: zh ? '← 重新上传' : '← Upload Another',
@@ -342,6 +340,9 @@ const summaryDetail = computed(() => {
   if (result.value.isMatch) return t.value.templatesMatch(n)
   return t.value.templateDiff(n)
 })
+
+const helmLineCount = computed(() => (result.value?.helmOutput || '').split('\n').length)
+const helmSharpLineCount = computed(() => (result.value?.helmSharpOutput || '').split('\n').length)
 
 const diffLines = computed<DiffLine[]>(() => {
   const r = result.value
@@ -495,7 +496,7 @@ function reset() {
 
 <style scoped>
 .compare-tool {
-  max-width: 1200px;
+  max-width: 100%;
   margin: 0 auto;
   padding: 2rem 1.5rem 4rem;
 }
@@ -755,27 +756,38 @@ function reset() {
 
 /* Loading */
 .loading-section {
-  text-align: center;
-  padding: 3rem;
+  display: flex;
+  justify-content: center;
+  padding: 4rem 1rem;
 }
-
+.loading-card {
+  text-align: center;
+  padding: 2rem 3rem;
+  background: var(--vp-c-bg-soft);
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 10px;
+}
 .spinner {
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   border: 3px solid var(--vp-c-divider);
   border-top-color: var(--vp-c-brand-1);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
-  margin: 0 auto 1rem;
+  margin: 0 auto 1.25rem;
 }
-
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
-
 .loading-text {
-  color: var(--vp-c-text-2);
-  font-size: 0.95rem;
+  color: var(--vp-c-text-1);
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 0.4rem;
+}
+.loading-hint {
+  color: var(--vp-c-text-3);
+  font-size: 0.8rem;
 }
 
 /* Results */
@@ -909,8 +921,68 @@ function reset() {
   word-break: break-all;
 }
 
-/* Diff */
-.diff-container {
+/* Split view: Helm CLI left, HelmSharp right */
+.split-view {
+  display: flex;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  overflow: auto;
+  max-height: calc(100vh - 280px);
+}
+.split-column {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.split-column-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  background: var(--vp-c-bg-soft);
+  border-bottom: 1px solid var(--vp-c-divider);
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--vp-c-text-1);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.split-line-count {
+  font-weight: 400;
+  font-size: 0.75rem;
+  color: var(--vp-c-text-3);
+}
+.split-divider {
+  width: 1px;
+  background: var(--vp-c-divider);
+  flex-shrink: 0;
+}
+.split-output {
+  flex: 1;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--vp-c-bg);
+  color: var(--vp-c-text-1);
+}
+.split-error {
+  padding: 0.75rem 1rem;
+  color: #dc2626;
+  font-size: 0.8rem;
+  background: rgba(220, 38, 38, 0.05);
+  border-top: 1px solid rgba(220, 38, 38, 0.15);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Diff (legacy, kept for reference) */
+.diff-container-old {
   border: 1px solid var(--vp-c-divider);
   border-radius: 6px;
   overflow: hidden;
