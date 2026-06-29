@@ -21,7 +21,7 @@ features:
   - title: Release workflows when you need them
     details: Start with rendering, then opt into install, upgrade, rollback, uninstall, Kubernetes apply, wait behavior, and release history APIs.
   - title: Compatibility measured against Helm
-    details: Helm CLI output is used as a test oracle. The current real-chart suite renders 129/129 templates across five public charts.
+    details: Helm CLI output is used as a test oracle. The current real-chart suite renders 127/129 templates across five public charts.
 ---
 
 ## The job HelmSharp is built for
@@ -85,7 +85,7 @@ dotnet add package HelmSharp.Engine
 
 ## Current Scope
 
-The current golden suite renders **129/129 templates** across `podinfo`, `metrics-server`, `external-dns`, `ingress-nginx`, and `cert-manager` without parser exceptions. That is the baseline HelmSharp uses to grow compatibility against real charts, not only hand-written fixtures.
+The current golden suite renders **127/129 templates** across `podinfo`, `metrics-server`, `external-dns`, `ingress-nginx`, and `cert-manager`; the remaining two `ingress-nginx` templates are tracked by the real-chart reports. That is the baseline HelmSharp uses to grow compatibility against real charts, not only hand-written fixtures.
 
 HelmSharp already covers chart loading, values merging, managed template rendering, chart packaging, repository helpers, Kubernetes apply/delete/wait helpers, and release history backed by Kubernetes Secrets.
 

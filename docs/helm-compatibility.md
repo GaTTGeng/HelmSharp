@@ -6,18 +6,22 @@ The Helm CLI is used as a test oracle. It is not required at runtime by consumer
 
 ## Current confidence level
 
-The current real-chart golden suite renders **129/129 templates** across five public charts with no parser exceptions:
+The current real-chart golden suite renders **127/129 templates** across five public charts. Four charts complete full-chart rendering; `ingress-nginx` currently falls back to per-template reporting because two templates hit unsupported renderer paths. All charts remain classified as **Partial** until content-level output differences are closed:
 
-| Chart | Version | Templates | Result |
-| --- | --- | --- | --- |
-| podinfo | 6.14.0 | 21/21 | Pass |
-| metrics-server | 3.13.1 | 18/18 | Pass |
-| external-dns | 1.21.1 | 7/7 | Pass |
-| ingress-nginx | 4.12.1 | 42/42 | Pass |
-| cert-manager | 1.17.1 | 41/41 | Pass |
-| **Total** | - | **129/129** | **Pass** |
+| Chart | Version | Templates | Full render | Verdict |
+| --- | --- | --- | --- | --- |
+| podinfo | 6.14.0 | 21/21 | Success | Partial |
+| metrics-server | 3.13.1 | 18/18 | Success | Partial |
+| external-dns | 1.21.1 | 7/7 | Success | Partial |
+| ingress-nginx | 4.12.1 | 40/42 | Fallback | Partial |
+| cert-manager | 1.17.1 | 41/41 | Success | Partial |
+| **Total** | - | **127/129** | **4/5** | **Partial** |
 
 That number matters because real charts expose helper templates, nested values, `.Files`, capabilities, and formatting patterns that small examples miss.
+
+CI installs Helm v3.12.3 and runs the Helm CLI golden suite explicitly after the normal Release test pass. The golden step covers both fixture charts and the real-chart suite, then uploads `GoldenReports/*.json` artifacts for reviewing per-chart results.
+
+The current known per-template failures are `ingress-nginx` `controller-deployment.yaml` and `controller-role.yaml`, both reported as `NotSupportedException` by the managed renderer.
 
 ## Compatibility contract
 

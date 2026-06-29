@@ -6,18 +6,22 @@ Helm CLI 只作为测试基准使用，消费者运行时不需要安装 Helm。
 
 ## 当前可信度
 
-当前真实 chart golden suite 已经在 5 个公共 chart 上完成 **129/129 个模板**渲染，没有 parser exception：
+当前真实 chart golden suite 已经在 5 个公共 chart 上完成 **127/129 个模板**渲染。4 个 chart 可完成完整 Chart 渲染；`ingress-nginx` 当前会降级到逐模板报告，因为两个模板命中了尚未支持的 renderer 路径。在内容级输出差异完全收敛前，整体判定仍为 **Partial**：
 
-| Chart | Version | Templates | Result |
-| --- | --- | --- | --- |
-| podinfo | 6.14.0 | 21/21 | Pass |
-| metrics-server | 3.13.1 | 18/18 | Pass |
-| external-dns | 1.21.1 | 7/7 | Pass |
-| ingress-nginx | 4.12.1 | 42/42 | Pass |
-| cert-manager | 1.17.1 | 41/41 | Pass |
-| **Total** | - | **129/129** | **Pass** |
+| Chart | Version | Templates | 完整渲染 | 判定 |
+| --- | --- | --- | --- | --- |
+| podinfo | 6.14.0 | 21/21 | Success | Partial |
+| metrics-server | 3.13.1 | 18/18 | Success | Partial |
+| external-dns | 1.21.1 | 7/7 | Success | Partial |
+| ingress-nginx | 4.12.1 | 40/42 | Fallback | Partial |
+| cert-manager | 1.17.1 | 41/41 | Success | Partial |
+| **Total** | - | **127/129** | **4/5** | **Partial** |
 
 这个数字重要，是因为真实 chart 会暴露 helper template、嵌套 values、`.Files`、capabilities 和格式细节，手写小 fixture 很难覆盖这些情况。
+
+CI 会安装 Helm v3.12.3，并在常规 Release 测试之后显式运行 Helm CLI golden suite。该步骤覆盖 fixture chart 和真实 chart suite，并上传 `GoldenReports/*.json` artifact，便于按 chart 查看结果。
+
+当前已知逐模板失败是 `ingress-nginx` 的 `controller-deployment.yaml` 和 `controller-role.yaml`，两者均由托管 renderer 报告为 `NotSupportedException`。
 
 ## 兼容性契约
 

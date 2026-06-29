@@ -12,12 +12,14 @@ This project follows semantic versioning once stable releases begin.
 - Preserved Helm-compatible `.Files.AsConfig` quoted scalar output for multiline and CRLF file content.
 - Added a VitePress documentation site and GitHub Pages deployment workflow.
 - Added Helm CLI golden coverage for whitespace trimming, `indent`/`nindent`, YAML document separators, and NOTES rendering (#9).
+- Added an explicit CI Helm golden test step with uploaded real-chart JSON reports (#14).
 
 ### Changed
 
 - Hardened CI, documentation, and NuGet release workflows with PR validation, release tag guards, package caching, and symbol package publishing.
 - Bumped `Microsoft.NET.Test.Sdk` from 18.6.0 to 18.7.0.
 - Reworked the VitePress documentation around user workflows and added Simplified Chinese localization.
+- Clarified Helm compatibility documentation around current 127/129 real-chart template coverage and remaining Partial output parity (#14).
 
 ### Fixed
 

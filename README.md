@@ -141,7 +141,9 @@ await foreach (var line in client.UpgradeInstallStreamAsync(new HelmUpgradeInsta
 
 HelmSharp's template engine is continuously validated against real-world, publicly-available Helm charts using golden tests. Each chart is rendered by both `helm template` (reference) and HelmSharp's managed renderer; outputs are compared document-by-document after normalization.
 
-> **Last updated:** 2026-06-22 · **HelmSharp version:** 1.0.3 · **Helm version:** v3.12.3 · **Test framework:** net10.0
+> **Last updated:** 2026-06-29 · **HelmSharp version:** 1.0.4 + Unreleased · **Helm version:** v3.12.3 · **Test framework:** net8.0, net9.0, net10.0
+
+CI installs Helm v3.12.3, runs the normal Release test suite, then runs a dedicated Helm golden test step for fixture charts and real public charts. The real-chart step writes `GoldenReports/*.json` artifacts for reviewing per-chart coverage.
 
 ### Summary
 
@@ -150,9 +152,9 @@ HelmSharp's template engine is continuously validated against real-world, public
 | **podinfo** | 6.14.0 | 5 | 21 | 21 | 0 | 100% | ✅ Success | **Partial** |
 | **metrics-server** | 3.13.1 | 9 | 18 | 18 | 0 | 100% | ✅ Success | **Partial** |
 | **external-dns** | 1.21.1 | 5 | 7 | 7 | 0 | 100% | ✅ Success | **Partial** |
-| **ingress-nginx** | 4.12.1 | 19 | 42 | 42 | 0 | 100% | ✅ Success | **Partial** |
+| **ingress-nginx** | 4.12.1 | 19 | 42 | 40 | 2 | 95% | ❌ Fallback | **Partial** |
 | **cert-manager** | 1.17.1 | 52 | 41 | 41 | 0 | 100% | ✅ Success | **Partial** |
-| **Total** | — | **90** | **129** | **129** | **0** | **100%** | — | — |
+| **Total** | — | **90** | **129** | **127** | **2** | **98%** | — | — |
 
 ### Per-Chart Breakdown
 
@@ -160,23 +162,24 @@ HelmSharp's template engine is continuously validated against real-world, public
 podinfo          █████████████████████  100%  (21/21 templates)
 metrics-server   █████████████████████  100%  (18/18 templates)
 external-dns     █████████████████████  100%  ( 7/ 7 templates)
-ingress-nginx    █████████████████████  100%  (42/42 templates)
+ingress-nginx    ████████████████████░   95%  (40/42 templates)
 cert-manager     █████████████████████  100%  (41/41 templates)
                  ─────────────────────
-                 █████████████████████  100%  (129/129 templates overall)
+                 ████████████████████░   98%  (127/129 templates overall)
 ```
 
 ### Error Analysis
 
-All 129 templates across 5 real-world charts now render without parser exceptions. Full-chart rendering produces output that is structurally comparable to `helm template` (same or close document count). Remaining content-level differences are attributable to:
+127 of 129 templates across 5 real-world charts render successfully. Four charts complete full-chart rendering; `ingress-nginx` currently falls back to per-template reporting because `controller-deployment.yaml` and `controller-role.yaml` hit `NotSupportedException` during managed rendering. Remaining differences are attributable to:
 
 | Category | Impact | Affected Charts |
 | --- | --- | --- |
+| Unsupported renderer paths | Two templates are reported as per-template failures | ingress-nginx |
 | Whitespace / document formatting | Minor rendering diffs in YAML indentation and blank lines | All 5 charts |
 | Values evaluation edge cases | Some conditional branches produce different output | cert-manager, ingress-nginx |
 | Printf / string formatting | Slight differences in formatted string output | metrics-server, external-dns |
 
-**Key achievement:** The two parser bugs that previously caused `NotSupportedException` across 7 templates have been resolved:
+**Recent parser fixes:** The two parser bugs that previously caused `NotSupportedException` across 7 templates have been resolved:
 - **#51** — `SplitPipeline` now tracks parentheses, fixing `(empty .x)` and `($value \| quote \| len)` patterns.
 - **#50** — `else if` chain reconstruction now correctly produces balanced template blocks, fixing C# string interpolation escaping (`{{- end }}` vs `{- end }`).
 
@@ -223,6 +226,7 @@ The NuGet package metadata is defined in `src/Directory.Build.props`. The packag
 This repository includes GitHub Actions workflows:
 
 - `.github/workflows/ci.yml` restores, builds, tests, packs, and uploads package artifacts on pushes and pull requests.
+- The CI workflow installs Helm v3.12.3 and runs Helm CLI golden tests explicitly when Helm is available, uploading both `.trx` results and real-chart JSON reports.
 - `.github/workflows/deploy-docs.yml` builds the VitePress documentation site and deploys it to GitHub Pages on pushes to `master`.
 - `.github/workflows/release-nuget.yml` packs release packages and can publish them to NuGet.org.
 

@@ -21,7 +21,7 @@ features:
   - title: 需要时再进入发布流程
     details: 先只渲染；当产品需要时，再接入 install、upgrade、rollback、uninstall、apply、wait 和 release history API。
   - title: 用 Helm 输出校验兼容性
-    details: Helm CLI 只作为测试基准使用。当前真实 chart 测试集已覆盖 5 个公共 chart 的 129/129 个模板。
+    details: Helm CLI 只作为测试基准使用。当前真实 chart 测试集已覆盖 5 个公共 chart 的 127/129 个模板。
 ---
 
 ## HelmSharp 解决什么问题
@@ -85,7 +85,7 @@ dotnet add package HelmSharp.Engine
 
 ## 当前范围
 
-当前 golden suite 已经在 `podinfo`、`metrics-server`、`external-dns`、`ingress-nginx` 和 `cert-manager` 这 5 个公共 chart 上渲染 **129/129 个模板**，没有 parser exception。这是 HelmSharp 扩展兼容性的基线，不只是手写小样例。
+当前 golden suite 已经在 `podinfo`、`metrics-server`、`external-dns`、`ingress-nginx` 和 `cert-manager` 这 5 个公共 chart 上渲染 **127/129 个模板**；剩余两个 `ingress-nginx` 模板由真实 chart 报告持续跟踪。这是 HelmSharp 扩展兼容性的基线，不只是手写小样例。
 
 目前已覆盖 chart 加载、values 合并、托管模板渲染、chart 打包、repository helper、Kubernetes apply/delete/wait helper，以及基于 Kubernetes Secrets 的 release history。
 
