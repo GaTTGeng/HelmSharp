@@ -25,7 +25,7 @@
     </div>
 
     <!-- Upload + Examples side-by-side -->
-    <div class="compare-layout" v-if="state === 'idle' || state === 'error'">
+    <div class="compare-page-body" v-if="state === 'idle' || state === 'error'">
       <div class="compare-main">
         <div
           class="drop-zone"
@@ -83,8 +83,8 @@
         </div>
       </div>
 
-      <!-- Quick Examples -->
-      <div class="examples-sidebar" v-if="examples.length > 0">
+      <!-- Quick Examples — separate right panel -->
+      <div class="examples-panel" v-if="examples.length > 0">
         <div class="examples-header">{{ t.examplesHeader }}</div>
         <div class="examples-list">
           <div
@@ -1000,28 +1000,34 @@ function reset() {
   color: #dc2626;
 }
 
-/* Two-column layout: upload left, examples right */
-.compare-layout {
+/* Two-column layout: upload left, examples right panel */
+.compare-page-body {
   display: flex;
-  gap: 2rem;
+  gap: 2.5rem;
   align-items: flex-start;
 }
 .compare-main {
   flex: 1;
   min-width: 0;
 }
-.examples-sidebar {
-  flex: 0 0 280px;
-  max-height: 70vh;
+.examples-panel {
+  flex: 0 0 260px;
+  background: var(--vp-c-bg-soft);
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  padding: 1rem;
+  max-height: 75vh;
   overflow-y: auto;
+  position: sticky;
+  top: calc(var(--vp-nav-height) + 1rem);
 }
 @media (max-width: 768px) {
-  .compare-layout { flex-direction: column; }
-  .examples-sidebar { flex: none; max-height: none; }
+  .compare-page-body { flex-direction: column; }
+  .examples-panel { flex: none; position: static; max-height: none; }
 }
 .examples-header { font-size: 0.85rem; font-weight: 600; color: var(--vp-c-text-1); margin-bottom: 0.6rem; }
 .examples-list { display: flex; flex-direction: column; gap: 0.5rem; }
-.example-card { border: 1px solid var(--vp-c-divider); border-radius: 6px; padding: 0.6rem 0.75rem; cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; }
+.example-card { border: 1px solid var(--vp-c-divider); border-radius: 6px; padding: 0.6rem 0.75rem; cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; background: var(--vp-c-bg); }
 .example-card:hover { border-color: var(--vp-c-brand-1); box-shadow: 0 1px 6px var(--vp-c-brand-soft); }
 .example-card-name { font-weight: 700; font-size: 0.85rem; color: var(--vp-c-brand-1); }
 .example-card-source { font-size: 0.7rem; color: var(--vp-c-text-3); }
