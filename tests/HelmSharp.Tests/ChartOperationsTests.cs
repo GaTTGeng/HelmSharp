@@ -541,7 +541,7 @@ public class ChartOperationsTests : IDisposable
         var result = await client.VersionAsync();
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Contains("chemical-ai-helm", result.StandardOutput);
+        Assert.Contains("HelmSharp", result.StandardOutput);
     }
 
     [Fact]

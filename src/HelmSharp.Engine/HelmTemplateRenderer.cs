@@ -1094,7 +1094,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                 ["APIVersions"] = context.ApiVersions ?? GetDefaultApiVersions(context.KubeVersion),
                 ["HelmVersion"] = new Dictionary<string, object?>
                 {
-                    ["Version"] = "chemical-ai-helm managed-0.3.0",
+                    ["Version"] = "HelmSharp 0.3.0",
                     ["GitCommit"] = "managed",
                     ["GitTreeState"] = "clean",
                     ["GoVersion"] = "dotnet/9.0"
@@ -1122,7 +1122,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                 ["APIVersions"] = context.ApiVersions ?? GetDefaultApiVersions(context.KubeVersion),
                 ["HelmVersion"] = new Dictionary<string, object?>
                 {
-                    ["Version"] = "chemical-ai-helm managed-0.3.0",
+                    ["Version"] = "HelmSharp 0.3.0",
                     ["GitCommit"] = "managed",
                     ["GitTreeState"] = "clean",
                     ["GoVersion"] = "dotnet/9.0"

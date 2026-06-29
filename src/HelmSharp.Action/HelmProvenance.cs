@@ -36,7 +36,7 @@ public static class HelmProvenance
             provContent.AppendLine($"pgpKeyID: {keyId}");
 
         provContent.AppendLine("-----BEGIN PGP SIGNATURE-----");
-        provContent.AppendLine($"comment: chemical-ai-helm managed provenance");
+        provContent.AppendLine($"comment: HelmSharp managed provenance");
         provContent.AppendLine();
         provContent.AppendLine(Convert.ToBase64String(SHA512.HashData(chartBytes)));
         provContent.AppendLine("-----END PGP SIGNATURE-----");

@@ -14,7 +14,7 @@ public class HelmExecutionOptions
 
     public int TimeoutSeconds { get; set; } = 300;
 
-    public string FieldManager { get; set; } = "chemical-ai-helm";
+    public string FieldManager { get; set; } = "helmsharp";
 
     /// <summary>
     /// Maximum number of revisions to keep per release (0 = unlimited).
