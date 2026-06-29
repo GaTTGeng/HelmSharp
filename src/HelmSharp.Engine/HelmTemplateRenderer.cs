@@ -93,7 +93,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             }
         }
 
-        var output = new StringBuilder();
+        var manifests = new List<(string SourcePath, string Content)>();
         var errors = new List<(string Path, Exception Exception)>();
 
         // Render main chart templates
@@ -115,8 +115,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                 if (string.IsNullOrWhiteSpace(rendered))
                     continue;
 
-                output.AppendLine("---");
-                output.AppendLine(rendered.Trim());
+                manifests.Add(($"{_chart.Name}/{path}", rendered.Trim()));
             }
             catch (NotSupportedException ex)
             {
@@ -173,8 +172,9 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                     if (string.IsNullOrWhiteSpace(rendered))
                         continue;
 
-                    output.AppendLine("---");
-                    output.AppendLine(rendered.Trim());
+                    manifests.Add((
+                        $"{_chart.Name}/charts/{subchartIdentity}/{path}",
+                        rendered.Trim()));
                 }
                 catch (NotSupportedException ex)
                 {
@@ -198,6 +198,13 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             throw new InvalidOperationException(
                 $"HelmSharp template rendering failed for {errors.Count} template(s): {errorSummary}",
                 errors[0].Exception);
+        }
+
+        var output = new StringBuilder();
+        foreach (var manifest in manifests.OrderBy(x => x.SourcePath, StringComparer.Ordinal))
+        {
+            output.AppendLine("---");
+            output.AppendLine(manifest.Content);
         }
 
         return output.ToString();

@@ -1,0 +1,10 @@
+apiVersion: v2
+name: dependencies
+version: 1.0.0
+dependencies:
+  - name: child
+    version: 1.0.0
+    repository: file://charts/child
+    condition: child.enabled
+    tags:
+      - optional

@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: child
+data:
+  marker: {{ .Values.marker | quote }}
+  nestedSource: {{ .Values.nested.source | quote }}
+  globalShared: {{ .Values.global.shared | quote }}
+  parentHelper: {{ include "parent.shared" . | quote }}
+  childHelper: {{ include "child.shared" . | quote }}
