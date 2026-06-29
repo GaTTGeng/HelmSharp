@@ -1077,25 +1077,34 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         return token;
     }
 
+    /// <summary>
+    /// Builds the full root dictionary for <c>$</c> lookups, matching Helm's
+    /// top-level template object ($.Values, $.Release, $.Chart, $.Capabilities,
+    /// $.Files, $.Template).
+    /// </summary>
     private static Dictionary<string, object?> CreateRootDot(TemplateContext context)
         => new(StringComparer.Ordinal)
         {
             ["Values"] = context.Values,
-            ["Release"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+            ["Release"] = BuildReleaseDict(context),
+            ["Chart"] = BuildChartDict(context),
+            ["Capabilities"] = new Dictionary<string, object?>
             {
-                ["Name"] = context.ReleaseName,
-                ["Namespace"] = context.ReleaseNamespace,
-                ["Service"] = "Helm",
-                ["IsInstall"] = context.IsInstall,
-                ["IsUpgrade"] = context.IsUpgrade,
-                ["Revision"] = context.Revision
+                ["KubeVersion"] = ToTemplateKubeVersion(context.KubeVersion),
+                ["APIVersions"] = context.ApiVersions ?? GetDefaultApiVersions(context.KubeVersion),
+                ["HelmVersion"] = new Dictionary<string, object?>
+                {
+                    ["Version"] = "chemical-ai-helm managed-0.3.0",
+                    ["GitCommit"] = "managed",
+                    ["GitTreeState"] = "clean",
+                    ["GoVersion"] = "dotnet/9.0"
+                }
             },
-            ["Chart"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+            ["Files"] = new TemplateFiles(context.Chart.Files),
+            ["Template"] = new Dictionary<string, object?>
             {
-                ["APIVersion"] = context.Chart.ApiVersion,
-                ["Name"] = context.TemplateChartName ?? context.Chart.Name,
-                ["Version"] = context.Chart.Version,
-                ["AppVersion"] = context.Chart.AppVersion ?? string.Empty
+                ["Name"] = $"{context.TemplateChartPath ?? context.Chart.Name}/{context.CurrentTemplatePath}",
+                ["BasePath"] = $"{context.TemplateChartPath ?? context.Chart.Name}/templates"
             }
         };
 
@@ -1105,35 +1114,8 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         object? current = parts.FirstOrDefault() switch
         {
             "Values" => context.Values,
-            "Chart" => new Dictionary<string, object?>
-            {
-                ["APIVersion"] = context.Chart.ApiVersion,
-                ["Name"] = context.TemplateChartName ?? context.Chart.Name,
-                ["Version"] = context.Chart.Version,
-                ["AppVersion"] = context.Chart.AppVersion ?? string.Empty,
-                ["Description"] = context.Chart.Description ?? string.Empty,
-                ["Home"] = context.Chart.Home ?? string.Empty,
-                ["Sources"] = context.Chart.Sources ?? new List<object?>(),
-                ["Keywords"] = context.Chart.Keywords ?? new List<object?>(),
-                ["Maintainers"] = context.Chart.Maintainers?
-                    .Select(ToTemplateMaintainer)
-                    .Cast<object?>()
-                    .ToList() ?? new List<object?>(),
-                ["Type"] = context.Chart.Type ?? "application",
-                ["Deprecated"] = context.Chart.Deprecated,
-                ["KubeVersion"] = context.Chart.KubeVersion ?? string.Empty,
-                ["Annotations"] = context.Chart.Annotations ?? new Dictionary<string, object?>(StringComparer.Ordinal),
-                ["Dependencies"] = context.Dependencies.Select(ToTemplateDependency).ToList()
-            },
-            "Release" => new Dictionary<string, object?>
-            {
-                ["Name"] = context.ReleaseName,
-                ["Namespace"] = context.ReleaseNamespace,
-                ["Service"] = "Helm",
-                ["IsInstall"] = context.IsInstall,
-                ["IsUpgrade"] = context.IsUpgrade,
-                ["Revision"] = context.Revision
-            },
+            "Chart" => BuildChartDict(context),
+            "Release" => BuildReleaseDict(context),
             "Capabilities" => new Dictionary<string, object?>
             {
                 ["KubeVersion"] = ToTemplateKubeVersion(context.KubeVersion),
@@ -1158,6 +1140,39 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         var skip = parts.FirstOrDefault() is "Values" or "Chart" or "Release" or "Capabilities" or "Files" or "Template" ? 1 : 0;
         return ResolveMembers(current, parts.Skip(skip));
     }
+
+    private static Dictionary<string, object?> BuildChartDict(TemplateContext context)
+        => new(StringComparer.Ordinal)
+        {
+            ["APIVersion"] = context.Chart.ApiVersion,
+            ["Name"] = context.TemplateChartName ?? context.Chart.Name,
+            ["Version"] = context.Chart.Version,
+            ["AppVersion"] = context.Chart.AppVersion ?? string.Empty,
+            ["Description"] = context.Chart.Description ?? string.Empty,
+            ["Home"] = context.Chart.Home ?? string.Empty,
+            ["Sources"] = context.Chart.Sources ?? new List<object?>(),
+            ["Keywords"] = context.Chart.Keywords ?? new List<object?>(),
+            ["Maintainers"] = context.Chart.Maintainers?
+                .Select(ToTemplateMaintainer)
+                .Cast<object?>()
+                .ToList() ?? new List<object?>(),
+            ["Type"] = context.Chart.Type ?? "application",
+            ["Deprecated"] = context.Chart.Deprecated,
+            ["KubeVersion"] = context.Chart.KubeVersion ?? string.Empty,
+            ["Annotations"] = context.Chart.Annotations ?? new Dictionary<string, object?>(StringComparer.Ordinal),
+            ["Dependencies"] = context.Dependencies.Select(ToTemplateDependency).ToList()
+        };
+
+    private static Dictionary<string, object?> BuildReleaseDict(TemplateContext context)
+        => new(StringComparer.Ordinal)
+        {
+            ["Name"] = context.ReleaseName,
+            ["Namespace"] = context.ReleaseNamespace,
+            ["Service"] = "Helm",
+            ["IsInstall"] = context.IsInstall,
+            ["IsUpgrade"] = context.IsUpgrade,
+            ["Revision"] = context.Revision
+        };
 
     private static object? ResolveMembers(object? current, string path)
         => ResolveMembers(current, path.Split('.', StringSplitOptions.RemoveEmptyEntries));
