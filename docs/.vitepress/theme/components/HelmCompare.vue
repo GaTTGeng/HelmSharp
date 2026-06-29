@@ -607,8 +607,14 @@ function syncDiffScroll(side: 'left' | 'right') {
 function scrollThumbStyle(side: 'left' | 'right'): Record<string, string> {
   const max = side === 'left' ? leftScrollMax.value : rightScrollMax.value
   const val = side === 'left' ? leftScrollValue.value : rightScrollValue.value
-  const pct = max > 0 ? Math.round((val / max) * 100) : 0
-  return { width: pct + '%' }
+  if (max === 0) return { width: '100%', left: '0' }
+  const viewRatio = Math.min(1, 0.3)
+  const thumbWidth = Math.max(20, viewRatio * 100)
+  const thumbLeft = (val / max) * (100 - thumbWidth)
+  return {
+    width: thumbWidth + '%',
+    left: thumbLeft + '%',
+  }
 }
 
 function onDiffTrackPointerDown(side: 'left' | 'right', e: PointerEvent) {
@@ -618,16 +624,32 @@ function onDiffTrackPointerDown(side: 'left' | 'right', e: PointerEvent) {
   const max = side === 'left' ? leftScrollMax.value : rightScrollMax.value
   if (max === 0) return
   const track = e.currentTarget as HTMLElement
-  const rect = track.getBoundingClientRect()
-  const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
-  const target = pct * max
-  if (side === 'left') {
-    leftScrollValue.value = target
-    pane.scrollLeft = target
-  } else {
-    rightScrollValue.value = target
-    pane.scrollLeft = target
+  ;(track as any).setPointerCapture?.(e.pointerId)
+
+  const updatePos = (clientX: number) => {
+    const rect = track.getBoundingClientRect()
+    const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
+    const target = pct * max
+    if (side === 'left') {
+      leftScrollValue.value = target
+      pane.scrollLeft = target
+    } else {
+      rightScrollValue.value = target
+      pane.scrollLeft = target
+    }
   }
+
+  updatePos(e.clientX)
+
+  const onMove = (ev: PointerEvent) => { updatePos(ev.clientX) }
+  const onUp = () => {
+    track.removeEventListener('pointermove', onMove)
+    track.removeEventListener('pointerup', onUp)
+    track.removeEventListener('pointerleave', onUp)
+  }
+  track.addEventListener('pointermove', onMove)
+  track.addEventListener('pointerup', onUp)
+  track.addEventListener('pointerleave', onUp)
 }
 
 function onDiffTrackKeydown(side: 'left' | 'right', e: KeyboardEvent) {
@@ -1429,7 +1451,6 @@ function reset() {
   font-size: 0.75rem;
   line-height: 1.55;
   overflow-y: auto;
-  scrollbar-width: none;
 }
 
 .diff-body::-webkit-scrollbar {
@@ -1440,8 +1461,6 @@ function reset() {
 .diff-pane {
   min-width: 0;
   overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
 }
 
 .diff-pane::-webkit-scrollbar {
@@ -1475,9 +1494,43 @@ function reset() {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   flex: 0 0 auto;
   gap: 0;
-  padding: 0.55rem 0.75rem;
+  padding: 0.5rem 0.75rem;
   border-top: 1px solid var(--vp-c-divider);
   background: var(--vp-c-bg-soft);
+}
+.diff-scroll-cell {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+.diff-scroll-cell:first-child {
+  padding-right: 0.75rem;
+  border-right: 1px solid var(--vp-c-divider);
+}
+.diff-scroll-cell:last-child {
+  padding-left: 0.75rem;
+}
+.diff-scroll-track {
+  width: 100%;
+  height: 8px;
+  background: var(--vp-c-divider);
+  border-radius: 4px;
+  cursor: pointer;
+  position: relative;
+}
+.diff-scroll-track.disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.diff-scroll-thumb {
+  display: block;
+  height: 8px;
+  background: var(--vp-c-brand-1);
+  border-radius: 4px;
+  min-width: 20px;
+  position: absolute;
+  left: 0;
+  top: 0;
 }
 
 .diff-scroll-range {
