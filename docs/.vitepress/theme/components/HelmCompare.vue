@@ -3,10 +3,24 @@
     <div class="compare-header">
       <h1>{{ t.title }}</h1>
       <p class="compare-subtitle">{{ t.subtitle }}</p>
-      <div class="version-bar" v-if="helmSharpVersion || helmVersion">
-        <span class="version-badge" v-if="helmSharpVersion">HelmSharp {{ helmSharpVersion }}</span>
-        <span class="version-sep" v-if="helmSharpVersion && helmVersion">|</span>
-        <span class="version-badge" v-if="helmVersion">Helm {{ helmVersion }}</span>
+      <div class="status-bar">
+        <!-- Online -->
+        <template v-if="serviceStatus === 'online'">
+          <span class="status-dot online"></span>
+          <span class="version-badge" v-if="helmSharpVersion">HelmSharp {{ helmSharpVersion }}</span>
+          <span class="version-sep" v-if="helmSharpVersion && helmVersion">|</span>
+          <span class="version-badge" v-if="helmVersion">Helm {{ helmVersion }}</span>
+        </template>
+        <!-- Offline -->
+        <template v-else-if="serviceStatus === 'offline'">
+          <span class="status-dot offline"></span>
+          <span class="status-text">{{ t.serviceOffline }}</span>
+        </template>
+        <!-- Checking -->
+        <template v-else>
+          <span class="status-dot checking"></span>
+          <span class="status-text">{{ t.serviceChecking }}</span>
+        </template>
       </div>
     </div>
 
@@ -52,8 +66,13 @@
         ></textarea>
       </div>
 
+      <div class="offline-warning" v-if="serviceStatus === 'offline'">
+        <div class="offline-warning-icon">⚠️</div>
+        <div class="offline-warning-text">{{ t.serviceUnavailable }}</div>
+      </div>
+
       <div class="submit-row">
-        <button class="btn-submit" :disabled="!canSubmit" @click="submitCompare">
+        <button class="btn-submit" :disabled="!canSubmit || serviceStatus === 'offline'" @click="submitCompare">
           {{ t.submitBtn }}
         </button>
       </div>
@@ -138,7 +157,8 @@ import { useData } from 'vitepress'
 
 const { lang } = useData()
 
-// ── Version info (fetched from API health endpoint) ────────────────────
+// ── Service status & version info ────────────────────────────────────
+const serviceStatus = ref<'checking' | 'online' | 'offline'>('checking')
 const helmVersion = ref('')
 const helmSharpVersion = ref('')
 
@@ -146,12 +166,13 @@ onMounted(async () => {
   try {
     const base = API_BASE || ''
     const url = base ? `${base}/api/v1/health` : '/api/v1/health'
-    const res = await fetch(url)
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) })
     const data = await res.json()
     helmVersion.value = data.helmVersion || ''
     helmSharpVersion.value = data.helmSharpVersion || ''
+    serviceStatus.value = 'online'
   } catch {
-    // API not reachable, leave empty
+    serviceStatus.value = 'offline'
   }
 })
 
@@ -193,6 +214,11 @@ const t = computed(() => {
     notHelmChart: zh ? '这个包里没有找到 Chart.yaml，请确认上传的是 Helm Chart 文件' : 'No Chart.yaml found in the archive — please upload a valid Helm Chart',
     requestFailed: (status: number) => zh ? `请求失败 (${status})` : `Request failed (${status})`,
     connectFailed: (msg: string) => zh ? `连接失败: ${msg}` : `Connection failed: ${msg}`,
+    serviceChecking: zh ? '检测服务状态...' : 'Checking service...',
+    serviceOffline: zh ? '对比服务不可用' : 'Compare service offline',
+    serviceUnavailable: zh
+      ? '对比服务暂时无法连接，上传功能已禁用。请稍后重试或联系管理员。'
+      : 'The compare service is currently unreachable. Upload has been disabled. Please try again later.',
   }
 })
 
@@ -425,7 +451,7 @@ function reset() {
   font-size: 0.95rem;
 }
 
-.version-bar {
+.status-bar {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -447,6 +473,62 @@ function reset() {
 .version-sep {
   color: var(--vp-c-text-3);
   font-size: 0.8rem;
+}
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-dot.online {
+  background: #16a34a;
+  box-shadow: 0 0 6px rgba(22, 163, 74, 0.5);
+}
+
+.status-dot.offline {
+  background: #dc2626;
+  box-shadow: 0 0 6px rgba(220, 38, 38, 0.5);
+}
+
+.status-dot.checking {
+  background: #ca8a04;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+.status-text {
+  font-size: 0.8rem;
+  color: var(--vp-c-text-2);
+}
+
+.offline-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  background: rgba(220, 38, 38, 0.06);
+  border: 1px solid rgba(220, 38, 38, 0.25);
+  border-radius: 6px;
+}
+
+.offline-warning-icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.offline-warning-text {
+  font-size: 0.85rem;
+  color: #dc2626;
+  line-height: 1.5;
 }
 
 /* Upload */
