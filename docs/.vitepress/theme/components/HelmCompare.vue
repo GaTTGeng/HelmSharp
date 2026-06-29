@@ -84,6 +84,24 @@
       </div>
     </div>
 
+    <!-- Quick Examples -->
+    <div class="examples-section" v-if="examples.length > 0 && (state === 'idle' || state === 'error')">
+      <div class="examples-header">{{ t.examplesHeader }}</div>
+      <div class="examples-grid">
+        <div
+          v-for="ex in examples"
+          :key="ex.id"
+          class="example-card"
+          @click="runExample(ex)"
+        >
+          <div class="example-card-name">{{ ex.name }}</div>
+          <div class="example-card-source">{{ ex.source }}</div>
+          <div class="example-card-desc">{{ isZh && ex.descriptionZh ? ex.descriptionZh : ex.description }}</div>
+          <code class="example-card-values" v-if="ex.defaultValues">{{ ex.defaultValues }}</code>
+        </div>
+      </div>
+    </div>
+
     <!-- Loading -->
     <div class="loading-section" v-if="state === 'uploading' || state === 'rendering'">
       <div class="spinner"></div>
@@ -174,7 +192,54 @@ onMounted(async () => {
   } catch {
     serviceStatus.value = 'offline'
   }
+
+  if (serviceStatus.value === 'online') {
+    try {
+      const base = API_BASE || ''
+      const url = base ? `${base}/api/v1/examples` : '/api/v1/examples'
+      const res = await fetch(url, { signal: AbortSignal.timeout(5000) })
+      if (res.ok) examples.value = await res.json()
+    } catch { /* ignore */ }
+  }
 })
+
+interface ExampleInfo {
+  id: string
+  name: string
+  source: string
+  description: string
+  descriptionZh: string
+  defaultValues: string
+}
+
+const examples = ref<ExampleInfo[]>([])
+
+async function runExample(example: ExampleInfo) {
+  state.value = 'uploading'
+  errorMessage.value = ''
+  result.value = null
+  frontendValidation.value = ''
+
+  try {
+    const base = API_BASE || ''
+    const chartUrl = base
+      ? `${base}/api/v1/examples/${example.id}/chart`
+      : `/api/v1/examples/${example.id}/chart`
+    const res = await fetch(chartUrl)
+    if (!res.ok) {
+      state.value = 'error'
+      errorMessage.value = t.value.requestFailed(res.status)
+      return
+    }
+    const blob = await res.blob()
+    chartFile.value = new File([blob], `${example.id}.tgz`, { type: 'application/gzip' })
+    valuesContent.value = example.defaultValues || ''
+    state.value = 'idle'
+  } catch (e: any) {
+    state.value = 'error'
+    errorMessage.value = t.value.connectFailed(e.message)
+  }
+}
 
 const isZh = computed(() => lang.value === 'zh-CN')
 
@@ -219,6 +284,7 @@ const t = computed(() => {
     serviceUnavailable: zh
       ? '对比服务暂时无法连接，上传功能已禁用。请稍后重试或联系管理员。'
       : 'The compare service is currently unreachable. Upload has been disabled. Please try again later.',
+    examplesHeader: zh ? '快速示例' : 'Quick Examples',
   }
 })
 
@@ -933,6 +999,18 @@ function reset() {
 .diff-row.removed .diff-left .line-content {
   color: #dc2626;
 }
+
+/* Examples */
+.examples-section { margin-top: 2rem; }
+.examples-header { font-size: 0.9rem; font-weight: 600; color: var(--vp-c-text-1); margin-bottom: 0.75rem; }
+.examples-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 0.75rem; }
+.example-card { border: 1px solid var(--vp-c-divider); border-radius: 8px; padding: 1rem; cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; }
+.example-card:hover { border-color: var(--vp-c-brand-1); box-shadow: 0 2px 8px var(--vp-c-brand-soft); }
+.example-card-name { font-weight: 700; font-size: 1rem; color: var(--vp-c-brand-1); }
+.example-card-source { font-size: 0.75rem; color: var(--vp-c-text-3); margin-bottom: 0.5rem; }
+.example-card-desc { font-size: 0.8rem; color: var(--vp-c-text-2); margin-bottom: 0.5rem; }
+.example-card-values { display: block; font-size: 0.72rem; font-family: monospace; background: var(--vp-c-bg-soft); padding: 0.3rem 0.5rem; border-radius: 4px; white-space: pre-wrap;
+max-height: 80px; overflow: hidden; }
 
 /* All match */
 .all-match {
