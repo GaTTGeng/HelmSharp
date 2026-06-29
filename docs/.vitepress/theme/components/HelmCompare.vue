@@ -24,80 +24,80 @@
       </div>
     </div>
 
-    <!-- Upload Section -->
-    <div class="upload-section" v-if="state === 'idle' || state === 'error'">
-      <div
-        class="drop-zone"
-        :class="{ active: fileDropActive, 'has-file': !!chartFile, 'has-error': !!frontendValidation }"
-        @dragover.prevent="fileDropActive = true"
-        @dragleave.prevent="fileDropActive = false"
-        @drop.prevent="onFileDrop"
-      >
-        <div v-if="!chartFile" class="drop-prompt">
-          <div class="drop-icon">📦</div>
-          <div class="drop-text">{{ t.dropText }}<a href="javascript:void(0)" @click="triggerFileInput">{{ t.clickText }}</a> Helm Chart</div>
-          <div class="drop-hint">{{ t.dropHint }}</div>
-        </div>
-        <div v-else class="file-info">
-          <span class="file-name">📦 {{ chartFile?.name }}</span>
-          <span class="file-size">({{ formatSize(chartFile?.size) }})</span>
-          <button class="btn-clear" @click="clearFile">✕</button>
-        </div>
-        <input
-          ref="fileInputRef"
-          type="file"
-          accept=".tgz,.tar.gz"
-          class="hidden-input"
-          @change="onFileChange"
-        />
-      </div>
-      <div class="validation-error" v-if="frontendValidation">{{ frontendValidation }}</div>
-
-      <div class="values-section">
-        <div class="values-header">
-          <label class="values-label">{{ t.valuesLabel }}</label>
-        </div>
-        <textarea
-          class="values-editor"
-          v-model="valuesContent"
-          :placeholder="t.valuesPlaceholder"
-          rows="6"
-          spellcheck="false"
-        ></textarea>
-      </div>
-
-      <div class="offline-warning" v-if="serviceStatus === 'offline'">
-        <div class="offline-warning-icon">⚠️</div>
-        <div class="offline-warning-text">{{ t.serviceUnavailable }}</div>
-      </div>
-
-      <div class="submit-row">
-        <button class="btn-submit" :disabled="!canSubmit || serviceStatus === 'offline'" @click="submitCompare">
-          {{ t.submitBtn }}
-        </button>
-      </div>
-
-      <div class="error-banner" v-if="state === 'error' && errorMessage">
-        <div class="error-icon">❌</div>
-        <div class="error-text">{{ errorMessage }}</div>
-        <button class="btn-retry" @click="reset">{{ t.retry }}</button>
-      </div>
-    </div>
-
-    <!-- Quick Examples -->
-    <div class="examples-section" v-if="examples.length > 0 && (state === 'idle' || state === 'error')">
-      <div class="examples-header">{{ t.examplesHeader }}</div>
-      <div class="examples-grid">
+    <!-- Upload + Examples side-by-side -->
+    <div class="compare-layout" v-if="state === 'idle' || state === 'error'">
+      <div class="compare-main">
         <div
-          v-for="ex in examples"
-          :key="ex.id"
-          class="example-card"
-          @click="runExample(ex)"
+          class="drop-zone"
+          :class="{ active: fileDropActive, 'has-file': !!chartFile, 'has-error': !!frontendValidation }"
+          @dragover.prevent="fileDropActive = true"
+          @dragleave.prevent="fileDropActive = false"
+          @drop.prevent="onFileDrop"
         >
-          <div class="example-card-name">{{ ex.name }}</div>
-          <div class="example-card-source">{{ ex.source }}</div>
-          <div class="example-card-desc">{{ isZh && ex.descriptionZh ? ex.descriptionZh : ex.description }}</div>
-          <code class="example-card-values" v-if="ex.defaultValues">{{ ex.defaultValues }}</code>
+          <div v-if="!chartFile" class="drop-prompt">
+            <div class="drop-icon">📦</div>
+            <div class="drop-text">{{ t.dropText }}<a href="javascript:void(0)" @click="triggerFileInput">{{ t.clickText }}</a> Helm Chart</div>
+            <div class="drop-hint">{{ t.dropHint }}</div>
+          </div>
+          <div v-else class="file-info">
+            <span class="file-name">📦 {{ chartFile?.name }}</span>
+            <span class="file-size">({{ formatSize(chartFile?.size) }})</span>
+            <button class="btn-clear" @click="clearFile">✕</button>
+          </div>
+          <input
+            ref="fileInputRef"
+            type="file"
+            accept=".tgz,.tar.gz"
+            class="hidden-input"
+            @change="onFileChange"
+          />
+        </div>
+        <div class="validation-error" v-if="frontendValidation">{{ frontendValidation }}</div>
+
+        <div class="values-section">
+          <label class="values-label">{{ t.valuesLabel }}</label>
+          <textarea
+            class="values-editor"
+            v-model="valuesContent"
+            :placeholder="t.valuesPlaceholder"
+            rows="5"
+            spellcheck="false"
+          ></textarea>
+        </div>
+
+        <div class="offline-warning" v-if="serviceStatus === 'offline'">
+          <span class="offline-warning-icon">⚠️</span>
+          <span class="offline-warning-text">{{ t.serviceUnavailable }}</span>
+        </div>
+
+        <div class="submit-row">
+          <button class="btn-submit" :disabled="!canSubmit || serviceStatus === 'offline'" @click="submitCompare">
+            {{ t.submitBtn }}
+          </button>
+        </div>
+
+        <div class="error-banner" v-if="state === 'error' && errorMessage">
+          <span class="error-icon">❌</span>
+          <span class="error-text">{{ errorMessage }}</span>
+          <button class="btn-retry" @click="reset">{{ t.retry }}</button>
+        </div>
+      </div>
+
+      <!-- Quick Examples -->
+      <div class="examples-sidebar" v-if="examples.length > 0">
+        <div class="examples-header">{{ t.examplesHeader }}</div>
+        <div class="examples-list">
+          <div
+            v-for="ex in examples"
+            :key="ex.id"
+            class="example-card"
+            @click="runExample(ex)"
+          >
+            <div class="example-card-name">{{ ex.name }}</div>
+            <div class="example-card-source">{{ ex.source }}</div>
+            <div class="example-card-desc">{{ isZh && ex.descriptionZh ? ex.descriptionZh : ex.description }}</div>
+            <code class="example-card-values" v-if="ex.defaultValues">{{ ex.defaultValues }}</code>
+          </div>
         </div>
       </div>
     </div>
@@ -1000,17 +1000,33 @@ function reset() {
   color: #dc2626;
 }
 
-/* Examples */
-.examples-section { margin-top: 2rem; }
-.examples-header { font-size: 0.9rem; font-weight: 600; color: var(--vp-c-text-1); margin-bottom: 0.75rem; }
-.examples-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 0.75rem; }
-.example-card { border: 1px solid var(--vp-c-divider); border-radius: 8px; padding: 1rem; cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; }
-.example-card:hover { border-color: var(--vp-c-brand-1); box-shadow: 0 2px 8px var(--vp-c-brand-soft); }
-.example-card-name { font-weight: 700; font-size: 1rem; color: var(--vp-c-brand-1); }
-.example-card-source { font-size: 0.75rem; color: var(--vp-c-text-3); margin-bottom: 0.5rem; }
-.example-card-desc { font-size: 0.8rem; color: var(--vp-c-text-2); margin-bottom: 0.5rem; }
-.example-card-values { display: block; font-size: 0.72rem; font-family: monospace; background: var(--vp-c-bg-soft); padding: 0.3rem 0.5rem; border-radius: 4px; white-space: pre-wrap;
-max-height: 80px; overflow: hidden; }
+/* Two-column layout: upload left, examples right */
+.compare-layout {
+  display: flex;
+  gap: 2rem;
+  align-items: flex-start;
+}
+.compare-main {
+  flex: 1;
+  min-width: 0;
+}
+.examples-sidebar {
+  flex: 0 0 280px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+@media (max-width: 768px) {
+  .compare-layout { flex-direction: column; }
+  .examples-sidebar { flex: none; max-height: none; }
+}
+.examples-header { font-size: 0.85rem; font-weight: 600; color: var(--vp-c-text-1); margin-bottom: 0.6rem; }
+.examples-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.example-card { border: 1px solid var(--vp-c-divider); border-radius: 6px; padding: 0.6rem 0.75rem; cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; }
+.example-card:hover { border-color: var(--vp-c-brand-1); box-shadow: 0 1px 6px var(--vp-c-brand-soft); }
+.example-card-name { font-weight: 700; font-size: 0.85rem; color: var(--vp-c-brand-1); }
+.example-card-source { font-size: 0.7rem; color: var(--vp-c-text-3); }
+.example-card-desc { font-size: 0.75rem; color: var(--vp-c-text-2); margin: 0.2rem 0; }
+.example-card-values { display: block; font-size: 0.68rem; font-family: monospace; background: var(--vp-c-bg-soft); padding: 0.2rem 0.4rem; border-radius: 3px; white-space: pre-wrap; max-height: 60px; overflow: hidden; }
 
 /* All match */
 .all-match {

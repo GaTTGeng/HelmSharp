@@ -19,3 +19,37 @@
   display: table;
   width: 100%;
 }
+
+/* Compare CTA button — matches VitePress hero action style */
+.compare-cta {
+  text-align: center;
+  margin: 2rem 0 1.5rem;
+}
+.compare-cta-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.7rem 1.8rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--vp-button-brand-text);
+  background: var(--vp-c-brand-1);
+  border-radius: 6px;
+  text-decoration: none;
+  transition: background 0.2s, transform 0.15s;
+}
+.compare-cta-btn:hover {
+  background: var(--vp-c-brand-2);
+  transform: translateY(-1px);
+  text-decoration: none !important;
+  color: var(--vp-button-brand-text);
+}
+.compare-cta-icon {
+  font-size: 1.1rem;
+}
+.compare-cta-arrow {
+  transition: transform 0.15s;
+}
+.compare-cta-btn:hover .compare-cta-arrow {
+  transform: translateX(3px);
+}
