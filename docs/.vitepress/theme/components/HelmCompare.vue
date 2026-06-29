@@ -25,7 +25,7 @@
     </div>
 
     <!-- Upload + Examples side-by-side -->
-    <div class="compare-page-body" v-if="state === 'idle' || state === 'error'">
+    <div class="compare-layout" v-if="state === 'idle' || state === 'error'">
       <div class="compare-main">
         <div
           class="drop-zone"
@@ -36,15 +36,7 @@
         >
           <div v-if="!chartFile" class="drop-prompt">
             <div class="drop-icon">📦</div>
-            <div class="drop-text">
-              {{ t.dropText }}<a href="javascript:void(0)" @click="triggerFileInput">{{ t.clickText }}</a> Helm Chart
-              <template v-if="examples.length > 0">
-                <span class="drop-text-separator">·</span>
-                <button class="drop-example-link" type="button" @click.stop="examplesOpen = true">
-                  {{ t.examplesHeader }}
-                </button>
-              </template>
-            </div>
+            <div class="drop-text">{{ t.dropText }}<a href="javascript:void(0)" @click="triggerFileInput">{{ t.clickText }}</a> Helm Chart</div>
             <div class="drop-hint">{{ t.dropHint }}</div>
           </div>
           <div v-else class="file-info">
@@ -90,35 +82,22 @@
           <button class="btn-retry" @click="reset">{{ t.retry }}</button>
         </div>
       </div>
-    </div>
 
-    <div
-      class="examples-modal-backdrop"
-      v-if="examplesOpen"
-      @click.self="examplesOpen = false"
-    >
-      <div class="examples-modal" role="dialog" aria-modal="true" :aria-label="t.examplesHeader">
-        <div class="examples-modal-header">
-          <div>
-            <div class="examples-title">{{ t.examplesHeader }}</div>
-            <div class="examples-subtitle">{{ t.examplesSubtitle }}</div>
-          </div>
-          <button class="btn-modal-close" type="button" @click="examplesOpen = false">{{ t.close }}</button>
-        </div>
+      <!-- Quick Examples -->
+      <div class="examples-sidebar" v-if="examples.length > 0">
+        <div class="examples-header">{{ t.examplesHeader }}</div>
         <div class="examples-list">
-          <button
+          <div
             v-for="ex in examples"
             :key="ex.id"
             class="example-card"
-            type="button"
             @click="runExample(ex)"
           >
-            <span class="example-card-mark" aria-hidden="true">{{ exampleInitial(ex.name) }}</span>
-            <span class="example-card-body">
-              <span class="example-card-name">{{ ex.name }}</span>
-              <span class="example-card-source">{{ ex.source }}</span>
-            </span>
-          </button>
+            <div class="example-card-name">{{ ex.name }}</div>
+            <div class="example-card-source">{{ ex.source }}</div>
+            <div class="example-card-desc">{{ isZh && ex.descriptionZh ? ex.descriptionZh : ex.description }}</div>
+            <code class="example-card-values" v-if="ex.defaultValues">{{ ex.defaultValues }}</code>
+          </div>
         </div>
       </div>
     </div>
@@ -1635,172 +1614,33 @@ function reset() {
   color: #dc2626;
 }
 
-.inline-diff {
-  border-radius: 3px;
-  padding: 0.05rem 0.1rem;
-}
-
-.inline-diff.added {
-  background: rgba(22, 163, 74, 0.18);
-}
-
-.inline-diff.removed {
-  background: rgba(220, 38, 38, 0.18);
-}
-
-.compare-page-body {
+/* Two-column layout: upload left, examples right */
+.compare-layout {
   display: flex;
-  justify-content: center;
+  gap: 2rem;
+  align-items: flex-start;
 }
 .compare-main {
-  width: 100%;
-  max-width: 720px;
+  flex: 1;
   min-width: 0;
 }
-.examples-modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1.5rem;
-  background: rgba(0, 0, 0, 0.48);
-  backdrop-filter: blur(6px);
-}
-.examples-modal {
-  width: min(760px, 100%);
-  max-height: min(78vh, 720px);
+.examples-sidebar {
+  flex: 0 0 280px;
+  max-height: 70vh;
   overflow-y: auto;
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 8px;
-  background: var(--vp-c-bg);
-  box-shadow: 0 24px 72px rgba(0, 0, 0, 0.28);
-  padding: 1rem;
-  animation: loadingCardEnter 0.2s ease-out both;
 }
-.examples-modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 0.9rem;
-  padding-bottom: 0.75rem;
-  border-bottom: 1px solid var(--vp-c-divider);
+@media (max-width: 768px) {
+  .compare-layout { flex-direction: column; }
+  .examples-sidebar { flex: none; max-height: none; }
 }
-.examples-title {
-  font-size: 1rem;
-  font-weight: 700;
-  color: var(--vp-c-text-1);
-  line-height: 1.2;
-}
-.examples-subtitle {
-  margin-top: 0.15rem;
-  font-size: 0.72rem;
-  line-height: 1.35;
-  color: var(--vp-c-text-3);
-}
-.btn-modal-close {
-  flex-shrink: 0;
-  min-height: 2rem;
-  padding: 0.35rem 0.7rem;
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 6px;
-  background: var(--vp-c-bg-soft);
-  color: var(--vp-c-text-2);
-  font-size: 0.8rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-.btn-modal-close:hover,
-.btn-modal-close:focus-visible {
-  border-color: var(--vp-c-brand-1);
-  color: var(--vp-c-brand-1);
-}
-.examples-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.65rem;
-}
-.example-card {
-  display: grid;
-  grid-template-columns: 2.1rem minmax(0, 1fr);
-  align-items: center;
-  gap: 0.7rem;
-  width: 100%;
-  min-height: 4rem;
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 6px;
-  padding: 0.65rem 0.75rem;
-  cursor: pointer;
-  text-align: left;
-  transition: border-color 0.15s, background 0.15s, transform 0.15s;
-  background: var(--vp-c-bg-soft);
-  color: inherit;
-  font: inherit;
-}
-.example-card:hover {
-  border-color: var(--vp-c-brand-1);
-  background: color-mix(in srgb, var(--vp-c-brand-soft) 52%, var(--vp-c-bg));
-  transform: translateY(-1px);
-}
-.example-card:focus-visible {
-  outline: 2px solid var(--vp-c-brand-1);
-  outline-offset: 2px;
-}
-.example-card-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 2.1rem;
-  height: 2.1rem;
-  border-radius: 5px;
-  background: var(--vp-c-brand-soft);
-  color: var(--vp-c-brand-1);
-  font-size: 0.85rem;
-  font-weight: 800;
-  font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
-  text-transform: uppercase;
-}
-.example-card-body {
-  display: block;
-  min-width: 0;
-}
-.example-card-name {
-  display: block;
-  font-weight: 700;
-  font-size: 0.88rem;
-  line-height: 1.2;
-  color: var(--vp-c-brand-1);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.example-card-source {
-  display: block;
-  margin-top: 0.1rem;
-  font-size: 0.72rem;
-  line-height: 1.2;
-  color: var(--vp-c-text-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-@media (max-width: 520px) {
-  .examples-modal-backdrop {
-    align-items: flex-start;
-    padding: 1rem;
-  }
-
-  .examples-modal {
-    max-height: calc(100vh - 2rem);
-  }
-
-  .examples-list {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
+.examples-header { font-size: 0.85rem; font-weight: 600; color: var(--vp-c-text-1); margin-bottom: 0.6rem; }
+.examples-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.example-card { border: 1px solid var(--vp-c-divider); border-radius: 6px; padding: 0.6rem 0.75rem; cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; }
+.example-card:hover { border-color: var(--vp-c-brand-1); box-shadow: 0 1px 6px var(--vp-c-brand-soft); }
+.example-card-name { font-weight: 700; font-size: 0.85rem; color: var(--vp-c-brand-1); }
+.example-card-source { font-size: 0.7rem; color: var(--vp-c-text-3); }
+.example-card-desc { font-size: 0.75rem; color: var(--vp-c-text-2); margin: 0.2rem 0; }
+.example-card-values { display: block; font-size: 0.68rem; font-family: monospace; background: var(--vp-c-bg-soft); padding: 0.2rem 0.4rem; border-radius: 3px; white-space: pre-wrap; max-height: 60px; overflow: hidden; }
 
 /* All match */
 .all-match {
