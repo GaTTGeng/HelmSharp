@@ -33,7 +33,17 @@ internal static class CoreFunctions
     public static string Tpl(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
         var template = TypeConverters.ToTemplateString(pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));
-        return eval.RenderSection(template, context);
+        var scopeIndex = pipelineValue is null ? 2 : 1;
+        if (scopeIndex >= tokens.Count)
+            return eval.RenderSection(template, context);
+
+        var dot = eval.EvaluateToken(tokens.ElementAtOrDefault(scopeIndex), context);
+        var renderContext = context with
+        {
+            Dot = dot,
+            Variables = new Dictionary<string, object?>(context.Variables, StringComparer.Ordinal)
+        };
+        return eval.RenderSection(template, renderContext);
     }
 
     public static object? Ternary(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)

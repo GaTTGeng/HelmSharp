@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: named-templates
+data:
+  includeScoped: {{ include "named.line" .Values.target | quote }}
+  includePiped: {{ include "named.line" .Values.target | upper | quote }}
+  templateScoped: {{ template "named.line" .Values.target }}
+  tplNested: {{ tpl .Values.tpl.nested . | quote }}
+  tplRoot: {{ tpl .Values.tpl.release . | quote }}
+  withTplRoot: {{ with .Values.target }}{{ tpl $.Values.tpl.currentName $ | quote }}{{ end }}
+  block: |
+{{ include "named.block" .Values.target | nindent 4 }}

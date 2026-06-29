@@ -1,0 +1,7 @@
+target:
+  name: scoped
+  label: worker
+tpl:
+  currentName: "{{ .name | default \"root\" }}"
+  nested: "{{ include \"named.tplLine\" .Values.target }}"
+  release: "{{ .Release.Name }}:{{ .Values.target.name }}"

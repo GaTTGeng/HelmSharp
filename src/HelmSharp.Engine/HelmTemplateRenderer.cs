@@ -951,13 +951,13 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
 
     private object? IncludeTemplate(IReadOnlyList<string> tokens, TemplateContext context)
     {
-        var name = StringHelpers.Unquote(tokens.ElementAtOrDefault(1) ?? string.Empty);
+        var name = TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
         if (!_definedTemplates.TryGetValue(name, out var body))
             throw new NotSupportedException($"Included template '{name}' was not found.");
 
         try
         {
-            var rendered = RenderSection(body, context);
+            var rendered = RenderSection(body, CreateTemplateInvocationContext(tokens, context));
             // In Go templates, include returns the trimmed result
             return rendered.Trim();
         }
@@ -979,6 +979,18 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             throw new InvalidOperationException(
                 $"Error rendering included template '{name}': {ex.Message}", ex);
         }
+    }
+
+    private TemplateContext CreateTemplateInvocationContext(IReadOnlyList<string> tokens, TemplateContext context)
+    {
+        if (tokens.Count <= 2)
+            return context;
+
+        return context with
+        {
+            Dot = EvaluateToken(tokens[2], context),
+            Variables = new Dictionary<string, object?>(context.Variables, StringComparer.Ordinal)
+        };
     }
 
     private object? ApplySimpleFunction(string function, object? value, TemplateContext context)
@@ -1053,6 +1065,10 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         if (token == "nil") return null;
         if (long.TryParse(token, out var l)) return l;
         if (double.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out var d)) return d;
+        if (token == "$")
+            return CreateRootDot(context);
+        if (token.StartsWith("$.", StringComparison.Ordinal))
+            return ResolvePath("." + token[2..], context);
         if (token.StartsWith('$'))
             return ResolveVariable(token, context);
         if (token.StartsWith('.'))
@@ -1060,6 +1076,28 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
 
         return token;
     }
+
+    private static Dictionary<string, object?> CreateRootDot(TemplateContext context)
+        => new(StringComparer.Ordinal)
+        {
+            ["Values"] = context.Values,
+            ["Release"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["Name"] = context.ReleaseName,
+                ["Namespace"] = context.ReleaseNamespace,
+                ["Service"] = "Helm",
+                ["IsInstall"] = context.IsInstall,
+                ["IsUpgrade"] = context.IsUpgrade,
+                ["Revision"] = context.Revision
+            },
+            ["Chart"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["APIVersion"] = context.Chart.ApiVersion,
+                ["Name"] = context.TemplateChartName ?? context.Chart.Name,
+                ["Version"] = context.Chart.Version,
+                ["AppVersion"] = context.Chart.AppVersion ?? string.Empty
+            }
+        };
 
     private object? ResolvePath(string token, TemplateContext context)
     {
