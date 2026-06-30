@@ -321,6 +321,54 @@ public class TemplateFunctionTests
     }
 
     [Fact]
+    public void ToYaml_SortsKeysAlphabetically()
+    {
+        // Helm/Go YAML marshaling sorts map keys alphabetically.
+        // Verify that toYaml output matches this behavior.
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            {{- toYaml .Values | nindent 0 }}
+            """;
+
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>
+            {
+                ["zzz"] = "last-alpha",
+                ["aaa"] = "first-alpha",
+                ["nested"] = new Dictionary<string, object?>
+                {
+                    ["charlie"] = "c",
+                    ["bravo"] = "b",
+                    ["alpha"] = "a"
+                },
+                ["mmm"] = "middle"
+            });
+        var result = renderer.Render().TrimEnd();
+        _output.WriteLine(result);
+
+        // Keys must appear in alphabetical order: aaa, mmm, nested, zzz
+        var idxAaa = result.IndexOf("aaa:", StringComparison.Ordinal);
+        var idxMmm = result.IndexOf("mmm:", StringComparison.Ordinal);
+        var idxNested = result.IndexOf("nested:", StringComparison.Ordinal);
+        var idxZzz = result.IndexOf("zzz:", StringComparison.Ordinal);
+
+        Assert.True(idxAaa >= 0, "aaa key missing");
+        Assert.True(idxMmm >= 0, "mmm key missing");
+        Assert.True(idxNested >= 0, "nested key missing");
+        Assert.True(idxZzz >= 0, "zzz key missing");
+        Assert.True(idxAaa < idxMmm, "aaa should come before mmm");
+        Assert.True(idxMmm < idxNested, "mmm should come before nested");
+        Assert.True(idxNested < idxZzz, "nested should come before zzz");
+
+        // Nested keys must also be sorted: alpha, bravo, charlie
+        var idxAlpha = result.IndexOf("alpha:", StringComparison.Ordinal);
+        var idxBravo = result.IndexOf("bravo:", StringComparison.Ordinal);
+        var idxCharlie = result.IndexOf("charlie:", StringComparison.Ordinal);
+        Assert.True(idxAlpha < idxBravo, "nested: alpha should come before bravo");
+        Assert.True(idxBravo < idxCharlie, "nested: bravo should come before charlie");
+    }
+
+    [Fact]
     public void StringFunctions_UpperLowerTitleTrimReplaceTrunc()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };

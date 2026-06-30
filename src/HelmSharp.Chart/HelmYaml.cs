@@ -18,7 +18,26 @@ public static class HelmYaml
     }
 
     public static string Serialize(object? value)
-        => Serializer.Serialize(value);
+        => Serializer.Serialize(SortKeys(value));
+
+    /// <summary>
+    /// Recursively sorts dictionary keys alphabetically to match
+    /// Helm/Go YAML marshaling output (Go sorts map keys by default).
+    /// </summary>
+    private static object? SortKeys(object? value)
+    {
+        return value switch
+        {
+            Dictionary<string, object?> dict => new SortedDictionary<string, object?>(
+                dict.ToDictionary(kvp => kvp.Key, kvp => SortKeys(kvp.Value))!,
+                StringComparer.Ordinal),
+            Dictionary<object, object> dict => new SortedDictionary<string, object?>(
+                dict.ToDictionary(kvp => Convert.ToString(kvp.Key) ?? string.Empty, kvp => SortKeys(kvp.Value))!,
+                StringComparer.Ordinal),
+            List<object> list => list.ConvertAll(x => SortKeys(x)),
+            _ => value
+        };
+    }
 
     public static string? GetString(IDictionary<string, object?> values, string key)
         => values.TryGetValue(key, out var value) ? Convert.ToString(value) : null;
