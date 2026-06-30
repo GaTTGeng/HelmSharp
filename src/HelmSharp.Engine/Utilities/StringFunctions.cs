@@ -127,7 +127,7 @@ internal static class StringFunctions
         => System.Text.RegularExpressions.Regex.Replace(input, pattern, replacement);
 
     public static string RegexReplaceAllLiteral(string input, string pattern, string replacement)
-        => System.Text.RegularExpressions.Regex.Replace(input, pattern, System.Text.RegularExpressions.Regex.Escape(replacement));
+        => System.Text.RegularExpressions.Regex.Replace(input, pattern, _ => replacement);
 
     public static List<object?> RegexSplit(string input, string pattern)
     {

@@ -1128,17 +1128,33 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         };
     }
 
-    // Go fmt.Sprint semantics: operands concatenated without injected spaces.
-    // Pipeline value is the LAST argument, matching Helm's print behavior.
-    // e.g. {{ print .Release.Name "-svc" }} → "rel-svc", not "rel -svc" nor ".Release.Name -svc"
+    // Go fmt.Sprint spacing: adjacent strings concatenate without spaces;
+    // non-string operands get spaces between them. Pipeline value is LAST.
+    // e.g. {{ print .Release.Name "-svc" }} → "rel-svc" (string+string)
+    // e.g. {{ print 1 2 }} → "1 2" (non-string+non-string)
     private string PrintArgs(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, bool newline = false)
     {
-        var parts = new List<string>();
+        var values = new List<object?>();
         foreach (var t in tokens.Skip(1))
-            parts.Add(TypeConverters.ToTemplateString(EvaluateToken(t, context)));
+            values.Add(EvaluateToken(t, context));
         if (pipelineValue != null)
-            parts.Add(TypeConverters.ToTemplateString(pipelineValue));
-        return string.Concat(parts) + (newline ? "\n" : string.Empty);
+            values.Add(pipelineValue);
+
+        if (values.Count == 0)
+            return newline ? "\n" : string.Empty;
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append(TypeConverters.ToTemplateString(values[0]));
+        for (var i = 1; i < values.Count; i++)
+        {
+            var prevIsString = values[i - 1] is string;
+            var currIsString = values[i] is string;
+            if (!prevIsString && !currIsString)
+                sb.Append(' ');
+            sb.Append(TypeConverters.ToTemplateString(values[i]));
+        }
+        if (newline) sb.Append('\n');
+        return sb.ToString();
     }
 
     private object? EvaluateToken(string? token, TemplateContext context)

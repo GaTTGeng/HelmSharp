@@ -138,12 +138,19 @@ internal static class TextFunctions
         return result;
     }
 
-    // Sprig: untilStep START STOP STEP → [START, START+STEP, ..., < STOP]
-    // Default START=0, STEP=1.
+    // Sprig: untilStep START STOP STEP → [START, START+STEP, ..., < STOP (step>0) or > STOP (step<0)]
+    // Default START=0, STEP=1. Step=0 or wrong-direction step returns empty list.
     public static List<object?> UntilStep(int start, int stop, int step)
     {
         var result = new List<object?>();
-        for (var i = start; i < stop; i += step) result.Add(i);
+        if (step > 0)
+        {
+            for (var i = start; i < stop; i += step) result.Add(i);
+        }
+        else if (step < 0)
+        {
+            for (var i = start; i > stop; i += step) result.Add(i);
+        }
         return result;
     }
 }

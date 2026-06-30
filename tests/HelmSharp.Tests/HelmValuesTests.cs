@@ -485,4 +485,163 @@ public class HelmValuesTests
             catch { /* best effort */ }
         }
     }
+
+    // ── Coercion edge cases (#98) ──
+
+    [Fact]
+    public async Task BuildAsync_SetNull_ProducesNull()
+    {
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0",
+            ValuesYaml = "key: original"
+        };
+        var result = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, null,
+            new Dictionary<string, string> { ["key"] = "null" }, null, null, null, CancellationToken.None);
+        Assert.Null(result["key"]);
+    }
+
+    [Fact]
+    public async Task BuildAsync_SetYamlNullTilde_ProducesNull()
+    {
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0",
+            ValuesYaml = "key: value"
+        };
+        var result = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, null,
+            new Dictionary<string, string> { ["key"] = "~" }, null, null, null, CancellationToken.None);
+        Assert.Null(result["key"]);
+    }
+
+    [Fact]
+    public async Task BuildAsync_SetQuotedNumber_StaysString()
+    {
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0",
+            ValuesYaml = "key: original"
+        };
+        var result = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, null,
+            new Dictionary<string, string> { ["key"] = "\"123\"" }, null, null, null, CancellationToken.None);
+        // Quoted "123" should be string "123", not integer 123
+        Assert.IsType<string>(result["key"]);
+        Assert.Equal("123", result["key"]);
+    }
+
+    [Fact]
+    public async Task BuildAsync_SetBoolValues_CoercesCorrectly()
+    {
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0",
+            ValuesYaml = "a: false\nb: true"
+        };
+        var result = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, null,
+            new Dictionary<string, string> { ["a"] = "true", ["b"] = "false" }, null, null, null, CancellationToken.None);
+        Assert.Equal(true, result["a"]);
+        Assert.Equal(false, result["b"]);
+    }
+
+    [Fact]
+    public async Task BuildAsync_SetInteger_CoercesToLong()
+    {
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0",
+            ValuesYaml = "count: 0"
+        };
+        var result = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, null,
+            new Dictionary<string, string> { ["count"] = "42" }, null, null, null, CancellationToken.None);
+        Assert.Equal(42L, result["count"]);
+    }
+
+    [Fact]
+    public async Task BuildAsync_SetFloat_CoercesToDouble()
+    {
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0",
+            ValuesYaml = "ratio: 0.0"
+        };
+        var result = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, null,
+            new Dictionary<string, string> { ["ratio"] = "3.14" }, null, null, null, CancellationToken.None);
+        var ratio = Assert.IsType<double>(result["ratio"]);
+        Assert.Equal(3.14, ratio, 3);
+    }
+
+    [Fact]
+    public async Task BuildAsync_SetYamlList_CoercesToList()
+    {
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0",
+            ValuesYaml = "items: []"
+        };
+        var result = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, null,
+            new Dictionary<string, string> { ["items"] = "[a, b, c]" }, null, null, null, CancellationToken.None);
+        var list = Assert.IsType<List<object?>>(result["items"]);
+        Assert.Equal(3, list.Count);
+        Assert.Equal("a", list[0]);
+        Assert.Equal("b", list[1]);
+        Assert.Equal("c", list[2]);
+    }
+
+    // ── List index notation (#98) ──
+
+    [Fact]
+    public async Task BuildAsync_SetPathListIndex_SetsElement()
+    {
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0",
+            ValuesYaml = "servers: []"
+        };
+        var result = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, null,
+            new Dictionary<string, string> { ["servers[0]"] = "primary", ["servers[1]"] = "secondary" },
+            null, null, null, CancellationToken.None);
+        var list = Assert.IsType<List<object?>>(result["servers"]);
+        Assert.Equal(2, list.Count);
+        Assert.Equal("primary", list[0]);
+        Assert.Equal("secondary", list[1]);
+    }
+
+    [Fact]
+    public async Task BuildAsync_SetPathNestedListIndex_SetsNestedElement()
+    {
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0",
+            ValuesYaml = "spec: {}"
+        };
+        var result = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, null,
+            new Dictionary<string, string>
+            {
+                ["servers[0].name"] = "web",
+                ["servers[0].port"] = "80",
+                ["servers[1].name"] = "db",
+                ["servers[1].port"] = "5432"
+            }, null, null, null, CancellationToken.None);
+        var list = Assert.IsType<List<object?>>(result["servers"]);
+        Assert.Equal(2, list.Count);
+        var s0 = Assert.IsType<Dictionary<string, object?>>(list[0]);
+        Assert.Equal("web", s0["name"]);
+        Assert.Equal(80L, s0["port"]);
+        var s1 = Assert.IsType<Dictionary<string, object?>>(list[1]);
+        Assert.Equal("db", s1["name"]);
+        Assert.Equal(5432L, s1["port"]);
+    }
+
+    [Fact]
+    public async Task BuildAsync_SetEmptyString_StaysEmpty()
+    {
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0",
+            ValuesYaml = "key: original"
+        };
+        var result = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, null,
+            new Dictionary<string, string> { ["key"] = "" }, null, null, null, CancellationToken.None);
+        Assert.Equal(string.Empty, result["key"]);
+    }
 }
