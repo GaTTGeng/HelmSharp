@@ -129,4 +129,21 @@ internal static class TextFunctions
         var algo = tokens.Count > 1 ? TypeConverters.ToTemplateString(eval.EvaluateToken(tokens[1], context)) : "rsa";
         return $"-----BEGIN {algo.ToUpperInvariant()} PRIVATE KEY-----\n(managed-helm-placeholder)\n-----END {algo.ToUpperInvariant()} PRIVATE KEY-----";
     }
+
+    // Sprig: until COUNT → [0, 1, ..., COUNT-1]
+    public static List<object?> Until(int count)
+    {
+        var result = new List<object?>(count);
+        for (var i = 0; i < count; i++) result.Add(i);
+        return result;
+    }
+
+    // Sprig: untilStep START STOP STEP → [START, START+STEP, ..., < STOP]
+    // Default START=0, STEP=1.
+    public static List<object?> UntilStep(int start, int stop, int step)
+    {
+        var result = new List<object?>();
+        for (var i = start; i < stop; i += step) result.Add(i);
+        return result;
+    }
 }

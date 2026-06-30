@@ -29,6 +29,17 @@ internal static class SerializationFunctions
         }
     }
 
+    public static decimal ToDecimal(object? value)
+        => Convert.ToDecimal(value, System.Globalization.CultureInfo.InvariantCulture);
+
+    public static string ToRawJson(object? value)
+    {
+        var json = JsonSerializer.Serialize(value, DefaultOptions);
+        return json.Replace("\\u0026", "&")
+                   .Replace("\\u003c", "<")
+                   .Replace("\\u003e", ">");
+    }
+
     public static object? JsonElementToObject(JsonElement element)
     {
         return element.ValueKind switch

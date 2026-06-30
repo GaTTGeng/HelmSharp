@@ -90,6 +90,27 @@ internal static class EncodingHelpers
         return Encoding.UTF8.GetString(bytes.ToArray());
     }
 
+    public static string Sha512Sum(string value)
+    {
+        var bytes = SHA512.HashData(Encoding.UTF8.GetBytes(value));
+        return Convert.ToHexString(bytes).ToLowerInvariant();
+    }
+
+    public static string UuidV4()
+    {
+        var bytes = new byte[16];
+        RandomNumberGenerator.Fill(bytes);
+        bytes[6] = (byte)((bytes[6] & 0x0F) | 0x40);
+        bytes[8] = (byte)((bytes[8] & 0x3F) | 0x80);
+        var sb = new StringBuilder(36);
+        for (var i = 0; i < 16; i++)
+        {
+            if (i is 4 or 6 or 8 or 10) sb.Append('-');
+            sb.Append(bytes[i].ToString("x2"));
+        }
+        return sb.ToString();
+    }
+
     public static string ExpandEnv(string input)
         => Environment.ExpandEnvironmentVariables(input);
 }

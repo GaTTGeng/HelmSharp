@@ -867,4 +867,148 @@ public class TemplateFunctionTests
         Assert.Contains("third: \"c\"", result);
         Assert.Contains("len: 3", result);
     }
+
+    [Fact]
+    public void Join_ConcatenatesListWithSeparator()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            {{- $l := list "a" "b" "c" }}
+            {{- join ", " $l }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>());
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        Assert.EndsWith("a, b, c", result.TrimEnd());
+    }
+
+    [Fact]
+    public void Split_SplitsStringIntoDict()
+    {
+        // Sprig split returns dict {_0, _1, …}; use ._N field access
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            {{- $parts := split "," "a,b,c" }}
+            {{ $parts._0 }},{{ $parts._1 }},{{ $parts._2 }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>());
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        Assert.Contains("a,b,c", result);
+    }
+
+    [Fact]
+    public void Slice_ExtractsSublist()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            {{- $l := list "a" "b" "c" "d" "e" }}
+            {{- $s := slice $l 1 4 }}
+            {{ join "," $s }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>());
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        Assert.Contains("b,c,d", result);
+    }
+
+    [Fact]
+    public void Sha512Sum_ComputesHash()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            {{- sha512sum "hello" }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>());
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        Assert.Contains("9b71d224", result);
+    }
+
+    [Fact]
+    public void UuidV4_GeneratesValidUuid()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            {{- uuidv4 }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>());
+        var result = renderer.Render().TrimEnd();
+        _output.WriteLine(result);
+        Assert.Matches(@"---\s*[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", result);
+    }
+
+    [Fact]
+    public void Nospace_RemovesWhitespace()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            {{- nospace "a b  c d" }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>());
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        Assert.Contains("abcd", result);
+    }
+
+    [Fact]
+    public void MergeOverwrite_MergesWithOverwriteSemantics()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            {{- $a := dict "x" 1 "y" 2 }}
+            {{- $b := dict "y" 3 "z" 4 }}
+            {{- $m := mergeOverwrite $a $b }}
+            x: {{ $m.x }}
+            y: {{ $m.y }}
+            z: {{ $m.z }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>());
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        Assert.Contains("x: 1", result);
+        Assert.Contains("y: 3", result);
+        Assert.Contains("z: 4", result);
+    }
+
+    [Fact]
+    public void RegexFunctions_MatchFindReplaceSplit()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            match: {{ regexMatch "[0-9]+" "abc123def" }}
+            find: {{ regexFind "[0-9]+" "abc123def" }}
+            replace: {{ regexReplaceAll "[0-9]+" "abc123def456" "NUM" }}
+            split: {{ join "," (regexSplit "[,;]" "a,b;c,d") }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>());
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        Assert.Contains("match: true", result);
+        Assert.Contains("find: 123", result);
+        Assert.Contains("replace: abcNUMdefNUM", result);
+        Assert.Contains("split: a,b,c,d", result);
+    }
+
+    [Fact]
+    public void MustVariants_WorkCorrectly()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            {{- $l := list 3 1 4 1 5 9 }}
+            rev: {{ index (mustReverse $l) 0 }}
+            sorted: {{ index (mustSortAlpha $l) 0 }}
+            compact: {{ len (mustCompact (list 0 1 2)) }}
+            uniq: {{ len (mustUniq $l) }}
+            has: {{ $l | mustHas 9 }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>());
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        Assert.Contains("rev: 9", result);
+        Assert.Contains("sorted: 1", result);
+        Assert.Contains("compact: 2", result);
+        Assert.Contains("uniq: 5", result);
+        Assert.Contains("has: true", result);
+    }
 }

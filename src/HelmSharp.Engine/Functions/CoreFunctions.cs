@@ -151,8 +151,9 @@ internal static class CoreFunctions
 
     public static object? Has(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
-        var list = CollectionsHelpers.ToList(pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));
-        var needle = TypeConverters.ToTemplateString(eval.EvaluateToken(tokens.ElementAtOrDefault(2), context));
+        // Helm signature: has NEEDLE LIST  or  LIST | has NEEDLE
+        var needle = TypeConverters.ToTemplateString(eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));
+        var list = CollectionsHelpers.ToList(pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(2), context));
         return list.Any(x => TypeConverters.ToTemplateString(x) == needle);
     }
 
