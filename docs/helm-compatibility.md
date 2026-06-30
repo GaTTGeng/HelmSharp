@@ -36,7 +36,7 @@ Exact CLI colors, progress text, terminal formatting, and plugin execution are n
 | --- | --- | --- |
 | Chart loading from directories and `.tgz` archives | Supported | Safe starting point for render and packaging tools. Validated across five real-world charts (podinfo, metrics-server, external-dns, ingress-nginx, cert-manager). |
 | Values files and `--set`-style overrides | Partial | Common flows work; edge-case coercion and list syntax still tracked by golden tests. |
-| Helm-style template rendering | Partial | All 129 templates across five real public charts render without parser exceptions; remaining gaps are content-level formatting diffs tracked in the README golden test breakdown. |
+| Helm-style template rendering | Supported | All 129 templates across five real public charts render with **byte-for-byte identical** output against `helm template`. Parsing, control-flow, named templates, built-in objects, whitespace/trim markers, and Sprig functions all pass golden test validation. |
 | Template control flow (`if`/`else if`/`else`/`range`/`with`) | Supported | All control-flow constructs render correctly against `helm template` output, validated by dedicated fixture charts and real-chart golden tests. |
 | Named templates and helpers | Supported | Cross-template `define`/`template`/`include` calls resolve correctly; validated across real charts with extensive helper usage (ingress-nginx: 42 templates). |
 | Built-in objects (`.Release`, `.Chart`, `.Values`, `.Files`, `.Capabilities`, `.Template`) | Supported | All built-in objects are populated and render consistently with Helm CLI output. |
@@ -50,13 +50,13 @@ Exact CLI colors, progress text, terminal formatting, and plugin execution are n
 
 These are the areas to check before betting a production workflow on exact Helm behavior:
 
-- full Sprig function parity;
-- obscure values coercion and list syntax cases;
-- byte-for-byte manifest formatting;
+- obscure values coercion and edge-case list syntax;
 - OCI authentication and registry flows;
 - provenance verification;
 - readiness for uncommon Kubernetes resource kinds;
 - safe replacement for Helm plugin execution.
+
+Sprig function parity and byte-for-byte manifest formatting have been validated through the golden test suite (Pass verdict on all five real-world charts) and are no longer known gaps.
 
 ## How to report a gap
 

@@ -9,7 +9,7 @@
 
 HelmSharp 是一个面向 .NET 的托管 Helm 风格库，用于在不调用 `helm` 可执行文件的情况下渲染 Helm 风格 Chart 并驱动 Kubernetes Release 工作流。它适合需要在 .NET 进程内完成模板渲染、values 合并、Chart 打包、仓库操作和 Kubernetes 发布生命周期管理的应用。
 
-项目仍在积极开发中。当前目标是实现实用的 Helm 兼容子集，而不是逐字节复刻 Helm CLI 的全部行为。
+项目仍在积极开发中。M1（Helm 模板对齐）已完成 — 模板引擎在 5 个真实 Chart 的 129 个模板上与 `helm template` 达到逐字节一致。M2+ 将扩展至发布生命周期和 Kubernetes 操作。
 
 文档站点：[https://gattgeng.github.io/HelmSharp/](https://gattgeng.github.io/HelmSharp/)
 
@@ -141,17 +141,17 @@ await foreach (var line in client.UpgradeInstallStreamAsync(new HelmUpgradeInsta
 
 HelmSharp 的模板引擎持续通过真实世界的公开 Helm Chart 进行 golden test 验证。每个 Chart 分别由 `helm template`（参照）和 HelmSharp 托管渲染器渲染，输出经规范化后逐文档比对。
 
-> **更新日期：** 2026-06-22 · **HelmSharp 版本：** 1.0.3 · **Helm 版本：** v3.12.3 · **测试框架：** net10.0
+> **更新日期：** 2026-07-01 · **HelmSharp 版本：** 1.1.0 · **Helm 版本：** v3.12.3 · **测试框架：** net10.0
 
 ### 汇总
 
 | Chart | 版本 | Helm 文档数 | 模板数 | 通过 | 失败 | 逐模板通过率 | 完整渲染 | 判定 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| **podinfo** | 6.14.0 | 5 | 21 | 21 | 0 | 100% | ✅ 成功 | **Partial** |
-| **metrics-server** | 3.13.1 | 9 | 18 | 18 | 0 | 100% | ✅ 成功 | **Partial** |
-| **external-dns** | 1.21.1 | 5 | 7 | 7 | 0 | 100% | ✅ 成功 | **Partial** |
-| **ingress-nginx** | 4.12.1 | 19 | 42 | 42 | 0 | 100% | ✅ 成功 | **Partial** |
-| **cert-manager** | 1.17.1 | 52 | 41 | 41 | 0 | 100% | ✅ 成功 | **Partial** |
+| **podinfo** | 6.14.0 | 5 | 21 | 21 | 0 | 100% | ✅ 成功 | **Pass** |
+| **metrics-server** | 3.13.1 | 9 | 18 | 18 | 0 | 100% | ✅ 成功 | **Pass** |
+| **external-dns** | 1.21.1 | 5 | 7 | 7 | 0 | 100% | ✅ 成功 | **Pass** |
+| **ingress-nginx** | 4.12.1 | 19 | 42 | 42 | 0 | 100% | ✅ 成功 | **Pass** |
+| **cert-manager** | 1.17.1 | 52 | 41 | 41 | 0 | 100% | ✅ 成功 | **Pass** |
 | **总计** | — | **90** | **129** | **129** | **0** | **100%** | — | — |
 
 ### 逐 Chart 明细
@@ -168,17 +168,15 @@ cert-manager     █████████████████████
 
 ### 错误分析
 
-全部 129 个模板在 5 个真实 Chart 中均可在无解析器异常的情况下渲染。完整 Chart 渲染产出的输出在结构上与 `helm template` 可比（文档数量相同或接近）。剩余内容级差异可归因于：
+全部 129 个模板在 5 个真实 Chart 中均可在无解析器异常的情况下渲染，规范化后与 `helm template` 达到**逐字节一致**。全部五个 Chart 现已取得 **Pass** 判定 — 无任何剩余内容级格式化差异、解析器缺口或错误分类。
 
-| 类别 | 影响 | 涉及 Chart |
-| --- | --- | --- |
-| 空白符 / 文档格式 | YAML 缩进和空行存在轻微渲染差异 | 全部 5 个 Chart |
-| Values 求值边界情况 | 部分条件分支产生不同输出 | cert-manager、ingress-nginx |
-| Printf / 字符串格式化 | 格式化字符串输出有细微差异 | metrics-server、external-dns |
+自 1.0.3 版本以来关闭的关键对齐里程碑：
 
-**关键成果：** 此前导致 7 个模板抛出 `NotSupportedException` 的两个解析器 bug 已修复：
-- **#51** — `SplitPipeline` 现已跟踪括号深度，修复了 `(empty .x)` 和 `($value | quote | len)` 模式。
-- **#50** — `else if` 链重建现已正确生成平衡的模板块，修复了 C# 字符串插值转义（`{{- end }}` vs `{- end }`）。
+- **#109 / #111 / #113** — Block 右 trim 现已保留 action 行缩进，匹配 Go `text/template` 行为；cert-manager golden test 从 45/52 恢复至 52/52 完全一致。
+- **#112** — `ParseDefine` 现已对 define body 应用右 trim，匹配 `ParseBlock` 行为。
+- **#97** — 完成 Sprig 函数对齐（`empty`、`keys`、`mergeOverwrite`、`mustRegexMatch`、`mustRegexReplaceAll` 等）。
+- **#102** — 解决 cert-manager 剩余内容差异（YAML tag、八进制值、merge key、block scalar、注释裁剪）。
+- **#96 / #99 / #108** — 解决真实 Chart golden test 内容差异，全部五个 Chart 达到 Pass 判定。
 
 ### 判定图例
 
