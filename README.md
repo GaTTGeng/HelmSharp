@@ -141,17 +141,17 @@ await foreach (var line in client.UpgradeInstallStreamAsync(new HelmUpgradeInsta
 
 HelmSharp's template engine is continuously validated against real-world, publicly-available Helm charts using golden tests. Each chart is rendered by both `helm template` (reference) and HelmSharp's managed renderer; outputs are compared document-by-document after normalization.
 
-> **Last updated:** 2026-06-22 · **HelmSharp version:** 1.0.3 · **Helm version:** v3.12.3 · **Test framework:** net10.0
+> **Last updated:** 2026-07-01 · **HelmSharp version:** 1.0.3 · **Helm version:** v3.12.3 · **Test framework:** net10.0
 
 ### Summary
 
 | Chart | Version | Helm Docs | Templates | Passed | Failed | Per-Template Rate | Full Render | Verdict |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| **podinfo** | 6.14.0 | 5 | 21 | 21 | 0 | 100% | ✅ Success | **Partial** |
-| **metrics-server** | 3.13.1 | 9 | 18 | 18 | 0 | 100% | ✅ Success | **Partial** |
-| **external-dns** | 1.21.1 | 5 | 7 | 7 | 0 | 100% | ✅ Success | **Partial** |
-| **ingress-nginx** | 4.12.1 | 19 | 42 | 42 | 0 | 100% | ✅ Success | **Partial** |
-| **cert-manager** | 1.17.1 | 52 | 41 | 41 | 0 | 100% | ✅ Success | **Partial** |
+| **podinfo** | 6.14.0 | 5 | 21 | 21 | 0 | 100% | ✅ Success | **Pass** |
+| **metrics-server** | 3.13.1 | 9 | 18 | 18 | 0 | 100% | ✅ Success | **Pass** |
+| **external-dns** | 1.21.1 | 5 | 7 | 7 | 0 | 100% | ✅ Success | **Pass** |
+| **ingress-nginx** | 4.12.1 | 19 | 42 | 42 | 0 | 100% | ✅ Success | **Pass** |
+| **cert-manager** | 1.17.1 | 52 | 41 | 41 | 0 | 100% | ✅ Success | **Pass** |
 | **Total** | — | **90** | **129** | **129** | **0** | **100%** | — | — |
 
 ### Per-Chart Breakdown
@@ -168,17 +168,15 @@ cert-manager     █████████████████████
 
 ### Error Analysis
 
-All 129 templates across 5 real-world charts now render without parser exceptions. Full-chart rendering produces output that is structurally comparable to `helm template` (same or close document count). Remaining content-level differences are attributable to:
+All 129 templates across 5 real-world charts render without parser exceptions and achieve **byte-for-byte identical output** with `helm template` after normalization. All five charts now carry the **Pass** verdict — no remaining content-level formatting diffs, no parser gaps, and no error categories.
 
-| Category | Impact | Affected Charts |
-| --- | --- | --- |
-| Whitespace / document formatting | Minor rendering diffs in YAML indentation and blank lines | All 5 charts |
-| Values evaluation edge cases | Some conditional branches produce different output | cert-manager, ingress-nginx |
-| Printf / string formatting | Slight differences in formatted string output | metrics-server, external-dns |
+Key parity milestones closed since the 1.0.3 release:
 
-**Key achievement:** The two parser bugs that previously caused `NotSupportedException` across 7 templates have been resolved:
-- **#51** — `SplitPipeline` now tracks parentheses, fixing `(empty .x)` and `($value \| quote \| len)` patterns.
-- **#50** — `else if` chain reconstruction now correctly produces balanced template blocks, fixing C# string interpolation escaping (`{{- end }}` vs `{- end }`).
+- **#109 / #111 / #113** — Block right-trim now preserves action-line indent matching Go `text/template` behavior; cert-manager golden test restored from 45/52 to 52/52 exact match.
+- **#112** — `ParseDefine` now applies right-trim to define body, matching `ParseBlock` behavior.
+- **#97** — Completed Sprig function parity for remaining gaps (`empty`, `keys`, `mergeOverwrite`, `mustRegexMatch`, `mustRegexReplaceAll`, etc.).
+- **#102** — Resolved cert-manager remaining content diffs (YAML tag, octal values, merge keys, block scalars, comment trimming).
+- **#96 / #99 / #108** — Resolved real-chart golden test content diffs to achieve Pass verdicts across all five charts.
 
 ### Verdict Legend
 

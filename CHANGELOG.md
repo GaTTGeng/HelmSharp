@@ -22,6 +22,8 @@ This project follows semantic versioning once stable releases begin.
 
 ### Fixed
 
+- Restored block right-trim behavior and guarded `IsFormattingWhitespace` against newline suppression, restoring cert-manager golden test to 52/52 Pass verdict (#109, #111, #113).
+- Applied right-trim to define body in `ParseDefine`, matching `ParseBlock` behavior for `{{- define \"name\" -}}` (#112).
 - Matched Helm named template scope for `include`, `template`, `tpl`, and `$` root lookups (#8).
 - Matched Helm whitespace behavior for block end trim markers, `nindent` output after `{{- ... }}`, and escaped newlines in quoted template strings (#9).
 - Matched Helm failure boundaries for `fail`, missing template functions, required values, and malformed templates (#13).
