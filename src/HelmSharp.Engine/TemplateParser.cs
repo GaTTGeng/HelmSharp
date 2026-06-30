@@ -140,6 +140,9 @@ public sealed class TemplateParser
         var bodyDoc = new TemplateDocumentNode();
         var stop = ParseContent(bodyDoc.Children, EndOnly);
 
+        if (rightTrim)
+            TrimLeadingForRightTrim(bodyDoc.Children);
+
         if (stop.Keyword == null)
             throw new TemplateParseException(
                 $"Missing 'end' for define \"{name}\"",
