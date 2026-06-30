@@ -236,6 +236,148 @@ public class TemplateFunctionTests
     }
 
     [Fact]
+    public void Comment_WithLeftTrim_RemovesPreviousLineWhitespace()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            apiVersion: v1
+            kind: ConfigMap
+            spec:
+              replicas: 1
+              {{- /* comment */}}
+              selector:
+                app: test
+            """;
+
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>());
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        var normalized = result.Replace("\r\n", "\n", StringComparison.Ordinal);
+
+        Assert.Contains("replicas: 1\n  selector:", normalized);
+        Assert.DoesNotContain("replicas: 1\n\n  selector:", normalized);
+        Assert.DoesNotContain("comment", normalized);
+    }
+
+    [Fact]
+    public void BlockWithRightTrim_DoesNotDuplicateActionLineIndent()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            apiVersion: v1
+            kind: ConfigMap
+            data:
+              args:
+              {{ if .Values.enabled -}}
+              - --flag
+              {{- end }}
+            """;
+
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?> { ["enabled"] = true });
+        var result = renderer.Render();
+        _output.WriteLine(result);
+
+        Assert.Contains("  - --flag", result);
+        Assert.DoesNotContain("    - --flag", result);
+    }
+
+    [Fact]
+    public void Render_OrdersManifestDocumentsLikeHelm()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/deployment.yaml"] = """
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: app
+            """;
+        chart.Templates["templates/service.yaml"] = """
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: app
+            """;
+        chart.Templates["templates/configmap.yaml"] = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: app
+            data:
+              helm.sh/hook: post-install
+              helm.sh/hook-weight: "99"
+            """;
+        chart.Templates["templates/kindless.yaml"] = """
+            # rendered comment-only manifest
+            """;
+        chart.Templates["templates/webhook.yaml"] = """
+            apiVersion: admissionregistration.k8s.io/v1
+            kind: ValidatingWebhookConfiguration
+            metadata:
+              name: app
+            """;
+        chart.Templates["templates/hook.yaml"] = """
+            apiVersion: batch/v1
+            kind: Job
+            metadata:
+              name: app-hook
+              annotations:
+                "helm.sh/hook": post-install
+            """;
+
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>());
+        var result = renderer.Render();
+        _output.WriteLine(result);
+
+        var configMapIndex = result.IndexOf("kind: ConfigMap", StringComparison.Ordinal);
+        var serviceIndex = result.IndexOf("kind: Service", StringComparison.Ordinal);
+        var deploymentIndex = result.IndexOf("kind: Deployment", StringComparison.Ordinal);
+        var kindlessIndex = result.IndexOf("# rendered comment-only manifest", StringComparison.Ordinal);
+        var webhookIndex = result.IndexOf("kind: ValidatingWebhookConfiguration", StringComparison.Ordinal);
+        var hookIndex = result.IndexOf("name: app-hook", StringComparison.Ordinal);
+
+        Assert.True(configMapIndex < serviceIndex);
+        Assert.True(serviceIndex < deploymentIndex);
+        Assert.True(deploymentIndex < kindlessIndex);
+        Assert.True(kindlessIndex < webhookIndex);
+        Assert.True(webhookIndex < hookIndex);
+    }
+
+    [Fact]
+    public void Render_SplitsManifestDocumentsWithWhitespaceAndComments()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/multi.yaml"] = """
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: app
+            --- # separator comment
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: app
+            """ + "\n---   \n" + """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: app
+            """;
+
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>());
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        var normalized = result.Replace("\r\n", "\n", StringComparison.Ordinal);
+
+        Assert.Contains("---\napiVersion: v1\nkind: ConfigMap", normalized);
+        Assert.Contains("---\napiVersion: v1\nkind: Service", normalized);
+        Assert.Contains("---\napiVersion: apps/v1\nkind: Deployment", normalized);
+    }
+
+    [Fact]
     public void MultipleIncludes_WithTrim()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
@@ -369,6 +511,33 @@ public class TemplateFunctionTests
     }
 
     [Fact]
+    public void ToYaml_RendersNestedNullsLikeHelm()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            {{- toYaml .Values | nindent 0 }}
+            """;
+
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>
+            {
+                ["limits"] = null,
+                ["requests"] = new Dictionary<string, object?>
+                {
+                    ["cpu"] = "1m"
+                },
+                ["plain"] = "value"
+            });
+        var result = renderer.Render();
+        _output.WriteLine(result);
+
+        Assert.Contains("limits: null", result);
+        Assert.Contains("requests:", result);
+        Assert.Contains("cpu: 1m", result);
+        Assert.Contains("plain: value", result);
+    }
+
+    [Fact]
     public void StringFunctions_UpperLowerTitleTrimReplaceTrunc()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
@@ -419,6 +588,24 @@ public class TemplateFunctionTests
         Assert.Contains("mul: 20", result);
         Assert.Contains("div: 5", result);
         Assert.Contains("mod: 1", result);
+    }
+
+    [Fact]
+    public void ToDecimal_ParsesInputsAsOctal()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            modeWithoutLeadingZero: {{ "644" | toDecimal }}
+            modeWithLeadingZero: {{ "0644" | toDecimal }}
+            invalidOctal: {{ "08" | toDecimal }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>());
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        Assert.Contains("modeWithoutLeadingZero: 420", result);
+        Assert.Contains("modeWithLeadingZero: 420", result);
+        Assert.Contains("invalidOctal: 0", result);
     }
 
     [Fact]
@@ -969,6 +1156,30 @@ public class TemplateFunctionTests
         Assert.Contains("x: 1", result);
         Assert.Contains("y: 3", result);
         Assert.Contains("z: 4", result);
+    }
+
+    [Fact]
+    public void MergeOverwrite_AppendsPipelineValueAsLastArgument()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            {{- $dst := dict "x" 1 "nested" (dict "a" "dst" "b" "dst") }}
+            {{- $src := dict "y" 2 "nested" (dict "b" "src" "c" "src") }}
+            {{- $m := $src | mergeOverwrite $dst }}
+            x: {{ $m.x }}
+            y: {{ $m.y }}
+            nestedA: {{ $m.nested.a }}
+            nestedB: {{ $m.nested.b }}
+            nestedC: {{ $m.nested.c }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>());
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        Assert.Contains("x: 1", result);
+        Assert.Contains("y: 2", result);
+        Assert.Contains("nestedA: dst", result);
+        Assert.Contains("nestedB: src", result);
+        Assert.Contains("nestedC: src", result);
     }
 
     [Fact]

@@ -301,7 +301,14 @@ public sealed class TemplateParser
     private static TemplateNode MakeNode(string expr, bool leftTrim, bool rightTrim, int startOffset, int startLine)
     {
         if (expr.TrimStart().StartsWith("/*", StringComparison.Ordinal))
-            return new CommentNode { Content = expr.Trim(), StartOffset = startOffset, StartLine = startLine };
+            return new CommentNode
+            {
+                Content = expr.Trim(),
+                LeftTrim = leftTrim,
+                RightTrim = rightTrim,
+                StartOffset = startOffset,
+                StartLine = startLine
+            };
 
         return new ActionNode
         {

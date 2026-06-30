@@ -133,6 +133,12 @@ public sealed class ActionNode : TemplateNode
 public sealed class CommentNode : TemplateNode
 {
     public string Content { get; init; } = string.Empty;
+
+    /// <summary>True if the opening delimiter had a trim marker.</summary>
+    public bool LeftTrim { get; set; }
+
+    /// <summary>True if the closing delimiter had a trim marker.</summary>
+    public bool RightTrim { get; set; }
 }
 
 /// <summary>

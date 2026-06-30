@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.Json;
 
 namespace HelmSharp.Engine;
@@ -31,14 +30,13 @@ internal static class SerializationFunctions
     }
 
     /// Sprig toDecimal: converts Unix octal permission strings to decimal.
-    /// "0777" → 511, "0644" → 420. Non-octal strings parse as decimal.
+    /// "0777", "0644", and "644" all parse as octal values.
     public static decimal ToDecimal(object? value)
     {
         var str = TypeConverters.ToTemplateString(value);
-        if (str.Length > 1 && str[0] == '0' && str.All(c => c >= '0' && c <= '7'))
+        if (str.Length > 0 && str.All(c => c >= '0' && c <= '7'))
             return Convert.ToInt64(str, 8);
-        return decimal.TryParse(str, NumberStyles.Number, CultureInfo.InvariantCulture, out var d)
-            ? d : 0m;
+        return 0m;
     }
 
     public static string ToRawJson(object? value)
