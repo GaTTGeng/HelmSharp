@@ -17,7 +17,7 @@ The real-chart golden suite renders **129/129 templates** across five public Hel
 | cert-manager | 1.17.1 | 41/41 | Pass |
 | **Total** | - | **129/129** | **Pass** |
 
-That number matters because real charts expose helper templates, nested values, `.Files`, capabilities, and formatting patterns that small examples miss. See the [Golden Test Results](../README.md#golden-test-results) section in the README for per-chart breakdowns, error analysis, and verdict definitions.
+That number matters because real charts expose helper templates, nested values, `.Files`, capabilities, and formatting patterns that small examples miss. See the [Golden Test Results](https://github.com/GaTTGeng/HelmSharp#golden-test-results) section in the README for per-chart breakdowns, error analysis, and verdict definitions.
 
 ## Compatibility contract
 
@@ -72,4 +72,4 @@ Small reproducible charts are more useful than screenshots or large private char
 
 ## Continuous validation
 
-Golden test results are validated on every push and pull request through the [CI workflow](../.github/workflows/ci.yml). The CI runner installs Helm CLI (`v3.12.3`) alongside the .NET SDKs and executes the full golden test suite, including both fixture-chart and real-chart comparisons. JSON reports are published as workflow artifacts for each run.
+Golden test results are validated on every push and pull request through the [CI workflow](https://github.com/GaTTGeng/HelmSharp/blob/master/.github/workflows/ci.yml). The CI runner installs Helm CLI (`v3.12.3`) alongside the .NET SDKs and executes the full golden test suite, including both fixture-chart and real-chart comparisons. JSON reports are published as workflow artifacts for each run.
