@@ -160,7 +160,7 @@ public class RealChartGoldenTests
         if (fullOutput != null)
         {
             // Full render succeeded — compare document-by-document
-            var sharpDocs = SplitDocuments(HelmCliRunner.NormalizeLineEndings(fullOutput));
+            var sharpDocs = SplitDocuments(NormalizeHelmOutput(fullOutput));
             var comparison = CompareDocumentSets(helmDocs, sharpDocs);
             matchedDocs = comparison.matched;
             contentDiffDocs = comparison.diffCount;
@@ -254,10 +254,13 @@ public class RealChartGoldenTests
         var current = new StringBuilder();
         foreach (var line in manifest.Split('\n'))
         {
-            if (line == "---" && current.Length > 0)
+            if (line == "---")
             {
-                docs.Add(current.ToString().TrimEnd() + "\n");
-                current.Clear();
+                if (current.Length > 0)
+                {
+                    docs.Add(current.ToString().TrimEnd() + "\n");
+                    current.Clear();
+                }
             }
             else
             {
