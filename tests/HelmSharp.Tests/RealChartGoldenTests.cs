@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.RegularExpressions;
 using HelmSharp.Chart;
 using HelmSharp.Engine;
 
@@ -41,6 +42,36 @@ public class RealChartGoldenTests
         "ingress-nginx",
         "cert-manager",
     };
+
+    [Fact]
+    public void NormalizeDynamicValues_ReplacesRandAlphaNumSuffixes()
+    {
+        // Simulates YAML output where podinfo test templates use randAlphaNum 5 | lower
+        var input = """
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: golden-release-podinfo-grpc-test-a3x9m
+              labels:
+                app: podinfo
+            ---
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: golden-release-podinfo-tls-test-z7k2p
+            """;
+
+        var result = NormalizeDynamicValues(input);
+
+        // Random 5-char lowercase suffix should be replaced with RANDOM
+        Assert.Contains("name: golden-release-podinfo-grpc-test-RANDOM", result);
+        Assert.Contains("name: golden-release-podinfo-tls-test-RANDOM", result);
+        // Original random suffixes should not appear
+        Assert.DoesNotContain("grpc-test-a3x9m", result);
+        Assert.DoesNotContain("tls-test-z7k2p", result);
+        // Identical non-random names should be untouched
+        Assert.Contains("app: podinfo", result);
+    }
 
     [HelmCliTheory]
     [MemberData(nameof(AllCharts))]
@@ -85,7 +116,7 @@ public class RealChartGoldenTests
         if (helmResult.ExitCode != 0)
             return GoldenResult.Fail(chartName, $"helm template exit {helmResult.ExitCode}: {helmResult.Stderr[..Math.Min(200, helmResult.Stderr.Length)]}");
 
-        var helmNorm = NormalizeHelmOutput(helmResult.Stdout);
+        var helmNorm = NormalizeDynamicValues(NormalizeHelmOutput(helmResult.Stdout));
         var helmDocs = SplitDocuments(helmNorm);
 
         // 2. Load chart with HelmSharp
@@ -160,7 +191,7 @@ public class RealChartGoldenTests
         if (fullOutput != null)
         {
             // Full render succeeded — compare document-by-document
-            var sharpDocs = SplitDocuments(NormalizeHelmOutput(fullOutput));
+            var sharpDocs = SplitDocuments(NormalizeDynamicValues(NormalizeHelmOutput(fullOutput)));
             var comparison = CompareDocumentSets(helmDocs, sharpDocs);
             matchedDocs = comparison.matched;
             contentDiffDocs = comparison.diffCount;
@@ -238,6 +269,34 @@ public class RealChartGoldenTests
     // ────────────────────────────────────────────────────────────
     //  Normalization
     // ────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Patterns that match non-deterministic template output (from randAlphaNum,
+    /// randNumeric, randAscii, etc.) and replace them with stable placeholders.
+    /// This is comparison-only normalization — it does not affect renderer behavior.
+    /// </summary>
+    private static readonly List<(Regex Pattern, string Replacement)> DynamicPatterns =
+    [
+        // randAlphaNum 5 | lower: 5-char lowercase alnum suffix on name/label lines
+        (new Regex(@"(^(\s{2,}|[ \t])name:.+)-([a-z0-9]{5})(\s*)$", RegexOptions.Multiline), "$1-RANDOM$4"),
+        // randAlphaNum default (10 chars, mixed case) suffix on name lines
+        (new Regex(@"(^(\s{2,}|[ \t])name:.+)-([a-zA-Z0-9]{10})(\s*)$", RegexOptions.Multiline), "$1-RANDOM$4"),
+        // randNumeric 5 or default (10 digits) suffix
+        (new Regex(@"(^(\s{2,}|[ \t])name:.+)-([0-9]{10})(\s*)$", RegexOptions.Multiline), "$1-RANDOM$4"),
+        // randAlphaNum in label values or annotation values (less common)
+        (new Regex(@"(^(\s{2,}|[ \t])\S+:\s+)([a-zA-Z0-9]{20,})(\s*)$", RegexOptions.Multiline), "$1RANDOM_VALUE$4"),
+    ];
+
+    /// <summary>
+    /// Replaces non-deterministic template output with stable placeholders
+    /// so that byte-for-byte comparison works despite randAlphaNum etc.
+    /// </summary>
+    internal static string NormalizeDynamicValues(string yaml)
+    {
+        foreach (var (pattern, replacement) in DynamicPatterns)
+            yaml = pattern.Replace(yaml, replacement);
+        return yaml;
+    }
 
     private static string NormalizeHelmOutput(string output)
     {
