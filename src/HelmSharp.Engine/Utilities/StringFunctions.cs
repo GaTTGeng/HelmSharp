@@ -85,4 +85,53 @@ internal static class StringFunctions
 
     public static string Initials(string input)
         => string.Join("", input.Split(' ', StringSplitOptions.RemoveEmptyEntries).Select(w => w.Length > 0 ? w[0].ToString() : ""));
+
+    public static string Nospace(string input)
+        => System.Text.RegularExpressions.Regex.Replace(input, @"\s+", string.Empty);
+
+    public static string Swapcase(string input)
+    {
+        var sb = new StringBuilder(input.Length);
+        foreach (var c in input)
+            sb.Append(char.IsUpper(c) ? char.ToLowerInvariant(c) : char.ToUpperInvariant(c));
+        return sb.ToString();
+    }
+
+    public static string Shuffle(string input)
+    {
+        var chars = input.ToCharArray();
+        for (var i = chars.Length - 1; i > 0; i--)
+        {
+            var j = Random.Shared.Next(i + 1);
+            (chars[i], chars[j]) = (chars[j], chars[i]);
+        }
+        return new string(chars);
+    }
+
+    public static string RegexFind(string input, string pattern)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(input, pattern);
+        return m.Success ? m.Value : string.Empty;
+    }
+
+    public static List<object?> RegexFindAll(string input, string pattern)
+    {
+        var matches = System.Text.RegularExpressions.Regex.Matches(input, pattern);
+        return matches.Select(m => (object?)m.Value).ToList();
+    }
+
+    public static bool RegexMatch(string input, string pattern)
+        => System.Text.RegularExpressions.Regex.IsMatch(input, pattern);
+
+    public static string RegexReplaceAll(string input, string pattern, string replacement)
+        => System.Text.RegularExpressions.Regex.Replace(input, pattern, replacement);
+
+    public static string RegexReplaceAllLiteral(string input, string pattern, string replacement)
+        => System.Text.RegularExpressions.Regex.Replace(input, pattern, System.Text.RegularExpressions.Regex.Escape(replacement));
+
+    public static List<object?> RegexSplit(string input, string pattern)
+    {
+        var parts = System.Text.RegularExpressions.Regex.Split(input, pattern);
+        return parts.Select(p => (object?)p).ToList();
+    }
 }

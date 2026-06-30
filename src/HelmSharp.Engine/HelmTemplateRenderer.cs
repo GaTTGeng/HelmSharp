@@ -795,6 +795,29 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "substr" => TextFunctions.Substr(tokens, context, pipelineValue, this),
             "toString" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "atoi" => int.TryParse(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)), out var ai) ? ai : 0,
+            "nospace" => StringFunctions.Nospace(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "swapcase" => StringFunctions.Swapcase(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "shuffle" => StringFunctions.Shuffle(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "regexFind" => StringFunctions.RegexFind(
+                TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context)),
+                TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "regexFindAll" => StringFunctions.RegexFindAll(
+                TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context)),
+                TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "regexMatch" => StringFunctions.RegexMatch(
+                TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context)),
+                TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "regexReplaceAll" => StringFunctions.RegexReplaceAll(
+                TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(3), context)),
+                TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+                TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(2), context))),
+            "regexReplaceAllLiteral" => StringFunctions.RegexReplaceAllLiteral(
+                TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(3), context)),
+                TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+                TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(2), context))),
+            "regexSplit" => StringFunctions.RegexSplit(
+                TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context)),
+                TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "printf" => CoreFunctions.Printf(tokens, context, this),
             "println" => PrintArgs(tokens, context, pipelineValue),
             "print" => PrintArgs(tokens, context, pipelineValue),
@@ -832,9 +855,11 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
 
             // Crypto / random functions
             "sha256sum" => StringHelpers.Sha256Sum(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "sha512sum" => EncodingHelpers.Sha512Sum(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "sha1sum" => EncodingHelpers.Sha1Sum(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "adler32sum" => EncodingHelpers.Adler32Sum(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "bcrypt" => EncodingHelpers.BCryptHash(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "uuidv4" => EncodingHelpers.UuidV4(),
             "randAlphaNum" => TextFunctions.RandString(tokens, context, "alphanum", this),
             "randAlpha" => TextFunctions.RandString(tokens, context, "alpha", this),
             "randNumeric" => TextFunctions.RandString(tokens, context, "numeric", this),
@@ -885,13 +910,40 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "prepend" => CoreFunctions.Prepend(tokens, context, pipelineValue, this),
             "append" => CoreFunctions.Append(tokens, context, pipelineValue, this),
             "mustAppend" => CoreFunctions.Append(tokens, context, pipelineValue, this),
+            "join" => CollectionsHelpers.Join(
+                pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context),
+                TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "split" => CollectionsHelpers.SplitList(
+                TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context)),
+                TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "splitList" => CollectionsHelpers.SplitList(
+                TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context)),
+                TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "slice" => CollectionsHelpers.Slice(
+                pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context),
+                (int)TypeConverters.ToLong(EvaluateToken(tokens.ElementAtOrDefault(pipelineValue != null ? 1 : 2), context)),
+                tokens.Count > (pipelineValue != null ? 2 : 3)
+                    ? (int)TypeConverters.ToLong(EvaluateToken(tokens.ElementAtOrDefault(pipelineValue != null ? 2 : 3), context))
+                    : null),
+            "until" => TextFunctions.Until(
+                (int)TypeConverters.ToLong(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "untilStep" => TextFunctions.UntilStep(
+                (int)TypeConverters.ToLong(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+                (int)TypeConverters.ToLong(EvaluateToken(tokens.ElementAtOrDefault(pipelineValue != null ? 1 : 2), context))),
             "reverse" => CollectionsHelpers.Reverse(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "mustReverse" => CollectionsHelpers.MustReverse(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "sortAlpha" => CollectionsHelpers.SortAlpha(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "mustSortAlpha" => CollectionsHelpers.MustSortAlpha(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "compact" => CollectionsHelpers.Compact(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "mustCompact" => CollectionsHelpers.MustCompact(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "uniq" => CollectionsHelpers.Uniq(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "mustUniq" => CollectionsHelpers.MustUniq(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "without" => CoreFunctions.Without(tokens, context, pipelineValue, this),
+            "mustWithout" => CoreFunctions.Without(tokens, context, pipelineValue, this),
             "has" => CoreFunctions.Has(tokens, context, pipelineValue, this),
+            "mustHas" => CoreFunctions.Has(tokens, context, pipelineValue, this),
             "concat" => CoreFunctions.Concat(tokens, context, pipelineValue, this),
+            "mustPrepend" => CoreFunctions.Prepend(tokens, context, pipelineValue, this),
 
             // Dict functions
             "dict" => DictFunctions.Dict(tokens, context, this),
@@ -903,7 +955,14 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "values" => CollectionsHelpers.Values(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "merge" => DictFunctions.MergeDicts(tokens, context, this),
             "mustMerge" => DictFunctions.MergeDicts(tokens, context, this),
+            "mergeOverwrite" => CollectionsHelpers.MergeOverwrite(
+                tokens.Skip(1).Select(t => EvaluateToken(t, context)).ToList()),
+            "mustMergeOverwrite" => CollectionsHelpers.MergeOverwrite(
+                tokens.Skip(1).Select(t => EvaluateToken(t, context)).ToList()),
             "deepCopy" => CollectionsHelpers.DeepCopy(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "mustDeepCopy" => CollectionsHelpers.DeepCopy(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "toDecimal" => SerializationFunctions.ToDecimal(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "toRawJson" => SerializationFunctions.ToRawJson(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "pick" => DictFunctions.Pick(tokens, context, pipelineValue, this),
             "omit" => DictFunctions.Omit(tokens, context, pipelineValue, this),
             "pluck" => DictFunctions.Pluck(tokens, context, pipelineValue, this),
@@ -1025,6 +1084,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "b64dec" => Encoding.UTF8.GetString(Convert.FromBase64String(TypeConverters.ToTemplateString(value))),
             "trim" => TypeConverters.ToTemplateString(value).Trim(),
             "sha256sum" => StringHelpers.Sha256Sum(TypeConverters.ToTemplateString(value)),
+            "sha512sum" => EncodingHelpers.Sha512Sum(TypeConverters.ToTemplateString(value)),
             "sha1sum" => EncodingHelpers.Sha1Sum(TypeConverters.ToTemplateString(value)),
             "not" => !TypeConverters.IsTruthy(value),
             "empty" => !TypeConverters.IsTruthy(value),
@@ -1036,10 +1096,21 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "rest" => CollectionsHelpers.Rest(value),
             "initial" => CollectionsHelpers.Initial(value),
             "reverse" => CollectionsHelpers.Reverse(value),
+            "mustReverse" => CollectionsHelpers.MustReverse(value),
             "sortAlpha" => CollectionsHelpers.SortAlpha(value),
+            "mustSortAlpha" => CollectionsHelpers.MustSortAlpha(value),
             "compact" => CollectionsHelpers.Compact(value),
+            "mustCompact" => CollectionsHelpers.MustCompact(value),
             "uniq" => CollectionsHelpers.Uniq(value),
+            "mustUniq" => CollectionsHelpers.MustUniq(value),
             "deepCopy" => CollectionsHelpers.DeepCopy(value),
+            "mustDeepCopy" => CollectionsHelpers.DeepCopy(value),
+            "nospace" => StringFunctions.Nospace(TypeConverters.ToTemplateString(value)),
+            "swapcase" => StringFunctions.Swapcase(TypeConverters.ToTemplateString(value)),
+            "shuffle" => StringFunctions.Shuffle(TypeConverters.ToTemplateString(value)),
+            "uuidv4" => EncodingHelpers.UuidV4(),
+            "toDecimal" => SerializationFunctions.ToDecimal(value),
+            "toRawJson" => SerializationFunctions.ToRawJson(value),
             "typeOf" => value?.GetType().FullName ?? "nil",
             "kindOf" => TypeFunctions.KindOf(value),
             "toString" => TypeConverters.ToTemplateString(value),

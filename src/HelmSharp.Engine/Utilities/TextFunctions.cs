@@ -129,4 +129,18 @@ internal static class TextFunctions
         var algo = tokens.Count > 1 ? TypeConverters.ToTemplateString(eval.EvaluateToken(tokens[1], context)) : "rsa";
         return $"-----BEGIN {algo.ToUpperInvariant()} PRIVATE KEY-----\n(managed-helm-placeholder)\n-----END {algo.ToUpperInvariant()} PRIVATE KEY-----";
     }
+
+    public static List<object?> Until(int count)
+    {
+        var result = new List<object?>(count);
+        for (var i = 0; i < count; i++) result.Add(i);
+        return result;
+    }
+
+    public static List<object?> UntilStep(int count, int step)
+    {
+        var result = new List<object?>();
+        for (var i = 0; i < count; i += step) result.Add(i);
+        return result;
+    }
 }
