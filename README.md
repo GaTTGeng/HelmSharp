@@ -9,7 +9,7 @@
 
 HelmSharp is a managed .NET library for rendering Helm-style charts and driving Kubernetes release workflows without invoking the `helm` executable. It is intended for applications that need Helm-like behavior inside a .NET process: template rendering, values merging, chart packaging, repository operations, and release lifecycle operations against Kubernetes.
 
-The project is under active development. The API currently implements a practical Helm-compatible subset rather than a byte-for-byte replacement for Helm CLI.
+The project is under active development. M1 (Helm template parity) is complete — the template engine achieves byte-for-byte identical output with `helm template` across 129 templates from five real-world charts. M2+ features expand into release lifecycle and Kubernetes operations.
 
 Documentation site: [https://gattgeng.github.io/HelmSharp/](https://gattgeng.github.io/HelmSharp/)
 
@@ -141,7 +141,7 @@ await foreach (var line in client.UpgradeInstallStreamAsync(new HelmUpgradeInsta
 
 HelmSharp's template engine is continuously validated against real-world, publicly-available Helm charts using golden tests. Each chart is rendered by both `helm template` (reference) and HelmSharp's managed renderer; outputs are compared document-by-document after normalization.
 
-> **Last updated:** 2026-07-01 · **HelmSharp version:** 1.0.3 · **Helm version:** v3.12.3 · **Test framework:** net10.0
+> **Last updated:** 2026-07-01 · **HelmSharp version:** 1.1.0 · **Helm version:** v3.12.3 · **Test framework:** net10.0
 
 ### Summary
 

@@ -6,6 +6,22 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-01
+
+### :tada: M1 Complete — Helm Template Parity Achieved
+
+HelmSharp achieves **byte-for-byte identical output** with `helm template` across all five real-world golden test charts (129/129 templates). All five charts now carry the **Pass** verdict:
+
+| Chart | Version | Templates | Full Render | Verdict |
+| --- | --- | --- | --- | --- |
+| podinfo | 6.14.0 | 21/21 | 52/52 docs exact | **Pass** |
+| metrics-server | 3.13.1 | 18/18 | 45/45 docs exact | **Pass** |
+| external-dns | 1.21.1 | 7/7 | 37/37 docs exact | **Pass** |
+| ingress-nginx | 4.12.1 | 42/42 | 90/90 docs exact | **Pass** |
+| cert-manager | 1.17.1 | 41/41 | 52/52 docs exact | **Pass** |
+
+Key M1 parity milestones closed: block right-trim matching Go `text/template` (#109, #111, #113), define body right-trim (#112), complete Sprig function parity (#97), YAML tag/octal/merge key/block scalar handling (#102), golden test normalization (#101, #100), and real-chart content diff resolution (#96, #99, #108).
+
 ### Added
 
 - Added managed renderer support for Helm `.Files.Glob`, `.Files.AsConfig`, and `.Files.AsSecrets` helpers.
@@ -19,6 +35,7 @@ This project follows semantic versioning once stable releases begin.
 - Hardened CI, documentation, and NuGet release workflows with PR validation, release tag guards, package caching, and symbol package publishing.
 - Bumped `Microsoft.NET.Test.Sdk` from 18.6.0 to 18.7.0.
 - Reworked the VitePress documentation around user workflows and added Simplified Chinese localization.
+- Updated all documentation to reflect M1 Pass verdicts — golden test results, compatibility page, and AGENTS.md (#14).
 
 ### Fixed
 
@@ -137,7 +154,8 @@ This was achieved by fixing two parser bugs that blocked full-chart rendering (#
 - Open source project documentation.
 - GitHub Actions workflows for CI and NuGet release publishing.
 
-[Unreleased]: https://github.com/GaTTGeng/HelmSharp/compare/1.0.4...HEAD
+[Unreleased]: https://github.com/GaTTGeng/HelmSharp/compare/1.1.0...HEAD
+[1.1.0]: https://github.com/GaTTGeng/HelmSharp/compare/1.0.4...1.1.0
 [1.0.4]: https://github.com/GaTTGeng/HelmSharp/compare/1.0.3...1.0.4
 [1.0.3]: https://github.com/GaTTGeng/HelmSharp/compare/1.0.2...1.0.3
 [1.0.2]: https://github.com/GaTTGeng/HelmSharp/compare/1.0.1...1.0.2

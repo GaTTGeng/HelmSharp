@@ -9,7 +9,7 @@
 
 HelmSharp 是一个面向 .NET 的托管 Helm 风格库，用于在不调用 `helm` 可执行文件的情况下渲染 Helm 风格 Chart 并驱动 Kubernetes Release 工作流。它适合需要在 .NET 进程内完成模板渲染、values 合并、Chart 打包、仓库操作和 Kubernetes 发布生命周期管理的应用。
 
-项目仍在积极开发中。当前目标是实现实用的 Helm 兼容子集，而不是逐字节复刻 Helm CLI 的全部行为。
+项目仍在积极开发中。M1（Helm 模板对齐）已完成 — 模板引擎在 5 个真实 Chart 的 129 个模板上与 `helm template` 达到逐字节一致。M2+ 将扩展至发布生命周期和 Kubernetes 操作。
 
 文档站点：[https://gattgeng.github.io/HelmSharp/](https://gattgeng.github.io/HelmSharp/)
 
@@ -141,7 +141,7 @@ await foreach (var line in client.UpgradeInstallStreamAsync(new HelmUpgradeInsta
 
 HelmSharp 的模板引擎持续通过真实世界的公开 Helm Chart 进行 golden test 验证。每个 Chart 分别由 `helm template`（参照）和 HelmSharp 托管渲染器渲染，输出经规范化后逐文档比对。
 
-> **更新日期：** 2026-07-01 · **HelmSharp 版本：** 1.0.3 · **Helm 版本：** v3.12.3 · **测试框架：** net10.0
+> **更新日期：** 2026-07-01 · **HelmSharp 版本：** 1.1.0 · **Helm 版本：** v3.12.3 · **测试框架：** net10.0
 
 ### 汇总
 
