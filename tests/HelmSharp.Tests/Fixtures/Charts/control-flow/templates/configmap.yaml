@@ -1,0 +1,124 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-control-flow
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: control-flow-test
+data:
+  # ── if / else if / else ──
+  if-enabled: |
+{{ if .Values.enabled }}
+    true-branch
+{{ else if .Values.disabled }}
+    else-if-branch (should not reach)
+{{ else }}
+    else-branch (should not reach)
+{{ end }}
+  if-disabled: |
+{{ if .Values.disabled }}
+    true-branch (should not reach)
+{{ else if .Values.enabled }}
+    else-if-branch
+{{ else }}
+    else-branch (should not reach)
+{{ end }}
+  if-all-false: |
+{{ if .Values.disabled }}
+    true-branch (should not reach)
+{{ else if .Values.falsyValue }}
+    else-if-branch (should not reach)
+{{ else }}
+    else-branch
+{{ end }}
+
+  # ── with (changing dot scope) ──
+  with-truthy: |
+{{ with .Values.withValue }}
+    inner-present: {{ .inner }}
+{{ end }}
+  with-falsy: |
+{{ with .Values.falsyValue }}
+    should-not-render
+{{ end }}
+
+  # ── with / else ──
+  with-else-present: |
+{{ with .Values.withValue }}
+    has-value
+{{ else }}
+    no-value (should not render)
+{{ end }}
+  with-else-missing: |
+{{ with .Values.falsyValue }}
+    has-value (should not render)
+{{ else }}
+    no-value
+{{ end }}
+
+  # ── simple range (list) ──
+  range-list: |
+{{ range .Values.items }}
+    - {{ . }}
+{{ end }}
+
+  # ── range / else ──
+  range-else-list: |
+{{ range .Values.items }}
+    - {{ . }}
+{{ else }}
+    empty-collection
+{{ end }}
+  range-else-empty: |
+{{ range .Values.emptyList }}
+    should-not-render
+{{ else }}
+    empty-collection
+{{ end }}
+
+  # ── range over dict ──
+  range-dict: |
+{{ range $k, $v := .Values.mapping }}
+    {{ $k }}: {{ $v }}
+{{ end }}
+
+  # ── $ (root) scope from within with/range ──
+  root-dollar-in-with: |
+{{ with .Values.nested }}
+    nested-value: {{ .value }}
+    root-release: {{ $.Release.Name }}
+{{ end }}
+  root-dollar-in-range: |
+{{ range .Values.items }}
+    item: {{ . }}
+    root-namespace: {{ $.Release.Namespace }}
+{{ end }}
+
+  # ── variable assignment ──
+  variable-assign: |
+{{ $team := .Values.labels.component }}
+    team: {{ $team }}
+
+  # ── variable scoping: with block ──
+  # Set a variable before the with, override inside;
+  # the outer value should be preserved (no leak).
+  var-scope-with: |
+{{ $pre := "before-with" }}
+    pre: {{ $pre }}
+{{ with .Values.withValue }}
+{{ $pre = "inside-with" }}
+    inside: {{ $pre }}
+    inner: {{ .inner }}
+{{ end }}
+    post: {{ $pre }}
+
+  # ── variable scoping: range block ──
+  # Same pattern: override inside range; outer should be preserved.
+  var-scope-range: |
+{{ $pre := "before-range" }}
+    pre: {{ $pre }}
+{{ range .Values.items }}
+{{ $pre = "inside-range" }}
+    inside: {{ $pre }} (item: {{ . }})
+{{ end }}
+    post: {{ $pre }}
