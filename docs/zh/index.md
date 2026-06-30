@@ -11,7 +11,7 @@ hero:
       link: /zh/getting-started
     - theme: alt
       text: 🔬 实时对比
-      link: /compare
+      link: /zh/compare
     - theme: alt
       text: 查看兼容性
       link: /zh/helm-compatibility
@@ -24,7 +24,7 @@ features:
   - title: 需要时再进入发布流程
     details: 先只渲染；当产品需要时，再接入 install、upgrade、rollback、uninstall、apply、wait 和 release history API。
   - title: 用 Helm 输出校验兼容性
-    details: Helm CLI 只作为测试基准使用。当前真实 chart 测试集已覆盖 5 个公共 chart 的 129/129 个模板。<br><br> **[🔬 在线对比你的 Chart →](/compare)** 直观感受 HelmSharp 的兼容度。
+    details: Helm CLI 只作为测试基准使用。当前真实 chart 测试集已覆盖 5 个公共 chart 的 129/129 个模板。<br><br><a href="./compare">在线对比你的 Chart →</a> 直观感受 HelmSharp 的兼容度。
 ---
 
 ---
@@ -34,7 +34,7 @@ features:
 理解 HelmSharp 兼容性最快的方式是**亲眼看看**。上传你的 Helm Chart，HelmSharp 和 Helm CLI 并排渲染、实时 diff — 同一份输入，同一组 values，差距一目了然。
 
 <div class="compare-cta">
-  <a class="compare-cta-btn" href="../compare">
+  <a class="compare-cta-btn" href="./compare">
     <span class="compare-cta-icon">🔬</span>
     <span class="compare-cta-label">打开在线对比</span>
     <span class="compare-cta-arrow">→</span>
