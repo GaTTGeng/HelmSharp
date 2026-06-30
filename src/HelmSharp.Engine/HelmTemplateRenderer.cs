@@ -796,7 +796,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "toString" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "atoi" => int.TryParse(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)), out var ai) ? ai : 0,
             "printf" => CoreFunctions.Printf(tokens, context, this),
-            "println" => PrintArgs(tokens, context, pipelineValue),
+            "println" => PrintArgs(tokens, context, pipelineValue, newline: true),
             "print" => PrintArgs(tokens, context, pipelineValue),
 
             // Math functions
@@ -1057,14 +1057,17 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         };
     }
 
-    private string PrintArgs(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
+    // Go fmt.Sprint semantics: operands concatenated without injected spaces.
+    // Pipeline value is the LAST argument, matching Helm's print behavior.
+    // e.g. {{ print .Release.Name "-svc" }} → "rel-svc", not "rel -svc" nor ".Release.Name -svc"
+    private string PrintArgs(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, bool newline = false)
     {
         var parts = new List<string>();
-        if (pipelineValue != null)
-            parts.Add(TypeConverters.ToTemplateString(pipelineValue));
         foreach (var t in tokens.Skip(1))
             parts.Add(TypeConverters.ToTemplateString(EvaluateToken(t, context)));
-        return string.Join(' ', parts);
+        if (pipelineValue != null)
+            parts.Add(TypeConverters.ToTemplateString(pipelineValue));
+        return string.Concat(parts) + (newline ? "\n" : string.Empty);
     }
 
     private object? EvaluateToken(string? token, TemplateContext context)

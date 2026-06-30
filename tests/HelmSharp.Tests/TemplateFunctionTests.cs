@@ -815,7 +815,7 @@ public class TemplateFunctionTests
             new Dictionary<string, object?>());
         var result = renderer.Render();
         _output.WriteLine(result);
-        Assert.Contains("value: hello world", result);
+        Assert.Contains("value: helloworld", result);
     }
 
     [Fact]
@@ -844,7 +844,7 @@ public class TemplateFunctionTests
             new Dictionary<string, object?>());
         var result = renderer.Render();
         _output.WriteLine(result);
-        Assert.Contains("value: hello world", result);
+        Assert.Contains("value: worldhello", result);
     }
 
     [Fact]

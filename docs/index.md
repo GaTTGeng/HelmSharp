@@ -27,8 +27,6 @@ features:
     details: Helm CLI output is used as a test oracle. The current real-chart suite renders 129/129 templates across five public charts. <br><br><a href="./compare">Try the live comparison →</a> to see how close HelmSharp gets on your own charts.
 ---
 
----
-
 ## 🔬 See HelmSharp in Action
 
 The fastest way to understand HelmSharp's compatibility is to **see it yourself**. Upload any Helm chart and watch HelmSharp and the real Helm CLI render it side-by-side — same input, same values, instant diff.
