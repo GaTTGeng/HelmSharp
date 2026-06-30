@@ -523,7 +523,16 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             ? trueDoc.SerializeToText()
             : string.Empty;
 
-        return RenderRangeExpression(block.Expression, bodyText, context);
+        var rendered = RenderRangeExpression(block.Expression, bodyText, context);
+
+        // range … else: render else body when the range value has no elements.
+        // The check is whether any output was produced; a non-empty collection whose
+        // every element renders to an empty string would hit the else branch — which
+        // matches Helm CLI's semantics (the range iterated zero times).
+        if (rendered.Length == 0 && block.FalseBody is TemplateDocumentNode elseDoc)
+            return RenderDocument(elseDoc, context);
+
+        return rendered;
     }
 
     private string RenderSection(string template, TemplateContext context)

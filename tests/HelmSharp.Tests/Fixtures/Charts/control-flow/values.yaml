@@ -1,0 +1,19 @@
+# Values for control-flow fixture chart
+enabled: true
+disabled: false
+items:
+  - one
+  - two
+  - three
+emptyList: []
+mapping:
+  key1: val1
+  key2: val2
+emptyMap: {}
+withValue:
+  inner: present
+falsyValue: ""
+nested:
+  value: nested-val
+labels:
+  component: control-flow-test
