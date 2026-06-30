@@ -172,6 +172,50 @@ public class EdgeCaseTests
     }
 
     [Fact]
+    public void WithEmptyDict_SkipsBlock()
+    {
+        // Go text/template treats empty maps as falsy (val.Len() > 0).
+        // Regression test for IsTruthy fix — empty IDictionary must return false.
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            {{- with .Values.data }}
+            value: {{ . | toYaml }}
+            {{- end }}
+            done
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>
+            {
+                ["data"] = new Dictionary<string, object?>()
+            });
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        Assert.Contains("done", result);
+        Assert.DoesNotContain("value:", result);
+    }
+
+    [Fact]
+    public void WithNonEmptyDict_EntersBlock()
+    {
+        // Non-empty dicts are truthy in both Go templates and HelmSharp.
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            {{- with .Values.data }}
+            value: present
+            {{- end }}
+            done
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>
+            {
+                ["data"] = new Dictionary<string, object?> { ["key"] = "val" }
+            });
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        Assert.Contains("value: present", result);
+    }
+
+    [Fact]
     public void DefaultFunction_Fallback()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };

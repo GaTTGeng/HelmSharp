@@ -755,4 +755,68 @@ public class TemplateFunctionTests
         Assert.Contains("hello_world", result);
         Assert.Contains("hello-world", result);
     }
+
+    [Fact]
+    public void PrintFunction_RendersArgs()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            value: {{ print "hello" "world" }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>());
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        Assert.Contains("value: hello world", result);
+    }
+
+    [Fact]
+    public void PrintFunction_PipelineForm()
+    {
+        // Regression: pipeline value should be included in output, not silently dropped.
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            value: {{ "hello" | print }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>());
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        Assert.Contains("value: hello", result);
+    }
+
+    [Fact]
+    public void PrintFunction_PipelineWithArgs()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            value: {{ "hello" | print "world" }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>());
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        Assert.Contains("value: hello world", result);
+    }
+
+    [Fact]
+    public void TupleFunction_CreatesList()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            {{- $t := tuple "a" "b" "c" }}
+            first: {{ index $t 0 | quote }}
+            second: {{ index $t 1 | quote }}
+            third: {{ index $t 2 | quote }}
+            len: {{ len $t }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>());
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        Assert.Contains("first: \"a\"", result);
+        Assert.Contains("second: \"b\"", result);
+        Assert.Contains("third: \"c\"", result);
+        Assert.Contains("len: 3", result);
+    }
 }
