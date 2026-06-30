@@ -6,7 +6,7 @@ The Helm CLI is used as a test oracle. It is not required at runtime by consumer
 
 ## Current confidence level
 
-The current real-chart golden suite renders **129/129 templates** across five public charts with no parser exceptions:
+The real-chart golden suite renders **129/129 templates** across five public Helm charts with no parser exceptions. These results are validated on every push and pull request by the CI workflow, which runs identical golden tests against a real `helm` binary.
 
 | Chart | Version | Templates | Result |
 | --- | --- | --- | --- |
@@ -17,7 +17,7 @@ The current real-chart golden suite renders **129/129 templates** across five pu
 | cert-manager | 1.17.1 | 41/41 | Pass |
 | **Total** | - | **129/129** | **Pass** |
 
-That number matters because real charts expose helper templates, nested values, `.Files`, capabilities, and formatting patterns that small examples miss.
+That number matters because real charts expose helper templates, nested values, `.Files`, capabilities, and formatting patterns that small examples miss. See the [Golden Test Results](https://github.com/GaTTGeng/HelmSharp#golden-test-results) section in the README for per-chart breakdowns, error analysis, and verdict definitions.
 
 ## Compatibility contract
 
@@ -34,9 +34,12 @@ Exact CLI colors, progress text, terminal formatting, and plugin execution are n
 
 | Area | Current level | What it means for users |
 | --- | --- | --- |
-| Chart loading from directories and `.tgz` archives | Supported | Safe starting point for render and packaging tools. |
-| Values files and `--set`-style overrides | Partial | Common flows work; edge-case coercion still needs parity work. |
-| Helm-style template rendering | Partial | Real public charts render; remaining gaps are tracked by golden tests. |
+| Chart loading from directories and `.tgz` archives | Supported | Safe starting point for render and packaging tools. Validated across five real-world charts (podinfo, metrics-server, external-dns, ingress-nginx, cert-manager). |
+| Values files and `--set`-style overrides | Partial | Common flows work; edge-case coercion and list syntax still tracked by golden tests. |
+| Helm-style template rendering | Partial | All 129 templates across five real public charts render without parser exceptions; remaining gaps are content-level formatting diffs tracked in the README golden test breakdown. |
+| Template control flow (`if`/`else if`/`else`/`range`/`with`) | Supported | All control-flow constructs render correctly against `helm template` output, validated by dedicated fixture charts and real-chart golden tests. |
+| Named templates and helpers | Supported | Cross-template `define`/`template`/`include` calls resolve correctly; validated across real charts with extensive helper usage (ingress-nginx: 42 templates). |
+| Built-in objects (`.Release`, `.Chart`, `.Values`, `.Files`, `.Capabilities`, `.Template`) | Supported | All built-in objects are populated and render consistently with Helm CLI output. |
 | Chart packaging and repositories | Partial | Useful APIs exist; archive and repository edge cases remain. |
 | Install, upgrade, rollback, uninstall | Partial | Dry-run and managed workflows exist; full lifecycle parity is still expanding. |
 | Kubernetes apply, delete, wait | Partial | Common resource operations exist; less common readiness behavior needs coverage. |
@@ -66,3 +69,7 @@ Open a compatibility issue with:
 - whether the difference affects rendering, release state, or cluster mutation.
 
 Small reproducible charts are more useful than screenshots or large private charts.
+
+## Continuous validation
+
+Golden test results are validated on every push and pull request through the [CI workflow](https://github.com/GaTTGeng/HelmSharp/blob/master/.github/workflows/ci.yml). The CI runner installs Helm CLI (`v3.12.3`) alongside the .NET SDKs and executes the full golden test suite, including both fixture-chart and real-chart comparisons. JSON reports are published as workflow artifacts for each run.
