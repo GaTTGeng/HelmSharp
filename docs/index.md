@@ -24,7 +24,7 @@ features:
   - title: Release workflows when you need them
     details: Start with rendering, then opt into install, upgrade, rollback, uninstall, Kubernetes apply, wait behavior, and release history APIs.
   - title: Compatibility measured against Helm
-    details: Helm CLI output is used as a test oracle. The current real-chart suite renders 129/129 templates across five public charts. <br><br> **[🔬 Try the live comparison →](/compare)** to see how close HelmSharp gets on your own charts.
+    details: Helm CLI output is used as a test oracle. The current real-chart suite renders 129/129 templates across five public charts. <br><br><a href="./compare">Try the live comparison →</a> to see how close HelmSharp gets on your own charts.
 ---
 
 ---

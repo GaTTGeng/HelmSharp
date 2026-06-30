@@ -28,28 +28,41 @@
 .compare-cta-btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 0.5rem;
+  min-width: 300px;
   padding: 0.7rem 1.8rem;
   font-size: 1rem;
   font-weight: 600;
-  color: var(--vp-button-brand-text);
+  color: #ffffff !important;
   background: var(--vp-c-brand-1);
   border-radius: 6px;
-  text-decoration: none;
+  text-decoration: none !important;
   transition: background 0.2s, transform 0.15s;
 }
 .compare-cta-btn:hover {
   background: var(--vp-c-brand-2);
   transform: translateY(-1px);
   text-decoration: none !important;
-  color: var(--vp-button-brand-text);
+  color: #ffffff !important;
 }
 .compare-cta-icon {
   font-size: 1.1rem;
+}
+.compare-cta-label,
+.compare-cta-arrow {
+  color: #ffffff;
 }
 .compare-cta-arrow {
   transition: transform 0.15s;
 }
 .compare-cta-btn:hover .compare-cta-arrow {
   transform: translateX(3px);
+}
+
+@media (max-width: 480px) {
+  .compare-cta-btn {
+    width: 100%;
+    min-width: 0;
+  }
 }
