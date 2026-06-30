@@ -79,11 +79,9 @@ public class RealChartGoldenTests
     {
         var result = await RunGoldenComparisonAsync(chartName);
 
-        // The test "passes" as long as it doesn't completely fail.
-        // We use the result data to populate the README.
         Assert.True(
-            result.Verdict is GoldenVerdict.Pass or GoldenVerdict.Partial,
-            $"Chart '{chartName}' failed completely.\n\n{result.Summary}");
+            result.Verdict is GoldenVerdict.Pass,
+            $"Chart '{chartName}' did not match helm template exactly.\n\n{result.Summary}");
 
         // Write a structured JSON report for the README generator
         var reportPath = Path.Combine(
@@ -191,10 +189,24 @@ public class RealChartGoldenTests
         if (fullOutput != null)
         {
             // Full render succeeded — compare document-by-document
-            var sharpDocs = SplitDocuments(NormalizeDynamicValues(NormalizeHelmOutput(fullOutput)));
-            var comparison = CompareDocumentSets(helmDocs, sharpDocs);
-            matchedDocs = comparison.matched;
-            contentDiffDocs = comparison.diffCount;
+            var sharpNorm = NormalizeDynamicValues(NormalizeHelmOutput(fullOutput));
+            var sharpDocs = SplitDocuments(sharpNorm);
+            if (helmNorm == sharpNorm)
+            {
+                matchedDocs = helmDocs.Count;
+                contentDiffDocs = 0;
+            }
+            else if (DocumentMultisetsEqual(helmDocs, sharpDocs))
+            {
+                matchedDocs = helmDocs.Count;
+                contentDiffDocs = 0;
+            }
+            else
+            {
+                var comparison = CompareDocumentSets(helmDocs, sharpDocs);
+                matchedDocs = comparison.matched;
+                contentDiffDocs = comparison.diffCount;
+            }
 
             verdict = matchedDocs == helmDocs.Count && contentDiffDocs == 0 && helmDocs.Count > 0
                 ? GoldenVerdict.Pass
@@ -367,6 +379,28 @@ public class RealChartGoldenTests
         }
 
         return (matched, diffCount);
+    }
+
+    private static bool DocumentMultisetsEqual(List<string> helmDocs, List<string> sharpDocs)
+    {
+        if (helmDocs.Count != sharpDocs.Count)
+            return false;
+
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var doc in helmDocs)
+            counts[doc] = counts.GetValueOrDefault(doc) + 1;
+
+        foreach (var doc in sharpDocs)
+        {
+            if (!counts.TryGetValue(doc, out var count))
+                return false;
+            if (count == 1)
+                counts.Remove(doc);
+            else
+                counts[doc] = count - 1;
+        }
+
+        return counts.Count == 0;
     }
 
     private static string ExtractKind(string yaml)

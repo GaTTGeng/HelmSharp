@@ -115,7 +115,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                 if (string.IsNullOrWhiteSpace(rendered))
                     continue;
 
-                manifests.Add(($"{_chart.Name}/{path}", rendered.Trim()));
+                manifests.Add(($"{_chart.Name}/{path}", NormalizeManifestContent(rendered)));
             }
             catch (NotSupportedException ex)
             {
@@ -174,7 +174,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
 
                     manifests.Add((
                         $"{_chart.Name}/charts/{subchartIdentity}/{path}",
-                        rendered.Trim()));
+                        NormalizeManifestContent(rendered)));
                 }
                 catch (NotSupportedException ex)
                 {
@@ -208,6 +208,15 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         }
 
         return output.ToString();
+    }
+
+    private static string NormalizeManifestContent(string rendered)
+    {
+        var normalized = rendered
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace("\r", "\n", StringComparison.Ordinal)
+            .Trim();
+        return Regex.Replace(normalized, @"(?m)^---\n[ \t]*\n", "---\n");
     }
 
     private IEnumerable<(string Identity, HelmChart Chart)> GetSubchartRenderInstances()
@@ -416,6 +425,8 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
 
                 case BlockNode block:
                 {
+                    if (block.RightTrim)
+                        TrimCurrentLineIndent(output);
                     output.Append(RenderBlockNode(block, context));
                     break;
                 }
@@ -428,6 +439,18 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         }
 
         return output.ToString();
+    }
+
+    private static void TrimCurrentLineIndent(StringBuilder output)
+    {
+        var index = output.Length - 1;
+        while (index >= 0 && output[index] is ' ' or '\t')
+            index--;
+
+        if (index >= 0 && output[index] != '\n')
+            return;
+
+        output.Length = index + 1;
     }
 
     /// <summary>
@@ -575,6 +598,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         {
             ActionNode a => a.LeftTrim,
             BlockNode b => b.LeftTrim,
+            CommentNode c => c.LeftTrim,
             _ => false,
         };
 

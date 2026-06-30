@@ -236,6 +236,53 @@ public class TemplateFunctionTests
     }
 
     [Fact]
+    public void Comment_WithLeftTrim_RemovesPreviousLineWhitespace()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            apiVersion: v1
+            kind: ConfigMap
+            spec:
+              replicas: 1
+              {{- /* comment */}}
+              selector:
+                app: test
+            """;
+
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>());
+        var result = renderer.Render();
+        _output.WriteLine(result);
+
+        Assert.Contains("replicas: 1\n  selector:", result);
+        Assert.DoesNotContain("replicas: 1\n\n  selector:", result);
+        Assert.DoesNotContain("comment", result);
+    }
+
+    [Fact]
+    public void BlockWithRightTrim_DoesNotDuplicateActionLineIndent()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            apiVersion: v1
+            kind: ConfigMap
+            data:
+              args:
+              {{ if .Values.enabled -}}
+              - --flag
+              {{- end }}
+            """;
+
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?> { ["enabled"] = true });
+        var result = renderer.Render();
+        _output.WriteLine(result);
+
+        Assert.Contains("  - --flag", result);
+        Assert.DoesNotContain("    - --flag", result);
+    }
+
+    [Fact]
     public void MultipleIncludes_WithTrim()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
@@ -369,6 +416,33 @@ public class TemplateFunctionTests
     }
 
     [Fact]
+    public void ToYaml_RendersNestedNullsLikeHelm()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            {{- toYaml .Values | nindent 0 }}
+            """;
+
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>
+            {
+                ["limits"] = null,
+                ["requests"] = new Dictionary<string, object?>
+                {
+                    ["cpu"] = "1m"
+                },
+                ["plain"] = "value"
+            });
+        var result = renderer.Render();
+        _output.WriteLine(result);
+
+        Assert.Contains("limits: null", result);
+        Assert.Contains("requests:", result);
+        Assert.Contains("cpu: 1m", result);
+        Assert.Contains("plain: value", result);
+    }
+
+    [Fact]
     public void StringFunctions_UpperLowerTitleTrimReplaceTrunc()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
@@ -419,6 +493,24 @@ public class TemplateFunctionTests
         Assert.Contains("mul: 20", result);
         Assert.Contains("div: 5", result);
         Assert.Contains("mod: 1", result);
+    }
+
+    [Fact]
+    public void ToDecimal_ParsesInputsAsOctal()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            modeWithoutLeadingZero: {{ "644" | toDecimal }}
+            modeWithLeadingZero: {{ "0644" | toDecimal }}
+            invalidOctal: {{ "08" | toDecimal }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>());
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        Assert.Contains("modeWithoutLeadingZero: 420", result);
+        Assert.Contains("modeWithLeadingZero: 420", result);
+        Assert.Contains("invalidOctal: 0", result);
     }
 
     [Fact]
