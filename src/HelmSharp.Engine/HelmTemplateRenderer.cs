@@ -603,7 +603,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
 
                 case BlockNode block:
                 {
-                    if (ShouldTrimLineIndent(i, doc.Children))
+                    if (block.RightTrim)
                         TrimCurrentLineIndent(output);
                     output.Append(RenderBlockNode(block, context));
                     break;
@@ -635,6 +635,11 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         if (children[i] is not TextNode text)
             return false;
         if (!IsAllWhitespace(text.Content))
+            return false;
+        // Never suppress whitespace that contains newlines — newlines are structural
+        // YAML separators. The renderer's trim logic (HasRightTrim/HasLeftTrim) already
+        // handles newline trimming correctly based on each node's trim markers.
+        if (text.Content.Contains('\n'))
             return false;
         // Only suppress when flanked by template directives (action/block on both sides).
         // Standalone whitespace before a block in a YAML content context is preserved.
