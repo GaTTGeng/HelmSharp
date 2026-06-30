@@ -225,6 +225,20 @@ public class HelmValuesTests
     }
 
     [Fact]
+    public void ToYaml_Null_OutputsNull()
+    {
+        var yaml = HelmYaml.Serialize(null);
+        Assert.Equal("null\n", yaml);
+    }
+
+    [Fact]
+    public void ToYaml_EmptyDict_OutputsEmptyBraces()
+    {
+        var yaml = HelmYaml.Serialize(new Dictionary<string, object?>()).Replace("\r\n", "\n");
+        Assert.Equal("{}\n", yaml);
+    }
+
+    [Fact]
     public async Task BuildAsync_CoercesScalars()
     {
         var chart = new HelmChart
