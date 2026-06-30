@@ -274,17 +274,16 @@ public class RealChartGoldenTests
     /// Patterns that match non-deterministic template output (from randAlphaNum,
     /// randNumeric, randAscii, etc.) and replace them with stable placeholders.
     /// This is comparison-only normalization — it does not affect renderer behavior.
+    ///
+    /// IMPORTANT: Patterns are scoped to specific chart templates to avoid masking
+    /// real rendering differences as false passes. When adding a new pattern, ensure
+    /// it matches ONLY the known random-value usage site, not arbitrary name suffixes.
     /// </summary>
     private static readonly List<(Regex Pattern, string Replacement)> DynamicPatterns =
     [
-        // randAlphaNum 5 | lower: 5-char lowercase alnum suffix on name/label lines
-        (new Regex(@"(^(\s{2,}|[ \t])name:.+)-([a-z0-9]{5})(\s*)$", RegexOptions.Multiline), "$1-RANDOM$4"),
-        // randAlphaNum default (10 chars, mixed case) suffix on name lines
-        (new Regex(@"(^(\s{2,}|[ \t])name:.+)-([a-zA-Z0-9]{10})(\s*)$", RegexOptions.Multiline), "$1-RANDOM$4"),
-        // randNumeric 5 or default (10 digits) suffix
-        (new Regex(@"(^(\s{2,}|[ \t])name:.+)-([0-9]{10})(\s*)$", RegexOptions.Multiline), "$1-RANDOM$4"),
-        // randAlphaNum in label values or annotation values (less common)
-        (new Regex(@"(^(\s{2,}|[ \t])\S+:\s+)([a-zA-Z0-9]{20,})(\s*)$", RegexOptions.Multiline), "$1RANDOM_VALUE$4"),
+        // podinfo: {{ randAlphaNum 5 | lower }} suffixes in test Pod names
+        // Template pattern: name: {{ template "podinfo.fullname" . }}-<type>-test-{{ randAlphaNum 5 | lower }}
+        (new Regex(@"(name:\s*[\w-]+-test-)([a-z0-9]{5})(\s*)$", RegexOptions.Multiline), "$1RANDOM$3"),
     ];
 
     /// <summary>

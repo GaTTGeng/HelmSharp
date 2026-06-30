@@ -27,8 +27,6 @@ features:
     details: Helm CLI 只作为测试基准使用。当前真实 chart 测试集已覆盖 5 个公共 chart 的 129/129 个模板。<br><br><a href="./compare">在线对比你的 Chart →</a> 直观感受 HelmSharp 的兼容度。
 ---
 
----
-
 ## 🔬 眼见为实
 
 理解 HelmSharp 兼容性最快的方式是**亲眼看看**。上传你的 Helm Chart，HelmSharp 和 Helm CLI 并排渲染、实时 diff — 同一份输入，同一组 values，差距一目了然。
