@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace HelmSharp.Chart;
 
 public static class HelmValues
@@ -189,33 +191,140 @@ public static class HelmValues
         }
     }
 
+    /// <summary>
+    /// Sets a value at a dotted path, supporting list index notation:
+    /// e.g. "servers[0].port" or "items[1].name".
+    /// Matches Helm's --set path syntax.
+    /// </summary>
     private static void SetPath(Dictionary<string, object?> root, string path, object? value)
     {
-        var parts = path.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (parts.Length == 0)
+        // Regex matches: fieldName or fieldName[index] (capturing name and optional index)
+        var segmentRegex = new System.Text.RegularExpressions.Regex(
+            @"([^\[\].]+)(?:\[(\d+)\])?", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        var matches = segmentRegex.Matches(path);
+        if (matches.Count == 0)
             return;
 
         var current = root;
-        foreach (var part in parts.Take(parts.Length - 1))
+        for (var i = 0; i < matches.Count - 1; i++)
         {
-            if (!current.TryGetValue(part, out var child) || child is not Dictionary<string, object?> childDict)
-            {
-                childDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-                current[part] = childDict;
-            }
+            var name = matches[i].Groups[1].Value;
+            var indexGroup = matches[i].Groups[2];
 
-            current = childDict;
+            if (indexGroup.Success)
+            {
+                var index = int.Parse(indexGroup.Value);
+                EnsureListElement(current, name, index, out var nextDict);
+                current = nextDict;
+            }
+            else
+            {
+                if (!current.TryGetValue(name, out var child) || child is not Dictionary<string, object?> childDict)
+                {
+                    childDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                    current[name] = childDict;
+                }
+                current = childDict;
+            }
         }
 
-        current[parts[^1]] = value;
+        // Last segment — if it has an index, set directly in the list element
+        var lastName = matches[matches.Count - 1].Groups[1].Value;
+        var lastIndexGroup = matches[matches.Count - 1].Groups[2];
+
+        if (lastIndexGroup.Success)
+        {
+            var index = int.Parse(lastIndexGroup.Value);
+            if (!current.TryGetValue(lastName, out var existing) || existing is not List<object?> list)
+            {
+                list = new List<object?>();
+                current[lastName] = list;
+            }
+            while (list.Count <= index)
+                list.Add(null);
+            list[index] = value;
+        }
+        else
+        {
+            current[lastName] = value;
+        }
     }
 
-    private static object CoerceScalar(string value)
+    /// <summary>
+    /// Ensures a list exists at <paramref name="name"/> with at least
+    /// <paramref name="index"/>+1 elements. Element at <paramref name="index"/>
+    /// is a Dictionary, and the method outputs it via <paramref name="element"/>.
+    /// </summary>
+    private static void EnsureListElement(
+        Dictionary<string, object?> parent,
+        string name,
+        int index,
+        out Dictionary<string, object?> element)
     {
-        if (bool.TryParse(value, out var b)) return b;
-        if (long.TryParse(value, out var l)) return l;
-        if (double.TryParse(value, out var d)) return d;
-        return value;
+        if (!parent.TryGetValue(name, out var existing) || existing is not List<object?> list)
+        {
+            list = new List<object?>();
+            parent[name] = list;
+        }
+
+        // Pad the list to ensure index exists
+        while (list.Count <= index)
+            list.Add(new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase));
+
+        var item = list[index];
+        if (item is not Dictionary<string, object?> itemDict)
+        {
+            itemDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            list[index] = itemDict;
+        }
+
+        element = itemDict;
+    }
+
+    /// <summary>
+    /// Coerces a --set value following Helm's semantics: first attempt YAML parsing
+    /// (which handles numbers, booleans, null, lists, and dicts), then fall back to string.
+    /// This matches Helm's approach of YAML-parsing --set values for type detection.
+    /// </summary>
+    private static object? CoerceScalar(string value)
+    {
+        // Empty string stays as empty string (Helm semantics)
+        if (value.Length == 0)
+            return string.Empty;
+
+        // Try YAML parse first — matches Helm's approach
+        // YAML handles: int, float, bool, null, lists, dicts, quoted strings
+        try
+        {
+            var yamlValue = HelmYaml.DeserializeAny(value);
+            // DeserializeAny returns null for bare null/~, but for scalar coercion
+            // we only want structured types; a bare string "hello" would also parse to "hello"
+            if (yamlValue is not string || value.StartsWith('"') || value.StartsWith('\''))
+                return yamlValue;
+
+            // If YAML returned a string identical to input (no quotes), try scalar coercion
+            var str = (string)yamlValue;
+            // bool
+            if (bool.TryParse(str, out var b)) return b;
+            // long
+            if (long.TryParse(str, NumberStyles.Integer, CultureInfo.InvariantCulture, out var l))
+            {
+                // A bare "true"/"false" should be bool, not long (YAML handles this already)
+                // A bare integer should be long
+                return l;
+            }
+            // double (only if it looks like a number)
+            if (double.TryParse(str, NumberStyles.Float, CultureInfo.InvariantCulture, out var d) &&
+                str.Length > 0 && (char.IsDigit(str[0]) || str[0] == '-' || str[0] == '.'))
+                return d;
+            // string
+            return str;
+        }
+        catch
+        {
+            return value;
+        }
     }
 
     private static object? ParseJsonValue(string value)

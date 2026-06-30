@@ -17,6 +17,20 @@ public static class HelmYaml
                ?? new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Deserializes any YAML value (scalar, list, or mapping) into its native .NET type.
+    /// Returns null for YAML null / ~, string for quoted scalars, bool/long/double for
+    /// typed scalars. Used by --set value coercion to match Helm's YAML-based parsing.
+    /// </summary>
+    public static object? DeserializeAny(string yaml)
+    {
+        if (string.IsNullOrEmpty(yaml))
+            return string.Empty;
+
+        var obj = Deserializer.Deserialize<object>(yaml);
+        return Normalize(obj);
+    }
+
     public static string Serialize(object? value)
     {
         if (value is null)
