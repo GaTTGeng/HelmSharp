@@ -776,6 +776,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         {
             ActionNode a => a.RightTrim,
             BlockNode b => b.EndRightTrim,
+            CommentNode c => c.RightTrim,
             _ => false,
         };
 
