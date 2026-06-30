@@ -299,6 +299,15 @@ public class TemplateFunctionTests
             metadata:
               name: app
             """;
+        chart.Templates["templates/configmap.yaml"] = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: app
+            data:
+              helm.sh/hook: post-install
+              helm.sh/hook-weight: "99"
+            """;
         chart.Templates["templates/kindless.yaml"] = """
             # rendered comment-only manifest
             """;
@@ -322,16 +331,50 @@ public class TemplateFunctionTests
         var result = renderer.Render();
         _output.WriteLine(result);
 
+        var configMapIndex = result.IndexOf("kind: ConfigMap", StringComparison.Ordinal);
         var serviceIndex = result.IndexOf("kind: Service", StringComparison.Ordinal);
         var deploymentIndex = result.IndexOf("kind: Deployment", StringComparison.Ordinal);
         var kindlessIndex = result.IndexOf("# rendered comment-only manifest", StringComparison.Ordinal);
         var webhookIndex = result.IndexOf("kind: ValidatingWebhookConfiguration", StringComparison.Ordinal);
         var hookIndex = result.IndexOf("name: app-hook", StringComparison.Ordinal);
 
+        Assert.True(configMapIndex < serviceIndex);
         Assert.True(serviceIndex < deploymentIndex);
         Assert.True(deploymentIndex < kindlessIndex);
         Assert.True(kindlessIndex < webhookIndex);
         Assert.True(webhookIndex < hookIndex);
+    }
+
+    [Fact]
+    public void Render_SplitsManifestDocumentsWithWhitespaceAndComments()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/multi.yaml"] = """
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: app
+            --- # separator comment
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: app
+            """ + "\n---   \n" + """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: app
+            """;
+
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>());
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        var normalized = result.Replace("\r\n", "\n", StringComparison.Ordinal);
+
+        Assert.Contains("---\napiVersion: v1\nkind: ConfigMap", normalized);
+        Assert.Contains("---\napiVersion: v1\nkind: Service", normalized);
+        Assert.Contains("---\napiVersion: apps/v1\nkind: Deployment", normalized);
     }
 
     [Fact]
@@ -1113,6 +1156,30 @@ public class TemplateFunctionTests
         Assert.Contains("x: 1", result);
         Assert.Contains("y: 3", result);
         Assert.Contains("z: 4", result);
+    }
+
+    [Fact]
+    public void MergeOverwrite_AppendsPipelineValueAsLastArgument()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            {{- $dst := dict "x" 1 "nested" (dict "a" "dst" "b" "dst") }}
+            {{- $src := dict "y" 2 "nested" (dict "b" "src" "c" "src") }}
+            {{- $m := $src | mergeOverwrite $dst }}
+            x: {{ $m.x }}
+            y: {{ $m.y }}
+            nestedA: {{ $m.nested.a }}
+            nestedB: {{ $m.nested.b }}
+            nestedC: {{ $m.nested.c }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>());
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        Assert.Contains("x: 1", result);
+        Assert.Contains("y: 2", result);
+        Assert.Contains("nestedA: dst", result);
+        Assert.Contains("nestedB: src", result);
+        Assert.Contains("nestedC: src", result);
     }
 
     [Fact]

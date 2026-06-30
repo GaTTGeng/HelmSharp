@@ -293,7 +293,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         var current = new StringBuilder();
         foreach (var line in manifest.Split('\n'))
         {
-            if (line == "---")
+            if (IsManifestDocumentSeparator(line))
             {
                 AddCurrentDocument(documents, current);
                 continue;
@@ -321,15 +321,53 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         return match.Success ? match.Groups[1].Value.Trim() : string.Empty;
     }
 
+    private static bool IsManifestDocumentSeparator(string line)
+        => Regex.IsMatch(line, @"^\s*---(?:\s*(?:#.*)?)?$");
+
     private static bool IsHookManifest(string manifest)
-        => Regex.IsMatch(manifest, @"(?m)^\s*[""']?helm\.sh/hook[""']?\s*:");
+        => TryGetHookAnnotation(manifest, "helm.sh/hook", out _);
 
     private static int ExtractHookWeight(string manifest)
     {
-        var match = Regex.Match(manifest, @"(?m)^\s*[""']?helm\.sh/hook-weight[""']?\s*:\s*[""']?(?<weight>-?\d+)");
-        return match.Success && int.TryParse(match.Groups["weight"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var weight)
+        return TryGetHookAnnotation(manifest, "helm.sh/hook-weight", out var hookWeight) &&
+               int.TryParse(hookWeight, NumberStyles.Integer, CultureInfo.InvariantCulture, out var weight)
             ? weight
             : 0;
+    }
+
+    private static bool TryGetHookAnnotation(string manifest, string key, out string value)
+    {
+        value = string.Empty;
+        try
+        {
+            var document = HelmYaml.DeserializeDictionary(manifest);
+            if (!TryGetDictionary(document, "metadata", out var metadata) ||
+                !TryGetDictionary(metadata, "annotations", out var annotations) ||
+                !annotations.TryGetValue(key, out var annotationValue))
+            {
+                return false;
+            }
+
+            value = TypeConverters.ToTemplateString(annotationValue);
+            return value.Length > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TryGetDictionary(
+        IDictionary<string, object?> source,
+        string key,
+        out IDictionary<string, object?> value)
+    {
+        value = null!;
+        if (!source.TryGetValue(key, out var candidate))
+            return false;
+
+        value = candidate as IDictionary<string, object?> ?? null!;
+        return value is not null;
     }
 
     private static string NormalizeManifestContent(string rendered)
@@ -1110,9 +1148,9 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "merge" => DictFunctions.MergeDicts(tokens, context, this),
             "mustMerge" => DictFunctions.MergeDicts(tokens, context, this),
             "mergeOverwrite" => CollectionsHelpers.MergeOverwrite(
-                tokens.Skip(1).Select(t => EvaluateToken(t, context)).ToList()),
+                EvaluateFunctionArguments(tokens, context, pipelineValue)),
             "mustMergeOverwrite" => CollectionsHelpers.MergeOverwrite(
-                tokens.Skip(1).Select(t => EvaluateToken(t, context)).ToList()),
+                EvaluateFunctionArguments(tokens, context, pipelineValue)),
             "deepCopy" => CollectionsHelpers.DeepCopy(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "mustDeepCopy" => CollectionsHelpers.DeepCopy(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "toDecimal" => SerializationFunctions.ToDecimal(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
@@ -1165,6 +1203,17 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                         ? EvaluateToken(expression, context)
                         : throw new NotSupportedException($"Helm template function '{head}' is not supported by the managed renderer.")
         };
+    }
+
+    private List<object?> EvaluateFunctionArguments(
+        IReadOnlyList<string> tokens,
+        TemplateContext context,
+        object? pipelineValue)
+    {
+        var args = tokens.Skip(1).Select(token => EvaluateToken(token, context)).ToList();
+        if (pipelineValue is not null)
+            args.Add(pipelineValue);
+        return args;
     }
 
     private static bool IsResolvableTokenExpression(string expression)
