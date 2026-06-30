@@ -593,8 +593,6 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
 
                 case BlockNode block:
                 {
-                    if (block.RightTrim)
-                        TrimCurrentLineIndent(output);
                     output.Append(RenderBlockNode(block, context));
                     break;
                 }
@@ -607,18 +605,6 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         }
 
         return output.ToString();
-    }
-
-    private static void TrimCurrentLineIndent(StringBuilder output)
-    {
-        var index = output.Length - 1;
-        while (index >= 0 && output[index] is ' ' or '\t')
-            index--;
-
-        if (index >= 0 && output[index] != '\n')
-            return;
-
-        output.Length = index + 1;
     }
 
     /// <summary>

@@ -242,6 +242,13 @@ public sealed class TemplateParser
         return block;
     }
 
+    /// <summary>
+    /// Strips <em>all</em> leading whitespace from the first child text node.
+    /// Go block right-trim (<c>-}}</c> on <c>if</c>/<c>range</c>/<c>with</c>) consumes
+    /// every whitespace character — spaces, tabs, and newlines — between the closing
+    /// delimiter and the first non-whitespace character in the body.  This is broader
+    /// than the standard action right-trim (spaces/tabs + at most one newline).
+    /// </summary>
     private static void TrimLeadingForRightTrim(List<TemplateNode> children)
     {
         if (children.FirstOrDefault() is not TextNode text)
@@ -249,9 +256,7 @@ public sealed class TemplateParser
 
         var content = text.Content;
         var newStart = 0;
-        while (newStart < content.Length && char.IsWhiteSpace(content[newStart]) && content[newStart] != '\n')
-            newStart++;
-        if (newStart < content.Length && content[newStart] == '\n')
+        while (newStart < content.Length && char.IsWhiteSpace(content[newStart]))
             newStart++;
 
         children[0] = new TextNode
