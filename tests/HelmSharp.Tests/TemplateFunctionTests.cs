@@ -835,12 +835,13 @@ public class TemplateFunctionTests
     }
 
     [Fact]
-    public void Split_SplitsStringIntoList()
+    public void Split_SplitsStringIntoDict()
     {
+        // Sprig split returns dict {_0, _1, …}; use ._N field access
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
         chart.Templates["templates/test.yaml"] = """
-            {{- $parts := splitList "," "a,b,c" }}
-            {{ index $parts 0 }},{{ index $parts 1 }},{{ index $parts 2 }}
+            {{- $parts := split "," "a,b,c" }}
+            {{ $parts._0 }},{{ $parts._1 }},{{ $parts._2 }}
             """;
         var renderer = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>());
         var result = renderer.Render();
@@ -929,7 +930,7 @@ public class TemplateFunctionTests
         chart.Templates["templates/test.yaml"] = """
             match: {{ regexMatch "[0-9]+" "abc123def" }}
             find: {{ regexFind "[0-9]+" "abc123def" }}
-            replace: {{ regexReplaceAll "[0-9]+" "NUM" "abc123def456" }}
+            replace: {{ regexReplaceAll "[0-9]+" "abc123def456" "NUM" }}
             split: {{ join "," (regexSplit "[,;]" "a,b;c,d") }}
             """;
         var renderer = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>());

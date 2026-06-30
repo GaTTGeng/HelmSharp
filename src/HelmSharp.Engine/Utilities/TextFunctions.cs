@@ -130,6 +130,7 @@ internal static class TextFunctions
         return $"-----BEGIN {algo.ToUpperInvariant()} PRIVATE KEY-----\n(managed-helm-placeholder)\n-----END {algo.ToUpperInvariant()} PRIVATE KEY-----";
     }
 
+    // Sprig: until COUNT → [0, 1, ..., COUNT-1]
     public static List<object?> Until(int count)
     {
         var result = new List<object?>(count);
@@ -137,10 +138,12 @@ internal static class TextFunctions
         return result;
     }
 
-    public static List<object?> UntilStep(int count, int step)
+    // Sprig: untilStep START STOP STEP → [START, START+STEP, ..., < STOP]
+    // Default START=0, STEP=1.
+    public static List<object?> UntilStep(int start, int stop, int step)
     {
         var result = new List<object?>();
-        for (var i = 0; i < count; i += step) result.Add(i);
+        for (var i = start; i < stop; i += step) result.Add(i);
         return result;
     }
 }

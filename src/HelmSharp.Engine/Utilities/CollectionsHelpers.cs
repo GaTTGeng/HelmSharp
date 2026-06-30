@@ -124,33 +124,64 @@ internal static class CollectionsHelpers
         return TypeConverters.ToTemplateString(value);
     }
 
+    // Sprig split: returns dict with _0, _1, … keys for field access
+    public static Dictionary<string, object?> Split(string input, string separator)
+    {
+        var parts = input.Split(separator, StringSplitOptions.None);
+        var dict = new Dictionary<string, object?>(StringComparer.Ordinal);
+        for (var i = 0; i < parts.Length; i++)
+            dict[$"_{i}"] = parts[i];
+        return dict;
+    }
+
     public static List<object?> SplitList(string input, string separator)
     {
         var parts = input.Split(separator, StringSplitOptions.None);
         return parts.Cast<object?>().ToList();
     }
 
-    public static object? Slice(object? value, int start, int? count)
+    public static object? Slice(object? value, int start, int? end)
     {
         var list = ToList(value);
         if (start >= list.Count) return new List<object?>();
         if (start < 0) start = Math.Max(0, list.Count + start);
-        var take = count ?? (list.Count - start);
-        return list.Skip(start).Take(take).ToList();
+        var stop = end ?? list.Count;
+        if (stop < 0) stop = Math.Max(0, list.Count + stop);
+        if (stop > list.Count) stop = list.Count;
+        if (start >= stop) return new List<object?>();
+        return list.Skip(start).Take(stop - start).ToList();
     }
 
+    // Sprig mergeOverwrite: deep merge from left to right, right wins at leaf level.
+    // Nested dicts are merged recursively; scalar values are overwritten.
     public static Dictionary<string, object?> MergeOverwrite(IReadOnlyList<object?> dicts)
     {
         var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
         foreach (var d in dicts)
         {
             if (d is IDictionary<string, object?> dict)
-            {
-                foreach (var kvp in dict)
-                    result[kvp.Key] = kvp.Value;
-            }
+                MergeOverwriteInto(result, dict);
         }
         return result;
+    }
+
+    private static void MergeOverwriteInto(Dictionary<string, object?> target, IDictionary<string, object?> source)
+    {
+        foreach (var kvp in source)
+        {
+            if (target.TryGetValue(kvp.Key, out var existing) &&
+                existing is Dictionary<string, object?> existingDict &&
+                kvp.Value is IDictionary<string, object?> sourceDict)
+            {
+                // Deep merge nested dictionaries
+                MergeOverwriteInto(existingDict, sourceDict);
+            }
+            else
+            {
+                // Overwrite leaf values (including replacing a dict with a scalar)
+                target[kvp.Key] = kvp.Value;
+            }
+        }
     }
 
     public static object? MustReverse(object? value)

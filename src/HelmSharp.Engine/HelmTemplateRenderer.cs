@@ -807,14 +807,15 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "regexMatch" => StringFunctions.RegexMatch(
                 TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context)),
                 TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            // Sprig: regexReplaceAll PATTERN INPUT REPLACEMENT
             "regexReplaceAll" => StringFunctions.RegexReplaceAll(
-                TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(3), context)),
+                TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context)),
                 TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-                TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(2), context))),
+                TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(pipelineValue != null ? 2 : 3), context))),
             "regexReplaceAllLiteral" => StringFunctions.RegexReplaceAllLiteral(
-                TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(3), context)),
+                TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context)),
                 TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-                TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(2), context))),
+                TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(pipelineValue != null ? 2 : 3), context))),
             "regexSplit" => StringFunctions.RegexSplit(
                 TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context)),
                 TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context))),
@@ -913,7 +914,8 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "join" => CollectionsHelpers.Join(
                 pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context),
                 TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context))),
-            "split" => CollectionsHelpers.SplitList(
+            // Sprig: split returns dict {_0, _1, …}; splitList returns list
+            "split" => CollectionsHelpers.Split(
                 TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context)),
                 TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "splitList" => CollectionsHelpers.SplitList(
@@ -927,9 +929,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                     : null),
             "until" => TextFunctions.Until(
                 (int)TypeConverters.ToLong(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
-            "untilStep" => TextFunctions.UntilStep(
-                (int)TypeConverters.ToLong(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-                (int)TypeConverters.ToLong(EvaluateToken(tokens.ElementAtOrDefault(pipelineValue != null ? 1 : 2), context))),
+            "untilStep" => ResolveUntilStep(tokens, context, pipelineValue),
             "reverse" => CollectionsHelpers.Reverse(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "mustReverse" => CollectionsHelpers.MustReverse(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "sortAlpha" => CollectionsHelpers.SortAlpha(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
@@ -1961,6 +1961,26 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
 
 
 
+
+    // Sprig: untilStep START STOP STEP (defaults: start=0, step=1)
+    private object? ResolveUntilStep(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
+    {
+        long start, stop, step;
+        if (pipelineValue != null)
+        {
+            start = TypeConverters.ToLong(pipelineValue);
+            stop = TypeConverters.ToLong(EvaluateToken(tokens.ElementAtOrDefault(1), context));
+            step = tokens.Count > 2 ? TypeConverters.ToLong(EvaluateToken(tokens[2], context)) : 1L;
+        }
+        else
+        {
+            start = tokens.Count > 1 ? TypeConverters.ToLong(EvaluateToken(tokens[1], context)) : 0L;
+            stop = TypeConverters.ToLong(EvaluateToken(tokens.ElementAtOrDefault(2), context));
+            step = tokens.Count > 3 ? TypeConverters.ToLong(EvaluateToken(tokens[3], context)) : 1L;
+        }
+        if (step == 0) step = 1;
+        return TextFunctions.UntilStep((int)start, (int)stop, (int)step);
+    }
 
     // ────────────────────────────────────────────────────────────
     //  MATH FUNCTIONS
