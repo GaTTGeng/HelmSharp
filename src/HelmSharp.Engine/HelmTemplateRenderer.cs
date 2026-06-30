@@ -120,13 +120,13 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             catch (NotSupportedException ex)
             {
                 // Engine-level gaps (missing function, parser limitation) — collect and continue
-                errors.Add((path, ex));
+                errors.Add((path, new NotSupportedException($"{Path.GetFileName(path)}: {ex.Message}")));
             }
             catch (TemplateParseException ex)
             {
                 // Malformed template syntax — collect and continue so the remaining
                 // templates in the chart can still render
-                errors.Add((path, ex));
+                errors.Add((path, new TemplateParseException($"{Path.GetFileName(path)}: {ex.Message}", ex.Line, ex.Column, ex.Offset)));
             }
             // Other exceptions (fail, arity errors, etc.) propagate immediately
         }
@@ -194,7 +194,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         if (errors.Count > 0)
         {
             var errorSummary = string.Join("; ",
-                errors.Select(e => $"{Path.GetFileName(e.Path)}: {e.Exception.GetType().Name}"));
+                errors.Select(e => $"{Path.GetFileName(e.Path)}: {e.Exception.GetType().Name}: {e.Exception.Message}"));
             throw new InvalidOperationException(
                 $"HelmSharp template rendering failed for {errors.Count} template(s): {errorSummary}",
                 errors[0].Exception);
@@ -797,6 +797,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "atoi" => int.TryParse(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)), out var ai) ? ai : 0,
             "printf" => CoreFunctions.Printf(tokens, context, this),
             "println" => string.Join(' ', tokens.Skip(1).Select(t => TypeConverters.ToTemplateString(EvaluateToken(t, context)))),
+            "print" => string.Join(' ', tokens.Skip(1).Select(t => TypeConverters.ToTemplateString(EvaluateToken(t, context)))),
 
             // Math functions
             "add" => FoldMathArgs(tokens, context, pipelineValue, "+"),
@@ -876,6 +877,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
 
             // List functions
             "list" => tokens.Skip(1).Select(t => EvaluateToken(t, context)).ToList(),
+            "tuple" => tokens.Skip(1).Select(t => EvaluateToken(t, context)).ToList(),
             "first" => CollectionsHelpers.First(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "last" => CollectionsHelpers.Last(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "rest" => CollectionsHelpers.Rest(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
@@ -1049,6 +1051,8 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "snakecase" => StringFunctions.Snakecase(TypeConverters.ToTemplateString(value)),
             "camelcase" => StringFunctions.Camelcase(TypeConverters.ToTemplateString(value)),
             "kebabcase" => StringFunctions.Kebabcase(TypeConverters.ToTemplateString(value)),
+            "print" => TypeConverters.ToTemplateString(value),
+            "tuple" => value,
             _ => throw new NotSupportedException($"Helm template function '{function}' is not supported by the managed renderer.")
         };
     }

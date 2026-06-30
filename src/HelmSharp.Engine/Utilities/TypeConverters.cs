@@ -70,6 +70,7 @@ internal static class TypeConverters
             long l => l != 0,
             int i => i != 0,
             double d => d != 0.0,
+            System.Collections.IDictionary d => d.Count > 0,
             IEnumerable<object?> e => e.Any(),
             _ => true
         };
