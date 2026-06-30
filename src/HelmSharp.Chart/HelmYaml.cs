@@ -23,18 +23,18 @@ public static class HelmYaml
     /// <summary>
     /// Recursively sorts dictionary keys alphabetically to match
     /// Helm/Go YAML marshaling output (Go sorts map keys by default).
+    /// Pattern matching uses the same interface shapes as Normalize() for consistency.
     /// </summary>
     private static object? SortKeys(object? value)
     {
         return value switch
         {
-            Dictionary<string, object?> dict => new SortedDictionary<string, object?>(
+            IDictionary<string, object?> dict => new SortedDictionary<string, object?>(
                 dict.ToDictionary(kvp => kvp.Key, kvp => SortKeys(kvp.Value))!,
                 StringComparer.Ordinal),
-            Dictionary<object, object> dict => new SortedDictionary<string, object?>(
-                dict.ToDictionary(kvp => Convert.ToString(kvp.Key) ?? string.Empty, kvp => SortKeys(kvp.Value))!,
-                StringComparer.Ordinal),
-            List<object> list => list.ConvertAll(x => SortKeys(x)),
+            // Dictionary<object, object> is already normalized by Normalize()
+            // before Serialize is called — skip it to avoid key-collision crash.
+            IEnumerable<object> list => list.Select(SortKeys).ToList(),
             _ => value
         };
     }
