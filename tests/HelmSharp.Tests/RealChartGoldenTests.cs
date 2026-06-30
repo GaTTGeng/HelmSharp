@@ -188,15 +188,10 @@ public class RealChartGoldenTests
 
         if (fullOutput != null)
         {
-            // Full render succeeded — compare document-by-document
+            // Full render succeeded — require exact normalized output parity.
             var sharpNorm = NormalizeDynamicValues(NormalizeHelmOutput(fullOutput));
             var sharpDocs = SplitDocuments(sharpNorm);
             if (helmNorm == sharpNorm)
-            {
-                matchedDocs = helmDocs.Count;
-                contentDiffDocs = 0;
-            }
-            else if (DocumentMultisetsEqual(helmDocs, sharpDocs))
             {
                 matchedDocs = helmDocs.Count;
                 contentDiffDocs = 0;
@@ -379,28 +374,6 @@ public class RealChartGoldenTests
         }
 
         return (matched, diffCount);
-    }
-
-    private static bool DocumentMultisetsEqual(List<string> helmDocs, List<string> sharpDocs)
-    {
-        if (helmDocs.Count != sharpDocs.Count)
-            return false;
-
-        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
-        foreach (var doc in helmDocs)
-            counts[doc] = counts.GetValueOrDefault(doc) + 1;
-
-        foreach (var doc in sharpDocs)
-        {
-            if (!counts.TryGetValue(doc, out var count))
-                return false;
-            if (count == 1)
-                counts.Remove(doc);
-            else
-                counts[doc] = count - 1;
-        }
-
-        return counts.Count == 0;
     }
 
     private static string ExtractKind(string yaml)

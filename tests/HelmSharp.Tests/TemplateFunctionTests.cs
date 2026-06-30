@@ -253,10 +253,11 @@ public class TemplateFunctionTests
             new Dictionary<string, object?>());
         var result = renderer.Render();
         _output.WriteLine(result);
+        var normalized = result.Replace("\r\n", "\n", StringComparison.Ordinal);
 
-        Assert.Contains("replicas: 1\n  selector:", result);
-        Assert.DoesNotContain("replicas: 1\n\n  selector:", result);
-        Assert.DoesNotContain("comment", result);
+        Assert.Contains("replicas: 1\n  selector:", normalized);
+        Assert.DoesNotContain("replicas: 1\n\n  selector:", normalized);
+        Assert.DoesNotContain("comment", normalized);
     }
 
     [Fact]
@@ -280,6 +281,57 @@ public class TemplateFunctionTests
 
         Assert.Contains("  - --flag", result);
         Assert.DoesNotContain("    - --flag", result);
+    }
+
+    [Fact]
+    public void Render_OrdersManifestDocumentsLikeHelm()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/deployment.yaml"] = """
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: app
+            """;
+        chart.Templates["templates/service.yaml"] = """
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: app
+            """;
+        chart.Templates["templates/kindless.yaml"] = """
+            # rendered comment-only manifest
+            """;
+        chart.Templates["templates/webhook.yaml"] = """
+            apiVersion: admissionregistration.k8s.io/v1
+            kind: ValidatingWebhookConfiguration
+            metadata:
+              name: app
+            """;
+        chart.Templates["templates/hook.yaml"] = """
+            apiVersion: batch/v1
+            kind: Job
+            metadata:
+              name: app-hook
+              annotations:
+                "helm.sh/hook": post-install
+            """;
+
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>());
+        var result = renderer.Render();
+        _output.WriteLine(result);
+
+        var serviceIndex = result.IndexOf("kind: Service", StringComparison.Ordinal);
+        var deploymentIndex = result.IndexOf("kind: Deployment", StringComparison.Ordinal);
+        var kindlessIndex = result.IndexOf("# rendered comment-only manifest", StringComparison.Ordinal);
+        var webhookIndex = result.IndexOf("kind: ValidatingWebhookConfiguration", StringComparison.Ordinal);
+        var hookIndex = result.IndexOf("name: app-hook", StringComparison.Ordinal);
+
+        Assert.True(serviceIndex < deploymentIndex);
+        Assert.True(deploymentIndex < kindlessIndex);
+        Assert.True(kindlessIndex < webhookIndex);
+        Assert.True(webhookIndex < hookIndex);
     }
 
     [Fact]

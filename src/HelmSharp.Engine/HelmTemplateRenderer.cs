@@ -15,6 +15,47 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         "{{-?\\s*(?<expr>.*?)\\s*-?}}",
         RegexOptions.Compiled | RegexOptions.Singleline);
 
+    private static readonly IReadOnlyDictionary<string, int> InstallOrder = new Dictionary<string, int>(StringComparer.Ordinal)
+    {
+        ["Namespace"] = 0,
+        ["NetworkPolicy"] = 1,
+        ["ResourceQuota"] = 2,
+        ["LimitRange"] = 3,
+        ["PodSecurityPolicy"] = 4,
+        ["PodDisruptionBudget"] = 5,
+        ["ServiceAccount"] = 6,
+        ["Secret"] = 7,
+        ["SecretList"] = 8,
+        ["ConfigMap"] = 9,
+        ["StorageClass"] = 10,
+        ["PersistentVolume"] = 11,
+        ["PersistentVolumeClaim"] = 12,
+        ["CustomResourceDefinition"] = 13,
+        ["ClusterRole"] = 14,
+        ["ClusterRoleList"] = 15,
+        ["ClusterRoleBinding"] = 16,
+        ["ClusterRoleBindingList"] = 17,
+        ["Role"] = 18,
+        ["RoleList"] = 19,
+        ["RoleBinding"] = 20,
+        ["RoleBindingList"] = 21,
+        ["Service"] = 22,
+        ["DaemonSet"] = 23,
+        ["Pod"] = 24,
+        ["ReplicationController"] = 25,
+        ["ReplicaSet"] = 26,
+        ["Deployment"] = 27,
+        ["HorizontalPodAutoscaler"] = 28,
+        ["StatefulSet"] = 29,
+        ["Job"] = 30,
+        ["CronJob"] = 31,
+        ["IngressClass"] = 32,
+        ["Ingress"] = 33,
+        ["APIService"] = 34,
+        ["MutatingWebhookConfiguration"] = 36,
+        ["ValidatingWebhookConfiguration"] = 37,
+    };
+
     private readonly HelmChart _chart;
     private readonly TemplateContext _root;
     private readonly Dictionary<string, string> _definedTemplates = new(StringComparer.Ordinal);
@@ -93,7 +134,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             }
         }
 
-        var manifests = new List<(string SourcePath, string Content)>();
+        var manifests = new List<RenderedManifest>();
         var errors = new List<(string Path, Exception Exception)>();
 
         // Render main chart templates
@@ -115,7 +156,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                 if (string.IsNullOrWhiteSpace(rendered))
                     continue;
 
-                manifests.Add(($"{_chart.Name}/{path}", NormalizeManifestContent(rendered)));
+                AddManifestDocuments(manifests, $"{_chart.Name}/{path}", rendered);
             }
             catch (NotSupportedException ex)
             {
@@ -172,9 +213,10 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                     if (string.IsNullOrWhiteSpace(rendered))
                         continue;
 
-                    manifests.Add((
+                    AddManifestDocuments(
+                        manifests,
                         $"{_chart.Name}/charts/{subchartIdentity}/{path}",
-                        NormalizeManifestContent(rendered)));
+                        rendered);
                 }
                 catch (NotSupportedException ex)
                 {
@@ -201,13 +243,93 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         }
 
         var output = new StringBuilder();
-        foreach (var manifest in manifests.OrderBy(x => x.SourcePath, StringComparer.Ordinal))
+        foreach (var manifest in SortManifests(manifests))
         {
-            output.AppendLine("---");
-            output.AppendLine(manifest.Content);
+            output.Append("---\n");
+            output.Append(manifest.Content);
+            output.Append('\n');
         }
 
         return output.ToString();
+    }
+
+    private static void AddManifestDocuments(List<RenderedManifest> manifests, string sourcePath, string rendered)
+    {
+        foreach (var document in SplitManifestDocuments(NormalizeManifestContent(rendered)))
+        {
+            if (string.IsNullOrWhiteSpace(document))
+                continue;
+
+            var order = manifests.Count;
+            manifests.Add(new RenderedManifest(
+                sourcePath,
+                document,
+                ExtractManifestKind(document),
+                IsHookManifest(document),
+                ExtractHookWeight(document),
+                order));
+        }
+    }
+
+    private static IEnumerable<RenderedManifest> SortManifests(IEnumerable<RenderedManifest> manifests)
+        => manifests
+            .OrderBy(manifest => manifest.IsHook)
+            .ThenBy(manifest => manifest.IsHook ? manifest.HookWeight : 0)
+            .ThenBy(manifest => GetManifestKindOrder(manifest.Kind))
+            .ThenBy(manifest => manifest.SourcePath, StringComparer.Ordinal)
+            .ThenBy(manifest => manifest.OriginalOrder);
+
+    private static int GetManifestKindOrder(string kind)
+    {
+        if (string.IsNullOrEmpty(kind))
+            return 35;
+
+        return InstallOrder.TryGetValue(kind, out var order) ? order : int.MaxValue;
+    }
+
+    private static List<string> SplitManifestDocuments(string manifest)
+    {
+        var documents = new List<string>();
+        var current = new StringBuilder();
+        foreach (var line in manifest.Split('\n'))
+        {
+            if (line == "---")
+            {
+                AddCurrentDocument(documents, current);
+                continue;
+            }
+
+            current.Append(line);
+            current.Append('\n');
+        }
+
+        AddCurrentDocument(documents, current);
+        return documents;
+    }
+
+    private static void AddCurrentDocument(List<string> documents, StringBuilder current)
+    {
+        var document = current.ToString().Trim();
+        current.Clear();
+        if (document.Length > 0)
+            documents.Add(document);
+    }
+
+    private static string ExtractManifestKind(string manifest)
+    {
+        var match = Regex.Match(manifest, @"(?m)^kind:\s*(.+)$");
+        return match.Success ? match.Groups[1].Value.Trim() : string.Empty;
+    }
+
+    private static bool IsHookManifest(string manifest)
+        => Regex.IsMatch(manifest, @"(?m)^\s*[""']?helm\.sh/hook[""']?\s*:");
+
+    private static int ExtractHookWeight(string manifest)
+    {
+        var match = Regex.Match(manifest, @"(?m)^\s*[""']?helm\.sh/hook-weight[""']?\s*:\s*[""']?(?<weight>-?\d+)");
+        return match.Success && int.TryParse(match.Groups["weight"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var weight)
+            ? weight
+            : 0;
     }
 
     private static string NormalizeManifestContent(string rendered)
@@ -218,6 +340,14 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             .Trim();
         return Regex.Replace(normalized, @"(?m)^---\n[ \t]*\n", "---\n");
     }
+
+    private sealed record RenderedManifest(
+        string SourcePath,
+        string Content,
+        string Kind,
+        bool IsHook,
+        int HookWeight,
+        int OriginalOrder);
 
     private IEnumerable<(string Identity, HelmChart Chart)> GetSubchartRenderInstances()
     {
