@@ -573,15 +573,25 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                 {
                     var content = text.Content;
 
-                    // Apply right trim from previous sibling (trim leading whitespace)
-                    if (i > 0 && HasRightTrim(doc.Children[i - 1]))
-                        content = TrimLeadingForRightTrim(content);
+                    // When a pure-whitespace text node sits between a previous action/block
+                    // and a right-trim block, it is template-formatting whitespace that Go trims.
+                    // Suppress the text node to avoid double-indentation.
+                    if (IsFormattingWhitespace(i, doc.Children, out _))
+                    {
+                        // skip entirely
+                    }
+                    else
+                    {
+                        // Apply right trim from previous sibling (trim leading whitespace)
+                        if (i > 0 && HasRightTrim(doc.Children[i - 1]))
+                            content = TrimLeadingForRightTrim(content);
 
-                    // Apply left trim from next sibling (trim trailing whitespace)
-                    if (i + 1 < doc.Children.Count && HasLeftTrim(doc.Children[i + 1]))
-                        content = TrimTrailingWhitespace(content);
+                        // Apply left trim from next sibling (trim trailing whitespace)
+                        if (i + 1 < doc.Children.Count && HasLeftTrim(doc.Children[i + 1]))
+                            content = TrimTrailingWhitespace(content);
 
-                    output.Append(content);
+                        output.Append(content);
+                    }
                     break;
                 }
 
@@ -593,6 +603,8 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
 
                 case BlockNode block:
                 {
+                    if (ShouldTrimLineIndent(i, doc.Children))
+                        TrimCurrentLineIndent(output);
                     output.Append(RenderBlockNode(block, context));
                     break;
                 }
@@ -605,6 +617,79 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         }
 
         return output.ToString();
+    }
+
+    /// <summary>
+    /// Returns true when the text node at <paramref name="i"/> should be silently
+    /// dropped.  This happens when a pure-whitespace text node sits between a
+    /// previous action/block and a right-trim block — template-formatting whitespace
+    /// that Go consumes.
+    /// </summary>
+    private static bool IsFormattingWhitespace(int i, List<TemplateNode> children, out TemplateNode nextBlock)
+    {
+        nextBlock = null!;
+        if (i + 1 >= children.Count)
+            return false;
+        if (children[i + 1] is not BlockNode block || !block.RightTrim)
+            return false;
+        if (children[i] is not TextNode text)
+            return false;
+        if (!IsAllWhitespace(text.Content))
+            return false;
+        // Only suppress when flanked by template directives (action/block on both sides).
+        // Standalone whitespace before a block in a YAML content context is preserved.
+        if (i > 0 && children[i - 1] is not (ActionNode or BlockNode))
+            return false;
+
+        nextBlock = block;
+        return true;
+    }
+
+    private static bool IsAllWhitespace(string value)
+    {
+        for (var i = 0; i < value.Length; i++)
+            if (!char.IsWhiteSpace(value[i]))
+                return false;
+        return true;
+    }
+
+    /// <summary>
+    /// Trims trailing spaces/tabs from the current output line when the preceding
+    /// text has meaningful content (not just standalone indent before a block).
+    /// Used when a right-trim block follows a text node that carries YAML content
+    /// whose indent is duplicated by the block body.
+    /// </summary>
+    /// <summary>
+    /// Returns true when the block at <paramref name="blockIndex"/> should trim
+    /// the current output line before rendering — because the preceding text
+    /// carries content whose trailing indent would otherwise duplicate the body indentation.
+    /// </summary>
+    private static bool ShouldTrimLineIndent(int blockIndex, List<TemplateNode> children)
+    {
+        // Need a preceding text node
+        if (blockIndex == 0)
+            return false;
+        if (children[blockIndex - 1] is not TextNode text)
+            return false;
+        // Trim when the text node has meaningful content
+        // OR when it is pure whitespace sandwiched between template directives.
+        // Don't trim when the text node is pure whitespace standing alone
+        // before a block (that whitespace is the YAML indent Go preserves).
+        if (!IsAllWhitespace(text.Content))
+            return true;
+        return blockIndex > 1 && children[blockIndex - 2] is (ActionNode or BlockNode);
+    }
+
+    private static void TrimCurrentLineIndent(StringBuilder output)
+    {
+        var index = output.Length - 1;
+        while (index >= 0 && output[index] is ' ' or '\t')
+            index--;
+
+        if (index >= 0 && output[index] != '\n')
+            return;
+
+        output.Length = index + 1;
     }
 
     /// <summary>
