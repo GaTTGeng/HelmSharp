@@ -18,7 +18,11 @@ public static class HelmYaml
     }
 
     public static string Serialize(object? value)
-        => Serializer.Serialize(SortKeys(value));
+    {
+        if (value is null)
+            return "null\n"; // Match Helm/Go yaml.Marshal(nil) → "null\n"
+        return Serializer.Serialize(SortKeys(value));
+    }
 
     /// <summary>
     /// Recursively sorts dictionary keys alphabetically to match

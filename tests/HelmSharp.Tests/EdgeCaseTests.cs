@@ -1141,4 +1141,105 @@ public class EdgeCaseTests
         Assert.Contains(nameof(TemplateParseException), ex.Message);
         Assert.Contains("1 template(s)", ex.Message); // only deployment.yaml fails
     }
+
+    [Fact]
+    public void ToYaml_Nil_OutputsNull()
+    {
+        // cert-manager templates do toYaml .Values.cainjector.extraArgs
+        // where extraArgs may be nil. Helm toYaml nil → "null\n", not empty.
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: test
+            data:
+              extra: |-
+                {{- toYaml .Values.extraArgs | nindent 4 }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?> { ["extraArgs"] = null });
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        // nil should serialize as "null" + newline, then nindent adds indentation
+        Assert.Contains("    null", result);
+    }
+
+    [Fact]
+    public void ToYaml_EmptyDictWithNindent_RendersEmptyBraces()
+    {
+        // cert-manager uses toYaml .Values.featureGates | nindent
+        // where featureGates is {} (empty dict). Helm toYaml {} → "{}\n"
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: test
+            data:
+              features: |-
+                {{- toYaml .Values.featureGates | nindent 4 }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?> { ["featureGates"] = new Dictionary<string, object?>() });
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        Assert.Contains("    {}", result);
+    }
+
+    [Fact]
+    public void WithBlock_ToYaml_NilSkipsBody()
+    {
+        // cert-manager: {{- with .Values.cainjector.extraArgs }}
+        // {{- toYaml . | nindent 10 }}{{- end }}
+        // with on nil → skips body entirely
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: test
+            data:
+            {{- with .Values.extraArgs }}
+              extra: |-
+            {{- toYaml . | nindent 4 }}
+            {{- end }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?> { ["extraArgs"] = null });
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        Assert.DoesNotContain("extra: |-", result);
+    }
+
+    [Fact]
+    public void WithBlock_ToYaml_NonEmptyRendersValues()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: test
+            data:
+            {{- with .Values.extraArgs }}
+              extra: |-
+            {{- toYaml . | nindent 4 }}
+            {{- end }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>
+            {
+                ["extraArgs"] = new Dictionary<string, object?>
+                {
+                    ["log-level"] = "debug",
+                    ["enable-feature"] = true
+                }
+            });
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        Assert.Contains("extra: |-", result);
+        Assert.Contains("log-level:", result);
+        Assert.Contains("enable-feature:", result);
+    }
 }
