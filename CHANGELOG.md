@@ -6,6 +6,15 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+### Added
+
+- Expanded the VitePress documentation into workflow guides, real integration examples, package-by-package pages, and generated API reference indexes in English and Simplified Chinese.
+
+### Changed
+
+- Reframed public-chart golden results in the VitePress docs and READMEs as compatibility evidence instead of primary marketing copy.
+- Polished Simplified Chinese documentation wording to reduce unnecessary English terms while preserving API and product names.
+
 ## [1.1.0] - 2026-07-01
 
 ### :tada: M1 Complete — Helm Template Parity Achieved

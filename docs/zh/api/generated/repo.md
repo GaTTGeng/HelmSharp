@@ -1,0 +1,104 @@
+# HelmSharp.Repo API
+
+> 生成内容。本页由 `docs/scripts/generate-api-reference.ps1` 根据公开 C# 声明生成。人工整理的使用建议在对应包页面中维护。
+
+此页列出公开类型和成员，便于查找。使用建议、边界和示例请先阅读对应包文档。
+
+## HelmChartRepository
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `class` |
+| 源文件 | `src/HelmSharp.Repo/HelmChartRepository.cs` |
+
+### 方法
+- `AddRepositoryAsync(...)`
+- `Dispose(...)`
+- `FetchRepoIndexAsync(...)`
+- `ListRepositoriesAsync(...)`
+- `PullChartAsync(...)`
+- `PushToOciAsync(...)`
+- `RemoveRepositoryAsync(...)`
+- `SearchRepoAsync(...)`
+
+### 使用提示
+先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
+
+## HelmChartSearchResult
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `class` |
+| 源文件 | `src/HelmSharp.Repo/HelmChartRepository.cs` |
+
+### 属性
+- `AppVersion`
+- `Description`
+- `Name`
+- `Version`
+
+### 使用提示
+先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
+
+## HelmChartVersion
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `class` |
+| 源文件 | `src/HelmSharp.Repo/HelmChartRepository.cs` |
+
+### 属性
+- `AppVersion`
+- `Created`
+- `Description`
+- `Digest`
+- `Name`
+- `Urls`
+- `Version`
+
+### 使用提示
+先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
+
+## HelmRepoIndex
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `class` |
+| 源文件 | `src/HelmSharp.Repo/HelmChartRepository.cs` |
+
+### 属性
+- `ApiVersion`
+- `Entries`
+- `Generated`
+
+### 使用提示
+先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
+
+## HelmRepoIndexer
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `class` |
+| 源文件 | `src/HelmSharp.Repo/HelmRepoIndexer.cs` |
+
+### 方法
+- `GenerateIndexAsync(...)`
+
+### 使用提示
+先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
+
+## HelmRepository
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `class` |
+| 源文件 | `src/HelmSharp.Repo/HelmChartRepository.cs` |
+
+### 属性
+- `Name`
+- `Password`
+- `Url`
+- `Username`
+
+### 使用提示
+先查看对应包页面的场景示例，再使用此成员索引定位具体类型。

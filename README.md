@@ -9,9 +9,11 @@
 
 HelmSharp is a managed .NET library for rendering Helm-style charts and driving Kubernetes release workflows without invoking the `helm` executable. It is intended for applications that need Helm-like behavior inside a .NET process: template rendering, values merging, chart packaging, repository operations, and release lifecycle operations against Kubernetes.
 
-The project is under active development. M1 (Helm template parity) is complete — the template engine achieves byte-for-byte identical output with `helm template` across 129 templates from five real-world charts. M2+ features expand into release lifecycle and Kubernetes operations.
+The project is under active development. M1 (Helm template parity) is complete, with the renderer continuously checked against focused fixtures and selected public Helm charts. M2+ features expand into release lifecycle and Kubernetes operations.
 
 Documentation site: [https://gattgeng.github.io/HelmSharp/](https://gattgeng.github.io/HelmSharp/)
+
+The documentation now includes workflow guides, realistic integration examples, package-by-package guidance, and generated API reference pages for public types and members.
 
 ## Packages
 
@@ -137,9 +139,11 @@ await foreach (var line in client.UpgradeInstallStreamAsync(new HelmUpgradeInsta
 - Release history stored in Kubernetes Secrets.
 - Install, upgrade, uninstall, rollback, status, history, manifest, values, hooks, notes, and test-oriented APIs.
 
-## Golden Test Results
+## Compatibility Validation
 
-HelmSharp's template engine is continuously validated against real-world, publicly-available Helm charts using golden tests. Each chart is rendered by both `helm template` (reference) and HelmSharp's managed renderer; outputs are compared document-by-document after normalization.
+HelmSharp's template engine is continuously validated with golden tests. The suite includes focused fixture charts and selected public Helm charts. Each public chart below is rendered by both `helm template` (reference) and HelmSharp's managed renderer; outputs are compared document-by-document after normalization.
+
+These results are a compatibility signal for the pinned chart versions in the table, not a blanket certification for every chart in the Helm ecosystem. Validate your own chart when it relies on uncommon Helm behavior.
 
 > **Last updated:** 2026-07-01 · **HelmSharp version:** 1.1.0 · **Helm version:** v3.12.3 · **Test framework:** net10.0
 
@@ -168,7 +172,7 @@ cert-manager     █████████████████████
 
 ### Error Analysis
 
-All 129 templates across 5 real-world charts render without parser exceptions and achieve **byte-for-byte identical output** with `helm template` after normalization. All five charts now carry the **Pass** verdict — no remaining content-level formatting diffs, no parser gaps, and no error categories.
+For the pinned public charts listed above, all 129 templates render without parser exceptions and match `helm template` after normalization. This is the current compatibility signal for the covered charts, not a guarantee that every Helm chart uses only covered behavior.
 
 Key parity milestones closed since the 1.0.3 release:
 
@@ -176,13 +180,13 @@ Key parity milestones closed since the 1.0.3 release:
 - **#112** — `ParseDefine` now applies right-trim to define body, matching `ParseBlock` behavior.
 - **#97** — Completed Sprig function parity for remaining gaps (`empty`, `keys`, `mergeOverwrite`, `mustRegexMatch`, `mustRegexReplaceAll`, etc.).
 - **#102** — Resolved cert-manager remaining content diffs (YAML tag, octal values, merge keys, block scalars, comment trimming).
-- **#96 / #99 / #108** — Resolved real-chart golden test content diffs to achieve Pass verdicts across all five charts.
+- **#96 / #99 / #108** — Resolved selected public-chart golden test content diffs to achieve Pass verdicts across all five charts.
 
 ### Verdict Legend
 
 | Verdict | Meaning |
 | --- | --- |
-| **Pass** | Byte-for-byte identical output after normalization (line endings, source comments). |
+| **Pass** | The tested chart output is byte-for-byte identical after normalization (line endings, source comments). |
 | **Partial** | Structurally compatible — same document count, or most individual templates render correctly while a few hit known parser gaps. |
 | **Fail** | The renderer cannot produce output for any template in this chart. |
 
@@ -194,8 +198,12 @@ HelmSharp is not a full Helm CLI clone. Some advanced Helm behaviors, edge-case 
 
 - [Documentation site](https://gattgeng.github.io/HelmSharp/)
 - [Getting started](docs/getting-started.md)
+- [Guide: installation and rendering](docs/guide/installation.md)
+- [Examples: render preview API](docs/examples/render-preview-api.md)
+- [Package guide: HelmSharp.Action](docs/packages/action.md)
+- [Generated API reference](docs/api/index.md)
 - [API overview](docs/api-overview.md)
-- [Helm compatibility](docs/helm-compatibility.md)
+- [Helm compatibility and validation](docs/helm-compatibility.md)
 - [Roadmap](docs/roadmap.md)
 - [Support](SUPPORT.md)
 - [GitHub releases](https://github.com/GaTTGeng/HelmSharp/releases)

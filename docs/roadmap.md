@@ -6,9 +6,9 @@ GitHub milestones remain the source of truth for issue-level scope.
 
 ## Current focus
 
-**M1: Helm Template Parity** is the active workstream. The project now has real-chart golden tests, and the next work is about closing remaining differences in values, built-in objects, template functions, whitespace, `.Files`, capabilities, and subcharts.
+**M1: Helm Template Parity** is complete in 1.1.0. The current focus is hardening the SDK experience around package guidance, release workflows, Kubernetes operations, and compatibility expansion from real user charts.
 
-Follow [M1 on GitHub](https://github.com/GaTTGeng/HelmSharp/milestone/1) or review the [compatibility page](helm-compatibility.md).
+Review the [compatibility page](helm-compatibility.md) for current rendering coverage, or follow the later milestones on GitHub for packaging, release lifecycle, Kubernetes semantics, OCI, and public SDK hardening.
 
 ## Delivery principles
 
@@ -22,7 +22,7 @@ Follow [M1 on GitHub](https://github.com/GaTTGeng/HelmSharp/milestone/1) or revi
 
 | Phase | Status | User outcome |
 | --- | --- | --- |
-| [M1: Helm Template Parity](https://github.com/GaTTGeng/HelmSharp/milestone/1) | Active | Render common real-world charts from .NET with predictable Helm-compatible output. |
+| [M1: Helm Template Parity](https://github.com/GaTTGeng/HelmSharp/milestone/1) | Complete in 1.1.0 | Render common charts from .NET with predictable Helm-compatible output. |
 | [M2: Chart Packaging and Repository Parity](https://github.com/GaTTGeng/HelmSharp/milestone/2) | Planned | Package, index, pull, and resolve chart dependencies without CLI handoffs. |
 | [M3: Release Lifecycle Parity](https://github.com/GaTTGeng/HelmSharp/milestone/6) | Planned | Install, upgrade, rollback, uninstall, status, history, and hook behavior users can reason about. |
 | [M4: Kubernetes Apply and Wait Semantics](https://github.com/GaTTGeng/HelmSharp/milestone/5) | Planned | Correct resource identity, namespace handling, readiness, Jobs, deletion, and hook cleanup. |
