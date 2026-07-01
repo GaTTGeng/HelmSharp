@@ -9,6 +9,7 @@ This project follows semantic versioning once stable releases begin.
 ### Added
 
 - Expanded the VitePress documentation into workflow guides, real integration examples, package-by-package pages, and generated API reference indexes in English and Simplified Chinese.
+- Added HelmSharp logo and wordmark assets to the READMEs and VitePress documentation site.
 
 ### Changed
 

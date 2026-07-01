@@ -5,6 +5,9 @@ hero:
   name: HelmSharp
   text: 面向 .NET 的 Helm 兼容渲染
   tagline: 在托管 .NET 代码中加载 Chart、合并 values、渲染 Kubernetes 清单并运行发布工作流，运行时不依赖 Helm CLI。
+  image:
+    src: /logo.svg
+    alt: HelmSharp logo
   actions:
     - theme: brand
       text: 开始指南
