@@ -29,7 +29,7 @@ dotnet add package HelmSharp.Repo --version 1.1.0
 
 ## 常见组合
 
-先用 repo helper 获取 Chart，再交给 `HelmChartLoader` 或高层 `HelmClient`。
+先用仓库辅助方法获取 Chart，再交给 `HelmChartLoader` 或高层 `HelmClient`。
 
 ## 当前边界
 

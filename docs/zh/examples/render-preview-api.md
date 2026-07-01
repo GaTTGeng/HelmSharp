@@ -47,7 +47,7 @@ app.MapPost("/preview", async (
 
 ## 生产环境注意事项
 
-- Chart 路径应来自白名单或内部 Chart registry。
+- Chart 路径应来自白名单或内部 Chart 注册表。
 - 保存每次预览使用的 values 输入。
 - 限制上传 values 内容的大小。
 

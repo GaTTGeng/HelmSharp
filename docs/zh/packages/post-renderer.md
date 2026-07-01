@@ -24,7 +24,7 @@ dotnet add package HelmSharp.PostRenderer --version 1.1.0
 
 ## 常见组合
 
-用于策略注入、labels、annotations 或清单规范化。
+用于策略注入、标签、注解或清单规范化。
 
 ## 当前边界
 

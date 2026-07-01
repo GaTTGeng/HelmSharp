@@ -35,7 +35,7 @@ return Results.Text(result.StandardOutput, "text/yaml");
 
 ## 生产环境注意事项
 
-- 日志至少保留 chart 路径、release name、namespace、values 来源、HelmSharp 版本和目标 kube version。
+- 日志至少保留 Chart 路径、发布名称、命名空间、values 来源、HelmSharp 版本和目标 Kubernetes 版本。
 - 兼容性报告中同时保留 HelmSharp 输出和 `helm template` 输出，只规范化换行。
 - 不要隐藏模板名和失败表达式，这通常是定位问题最快的信息。
 

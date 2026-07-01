@@ -14,7 +14,7 @@ dotnet add package HelmSharp.Release --version 1.1.0
 
 ## 依赖关系
 
-该包依赖 Kubernetes .NET 客户端，并引用 Chart 和 Kube helper。
+该包依赖 Kubernetes .NET 客户端，并引用 Chart 和 Kube 辅助包。
 
 ## 主要类型
 
@@ -25,7 +25,7 @@ dotnet add package HelmSharp.Release --version 1.1.0
 
 ## 常见组合
 
-`HelmClient` 在 install、upgrade、uninstall、status、history、get 操作中使用 `HelmReleaseStore`。
+`HelmClient` 在安装、升级、卸载、状态、历史和 get 操作中使用 `HelmReleaseStore`。
 
 ## 当前边界
 

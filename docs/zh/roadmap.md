@@ -2,7 +2,7 @@
 
 路线图围绕用户真正需要信任的事情组织：同一个 Chart 能否渲染，values 规则能否解释清楚，Kubernetes 变更是否只在应用明确允许时发生。
 
-具体 issue 范围以 GitHub milestones 为准。
+具体议题范围以 GitHub milestones 为准。
 
 ## 当前重点
 
@@ -25,8 +25,8 @@
 | [M1：Helm 模板对齐](https://github.com/GaTTGeng/HelmSharp/milestone/1) | 1.1.0 已完成 | 从 .NET 渲染常见 Chart，输出具备可预期的 Helm 兼容性。 |
 | [M2：Chart 打包和仓库对齐](https://github.com/GaTTGeng/HelmSharp/milestone/2) | 计划中 | 不交给 CLI 也能打包、生成索引、拉取和处理依赖。 |
 | [M3：发布生命周期对齐](https://github.com/GaTTGeng/HelmSharp/milestone/6) | 计划中 | 安装、升级、回滚、卸载、状态、历史和 hooks 行为可解释。 |
-| [M4：Kubernetes 提交和等待语义](https://github.com/GaTTGeng/HelmSharp/milestone/5) | 计划中 | 资源身份、namespace、就绪、Jobs、删除和 hook 清理更完整。 |
-| [M5：OCI 和来源证明](https://github.com/GaTTGeng/HelmSharp/milestone/4) | 计划中 | registry 认证、Chart 拉取/推送、签名和校验。 |
+| [M4：Kubernetes 提交和等待语义](https://github.com/GaTTGeng/HelmSharp/milestone/5) | 计划中 | 资源身份、命名空间、就绪、Jobs、删除和 hook 清理更完整。 |
+| [M5：OCI 和来源证明](https://github.com/GaTTGeng/HelmSharp/milestone/4) | 计划中 | 注册表认证、Chart 拉取/推送、签名和校验。 |
 | [M6：公共 SDK 加固](https://github.com/GaTTGeng/HelmSharp/milestone/3) | 进行中 | 文档、示例、nullable 正确性、包质量和 API 细节更稳。 |
 | [M7：兼容性扩展研究](https://github.com/GaTTGeng/HelmSharp/milestone/7) | 研究中 | 基于证据决定 `netstandard`、.NET Framework 和长期目标框架支持。 |
 

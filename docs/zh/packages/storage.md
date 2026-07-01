@@ -14,7 +14,7 @@ dotnet add package HelmSharp.Storage --version 1.1.0
 
 ## 依赖关系
 
-该包引用 release 和 Kubernetes helper 包。
+该包引用 release 和 Kubernetes 辅助包。
 
 ## 主要类型
 

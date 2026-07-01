@@ -27,4 +27,4 @@ dotnet add package HelmSharp.Engine --version 1.1.0
 
 ## 下一步
 
-需要 install、upgrade、history 或 rollback 时阅读 [发布工作流](release-workflows.md)。
+需要安装、升级、历史或回滚行为时阅读 [发布工作流](release-workflows.md)。

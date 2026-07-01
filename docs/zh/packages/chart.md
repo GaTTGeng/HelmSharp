@@ -2,7 +2,7 @@
 
 ## 包职责
 
-`HelmSharp.Chart` 负责加载 Chart 目录和 `.tgz` 归档，暴露 Chart 元数据，合并 values，并提供 YAML helper。
+`HelmSharp.Chart` 负责加载 Chart 目录和 `.tgz` 归档，暴露 Chart 元数据，合并 values，并提供 YAML 辅助方法。
 
 ## 何时安装
 
@@ -21,7 +21,7 @@ dotnet add package HelmSharp.Chart --version 1.1.0
 | 类型 | 用途 |
 | --- | --- |
 | `HelmChartLoader` | 从目录或归档加载 Chart。 |
-| `HelmChart` | 查看 Chart 元数据、templates、files、CRDs 和 subcharts。 |
+| `HelmChart` | 查看 Chart 元数据、模板、文件、CRDs 和子 Chart。 |
 | `HelmValues` | 按 Helm 优先级构建合并后的 values。 |
 | `HelmYaml` | 序列化和反序列化 YAML 对象。 |
 | `HelmChartDependency` | 查看 `Chart.yaml` 依赖元数据。 |

@@ -22,7 +22,7 @@
 
 ## 模板函数 API
 
-`HelmSharp.Engine.Functions` 和 `HelmSharp.Engine.Utilities` 下的类型会出现在 Engine 参考中，但它们主要服务 Helm/Sprig 模板执行。应用代码通常应调用 `HelmTemplateRenderer`，而不是直接依赖这些 helper。
+`HelmSharp.Engine.Functions` 和 `HelmSharp.Engine.Utilities` 下的类型会出现在 Engine 参考中，但它们主要服务 Helm/Sprig 模板执行。应用代码通常应调用 `HelmTemplateRenderer`，而不是直接依赖这些辅助类型。
 
 ## 重新生成
 

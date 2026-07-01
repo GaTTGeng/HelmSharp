@@ -2,7 +2,7 @@
 
 ## 包职责
 
-`HelmSharp.Registry` 包含 registry 相关扩展契约，用于未来 OCI 工作流。
+`HelmSharp.Registry` 包含注册表相关扩展契约，用于未来 OCI 工作流。
 
 ## 何时安装
 
@@ -20,11 +20,11 @@ dotnet add package HelmSharp.Registry --version 1.1.0
 
 | 类型 | 用途 |
 | --- | --- |
-| `IOciRegistryClient` | OCI registry 集成扩展点。 |
+| `IOciRegistryClient` | OCI 注册表集成扩展点。 |
 
 ## 常见组合
 
-在围绕 HelmSharp 仓库工作流实验自定义 registry 客户端时使用。
+在围绕 HelmSharp 仓库工作流实验自定义注册表客户端时使用。
 
 ## 当前边界
 

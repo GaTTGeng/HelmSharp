@@ -24,7 +24,7 @@ dotnet add package HelmSharp.Engine --version 1.1.0
 | `TemplateParseException` | 诊断模板解析失败。 |
 | `TemplateContext` | 提供发布和 capabilities 能力上下文。 |
 | `ApiVersionSet` | 建模 `.Capabilities.APIVersions`。 |
-| `TemplateParser` / tokenizer / AST types | 解析器、分词器和 AST 类型的内部诊断入口，不是常规应用入口。 |
+| `TemplateParser` / 分词器 / AST 类型 | 解析器、分词器和 AST 类型的内部诊断入口，不是常规应用入口。 |
 
 ## 常见组合
 
