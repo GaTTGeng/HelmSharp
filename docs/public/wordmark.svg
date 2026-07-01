@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 352 72" role="img" aria-labelledby="title desc">
+  <title id="title">HelmSharp</title>
+  <desc id="desc">The HelmSharp wordmark with the official logo to the left of the project name.</desc>
+  <style>
+    .word { fill: #24292f; }
+    @media (prefers-color-scheme: dark) {
+      .word { fill: #d0d7de; }
+    }
+  </style>
+
+  <g transform="translate(8 8) scale(.109375)">
+    <defs>
+      <linearGradient id="tile" x1="96" y1="72" x2="416" y2="448" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="#202428"/>
+        <stop offset="1" stop-color="#14181c"/>
+      </linearGradient>
+    </defs>
+
+    <rect x="48" y="48" width="416" height="416" rx="92" fill="url(#tile)"/>
+
+    <g fill="none" stroke="#ffffff" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M256 96v320M117 176l278 160M117 336l278-160" stroke-width="24"/>
+      <path d="M376 168A150 150 0 1 0 376 344" stroke-width="28"/>
+    </g>
+
+    <circle cx="256" cy="256" r="66" fill="#2364a2" stroke="#ffffff" stroke-width="20"/>
+
+    <g fill="none" stroke="#ffffff" stroke-linecap="square" stroke-linejoin="round">
+      <path d="M380 229l-8 53M412 229l-8 53" stroke-width="10"/>
+      <path d="M362 248h58M359 268h58" stroke-width="10"/>
+    </g>
+  </g>
+
+  <text class="word" x="76" y="49" font-family="Segoe UI, Arial, sans-serif" font-size="37" font-weight="700" letter-spacing="0">HelmSharp</text>
+</svg>
