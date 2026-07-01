@@ -181,6 +181,7 @@ export default defineConfig({
   cleanUrls: true,
   lastUpdated: true,
   head: [
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/HelmSharp/logo.svg' }],
     ['meta', { name: 'theme-color', content: '#2563eb' }],
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:title', content: 'HelmSharp Documentation' }],
@@ -193,7 +194,10 @@ export default defineConfig({
     }
   },
   themeConfig: {
-    logo: '/logo.svg',
+    logo: {
+      src: '/logo.svg',
+      alt: 'HelmSharp logo'
+    },
     socialLinks: [
       { icon: 'github', link: 'https://github.com/GaTTGeng/HelmSharp' }
     ],

@@ -1,4 +1,6 @@
-# HelmSharp
+<h1 align="center">
+  <img src="docs/public/wordmark.svg" alt="HelmSharp" width="352">
+</h1>
 
 [![CI](https://github.com/GaTTGeng/HelmSharp/actions/workflows/ci.yml/badge.svg)](https://github.com/GaTTGeng/HelmSharp/actions/workflows/ci.yml)
 [![NuGet](https://img.shields.io/nuget/v/HelmSharp.Action.svg)](https://www.nuget.org/packages/HelmSharp.Action)
