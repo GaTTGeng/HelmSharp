@@ -2,7 +2,7 @@
 
 ## 包职责
 
-`HelmSharp.Storage` 包含 release storage 扩展契约。
+`HelmSharp.Storage` 包含发布存储扩展契约。
 
 ## 何时安装
 
@@ -20,12 +20,12 @@ dotnet add package HelmSharp.Storage --version 1.1.0
 
 | 类型 | 用途 |
 | --- | --- |
-| `IHelmReleaseStore` | Release record storage 扩展点。 |
+| `IHelmReleaseStore` | 发布记录存储扩展点。 |
 
 ## 常见组合
 
-当产品需要把 release storage 抽象到自己的实现后面时使用。
+当产品需要把发布存储抽象到自己的实现后面时使用。
 
 ## 当前边界
 
-内置 release store 位于 `HelmSharp.Release`；该包主要提供 storage contract。
+内置发布存储位于 `HelmSharp.Release`；该包主要提供存储契约。

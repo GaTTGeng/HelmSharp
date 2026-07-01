@@ -2,11 +2,11 @@
 
 ## 包职责
 
-`HelmSharp.Repo` 处理 Chart repository 元数据：add、remove、list、search、pull、index，以及有限的 OCI 相关占位能力。
+`HelmSharp.Repo` 处理 Chart 仓库元数据：添加、移除、列出、搜索、拉取、生成索引，以及有限的 OCI 相关占位能力。
 
 ## 何时安装
 
-构建 repository 管理工具时直接安装：
+构建仓库管理工具时直接安装：
 
 ```powershell
 dotnet add package HelmSharp.Repo --version 1.1.0
@@ -20,12 +20,12 @@ dotnet add package HelmSharp.Repo --version 1.1.0
 
 | 类型 | 用途 |
 | --- | --- |
-| `HelmChartRepository` | 管理本地 repo 配置、搜索 index、拉取 Chart。 |
-| `HelmRepoIndexer` | 生成 repository `index.yaml`。 |
-| `HelmRepository` | Repository 配置项。 |
-| `HelmRepoIndex` | 解析后的 repository index。 |
-| `HelmChartVersion` | Index 里的 Chart version 元数据。 |
-| `HelmChartSearchResult` | Search result。 |
+| `HelmChartRepository` | 管理本地仓库配置、搜索索引、拉取 Chart。 |
+| `HelmRepoIndexer` | 生成仓库 `index.yaml`。 |
+| `HelmRepository` | 仓库配置项。 |
+| `HelmRepoIndex` | 解析后的仓库索引。 |
+| `HelmChartVersion` | 索引里的 Chart 版本元数据。 |
+| `HelmChartSearchResult` | 搜索结果。 |
 
 ## 常见组合
 

@@ -112,7 +112,7 @@ const chineseSidebar = [
     items: [
       { text: '安装', link: '/zh/guide/installation' },
       { text: '第一次渲染', link: '/zh/guide/first-render' },
-      { text: 'Values', link: '/zh/guide/values' },
+      { text: '值配置（Values）', link: '/zh/guide/values' },
       { text: '模板渲染', link: '/zh/guide/template-rendering' },
       { text: '发布工作流', link: '/zh/guide/release-workflows' },
       { text: 'Kubernetes 操作', link: '/zh/guide/kubernetes-operations' },
@@ -124,9 +124,9 @@ const chineseSidebar = [
     items: [
       { text: '渲染预览 API', link: '/zh/examples/render-preview-api' },
       { text: 'GitOps PR 生成器', link: '/zh/examples/gitops-pr-generator' },
-      { text: 'Dry-run 部署', link: '/zh/examples/dry-run-deployment' },
+      { text: '试运行部署', link: '/zh/examples/dry-run-deployment' },
       { text: '真实 Chart 渲染', link: '/zh/examples/real-chart-rendering' },
-      { text: '多租户 Options', link: '/zh/examples/multi-tenant-options' }
+      { text: '多租户选项', link: '/zh/examples/multi-tenant-options' }
     ]
   },
   {

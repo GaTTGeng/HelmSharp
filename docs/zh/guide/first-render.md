@@ -17,7 +17,7 @@ dotnet add package HelmSharp.Engine --version 1.1.0
 
 ## 关键 API 为什么这样用
 
-`HelmChartLoader.LoadAsync` 加载 Chart 元数据、values、templates、CRDs、文件、依赖和 subcharts。`HelmValues.BuildAsync` 按 Helm 风格合并 values。`HelmTemplateRenderer.Render()` 返回 manifests，`RenderNotes()` 返回 `NOTES.txt`。
+`HelmChartLoader.LoadAsync` 加载 Chart 元数据、values、templates、CRDs、文件、依赖和子 Chart。`HelmValues.BuildAsync` 按 Helm 风格合并 values。`HelmTemplateRenderer.Render()` 返回清单，`RenderNotes()` 返回 `NOTES.txt`。
 
 ## 生产环境注意事项
 
@@ -27,4 +27,4 @@ dotnet add package HelmSharp.Engine --version 1.1.0
 
 ## 下一步
 
-阅读 [Values](values.md)，正确建模用户覆盖项。
+阅读 [值配置（Values）](values.md)，正确建模用户覆盖项。

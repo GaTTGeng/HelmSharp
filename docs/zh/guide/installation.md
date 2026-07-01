@@ -4,7 +4,7 @@
 
 这页帮助你选择最小的 HelmSharp 包组合。HelmSharp 1.1.0 在 5 个真实 Chart 上与 `helm template` 达到规范化后逐字节一致：`podinfo`、`metrics-server`、`external-dns`、`ingress-nginx`、`cert-manager`，共 129/129 个模板通过。
 
-HelmSharp 运行时不需要 `helm` 可执行文件。只有发布、apply、delete、wait 等 Kubernetes 操作需要可访问的集群和 kubeconfig。
+HelmSharp 运行时不需要 `helm` 可执行文件。只有发布、提交、删除、等待等 Kubernetes 操作需要可访问的集群和 kubeconfig。
 
 ## 安装哪些包
 
@@ -50,7 +50,7 @@ Console.WriteLine(result.StandardOutput);
 ## 生产环境注意事项
 
 - 本地构建全部目标框架需要 .NET 8、.NET 9 和 .NET 10 SDK。
-- 只有需要 release state、Kubernetes apply/delete/wait、repo 或命令式结果时才用 `HelmSharp.Action`。
+- 只有需要发布状态、Kubernetes 提交/删除/等待、仓库操作或命令式结果时才用 `HelmSharp.Action`。
 - 会修改集群的示例在审批前保持 `DryRun = true`。
 
 ## 下一步

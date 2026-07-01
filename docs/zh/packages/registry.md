@@ -24,7 +24,7 @@ dotnet add package HelmSharp.Registry --version 1.1.0
 
 ## 常见组合
 
-在围绕 HelmSharp repo 工作流实验自定义 registry client 时使用。
+在围绕 HelmSharp 仓库工作流实验自定义 registry 客户端时使用。
 
 ## 当前边界
 

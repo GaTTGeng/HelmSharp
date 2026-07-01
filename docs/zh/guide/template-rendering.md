@@ -2,7 +2,7 @@
 
 ## 你在解决什么问题
 
-模板渲染把已加载的 Chart 和合并后的 values 转成 Kubernetes manifests。HelmSharp 1.1.0 以 Helm CLI 输出作为兼容性参照，5 个真实 Chart 全部取得 Pass 判定。
+模板渲染把已加载的 Chart 和合并后的 values 转成 Kubernetes 清单。HelmSharp 1.1.0 以 Helm CLI 输出作为兼容性参照，5 个真实 Chart 全部取得通过判定。
 
 ## 安装哪些包
 

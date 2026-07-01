@@ -6,7 +6,7 @@
 
 ## 何时安装
 
-只需要 manifest 输出、不需要 release 生命周期时，与 `HelmSharp.Chart` 一起安装：
+只需要清单输出、不需要发布生命周期时，与 `HelmSharp.Chart` 一起安装：
 
 ```powershell
 dotnet add package HelmSharp.Engine --version 1.1.0
@@ -20,11 +20,11 @@ dotnet add package HelmSharp.Engine --version 1.1.0
 
 | 类型 | 用途 |
 | --- | --- |
-| `HelmTemplateRenderer` | 渲染 manifests 和 NOTES。 |
+| `HelmTemplateRenderer` | 渲染清单和 NOTES。 |
 | `TemplateParseException` | 诊断模板解析失败。 |
-| `TemplateContext` | 提供 release 和 capabilities 上下文。 |
+| `TemplateContext` | 提供发布和 capabilities 能力上下文。 |
 | `ApiVersionSet` | 建模 `.Capabilities.APIVersions`。 |
-| `TemplateParser` / tokenizer / AST types | 解析器内部和诊断，不是常规应用入口。 |
+| `TemplateParser` / tokenizer / AST types | 解析器、分词器和 AST 类型的内部诊断入口，不是常规应用入口。 |
 
 ## 常见组合
 

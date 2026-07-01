@@ -1,8 +1,8 @@
-# Values
+# 值配置（Values）
 
 ## 你在解决什么问题
 
-Values 往往是产品模型和 Helm Chart 的集成边界。HelmSharp 保留 Helm 使用者熟悉的优先级模型，方便复用现有 values 文件和 `--set` 风格覆盖。
+值配置（values）往往是产品模型和 Helm Chart 的集成边界。HelmSharp 保留 Helm 使用者熟悉的优先级模型，方便复用现有 values 文件和 `--set` 风格覆盖。
 
 ## 安装哪些包
 
@@ -20,8 +20,8 @@ dotnet add package HelmSharp.Chart --version 1.1.0
 
 | 输入 | 含义 |
 | --- | --- |
-| Chart defaults | Chart 自带 `values.yaml`。 |
-| Subchart defaults | dependency 名称或 alias 下的子 Chart 默认值。 |
+| Chart 默认值 | Chart 自带 `values.yaml`。 |
+| 子 Chart 默认值 | 依赖名称或别名下的子 Chart 默认值。 |
 | `valuesFiles` | 一个或多个 values 文件，按顺序应用。 |
 | `valuesContent` | 数据库、请求或生成配置里的内联 YAML。 |
 | `setFileValues` | 将文件内容写入某个 values 路径。 |

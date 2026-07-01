@@ -2,7 +2,7 @@
 
 ## 你在解决什么问题
 
-HelmSharp 有两类失败形态：高层类命令 API 的 `CommandResult`，以及低层 API 抛出的 .NET exception。两者都要处理，Chart 作者才能得到有用诊断。
+HelmSharp 有两类失败形态：高层类命令 API 的 `CommandResult`，以及低层 API 抛出的 .NET 异常。两者都要处理，Chart 作者才能得到有用诊断。
 
 ## 安装哪些包
 
@@ -31,7 +31,7 @@ return Results.Text(result.StandardOutput, "text/yaml");
 
 ## 关键 API 为什么这样用
 
-`HelmClient` 多数方法返回 `CommandResult`，方便应用建模 stdout、stderr 和 exit code。`HelmChartLoader`、`HelmValues`、`HelmTemplateRenderer` 会在加载、values 解析或模板求值失败时抛出普通异常。
+`HelmClient` 多数方法返回 `CommandResult`，方便应用建模标准输出、标准错误和退出码。`HelmChartLoader`、`HelmValues`、`HelmTemplateRenderer` 会在加载、values 解析或模板求值失败时抛出普通异常。
 
 ## 生产环境注意事项
 

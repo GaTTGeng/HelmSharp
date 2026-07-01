@@ -2,7 +2,7 @@
 
 ## 你在解决什么问题
 
-很多平台需要一个预览接口：用户选择 Chart 和 values，产品先展示 manifest，不修改集群。
+很多平台需要一个预览接口：用户选择 Chart 和 values，产品先展示清单，不修改集群。
 
 ## 安装哪些包
 
@@ -43,7 +43,7 @@ app.MapPost("/preview", async (
 
 ## 关键 API 为什么这样用
 
-这个示例不使用 `HelmClient`，因为 preview API 通常不应该拥有 release state。低层路径能清楚表达：加载、合并、渲染，仅此而已。
+这个示例不使用 `HelmClient`，因为预览 API 通常不应该拥有发布状态。低层路径能清楚表达：加载、合并、渲染，仅此而已。
 
 ## 生产环境注意事项
 
@@ -53,4 +53,4 @@ app.MapPost("/preview", async (
 
 ## 下一步
 
-如果预览后可以发布，继续看 [Dry-run 部署](dry-run-deployment.md)。
+如果预览后可以发布，继续看 [试运行部署](dry-run-deployment.md)。

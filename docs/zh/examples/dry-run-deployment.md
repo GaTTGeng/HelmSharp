@@ -1,8 +1,8 @@
-# Dry-run 部署
+# 试运行部署
 
 ## 你在解决什么问题
 
-部署产品应拆分预览和 apply。HelmSharp 支持用同一个高层 release 工作流先 `DryRun = true`，审批后再提交。
+部署产品应拆分预览和提交。HelmSharp 支持用同一个高层发布工作流先 `DryRun = true`，审批后再提交。
 
 ## 安装哪些包
 
@@ -43,12 +43,12 @@ var apply = await client.UpgradeInstallAsync(new HelmUpgradeInstallRequest
 
 ## 关键 API 为什么这样用
 
-`UpgradeInstallAsync` 同时覆盖 install 和 upgrade。preview 与 apply 使用相似请求，可以减少用户审核内容和实际部署内容之间的漂移。
+`UpgradeInstallAsync` 同时覆盖安装和升级。预览与提交使用相似请求，可以减少用户审核内容和实际部署内容之间的漂移。
 
 ## 生产环境注意事项
 
-- 审批记录应包含 Chart 版本、values 输入、release name、namespace 和 dry-run 输出 hash。
-- 如果 Chart 或 values 可能变化，apply 前重新渲染。
+- 审批记录应包含 Chart 版本、values 输入、发布名称、namespace 和试运行输出哈希。
+- 如果 Chart 或 values 可能变化，提交前重新渲染。
 - `DryRun = false` 是唯一会修改集群的步骤。
 
 ## 下一步

@@ -35,12 +35,12 @@ Console.WriteLine(result.StandardOutput);
 
 ## 关键 API 为什么这样用
 
-`HelmTemplateRequest` 对应 Helm 用户熟悉的预览形态：release、namespace、chart、values、kube version、API versions、CRDs 和 notes。
+`HelmTemplateRequest` 对应 Helm 用户熟悉的预览形态：发布、namespace、Chart、values、Kubernetes 版本、API 版本、CRDs 和 NOTES。
 
 ## 生产环境注意事项
 
 - 渲染公开 Chart 时固定 Chart 版本。
-- 让 Chart 副本或 provenance 与预览输出关联。
+- 让 Chart 副本或来源证明与预览输出关联。
 - 当前真实 Chart 兼容性数据见兼容性页面。
 
 ## 下一步

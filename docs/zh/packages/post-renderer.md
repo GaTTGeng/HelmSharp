@@ -2,7 +2,7 @@
 
 ## 包职责
 
-`HelmSharp.PostRenderer` 定义 post-renderer 扩展契约，用于在模板渲染后、apply 前转换 manifests。
+`HelmSharp.PostRenderer` 定义后处理器扩展契约，用于在模板渲染后、提交前转换清单。
 
 ## 何时安装
 
@@ -24,8 +24,8 @@ dotnet add package HelmSharp.PostRenderer --version 1.1.0
 
 ## 常见组合
 
-用于策略注入、labels、annotations 或 manifest normalization。
+用于策略注入、labels、annotations 或清单规范化。
 
 ## 当前边界
 
-Post-renderer 是扩展点。转换逻辑应保持确定性，并用真实 Chart 输出测试。
+后处理器是扩展点。转换逻辑应保持确定性，并用真实 Chart 输出测试。

@@ -2,7 +2,7 @@
 
 ## 你在解决什么问题
 
-发布工作流会组合渲染、Kubernetes apply/delete/wait、hooks 和 release history。只有当应用确实拥有部署动作时才走这条路径。
+发布工作流会组合渲染、Kubernetes 提交/删除/等待、hooks 和发布历史。只有当应用确实拥有部署动作时才走这条路径。
 
 ## 安装哪些包
 
@@ -12,17 +12,17 @@ dotnet add package HelmSharp.Action --version 1.1.0
 
 ## 完整最小代码
 
-先 dry-run：
+先试运行：
 
 <<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#dry-run-release{csharp}
 
-审批后再 apply：
+审批后再提交：
 
 <<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#apply-release{csharp}
 
 ## 关键 API 为什么这样用
 
-`HelmClient.UpgradeInstallAsync` 是 install/upgrade 的主要入口。它会加载 Chart、合并 values、渲染 manifests、按需应用 CRDs、执行 hooks、等待资源 ready，并保存 release history。
+`HelmClient.UpgradeInstallAsync` 是安装/升级的主要入口。它会加载 Chart、合并 values、渲染清单、按需应用 CRDs、执行 hooks、等待资源就绪，并保存发布历史。
 
 ## 生产环境注意事项
 
@@ -32,4 +32,4 @@ dotnet add package HelmSharp.Action --version 1.1.0
 
 ## 下一步
 
-阅读 [Kubernetes 操作](kubernetes-operations.md) 了解低层 apply/delete/wait。
+阅读 [Kubernetes 操作](kubernetes-operations.md) 了解低层提交、删除和等待行为。
