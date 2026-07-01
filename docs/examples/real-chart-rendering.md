@@ -1,8 +1,8 @@
-# Real Chart Rendering
+# Public Chart Rendering
 
 ## What problem this solves
 
-Real public charts exercise template behavior that small sample charts rarely cover. HelmSharp 1.1.0 validates `podinfo`, `metrics-server`, `external-dns`, `ingress-nginx`, and `cert-manager` with 129/129 templates passing.
+Public charts are useful integration checks because they exercise helpers, nested values, capabilities, CRDs, and formatting patterns that small sample charts often miss. Use this workflow when you want to preview a pinned public chart and inspect the generated manifests before a release.
 
 ## Packages to install
 
@@ -41,7 +41,7 @@ Console.WriteLine(result.StandardOutput);
 
 - Pin chart versions when rendering public charts.
 - Keep the chart copy or chart provenance tied to the preview output.
-- Use the compatibility page for current real-chart parity data.
+- Use the compatibility page for current public-chart test coverage and known boundaries.
 
 ## Next step
 

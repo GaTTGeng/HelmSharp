@@ -6,9 +6,9 @@
 
 ## 当前重点
 
-**M1：Helm 模板对齐** 是当前活跃工作流。项目已经有真实 Chart golden tests，接下来继续缩小 values、内置对象、模板函数、空白处理、`.Files`、capabilities 和子 Chart 上的差异。
+**M1：Helm 模板对齐** 已在 1.1.0 完成。当前重点是继续加固 SDK 使用体验，包括包选择说明、发布工作流、Kubernetes 操作，以及来自真实用户 Chart 的兼容性扩展。
 
-可以跟踪 [GitHub M1](https://github.com/GaTTGeng/HelmSharp/milestone/1)，或查看 [兼容性页面](helm-compatibility.md)。
+当前渲染覆盖范围见 [兼容性页面](helm-compatibility.md)；后续打包、发布生命周期、Kubernetes 语义、OCI 和公共 SDK 加固可跟踪 GitHub 上的后续 milestones。
 
 ## 交付原则
 
@@ -22,7 +22,7 @@
 
 | 阶段 | 状态 | 用户结果 |
 | --- | --- | --- |
-| [M1：Helm 模板对齐](https://github.com/GaTTGeng/HelmSharp/milestone/1) | 活跃 | 从 .NET 渲染常见真实 Chart，输出具备可预期的 Helm 兼容性。 |
+| [M1：Helm 模板对齐](https://github.com/GaTTGeng/HelmSharp/milestone/1) | 1.1.0 已完成 | 从 .NET 渲染常见 Chart，输出具备可预期的 Helm 兼容性。 |
 | [M2：Chart 打包和仓库对齐](https://github.com/GaTTGeng/HelmSharp/milestone/2) | 计划中 | 不交给 CLI 也能打包、生成索引、拉取和处理依赖。 |
 | [M3：发布生命周期对齐](https://github.com/GaTTGeng/HelmSharp/milestone/6) | 计划中 | 安装、升级、回滚、卸载、状态、历史和 hooks 行为可解释。 |
 | [M4：Kubernetes 提交和等待语义](https://github.com/GaTTGeng/HelmSharp/milestone/5) | 计划中 | 资源身份、namespace、就绪、Jobs、删除和 hook 清理更完整。 |
@@ -34,7 +34,7 @@
 
 一个兼容性事项准备好离开里程碑时，需要满足：
 
-1. 行为被聚焦的单元、集成或 golden test 捕获。
+1. 行为被聚焦的单元测试、集成测试或基准输出测试捕获。
 2. 兼容性页面说明已支持内容和剩余边界。
 3. 公共 API 变化包含从用户视角出发的示例。
 4. `net8.0`、`net9.0`、`net10.0` 的 Release 构建和测试通过。

@@ -42,4 +42,4 @@ Keep `DryRun = true` until your application has an explicit approval step.
 
 ## Current compatibility baseline
 
-HelmSharp 1.1.0 reaches Pass verdicts against five real-world public charts: 129/129 templates render with byte-for-byte output parity against `helm template` after normalization. See [Helm Compatibility](helm-compatibility.md) for details.
+Before relying on an edge Helm behavior in production, review [Helm Compatibility](helm-compatibility.md) for the current golden-test coverage, known boundaries, and reporting guidance.

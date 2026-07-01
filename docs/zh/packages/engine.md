@@ -2,7 +2,7 @@
 
 ## 包职责
 
-`HelmSharp.Engine` 在托管代码中渲染 Helm 风格模板。1.1.0 的 golden suite 在 5 个真实公开 Chart、129/129 个模板上取得 Pass 判定。
+`HelmSharp.Engine` 在托管代码中渲染 Helm 风格模板。它通过聚焦测试用 Chart 和选定公开 Chart 的基准输出测试验证行为；如果你的 Chart 依赖特定 Helm 边缘行为，请先查看兼容性页面。
 
 ## 何时安装
 

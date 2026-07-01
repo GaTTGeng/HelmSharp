@@ -2,7 +2,7 @@
 
 ## What problem this solves
 
-Template rendering turns a loaded chart and merged values into Kubernetes manifests. HelmSharp 1.1.0 uses Helm CLI output as the compatibility oracle and reaches Pass verdicts for all five real-chart golden fixtures.
+Template rendering turns a loaded chart and merged values into Kubernetes manifests. HelmSharp uses Helm CLI output as a compatibility oracle in tests, while application code calls the managed renderer directly.
 
 ## Packages to install
 

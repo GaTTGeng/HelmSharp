@@ -1,8 +1,8 @@
-# 真实 Chart 渲染
+# 公开 Chart 渲染
 
 ## 你在解决什么问题
 
-真实公开 Chart 会覆盖手写小样例很少触达的模板行为。HelmSharp 1.1.0 验证了 `podinfo`、`metrics-server`、`external-dns`、`ingress-nginx` 和 `cert-manager`，129/129 个模板通过。
+公开 Chart 很适合作为集成检查，因为它们会触达 helper、嵌套 values、capabilities、CRDs 和格式细节，这些行为在手写小样例里经常缺失。需要预览固定版本的公开 Chart 并检查生成清单时，可以使用这个工作流。
 
 ## 安装哪些包
 
@@ -41,7 +41,7 @@ Console.WriteLine(result.StandardOutput);
 
 - 渲染公开 Chart 时固定 Chart 版本。
 - 让 Chart 副本或来源证明与预览输出关联。
-- 当前真实 Chart 兼容性数据见兼容性页面。
+- 当前公开 Chart 测试覆盖和已知边界见兼容性页面。
 
 ## 下一步
 

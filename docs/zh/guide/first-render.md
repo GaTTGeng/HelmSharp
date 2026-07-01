@@ -23,7 +23,7 @@ dotnet add package HelmSharp.Engine --version 1.1.0
 
 - 从服务边界传入绝对 chart 路径，便于复现问题。
 - 保存每次预览使用的 values 输入。
-- 排查差异时可使用 [对比工具](../compare.md) 或 Helm CLI golden test。
+- 排查差异时可使用 [对比工具](../compare.md) 或 Helm CLI 基准输出测试。
 
 ## 下一步
 

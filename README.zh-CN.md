@@ -9,7 +9,7 @@
 
 HelmSharp 是一个面向 .NET 的托管 Helm 风格库，用于在不调用 `helm` 可执行文件的情况下渲染 Helm 风格 Chart 并驱动 Kubernetes Release 工作流。它适合需要在 .NET 进程内完成模板渲染、values 合并、Chart 打包、仓库操作和 Kubernetes 发布生命周期管理的应用。
 
-项目仍在积极开发中。M1（Helm 模板对齐）已完成 — 模板引擎在 5 个真实 Chart 的 129 个模板上与 `helm template` 达到逐字节一致。M2+ 将扩展至发布生命周期和 Kubernetes 操作。
+项目仍在积极开发中。M1（Helm 模板对齐）已完成，渲染器会持续通过聚焦测试用 Chart 和选定公开 Helm Chart 校验。M2+ 将扩展至发布生命周期和 Kubernetes 操作。
 
 文档站点：[https://gattgeng.github.io/HelmSharp/](https://gattgeng.github.io/HelmSharp/)
 
@@ -139,9 +139,11 @@ await foreach (var line in client.UpgradeInstallStreamAsync(new HelmUpgradeInsta
 - 使用 Kubernetes Secret 保存 Release 历史。
 - 提供 install、upgrade、uninstall、rollback、status、history、manifest、values、hooks、notes 和 test 相关 API。
 
-## Golden Test 结果
+## 兼容性验证
 
-HelmSharp 的模板引擎持续通过真实世界的公开 Helm Chart 进行 golden test 验证。每个 Chart 分别由 `helm template`（参照）和 HelmSharp 托管渲染器渲染，输出经规范化后逐文档比对。
+HelmSharp 的模板引擎持续通过基准输出测试（golden tests）验证。测试套件包含聚焦测试用 Chart 和选定公开 Helm Chart。下表中的每个公开 Chart 都会分别由 `helm template`（参照）和 HelmSharp 托管渲染器渲染，输出经规范化后逐文档比对。
+
+这些结果是表格中固定 Chart 版本的兼容性信号，不是对整个 Helm 生态所有 Chart 的认证。如果你的 Chart 依赖少见 Helm 行为，仍应单独验证。
 
 > **更新日期：** 2026-07-01 · **HelmSharp 版本：** 1.1.0 · **Helm 版本：** v3.12.3 · **测试框架：** net10.0
 
@@ -170,21 +172,21 @@ cert-manager     █████████████████████
 
 ### 错误分析
 
-全部 129 个模板在 5 个真实 Chart 中均可在无解析器异常的情况下渲染，规范化后与 `helm template` 达到**逐字节一致**。全部五个 Chart 现已取得 **Pass** 判定 — 无任何剩余内容级格式化差异、解析器缺口或错误分类。
+对于上表列出的固定版本公开 Chart，全部 129 个模板都能在无解析器异常的情况下渲染，并在规范化后与 `helm template` 匹配。这是已覆盖 Chart 的当前兼容性信号，不代表所有 Helm Chart 都只使用已覆盖行为。
 
 自 1.0.3 版本以来关闭的关键对齐里程碑：
 
-- **#109 / #111 / #113** — Block 右 trim 现已保留 action 行缩进，匹配 Go `text/template` 行为；cert-manager golden test 从 45/52 恢复至 52/52 完全一致。
+- **#109 / #111 / #113** — Block 右 trim 现已保留 action 行缩进，匹配 Go `text/template` 行为；cert-manager 基准输出测试从 45/52 恢复至 52/52 完全一致。
 - **#112** — `ParseDefine` 现已对 define body 应用右 trim，匹配 `ParseBlock` 行为。
 - **#97** — 完成 Sprig 函数对齐（`empty`、`keys`、`mergeOverwrite`、`mustRegexMatch`、`mustRegexReplaceAll` 等）。
 - **#102** — 解决 cert-manager 剩余内容差异（YAML tag、八进制值、merge key、block scalar、注释裁剪）。
-- **#96 / #99 / #108** — 解决真实 Chart golden test 内容差异，全部五个 Chart 达到 Pass 判定。
+- **#96 / #99 / #108** — 解决选定公开 Chart 基准输出测试的内容差异，全部五个 Chart 达到 Pass 判定。
 
 ### 判定图例
 
 | 判定 | 含义 |
 | --- | --- |
-| **Pass** | 规范化后逐字节一致（换行符、源注释）。 |
+| **Pass** | 被测 Chart 输出在规范化后逐字节一致（换行符、源注释）。 |
 | **Partial** | 结构兼容——文档数量相同，或大多数独立模板渲染正确，少数存在已知解析器缺口。 |
 | **Fail** | 渲染器无法为该 Chart 中任何模板生成输出。 |
 
@@ -201,7 +203,7 @@ HelmSharp 不是完整的 Helm CLI 克隆。一些高级 Helm 行为、模板函
 - [包指南：HelmSharp.Action](docs/packages/action.md)
 - [生成 API 参考](docs/api/index.md)
 - [API 概览](docs/api-overview.md)
-- [Helm 兼容性](docs/helm-compatibility.md)
+- [Helm 兼容性与验证](docs/helm-compatibility.md)
 - [路线图](docs/roadmap.md)
 - [支持政策](SUPPORT.md)
 - [GitHub Releases](https://github.com/GaTTGeng/HelmSharp/releases)

@@ -42,4 +42,4 @@ dotnet add package HelmSharp.Action --version 1.1.0
 
 ## 当前兼容性基线
 
-HelmSharp 1.1.0 在 5 个真实公开 Chart 上取得 Pass 判定：129/129 个模板与 `helm template` 在规范化后逐字节一致。详见 [Helm 兼容性](helm-compatibility.md)。
+在生产环境依赖某个 Helm 边缘行为前，请先查看 [Helm 兼容性](helm-compatibility.md)，确认当前 golden-test 覆盖范围、已知边界和问题报告方式。

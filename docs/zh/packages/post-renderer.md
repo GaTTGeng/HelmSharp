@@ -6,7 +6,7 @@
 
 ## 何时安装
 
-构建自定义 post-rendering 集成时直接安装：
+构建自定义后处理集成时直接安装：
 
 ```powershell
 dotnet add package HelmSharp.PostRenderer --version 1.1.0
@@ -28,4 +28,4 @@ dotnet add package HelmSharp.PostRenderer --version 1.1.0
 
 ## 当前边界
 
-后处理器是扩展点。转换逻辑应保持确定性，并用真实 Chart 输出测试。
+后处理器是扩展点。转换逻辑应保持确定性，并用具代表性的 Chart 输出测试。

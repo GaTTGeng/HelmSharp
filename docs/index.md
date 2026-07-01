@@ -4,7 +4,7 @@ layout: home
 hero:
   name: HelmSharp
   text: Helm-compatible rendering for .NET
-  tagline: HelmSharp 1.1.0 renders 129/129 templates from five real-world public charts with byte-for-byte parity against helm template after normalization. No helm binary in your runtime path.
+  tagline: Load charts, merge values, render Kubernetes manifests, and run release workflows from managed .NET code without a Helm CLI dependency at runtime.
   actions:
     - theme: brand
       text: Start the guide
@@ -17,14 +17,14 @@ hero:
       link: /compare
 
 features:
-  - title: Real-chart parity baseline
-    details: "The 1.1.0 golden suite passes podinfo, metrics-server, external-dns, ingress-nginx, and cert-manager: 129/129 templates."
+  - title: Managed Helm workflows
+    details: Render, dry-run, install, upgrade, inspect release state, and package charts from a .NET SDK surface.
   - title: Workflow-first docs
     details: Learn install choices, render-only previews, values precedence, release dry-runs, Kubernetes apply/wait, and error handling.
   - title: Package-by-package guidance
     details: Each NuGet package has a role page with install advice, main types, common combinations, and compatibility boundaries.
-  - title: Generated API reference
-    details: "Public classes, interfaces, records, enums, methods, and properties are indexed from source for maintainable member lookup."
+  - title: Compatibility evidence
+    details: Fixture charts and selected public-chart golden tests are tracked separately from API guidance so users can check current coverage and boundaries.
 ---
 
 ## See HelmSharp in Action
@@ -38,7 +38,7 @@ Upload a Helm chart and compare HelmSharp output against the real Helm CLI side 
   </a>
 </div>
 
-## What HelmSharp 1.1.0 is ready for
+## What HelmSharp is for
 
 You have a .NET application that needs Helm chart output without a runtime dependency on the `helm` executable. Maybe the caller is a web service, an operator, a build agent, a GitOps generator, or a product feature that previews manifests before anything touches a cluster.
 
@@ -105,8 +105,6 @@ dotnet add package HelmSharp.Engine --version 1.1.0
 
 ## Current Scope
 
-The current golden suite renders **129/129 templates** across `podinfo`, `metrics-server`, `external-dns`, `ingress-nginx`, and `cert-manager` with Pass verdicts. That is the compatibility baseline HelmSharp uses to grow against real charts, not only hand-written fixtures.
-
 HelmSharp already covers chart loading, values merging, managed template rendering, chart packaging, repository helpers, Kubernetes apply/delete/wait helpers, and release history backed by Kubernetes Secrets.
 
-It is still an SDK with explicit compatibility boundaries. Advanced plugin behavior, complete provenance verification, OCI authentication parity, and uncommon readiness cases remain planned or active work. Check [Helm Compatibility](helm-compatibility.md) before depending on a specific Helm edge case.
+Compatibility is validated with focused fixtures and selected public-chart golden tests, but HelmSharp is still an SDK with explicit boundaries. Advanced plugin behavior, complete provenance verification, OCI authentication parity, and uncommon readiness cases remain planned or active work. Check [Helm Compatibility](helm-compatibility.md) before depending on a specific Helm edge case.

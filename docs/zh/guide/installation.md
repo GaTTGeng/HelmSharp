@@ -2,7 +2,7 @@
 
 ## 你在解决什么问题
 
-这页帮助你选择最小的 HelmSharp 包组合。HelmSharp 1.1.0 在 5 个真实 Chart 上与 `helm template` 达到规范化后逐字节一致：`podinfo`、`metrics-server`、`external-dns`、`ingress-nginx`、`cert-manager`，共 129/129 个模板通过。
+这页帮助你选择最小的 HelmSharp 包组合。先从你的工作流出发：只做渲染预览、使用类似 Helm 命令的高层操作、处理仓库，还是执行 Kubernetes 发布操作。
 
 HelmSharp 运行时不需要 `helm` 可执行文件。只有发布、提交、删除、等待等 Kubernetes 操作需要可访问的集群和 kubeconfig。
 

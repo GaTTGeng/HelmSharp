@@ -4,9 +4,9 @@ HelmSharp is not trying to be a command-line emulator. It is trying to give .NET
 
 The Helm CLI is used as a test oracle. It is not required at runtime by consumers.
 
-## Current confidence level
+## Current test signal
 
-The real-chart golden suite renders **129/129 templates** across five public Helm charts with no parser exceptions. These results are validated on every push and pull request by the CI workflow, which runs identical golden tests against a real `helm` binary.
+Compatibility data is a test signal, not a universal guarantee for every chart. The current public-chart golden suite covers five pinned charts and is validated by CI against a real `helm` binary:
 
 | Chart | Version | Templates | Result |
 | --- | --- | --- | --- |
@@ -17,7 +17,7 @@ The real-chart golden suite renders **129/129 templates** across five public Hel
 | cert-manager | 1.17.1 | 41/41 | Pass |
 | **Total** | - | **129/129** | **Pass** |
 
-That number matters because real charts expose helper templates, nested values, `.Files`, capabilities, and formatting patterns that small examples miss. See the [Golden Test Results](https://github.com/GaTTGeng/HelmSharp#golden-test-results) section in the README for per-chart breakdowns, error analysis, and verdict definitions.
+These charts are useful because they expose helper templates, nested values, `.Files`, capabilities, and formatting patterns that small examples miss. Treat the table as evidence for the covered cases, then validate your own chart when it relies on uncommon Helm behavior. See the [Compatibility Validation](https://github.com/GaTTGeng/HelmSharp#compatibility-validation) section in the README for the detailed breakdown and verdict definitions.
 
 ## Compatibility contract
 
@@ -34,11 +34,11 @@ Exact CLI colors, progress text, terminal formatting, and plugin execution are n
 
 | Area | Current level | What it means for users |
 | --- | --- | --- |
-| Chart loading from directories and `.tgz` archives | Supported | Safe starting point for render and packaging tools. Validated across five real-world charts (podinfo, metrics-server, external-dns, ingress-nginx, cert-manager). |
+| Chart loading from directories and `.tgz` archives | Supported | Safe starting point for render and packaging tools. Covered by fixture and public-chart tests. |
 | Values files and `--set`-style overrides | Partial | Common flows work; edge-case coercion and list syntax still tracked by golden tests. |
-| Helm-style template rendering | Supported | All 129 templates across five real public charts render with **byte-for-byte identical** output against `helm template`. Parsing, control-flow, named templates, built-in objects, whitespace/trim markers, and Sprig functions all pass golden test validation. |
+| Helm-style template rendering | Supported | Common parsing, control-flow, named templates, built-in objects, whitespace/trim markers, and Sprig functions are covered by focused tests and the current public-chart suite. |
 | Template control flow (`if`/`else if`/`else`/`range`/`with`) | Supported | All control-flow constructs render correctly against `helm template` output, validated by dedicated fixture charts and real-chart golden tests. |
-| Named templates and helpers | Supported | Cross-template `define`/`template`/`include` calls resolve correctly; validated across real charts with extensive helper usage (ingress-nginx: 42 templates). |
+| Named templates and helpers | Supported | Cross-template `define`/`template`/`include` calls are covered by dedicated fixtures and public charts with extensive helper usage. |
 | Built-in objects (`.Release`, `.Chart`, `.Values`, `.Files`, `.Capabilities`, `.Template`) | Supported | All built-in objects are populated and render consistently with Helm CLI output. |
 | Chart packaging and repositories | Partial | Useful APIs exist; archive and repository edge cases remain. |
 | Install, upgrade, rollback, uninstall | Partial | Dry-run and managed workflows exist; full lifecycle parity is still expanding. |
@@ -56,7 +56,7 @@ These are the areas to check before betting a production workflow on exact Helm 
 - readiness for uncommon Kubernetes resource kinds;
 - safe replacement for Helm plugin execution.
 
-Sprig function parity and byte-for-byte manifest formatting have been validated through the golden test suite (Pass verdict on all five real-world charts) and are no longer known gaps.
+The current golden tests do not show known gaps in Sprig function coverage or manifest formatting for the covered charts. New public charts can still surface edge cases, so compatibility reports should include a minimal chart and the equivalent Helm CLI command.
 
 ## How to report a gap
 

@@ -4,7 +4,7 @@ layout: home
 hero:
   name: HelmSharp
   text: 面向 .NET 的 Helm 兼容渲染
-  tagline: HelmSharp 1.1.0 在 5 个真实公开 Chart 的 129/129 个模板上与 helm template 达到规范化后逐字节一致。运行时不需要 helm 可执行文件。
+  tagline: 在托管 .NET 代码中加载 Chart、合并 values、渲染 Kubernetes 清单并运行发布工作流，运行时不依赖 Helm CLI。
   actions:
     - theme: brand
       text: 开始指南
@@ -17,14 +17,14 @@ hero:
       link: /zh/compare
 
 features:
-  - title: 真实 Chart 兼容性基线
-    details: "1.1.0 golden suite 覆盖 podinfo、metrics-server、external-dns、ingress-nginx 和 cert-manager，129/129 个模板通过。"
+  - title: 托管 Helm 工作流
+    details: 通过 .NET SDK 完成渲染、试运行、安装、升级、查看发布状态和 Chart 打包。
   - title: 按工作流组织的文档
     details: 覆盖安装选择、只渲染预览、values 优先级、发布试运行、Kubernetes 提交/等待和错误处理。
   - title: 每个包的使用边界
     details: 每个 NuGet 包都有职责、安装建议、主要类型、常见组合和当前边界说明。
-  - title: 生成式 API 参考
-    details: 从源码索引公开类、接口、记录、枚举、方法和属性，便于后续版本维护。
+  - title: 可核查的兼容性证据
+    details: 测试用 Chart 和选定公开 Chart 的基准输出测试独立呈现，便于用户确认当前覆盖范围和边界。
 ---
 
 ## 眼见为实
@@ -38,7 +38,7 @@ features:
   </a>
 </div>
 
-## HelmSharp 1.1.0 适合什么
+## HelmSharp 适合什么
 
 你的 .NET 应用需要 Helm Chart 输出，但不希望在运行时依赖 `helm` 可执行文件。调用方可能是 Web 服务、operator、构建代理、GitOps 生成器，或者需要在触碰集群前预览清单的产品功能。
 
@@ -105,8 +105,6 @@ dotnet add package HelmSharp.Engine --version 1.1.0
 
 ## 当前范围
 
-当前 golden suite 已经在 `podinfo`、`metrics-server`、`external-dns`、`ingress-nginx` 和 `cert-manager` 上渲染 **129/129 个模板**，全部取得 Pass 判定。这是 HelmSharp 面向真实 Chart 扩展兼容性的基线，不只是手写小样例。
+目前已覆盖 Chart 加载、values 合并、托管模板渲染、Chart 打包、仓库辅助方法、Kubernetes 提交/删除/等待辅助方法，以及基于 Kubernetes Secrets 的发布历史。
 
-目前已覆盖 Chart 加载、values 合并、托管模板渲染、Chart 打包、仓库 helper、Kubernetes 提交/删除/等待 helper，以及基于 Kubernetes Secrets 的发布历史。
-
-HelmSharp 仍然是边界清晰的 SDK。高级插件行为、完整来源校验、OCI 认证对齐和少见就绪场景仍在计划或推进中。如果你的 Chart 依赖某个 Helm 边缘行为，先看 [Helm 兼容性](helm-compatibility.md)。
+兼容性通过聚焦测试用 Chart 和选定公开 Chart 的基准输出测试持续验证，但 HelmSharp 仍然是边界清晰的 SDK。高级插件行为、完整来源校验、OCI 认证对齐和少见就绪场景仍在计划或推进中。如果你的 Chart 依赖某个 Helm 边缘行为，先看 [Helm 兼容性](helm-compatibility.md)。

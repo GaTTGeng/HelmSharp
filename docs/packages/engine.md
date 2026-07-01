@@ -2,7 +2,7 @@
 
 ## Package responsibility
 
-`HelmSharp.Engine` renders Helm-style templates from managed code. In 1.1.0, its golden suite reaches Pass verdicts for five real-world public charts and 129/129 templates.
+`HelmSharp.Engine` renders Helm-style templates from managed code. Its behavior is validated with focused fixtures and selected public-chart golden tests; check the compatibility page when your chart depends on a specific Helm edge case.
 
 ## When to install
 

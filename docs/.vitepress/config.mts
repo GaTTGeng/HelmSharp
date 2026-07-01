@@ -38,7 +38,7 @@ const englishSidebar = [
       { text: 'Render Preview API', link: '/examples/render-preview-api' },
       { text: 'GitOps PR Generator', link: '/examples/gitops-pr-generator' },
       { text: 'Dry-run Deployment', link: '/examples/dry-run-deployment' },
-      { text: 'Real Chart Rendering', link: '/examples/real-chart-rendering' },
+      { text: 'Public Chart Rendering', link: '/examples/real-chart-rendering' },
       { text: 'Multi-tenant Options', link: '/examples/multi-tenant-options' }
     ]
   },
@@ -125,7 +125,7 @@ const chineseSidebar = [
       { text: '渲染预览 API', link: '/zh/examples/render-preview-api' },
       { text: 'GitOps PR 生成器', link: '/zh/examples/gitops-pr-generator' },
       { text: '试运行部署', link: '/zh/examples/dry-run-deployment' },
-      { text: '真实 Chart 渲染', link: '/zh/examples/real-chart-rendering' },
+      { text: '公开 Chart 渲染', link: '/zh/examples/real-chart-rendering' },
       { text: '多租户选项', link: '/zh/examples/multi-tenant-options' }
     ]
   },

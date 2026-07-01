@@ -2,7 +2,7 @@
 
 ## What problem this solves
 
-Use this page to choose the smallest HelmSharp package set for your application. HelmSharp 1.1.0 renders the five real-chart golden fixtures with byte-for-byte output parity against `helm template` after normalization: `podinfo`, `metrics-server`, `external-dns`, `ingress-nginx`, and `cert-manager` cover 129/129 templates.
+Use this page to choose the smallest HelmSharp package set for your application. Start from the workflow you need: render-only preview, command-like Helm operations, repository helpers, or Kubernetes release operations.
 
 HelmSharp does not require the `helm` executable at runtime. Kubernetes release operations still require a reachable cluster and kubeconfig.
 
