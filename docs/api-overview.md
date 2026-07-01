@@ -1,80 +1,52 @@
 # API Overview
 
-Use the smallest layer that matches the problem you are solving. HelmSharp is split so render-only tools do not have to reference Kubernetes release workflow code.
+Start with the workflow, then choose the smallest package. The detailed member index lives under [API Reference](api/index.md); this page is the decision guide.
 
-## Which package should I start with?
+## Package decision table
 
-| You want to... | Start with | Why |
+| You want to... | Start with | Next page |
 | --- | --- | --- |
-| Render a chart to YAML | `HelmSharp.Chart` + `HelmSharp.Engine` | Smallest path: load chart, build values, render manifests and NOTES. |
-| Offer Helm-like commands from an app | `HelmSharp.Action` | One facade for template, install, upgrade, rollback, uninstall, status, package, repo, and registry-style calls. |
-| Load and inspect charts | `HelmSharp.Chart` | Chart model, archive loading, values merging, dependency metadata, YAML helpers. |
-| Apply rendered resources | `HelmSharp.Kube` | Resource identity, create/update/delete helpers, wait behavior. |
-| Store release history | `HelmSharp.Release` | Helm-style release records backed by Kubernetes Secrets. |
-| Work with chart repositories | `HelmSharp.Repo` | Index, pull, and repository helper behavior. |
+| Render manifests only | `HelmSharp.Chart` + `HelmSharp.Engine` | [First Render](guide/first-render.md) |
+| Build a preview API | `HelmSharp.Chart` + `HelmSharp.Engine` | [Render Preview API](examples/render-preview-api.md) |
+| Offer dry-run and apply | `HelmSharp.Action` | [Release Workflows](guide/release-workflows.md) |
+| Apply already-rendered YAML | `HelmSharp.Kube` | [Kubernetes Operations](guide/kubernetes-operations.md) |
+| Manage release history directly | `HelmSharp.Release` | [Release package](packages/release.md) |
+| Search or pull from chart repos | `HelmSharp.Repo` | [Repo package](packages/repo.md) |
 
-## Render-only path
+## Core workflow shape
 
-```csharp
-using HelmSharp.Chart;
-using HelmSharp.Engine;
-
-var chart = await HelmChartLoader.LoadAsync("/charts/my-chart", ct);
-var values = await HelmValues.BuildAsync(chart, null, null, null, null, null, null, ct);
-var renderer = new HelmTemplateRenderer(chart, "demo", "default", values);
-
-var manifests = renderer.Render();
-var notes = renderer.RenderNotes();
+```mermaid
+flowchart LR
+    A["HelmChartLoader"] --> B["HelmValues.BuildAsync"]
+    B --> C["HelmTemplateRenderer"]
+    C --> D["Manifest preview"]
+    C --> E["HelmClient dry-run/apply"]
 ```
 
-This is the right path for preview APIs, validation systems, GitOps generators, and tools that never mutate a cluster.
+## Most-used public types
 
-## Command-like path
+| Type | Package | Use |
+| --- | --- | --- |
+| `HelmClient` | `HelmSharp.Action` | Command-like facade for template and release operations. |
+| `HelmTemplateRequest` | `HelmSharp.Action` | Render request for high-level previews. |
+| `HelmUpgradeInstallRequest` | `HelmSharp.Action` | Install/upgrade request, including dry-run. |
+| `IHelmOptionsProvider` | `HelmSharp.Action` | Centralize environment defaults. |
+| `HelmChartLoader` | `HelmSharp.Chart` | Load a chart directory or archive. |
+| `HelmValues` | `HelmSharp.Chart` | Merge chart defaults and overrides. |
+| `HelmTemplateRenderer` | `HelmSharp.Engine` | Render manifests and NOTES. |
+| `KubernetesManifestApplier` | `HelmSharp.Kube` | Apply/delete rendered manifests. |
 
-`HelmClient` returns `CommandResult` for most operations. That shape is useful when your product already thinks in commands, stdout/stderr, exit codes, or dry-run output.
+## Generated API reference
 
-```csharp
-using HelmSharp.Action;
+The generated reference lists public types, properties, and methods by package:
 
-var client = new HelmClient(optionsProvider);
+- [Action API](api/generated/action.md)
+- [Chart API](api/generated/chart.md)
+- [Engine API](api/generated/engine.md)
+- [Kube API](api/generated/kube.md)
+- [Release API](api/generated/release.md)
+- [Repo API](api/generated/repo.md)
 
-var template = await client.TemplateAsync(new HelmTemplateRequest
-{
-    ReleaseName = "demo",
-    Namespace = "default",
-    Chart = "/charts/my-chart"
-});
+## Error handling model
 
-var dryRun = await client.UpgradeInstallAsync(new HelmUpgradeInstallRequest
-{
-    ReleaseName = "demo",
-    Namespace = "default",
-    Chart = "/charts/my-chart",
-    DryRun = true
-});
-```
-
-## Request objects worth knowing
-
-| Request | Use it for |
-| --- | --- |
-| `HelmTemplateRequest` | Render manifests without applying them. |
-| `HelmUpgradeInstallRequest` | Install or upgrade a release, including dry runs. |
-| `HelmUninstallRequest` | Delete release resources and update release history. |
-| `HelmRollbackRequest` | Move a release back to an earlier revision. |
-| `HelmPackageRequest` | Create a chart archive. |
-| `HelmPullRequest` | Pull charts from repository-oriented sources. |
-
-Common render fields include `ReleaseName`, `Namespace`, `Chart`, `ValuesFile`, `ValuesFiles`, `ValuesContent`, `SetValues`, `SetStringValues`, `SetJsonValues`, `SetFileValues`, `IncludeCRDs`, `ShowNotes`, `KubeVersion`, and `ApiVersions`.
-
-## Options provider
-
-`IHelmOptionsProvider` is intentionally outside individual requests. It lets an application centralize defaults such as field manager, namespace policy, kubeconfig selection, and tenant-specific settings.
-
-For a production service, implement it from configuration or request context. For a small tool, a static provider is enough and can stay hidden near program startup.
-
-## Error handling
-
-High-level operations report failures through `CommandResult.ExitCode` and `CommandResult.StandardError`. Lower-level rendering APIs throw ordinary .NET exceptions for parse or compatibility failures.
-
-When diagnosing a chart difference, capture the chart path, values inputs, HelmSharp output, Helm CLI output, HelmSharp version, and Helm CLI version. That gives compatibility work a reproducible target.
+High-level `HelmClient` operations return `CommandResult`. Lower-level loading, values, and rendering APIs throw .NET exceptions when they cannot load, parse, or evaluate input. See [Error Handling](guide/error-handling.md).

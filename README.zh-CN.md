@@ -13,6 +13,8 @@ HelmSharp 是一个面向 .NET 的托管 Helm 风格库，用于在不调用 `he
 
 文档站点：[https://gattgeng.github.io/HelmSharp/](https://gattgeng.github.io/HelmSharp/)
 
+文档站现已包含工作流指南、真实集成示例、逐包说明，以及从公开类型和成员生成的 API 参考页。
+
 ## NuGet 包
 
 仓库按职责拆分为多个 NuGet 包：
@@ -194,6 +196,10 @@ HelmSharp 不是完整的 Helm CLI 克隆。一些高级 Helm 行为、模板函
 
 - [文档站点](https://gattgeng.github.io/HelmSharp/)
 - [入门指南](docs/getting-started.md)
+- [指南：安装与渲染](docs/guide/installation.md)
+- [示例：渲染预览 API](docs/examples/render-preview-api.md)
+- [包指南：HelmSharp.Action](docs/packages/action.md)
+- [生成 API 参考](docs/api/index.md)
 - [API 概览](docs/api-overview.md)
 - [Helm 兼容性](docs/helm-compatibility.md)
 - [路线图](docs/roadmap.md)

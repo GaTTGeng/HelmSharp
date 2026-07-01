@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\HelmSharp.Action\HelmSharp.Action.csproj" />
+    <ProjectReference Include="..\..\..\src\HelmSharp.Chart\HelmSharp.Chart.csproj" />
+    <ProjectReference Include="..\..\..\src\HelmSharp.Engine\HelmSharp.Engine.csproj" />
+    <ProjectReference Include="..\..\..\src\HelmSharp.Kube\HelmSharp.Kube.csproj" />
+    <ProjectReference Include="..\..\..\src\HelmSharp.Repo\HelmSharp.Repo.csproj" />
+  </ItemGroup>
+
+</Project>

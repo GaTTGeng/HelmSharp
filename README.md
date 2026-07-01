@@ -13,6 +13,8 @@ The project is under active development. M1 (Helm template parity) is complete â
 
 Documentation site: [https://gattgeng.github.io/HelmSharp/](https://gattgeng.github.io/HelmSharp/)
 
+The documentation now includes workflow guides, realistic integration examples, package-by-package guidance, and generated API reference pages for public types and members.
+
 ## Packages
 
 This repository is organized as several NuGet packages:
@@ -194,6 +196,10 @@ HelmSharp is not a full Helm CLI clone. Some advanced Helm behaviors, edge-case 
 
 - [Documentation site](https://gattgeng.github.io/HelmSharp/)
 - [Getting started](docs/getting-started.md)
+- [Guide: installation and rendering](docs/guide/installation.md)
+- [Examples: render preview API](docs/examples/render-preview-api.md)
+- [Package guide: HelmSharp.Action](docs/packages/action.md)
+- [Generated API reference](docs/api/index.md)
 - [API overview](docs/api-overview.md)
 - [Helm compatibility](docs/helm-compatibility.md)
 - [Roadmap](docs/roadmap.md)

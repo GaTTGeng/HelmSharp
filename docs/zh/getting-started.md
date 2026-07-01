@@ -1,120 +1,45 @@
 # 快速开始
 
-先回答一个集成问题：你只是想拿到渲染后的 Kubernetes YAML，还是想在应用里做 Helm 风格的发布流程？
+这条 10 分钟路线帮助你判断：应用只是需要渲染后的 manifests，还是需要完整 release 工作流。
 
-如果只是渲染，先用低层 API。它的依赖更少，行为更直接，也最适合验证你的 chart 是否适配 HelmSharp。
+## 1. 安装最小包组合
 
-## 安装
+只渲染预览：
 
 ```powershell
-dotnet add package HelmSharp.Chart
-dotnet add package HelmSharp.Engine
+dotnet add package HelmSharp.Chart --version 1.1.0
+dotnet add package HelmSharp.Engine --version 1.1.0
 ```
 
-需要发布、回滚、状态查询等工作流时，再加 `HelmSharp.Action`。
+发布工作流：
 
-## 不通过 Helm CLI 渲染 chart
-
-```csharp
-using HelmSharp.Chart;
-using HelmSharp.Engine;
-
-var chart = await HelmChartLoader.LoadAsync("/charts/my-chart", ct);
-
-var values = await HelmValues.BuildAsync(
-    chart: chart,
-    valuesFiles: ["values.production.yaml"],
-    valuesContent: null,
-    setValues: new Dictionary<string, string>
-    {
-        ["image.tag"] = "1.25",
-        ["replicaCount"] = "2"
-    },
-    setFileValues: null,
-    setStringValues: null,
-    setJsonValues: null,
-    cancellationToken: ct);
-
-var renderer = new HelmTemplateRenderer(chart, "demo", "default", values);
-var manifests = renderer.Render();
-var notes = renderer.RenderNotes();
+```powershell
+dotnet add package HelmSharp.Action --version 1.1.0
 ```
 
-这个路径适合部署预览、策略检查、漂移报告、GitOps 生成，或者任何需要在 apply 之前先分析 manifests 的系统。
+## 2. 不通过 Helm CLI 渲染
 
-## values 应该贴近你的产品模型
+<<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#render-first-chart{csharp}
 
-HelmSharp 支持 Helm 使用者熟悉的覆盖方式：
+这条路径不会调用 `helm`，也不会修改集群。
 
-| 输入 | 适合场景 |
+## 3. 进入 dry-run 发布工作流
+
+<<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#dry-run-release{csharp}
+
+产品流程明确审批前，保持 `DryRun = true`。
+
+## 4. 选择下一页
+
+| 需要 | 阅读 |
 | --- | --- |
-| `valuesFiles` | 运维或平台团队已经维护环境 values 文件。 |
-| `valuesContent` | values 来自数据库、配置中心或应用生成内容。 |
-| `setValues` | 普通 `--set` 风格覆盖。 |
-| `setStringValues` | 看起来像数字或布尔值的内容也必须保持字符串。 |
-| `setJsonValues` | 产品配置天然是 JSON 对象或数组。 |
-| `setFileValues` | 某个 value 来自文件内容。 |
+| 安装细节 | [安装](guide/installation.md) |
+| Values 优先级 | [Values](guide/values.md) |
+| Capabilities 和 NOTES | [模板渲染](guide/template-rendering.md) |
+| Install/upgrade 行为 | [发布工作流](guide/release-workflows.md) |
+| 真实例子 | [示例](examples/render-preview-api.md) |
+| 成员级参考 | [API 参考](api/index.md) |
 
-后面的输入覆盖前面的输入。把这个顺序留在代码里，会让预览和排障更容易解释。
+## 当前兼容性基线
 
-## 进入发布工作流
-
-当你希望一个客户端覆盖 template、dry-run、install、upgrade、rollback、uninstall、status、history、package、repo 等操作时，安装 `HelmSharp.Action`。
-
-```powershell
-dotnet add package HelmSharp.Action
-```
-
-```csharp
-using HelmSharp.Action;
-
-var client = new HelmClient(optionsProvider);
-
-var result = await client.UpgradeInstallAsync(new HelmUpgradeInstallRequest
-{
-    ReleaseName = "demo",
-    Namespace = "default",
-    Chart = "/charts/my-chart",
-    ValuesFiles = ["values.production.yaml"],
-    CreateNamespace = true,
-    Wait = true,
-    TimeoutSeconds = 300,
-    DryRun = true
-});
-
-Console.WriteLine(result.StandardOutput);
-```
-
-在产品流程明确允许修改集群之前，保持 `DryRun = true`。
-
-::: details 最小静态 options provider
-
-生产应用通常从配置、DI 或租户上下文实现 `IHelmOptionsProvider`。小型控制台程序可以先这样写：
-
-```csharp
-sealed class StaticHelmOptionsProvider : IHelmOptionsProvider
-{
-    public ValueTask<HelmExecutionOptions> GetHelmAsync(CancellationToken cancellationToken = default)
-        => ValueTask.FromResult(new HelmExecutionOptions
-        {
-            DefaultNamespace = "default",
-            FieldManager = "helmsharp"
-        });
-}
-```
-
-:::
-
-## 运行仓库示例
-
-```powershell
-dotnet run --project examples/RenderChart -- examples/sample-chart
-dotnet run --project examples/InstallRelease -- examples/sample-chart demo
-dotnet run --project examples/InstallRelease -- examples/sample-chart demo --apply
-```
-
-安装示例默认 dry-run。传入 `--apply` 才会提交到当前 Kubernetes context。
-
-## 下一步
-
-阅读 [API 选择](api-overview.md) 来确定最小依赖层，再查看 [Helm 兼容性](helm-compatibility.md) 确认你的 chart 依赖的行为是否已覆盖。
+HelmSharp 1.1.0 在 5 个真实公开 Chart 上取得 Pass 判定：129/129 个模板与 `helm template` 在规范化后逐字节一致。详见 [Helm 兼容性](helm-compatibility.md)。

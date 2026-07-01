@@ -1,0 +1,31 @@
+# HelmSharp.PostRenderer
+
+## 包职责
+
+`HelmSharp.PostRenderer` 定义 post-renderer 扩展契约，用于在模板渲染后、apply 前转换 manifests。
+
+## 何时安装
+
+构建自定义 post-rendering 集成时直接安装：
+
+```powershell
+dotnet add package HelmSharp.PostRenderer --version 1.1.0
+```
+
+## 依赖关系
+
+该包很小，不依赖 Kubernetes。
+
+## 主要类型
+
+| 类型 | 用途 |
+| --- | --- |
+| `IPostRenderer` | 在下一步工作流之前转换渲染后的 YAML。 |
+
+## 常见组合
+
+用于策略注入、labels、annotations 或 manifest normalization。
+
+## 当前边界
+
+Post-renderer 是扩展点。转换逻辑应保持确定性，并用真实 Chart 输出测试。
