@@ -49,6 +49,36 @@ internal static class HelmCliRunner
             CommandTimeout,
             cancellationToken);
 
+    public static Task<HelmCliResult> PackageAsync(
+        string chartPath,
+        string destination,
+        string? version,
+        string? appVersion,
+        CancellationToken cancellationToken)
+    {
+        var arguments = new List<string>
+        {
+            "package",
+            chartPath,
+            "--destination",
+            destination
+        };
+
+        if (version is not null)
+        {
+            arguments.Add("--version");
+            arguments.Add(version);
+        }
+
+        if (appVersion is not null)
+        {
+            arguments.Add("--app-version");
+            arguments.Add(appVersion);
+        }
+
+        return RunAsync(arguments, CommandTimeout, cancellationToken);
+    }
+
     private static async Task<HelmCliResult> RunAsync(
         IReadOnlyCollection<string> arguments,
         TimeSpan timeout,

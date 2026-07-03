@@ -958,8 +958,15 @@ public class HelmClient : IHelmClient
         string? appVersion = null,
         CancellationToken cancellationToken = default)
     {
-        var path = await HelmChartPackager.PackageAsync(chartPath, destination, version, appVersion, cancellationToken);
-        return Ok($"Successfully packaged chart and saved it to: {path}");
+        try
+        {
+            var path = await HelmChartPackager.PackageAsync(chartPath, destination, version, appVersion, cancellationToken);
+            return Ok($"Successfully packaged chart and saved it to: {path}");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return Fail($"Error: {ex.Message}");
+        }
     }
 
     public async Task<CommandResult> CreateAsync(
