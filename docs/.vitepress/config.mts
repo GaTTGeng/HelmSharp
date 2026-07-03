@@ -1,5 +1,7 @@
 import { defineConfig } from 'vitepress';
 
+const docsBase = '/HelmSharp/';
+
 const englishNav = [
   { text: 'Guide', link: '/getting-started' },
   { text: 'Examples', link: '/examples/render-preview-api' },
@@ -177,10 +179,11 @@ const chineseSidebar = [
 export default defineConfig({
   title: 'HelmSharp',
   description: 'Managed Helm-compatible chart rendering and Kubernetes release workflows for .NET.',
-  base: '/HelmSharp/',
+  base: docsBase,
   cleanUrls: true,
   lastUpdated: true,
   head: [
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: `${docsBase}logo.svg` }],
     ['meta', { name: 'theme-color', content: '#2563eb' }],
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:title', content: 'HelmSharp Documentation' }],
@@ -193,7 +196,10 @@ export default defineConfig({
     }
   },
   themeConfig: {
-    logo: '/logo.svg',
+    logo: {
+      src: '/logo.svg',
+      alt: 'HelmSharp logo'
+    },
     socialLinks: [
       { icon: 'github', link: 'https://github.com/GaTTGeng/HelmSharp' }
     ],

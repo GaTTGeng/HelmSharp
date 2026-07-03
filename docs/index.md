@@ -5,6 +5,9 @@ hero:
   name: HelmSharp
   text: Helm-compatible rendering for .NET
   tagline: Load charts, merge values, render Kubernetes manifests, and run release workflows from managed .NET code without a Helm CLI dependency at runtime.
+  image:
+    src: /logo.svg
+    alt: HelmSharp logo
   actions:
     - theme: brand
       text: Start the guide
