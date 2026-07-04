@@ -20,6 +20,7 @@ This project follows semantic versioning once stable releases begin.
 ### Fixed
 
 - Aligned chart packaging metadata validation and version/appVersion override behavior with Helm package expectations.
+- Matched Helm package `.helmignore` filtering for comments, directory and glob patterns, normalized paths, and supported negation behavior (#126).
 
 ## [1.1.0] - 2026-07-01
 
