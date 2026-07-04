@@ -271,6 +271,60 @@ public sealed class PackageMetadataValidationTests : IDisposable
         Assert.True(File.Exists(Path.Combine(helmDestination, "missing-api-1.2.3.tgz")));
     }
 
+    [HelmCliTheory]
+    [InlineData("1")]
+    [InlineData("1.2")]
+    public async Task PackageAsync_ShortVersionFormsMatchHelmPackage(string chartVersion)
+    {
+        var sourceChartYaml = $"""
+            apiVersion: v2
+            name: short-version
+            version: {chartVersion}
+            """;
+        var sharpChartDir = await CreateChartAsync($"sharp-short-version-{chartVersion}", sourceChartYaml);
+        var helmChartDir = await CreateChartAsync($"helm-short-version-{chartVersion}", sourceChartYaml);
+        var sharpDestination = Path.Combine(_tempDir, $"sharp-short-version-{chartVersion}-output");
+        var helmDestination = Path.Combine(_tempDir, $"helm-short-version-{chartVersion}-output");
+        Directory.CreateDirectory(helmDestination);
+        var client = new HelmClient(new StaticHelmOptionsProvider());
+
+        var sharpResult = await client.PackageAsync(sharpChartDir, sharpDestination);
+        var helmResult = await HelmCliRunner.PackageAsync(
+            helmChartDir,
+            helmDestination,
+            version: null,
+            appVersion: null,
+            CancellationToken.None);
+
+        Assert.Equal(0, helmResult.ExitCode);
+        Assert.Equal(helmResult.ExitCode, sharpResult.ExitCode);
+        Assert.True(File.Exists(Path.Combine(sharpDestination, $"short-version-{chartVersion}.tgz")));
+        Assert.True(File.Exists(Path.Combine(helmDestination, $"short-version-{chartVersion}.tgz")));
+    }
+
+    [Fact]
+    public async Task PackageAsync_DestinationInsideChartDoesNotIncludePackageItself()
+    {
+        var chartDir = await CreateChartAsync("self-package", """
+            apiVersion: v2
+            name: self-package
+            version: 1.2.3
+            """);
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "values.yaml"), "replicaCount: 1\n");
+        var client = new HelmClient(new StaticHelmOptionsProvider());
+
+        var result = await client.PackageAsync(chartDir, chartDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var packagePath = Path.Combine(chartDir, "self-package-1.2.3.tgz");
+        Assert.True(File.Exists(packagePath));
+
+        var entryNames = await ReadPackageEntryNamesAsync(packagePath);
+        Assert.Contains("self-package/Chart.yaml", entryNames);
+        Assert.Contains("self-package/values.yaml", entryNames);
+        Assert.DoesNotContain("self-package/self-package-1.2.3.tgz", entryNames);
+    }
+
     [HelmCliFact]
     public async Task PackageAsync_VersionAndAppVersionOverrideMatchesHelmPackagedChartYaml()
     {
@@ -347,6 +401,20 @@ public sealed class PackageMetadataValidationTests : IDisposable
         }
 
         throw new InvalidOperationException($"Chart.yaml was not found in package {packagePath}.");
+    }
+
+    private static async Task<List<string>> ReadPackageEntryNamesAsync(string packagePath)
+    {
+        var entries = new List<string>();
+        await using var file = File.OpenRead(packagePath);
+        await using var gzip = new GZipStream(file, CompressionMode.Decompress);
+        using var reader = new TarReader(gzip);
+
+        TarEntry? entry;
+        while ((entry = reader.GetNextEntry()) is not null)
+            entries.Add(entry.Name);
+
+        return entries;
     }
 
     public void Dispose()

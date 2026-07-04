@@ -75,12 +75,13 @@ internal static class HelmChartPackager
         var destDir = destination ?? Directory.GetCurrentDirectory();
         Directory.CreateDirectory(destDir);
         var outputPath = Path.Combine(destDir, fileName);
+        var outputFullPath = Path.GetFullPath(outputPath);
 
         await using var fileStream = File.Create(outputPath);
         await using var gzip = new GZipStream(fileStream, CompressionLevel.Optimal);
         await using var tar = new TarWriter(gzip);
 
-        await AddDirectoryToTarAsync(tar, chartPath, chartName, chartYamlContent, cancellationToken);
+        await AddDirectoryToTarAsync(tar, chartPath, chartName, chartYamlContent, outputFullPath, cancellationToken);
 
         return outputPath;
     }
@@ -190,11 +191,15 @@ internal static class HelmChartPackager
         string sourceDir,
         string archiveRoot,
         string chartYamlContent,
+        string outputFullPath,
         CancellationToken cancellationToken)
     {
         foreach (var filePath in Directory.EnumerateFiles(sourceDir, "*", SearchOption.AllDirectories))
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            if (PathsEqual(Path.GetFullPath(filePath), outputFullPath))
+                continue;
 
             var relativePath = Path.GetRelativePath(sourceDir, filePath)
                 .Replace('\\', '/');
@@ -207,5 +212,13 @@ internal static class HelmChartPackager
             entry.DataStream = new MemoryStream(fileBytes);
             await tar.WriteEntryAsync(entry, cancellationToken);
         }
+    }
+
+    private static bool PathsEqual(string left, string right)
+    {
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        return string.Equals(left, right, comparison);
     }
 }
