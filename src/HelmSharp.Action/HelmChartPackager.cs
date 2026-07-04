@@ -18,7 +18,7 @@ internal static class HelmChartPackager
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     private static readonly Regex VersionPattern = new(
-        @"^v?[0-9]+(?:\.[0-9]+){0,2}(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$",
+        @"^v?[0-9]+(?:\.[0-9]+){0,2}(?:-(?<prerelease>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     /// <summary>
@@ -48,7 +48,7 @@ internal static class HelmChartPackager
         var sourceVersion = GetRequiredMetadataString(metadata, "version");
         ValidateChartVersion(sourceVersion);
 
-        var apiVersion = GetRequiredMetadataString(metadata, "apiVersion");
+        var apiVersion = GetMetadataString(metadata, "apiVersion");
         ValidateApiVersion(apiVersion);
 
         var chartType = GetMetadataString(metadata, "type");
@@ -131,18 +131,44 @@ internal static class HelmChartPackager
 
     private static void ValidateChartVersion(string chartVersion)
     {
-        if (!VersionPattern.IsMatch(chartVersion))
+        if (!IsValidChartVersion(chartVersion))
             throw new InvalidDataException($"validation: chart.metadata.version \"{chartVersion}\" is invalid");
     }
 
     private static void ValidateVersionOverride(string chartVersion)
     {
-        if (string.IsNullOrWhiteSpace(chartVersion) || !VersionPattern.IsMatch(chartVersion))
+        if (string.IsNullOrWhiteSpace(chartVersion) || !IsValidChartVersion(chartVersion))
             throw new InvalidDataException("Invalid Semantic Version");
     }
 
-    private static void ValidateApiVersion(string apiVersion)
+    private static bool IsValidChartVersion(string chartVersion)
     {
+        var match = VersionPattern.Match(chartVersion);
+        if (!match.Success)
+            return false;
+
+        var prerelease = match.Groups["prerelease"];
+        if (!prerelease.Success)
+            return true;
+
+        foreach (var identifier in prerelease.Value.Split('.'))
+        {
+            if (identifier.Length > 1 &&
+                identifier[0] == '0' &&
+                identifier.All(char.IsDigit))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static void ValidateApiVersion(string? apiVersion)
+    {
+        if (string.IsNullOrWhiteSpace(apiVersion))
+            return;
+
         if (!apiVersion.Equals("v1", StringComparison.Ordinal) &&
             !apiVersion.Equals("v2", StringComparison.Ordinal))
         {

@@ -216,6 +216,7 @@ public sealed class PackageMetadataValidationTests : IDisposable
     [InlineData("missing-name", "apiVersion: v2\nversion: 1.2.3\n")]
     [InlineData("missing-version", "apiVersion: v2\nname: missing-version\n")]
     [InlineData("invalid-semver", "apiVersion: v2\nname: invalid-semver\nversion: nope\n")]
+    [InlineData("invalid-prerelease", "apiVersion: v2\nname: invalid-prerelease\nversion: 1.2.3-01\n")]
     [InlineData("invalid-type", "apiVersion: v2\nname: invalid-type\nversion: 1.2.3\ntype: wrong\n")]
     public async Task PackageAsync_ValidationFailuresMatchHelmPackage(
         string caseName,
@@ -240,6 +241,34 @@ public sealed class PackageMetadataValidationTests : IDisposable
         Assert.Equal(helmResult.Stderr.Trim(), sharpResult.StandardError.Trim());
         Assert.False(ContainsPackage(sharpDestination));
         Assert.False(ContainsPackage(helmDestination));
+    }
+
+    [HelmCliFact]
+    public async Task PackageAsync_MissingApiVersionMatchesHelmPackage()
+    {
+        var sourceChartYaml = """
+            name: missing-api
+            version: 1.2.3
+            """;
+        var sharpChartDir = await CreateChartAsync("sharp-missing-api", sourceChartYaml);
+        var helmChartDir = await CreateChartAsync("helm-missing-api", sourceChartYaml);
+        var sharpDestination = Path.Combine(_tempDir, "sharp-missing-api-output");
+        var helmDestination = Path.Combine(_tempDir, "helm-missing-api-output");
+        Directory.CreateDirectory(helmDestination);
+        var client = new HelmClient(new StaticHelmOptionsProvider());
+
+        var sharpResult = await client.PackageAsync(sharpChartDir, sharpDestination);
+        var helmResult = await HelmCliRunner.PackageAsync(
+            helmChartDir,
+            helmDestination,
+            version: null,
+            appVersion: null,
+            CancellationToken.None);
+
+        Assert.Equal(0, helmResult.ExitCode);
+        Assert.Equal(helmResult.ExitCode, sharpResult.ExitCode);
+        Assert.True(File.Exists(Path.Combine(sharpDestination, "missing-api-1.2.3.tgz")));
+        Assert.True(File.Exists(Path.Combine(helmDestination, "missing-api-1.2.3.tgz")));
     }
 
     [HelmCliFact]
