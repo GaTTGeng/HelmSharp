@@ -17,6 +17,10 @@ This project follows semantic versioning once stable releases begin.
 - Reframed public-chart golden results in the VitePress docs and READMEs as compatibility evidence instead of primary marketing copy.
 - Polished Simplified Chinese documentation wording to reduce unnecessary English terms while preserving API and product names.
 
+### Fixed
+
+- Aligned chart packaging metadata validation and version/appVersion override behavior with Helm package expectations.
+
 ## [1.1.0] - 2026-07-01
 
 ### :tada: M1 Complete — Helm Template Parity Achieved

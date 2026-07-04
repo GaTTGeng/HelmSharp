@@ -1,7 +1,10 @@
 using System.Formats.Tar;
+using System.Globalization;
 using System.IO.Compression;
 using System.Text;
+using System.Text.RegularExpressions;
 using HelmSharp.Chart;
+using YamlDotNet.Core;
 
 namespace HelmSharp.Action;
 
@@ -10,6 +13,14 @@ namespace HelmSharp.Action;
 /// </summary>
 internal static class HelmChartPackager
 {
+    private static readonly Regex ChartNamePattern = new(
+        @"^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    private static readonly Regex VersionPattern = new(
+        @"^v?[0-9]+(?:\.[0-9]+){0,2}(?:-(?<prerelease>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
     /// <summary>
     /// Packages a chart directory into a .tgz archive.
     /// Returns the path to the created archive.
@@ -26,37 +37,153 @@ internal static class HelmChartPackager
 
         var chartYamlPath = Path.Combine(chartPath, "Chart.yaml");
         if (!File.Exists(chartYamlPath))
-            throw new FileNotFoundException("Chart.yaml not found in chart directory");
+            throw new FileNotFoundException("Chart.yaml file is missing");
 
         var chartYamlContent = await File.ReadAllTextAsync(chartYamlPath, Encoding.UTF8, cancellationToken);
-        var metadata = HelmYaml.DeserializeDictionary(chartYamlContent);
+        var metadata = LoadChartMetadata(chartYamlContent);
 
-        var chartName = HelmYaml.GetString(metadata, "name") ?? Path.GetFileName(chartPath);
-        var chartVersion = version ?? HelmYaml.GetString(metadata, "version") ?? "0.1.0";
+        var chartName = GetRequiredMetadataString(metadata, "name");
+        ValidateChartName(chartName);
+
+        var sourceVersion = GetRequiredMetadataString(metadata, "version");
+        ValidateChartVersion(sourceVersion);
+
+        var apiVersion = GetMetadataString(metadata, "apiVersion");
+        ValidateApiVersion(apiVersion);
+
+        var chartType = GetMetadataString(metadata, "type");
+        ValidateChartType(chartType);
+
+        var chartVersion = sourceVersion;
 
         if (version is not null)
         {
+            ValidateVersionOverride(version);
+            chartVersion = version;
             metadata["version"] = version;
-            chartYamlContent = HelmYaml.Serialize(metadata);
         }
+
         if (appVersion is not null)
         {
             metadata["appVersion"] = appVersion;
-            chartYamlContent = HelmYaml.Serialize(metadata);
         }
+
+        if (version is not null || appVersion is not null)
+            chartYamlContent = HelmYaml.Serialize(metadata);
 
         var fileName = $"{chartName}-{chartVersion}.tgz";
         var destDir = destination ?? Directory.GetCurrentDirectory();
         Directory.CreateDirectory(destDir);
         var outputPath = Path.Combine(destDir, fileName);
+        var outputFullPath = Path.GetFullPath(outputPath);
 
         await using var fileStream = File.Create(outputPath);
         await using var gzip = new GZipStream(fileStream, CompressionLevel.Optimal);
         await using var tar = new TarWriter(gzip);
 
-        await AddDirectoryToTarAsync(tar, chartPath, chartName, chartYamlContent, cancellationToken);
+        await AddDirectoryToTarAsync(tar, chartPath, chartName, chartYamlContent, outputFullPath, cancellationToken);
 
         return outputPath;
+    }
+
+    private static Dictionary<string, object?> LoadChartMetadata(string chartYamlContent)
+    {
+        try
+        {
+            return HelmYaml.DeserializeDictionary(chartYamlContent);
+        }
+        catch (YamlException ex)
+        {
+            throw new InvalidDataException($"cannot load Chart.yaml: {ex.Message}", ex);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidDataException($"cannot load Chart.yaml: {ex.Message}", ex);
+        }
+    }
+
+    private static string GetRequiredMetadataString(IDictionary<string, object?> metadata, string key)
+    {
+        var value = GetMetadataString(metadata, key);
+        if (string.IsNullOrWhiteSpace(value))
+            throw new InvalidDataException($"validation: chart.metadata.{key} is required");
+
+        return value;
+    }
+
+    private static string? GetMetadataString(IDictionary<string, object?> metadata, string key)
+    {
+        if (!metadata.TryGetValue(key, out var value) || value is null)
+            return null;
+
+        return Convert.ToString(value, CultureInfo.InvariantCulture);
+    }
+
+    private static void ValidateChartName(string chartName)
+    {
+        if (!ChartNamePattern.IsMatch(chartName) ||
+            chartName is "." or ".." ||
+            chartName.Contains('/', StringComparison.Ordinal) ||
+            chartName.Contains('\\', StringComparison.Ordinal))
+        {
+            throw new InvalidDataException($"validation: chart.metadata.name \"{chartName}\" is invalid");
+        }
+    }
+
+    private static void ValidateChartVersion(string chartVersion)
+    {
+        if (!IsValidChartVersion(chartVersion))
+            throw new InvalidDataException($"validation: chart.metadata.version \"{chartVersion}\" is invalid");
+    }
+
+    private static void ValidateVersionOverride(string chartVersion)
+    {
+        if (string.IsNullOrWhiteSpace(chartVersion) || !IsValidChartVersion(chartVersion))
+            throw new InvalidDataException("Invalid Semantic Version");
+    }
+
+    private static bool IsValidChartVersion(string chartVersion)
+    {
+        var match = VersionPattern.Match(chartVersion);
+        if (!match.Success)
+            return false;
+
+        var prerelease = match.Groups["prerelease"];
+        if (!prerelease.Success)
+            return true;
+
+        foreach (var identifier in prerelease.Value.Split('.'))
+        {
+            if (identifier.Length > 1 &&
+                identifier[0] == '0' &&
+                identifier.All(char.IsDigit))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static void ValidateApiVersion(string? apiVersion)
+    {
+        if (string.IsNullOrWhiteSpace(apiVersion))
+            return;
+
+        if (!apiVersion.Equals("v1", StringComparison.Ordinal) &&
+            !apiVersion.Equals("v2", StringComparison.Ordinal))
+        {
+            throw new InvalidDataException($"validation: chart.metadata.apiVersion \"{apiVersion}\" is unsupported");
+        }
+    }
+
+    private static void ValidateChartType(string? chartType)
+    {
+        if (string.IsNullOrEmpty(chartType))
+            return;
+
+        if (chartType is not ("application" or "library"))
+            throw new InvalidDataException("validation: chart.metadata.type must be application or library");
     }
 
     private static async Task AddDirectoryToTarAsync(
@@ -64,11 +191,15 @@ internal static class HelmChartPackager
         string sourceDir,
         string archiveRoot,
         string chartYamlContent,
+        string outputFullPath,
         CancellationToken cancellationToken)
     {
         foreach (var filePath in Directory.EnumerateFiles(sourceDir, "*", SearchOption.AllDirectories))
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            if (PathsEqual(Path.GetFullPath(filePath), outputFullPath))
+                continue;
 
             var relativePath = Path.GetRelativePath(sourceDir, filePath)
                 .Replace('\\', '/');
@@ -81,5 +212,13 @@ internal static class HelmChartPackager
             entry.DataStream = new MemoryStream(fileBytes);
             await tar.WriteEntryAsync(entry, cancellationToken);
         }
+    }
+
+    private static bool PathsEqual(string left, string right)
+    {
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        return string.Equals(left, right, comparison);
     }
 }
