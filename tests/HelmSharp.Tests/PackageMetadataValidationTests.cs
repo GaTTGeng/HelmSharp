@@ -325,6 +325,130 @@ public sealed class PackageMetadataValidationTests : IDisposable
         Assert.DoesNotContain("self-package/self-package-1.2.3.tgz", entryNames);
     }
 
+    [Fact]
+    public async Task PackageAsync_HelmIgnoreFiltersIgnoredFilesAndPreservesBinaryPayload()
+    {
+        var chartDir = await CreateChartAsync("helmignore-filter", """
+            apiVersion: v2
+            name: helmignore-filter
+            version: 1.2.3
+            """);
+        await WriteTextAsync(Path.Combine(chartDir, ".helmignore"), """
+            # comments and blank lines are ignored
+
+            .helmignore
+            .git/
+            .vscode/
+            generated/
+            *.tmp
+            *.bak
+            /root-only.txt
+            config/*.draft
+            """);
+        await WriteTextAsync(Path.Combine(chartDir, "values.yaml"), "replicaCount: 1\n");
+        await WriteTextAsync(Path.Combine(chartDir, "templates", "deployment.yaml"), "kind: Deployment\n");
+        await WriteTextAsync(Path.Combine(chartDir, ".git", "config"), "ignored\n");
+        await WriteTextAsync(Path.Combine(chartDir, ".vscode", "settings.json"), "{}\n");
+        await WriteTextAsync(Path.Combine(chartDir, "generated", "nested", "manifest.yaml"), "ignored\n");
+        await WriteTextAsync(Path.Combine(chartDir, "notes.tmp"), "ignored\n");
+        await WriteTextAsync(Path.Combine(chartDir, "backup.bak"), "ignored\n");
+        await WriteTextAsync(Path.Combine(chartDir, "root-only.txt"), "ignored\n");
+        await WriteTextAsync(Path.Combine(chartDir, "nested", "root-only.txt"), "kept\n");
+        await WriteTextAsync(Path.Combine(chartDir, "config", "local.draft"), "ignored\n");
+        var payload = new byte[] { 0, 1, 2, 127, 128, 255 };
+        await WriteBytesAsync(Path.Combine(chartDir, "files", "payload.bin"), payload);
+        var destination = Path.Combine(_tempDir, "helmignore-filter-output");
+        var client = new HelmClient(new StaticHelmOptionsProvider());
+
+        var result = await client.PackageAsync(chartDir.Replace('\\', '/'), destination.Replace('\\', '/'));
+
+        Assert.Equal(0, result.ExitCode);
+        var packagePath = Path.Combine(destination, "helmignore-filter-1.2.3.tgz");
+        var entryNames = await ReadPackageEntryNamesAsync(packagePath);
+        Assert.Contains("helmignore-filter/Chart.yaml", entryNames);
+        Assert.Contains("helmignore-filter/values.yaml", entryNames);
+        Assert.Contains("helmignore-filter/templates/deployment.yaml", entryNames);
+        Assert.Contains("helmignore-filter/nested/root-only.txt", entryNames);
+        Assert.Contains("helmignore-filter/files/payload.bin", entryNames);
+        Assert.DoesNotContain("helmignore-filter/.helmignore", entryNames);
+        Assert.DoesNotContain("helmignore-filter/.git/config", entryNames);
+        Assert.DoesNotContain("helmignore-filter/.vscode/settings.json", entryNames);
+        Assert.DoesNotContain("helmignore-filter/generated/nested/manifest.yaml", entryNames);
+        Assert.DoesNotContain("helmignore-filter/notes.tmp", entryNames);
+        Assert.DoesNotContain("helmignore-filter/backup.bak", entryNames);
+        Assert.DoesNotContain("helmignore-filter/root-only.txt", entryNames);
+        Assert.DoesNotContain("helmignore-filter/config/local.draft", entryNames);
+        Assert.Equal(payload, await ReadPackageEntryBytesAsync(packagePath, "helmignore-filter/files/payload.bin"));
+    }
+
+    [Fact]
+    public async Task PackageAsync_HelmIgnoreNegationRestoresLaterMatches()
+    {
+        var chartDir = await CreateChartAsync("helmignore-negation", """
+            apiVersion: v2
+            name: helmignore-negation
+            version: 1.2.3
+            """);
+        await WriteTextAsync(Path.Combine(chartDir, ".helmignore"), """
+            *.txt
+            !important.txt
+            nested/*.txt
+            !nested/keep.txt
+            generated/
+            !generated/keep.yaml
+            """);
+        await WriteTextAsync(Path.Combine(chartDir, "values.yaml"), "replicaCount: 1\n");
+        await WriteTextAsync(Path.Combine(chartDir, "ordinary.txt"), "ignored\n");
+        await WriteTextAsync(Path.Combine(chartDir, "important.txt"), "kept\n");
+        await WriteTextAsync(Path.Combine(chartDir, "nested", "drop.txt"), "ignored\n");
+        await WriteTextAsync(Path.Combine(chartDir, "nested", "keep.txt"), "kept\n");
+        await WriteTextAsync(Path.Combine(chartDir, "generated", "drop.yaml"), "ignored\n");
+        await WriteTextAsync(Path.Combine(chartDir, "generated", "keep.yaml"), "kept\n");
+        var destination = Path.Combine(_tempDir, "helmignore-negation-output");
+        var client = new HelmClient(new StaticHelmOptionsProvider());
+
+        var result = await client.PackageAsync(chartDir, destination);
+
+        Assert.Equal(0, result.ExitCode);
+        var packagePath = Path.Combine(destination, "helmignore-negation-1.2.3.tgz");
+        var entryNames = await ReadPackageEntryNamesAsync(packagePath);
+        Assert.Contains("helmignore-negation/important.txt", entryNames);
+        Assert.Contains("helmignore-negation/nested/keep.txt", entryNames);
+        Assert.Contains("helmignore-negation/generated/keep.yaml", entryNames);
+        Assert.DoesNotContain("helmignore-negation/ordinary.txt", entryNames);
+        Assert.DoesNotContain("helmignore-negation/nested/drop.txt", entryNames);
+        Assert.DoesNotContain("helmignore-negation/generated/drop.yaml", entryNames);
+    }
+
+    [HelmCliFact]
+    public async Task PackageAsync_HelmIgnoreEntriesMatchHelmPackage()
+    {
+        var sharpChartDir = await CreateHelmIgnoreParityChartAsync("sharp-helmignore-parity");
+        var helmChartDir = await CreateHelmIgnoreParityChartAsync("helm-helmignore-parity");
+        var sharpDestination = Path.Combine(_tempDir, "sharp-helmignore-parity-output");
+        var helmDestination = Path.Combine(_tempDir, "helm-helmignore-parity-output");
+        Directory.CreateDirectory(helmDestination);
+        var client = new HelmClient(new StaticHelmOptionsProvider());
+
+        var sharpResult = await client.PackageAsync(sharpChartDir, sharpDestination);
+        var helmResult = await HelmCliRunner.PackageAsync(
+            helmChartDir,
+            helmDestination,
+            version: null,
+            appVersion: null,
+            CancellationToken.None);
+
+        Assert.Equal(0, sharpResult.ExitCode);
+        Assert.Equal(0, helmResult.ExitCode);
+        var sharpEntries = (await ReadPackageEntryNamesAsync(GetSinglePackagePath(sharpDestination)))
+            .Order(StringComparer.Ordinal)
+            .ToList();
+        var helmEntries = (await ReadPackageEntryNamesAsync(GetSinglePackagePath(helmDestination)))
+            .Order(StringComparer.Ordinal)
+            .ToList();
+        Assert.Equal(helmEntries, sharpEntries);
+    }
+
     [HelmCliFact]
     public async Task PackageAsync_VersionAndAppVersionOverrideMatchesHelmPackagedChartYaml()
     {
@@ -373,6 +497,54 @@ public sealed class PackageMetadataValidationTests : IDisposable
         return chartDir;
     }
 
+    private async Task<string> CreateHelmIgnoreParityChartAsync(string directoryName)
+    {
+        var chartDir = await CreateChartAsync(directoryName, """
+            apiVersion: v2
+            name: helmignore-parity
+            version: 1.2.3
+            """);
+        await WriteTextAsync(Path.Combine(chartDir, ".helmignore"), """
+            # Keep all otherwise unmatched files, then apply package exclusions.
+            !*
+
+            .git/
+            .vscode/
+            generated/
+            *.tmp
+            *.bak
+            /root-only.txt
+            config/*.draft
+            [ab].txt
+            """);
+        await WriteTextAsync(Path.Combine(chartDir, "values.yaml"), "replicaCount: 1\n");
+        await WriteTextAsync(Path.Combine(chartDir, "templates", "deployment.yaml"), "kind: Deployment\n");
+        await WriteTextAsync(Path.Combine(chartDir, ".git", "config"), "ignored\n");
+        await WriteTextAsync(Path.Combine(chartDir, ".vscode", "settings.json"), "{}\n");
+        await WriteTextAsync(Path.Combine(chartDir, "generated", "nested", "manifest.yaml"), "ignored\n");
+        await WriteTextAsync(Path.Combine(chartDir, "notes.tmp"), "ignored\n");
+        await WriteTextAsync(Path.Combine(chartDir, "backup.bak"), "ignored\n");
+        await WriteTextAsync(Path.Combine(chartDir, "root-only.txt"), "ignored\n");
+        await WriteTextAsync(Path.Combine(chartDir, "nested", "root-only.txt"), "kept\n");
+        await WriteTextAsync(Path.Combine(chartDir, "config", "local.draft"), "ignored\n");
+        await WriteTextAsync(Path.Combine(chartDir, "a.txt"), "ignored\n");
+        await WriteTextAsync(Path.Combine(chartDir, "c.txt"), "kept\n");
+        await WriteBytesAsync(Path.Combine(chartDir, "files", "payload.bin"), [0, 1, 2, 127, 128, 255]);
+        return chartDir;
+    }
+
+    private static async Task WriteTextAsync(string path, string content)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+    }
+
+    private static async Task WriteBytesAsync(string path, byte[] content)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllBytesAsync(path, content);
+    }
+
     private static bool ContainsPackage(string destination)
         => Directory.Exists(destination) &&
            Directory.EnumerateFiles(destination, "*.tgz", SearchOption.AllDirectories).Any();
@@ -415,6 +587,26 @@ public sealed class PackageMetadataValidationTests : IDisposable
             entries.Add(entry.Name);
 
         return entries;
+    }
+
+    private static async Task<byte[]> ReadPackageEntryBytesAsync(string packagePath, string entryName)
+    {
+        await using var file = File.OpenRead(packagePath);
+        await using var gzip = new GZipStream(file, CompressionMode.Decompress);
+        using var reader = new TarReader(gzip);
+
+        TarEntry? entry;
+        while ((entry = reader.GetNextEntry()) is not null)
+        {
+            if (entry.DataStream is null || !string.Equals(entry.Name, entryName, StringComparison.Ordinal))
+                continue;
+
+            using var memory = new MemoryStream();
+            await entry.DataStream.CopyToAsync(memory);
+            return memory.ToArray();
+        }
+
+        throw new InvalidOperationException($"Entry {entryName} was not found in package {packagePath}.");
     }
 
     public void Dispose()

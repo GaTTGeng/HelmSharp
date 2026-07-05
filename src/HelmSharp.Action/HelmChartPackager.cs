@@ -81,7 +81,8 @@ internal static class HelmChartPackager
         await using var gzip = new GZipStream(fileStream, CompressionLevel.Optimal);
         await using var tar = new TarWriter(gzip);
 
-        await AddDirectoryToTarAsync(tar, chartPath, chartName, chartYamlContent, outputFullPath, cancellationToken);
+        var ignoreRules = await HelmIgnoreRules.LoadAsync(chartPath, cancellationToken);
+        await AddDirectoryToTarAsync(tar, chartPath, chartName, chartYamlContent, outputFullPath, ignoreRules, cancellationToken);
 
         return outputPath;
     }
@@ -192,23 +193,33 @@ internal static class HelmChartPackager
         string archiveRoot,
         string chartYamlContent,
         string outputFullPath,
+        HelmIgnoreRules ignoreRules,
         CancellationToken cancellationToken)
     {
-        foreach (var filePath in Directory.EnumerateFiles(sourceDir, "*", SearchOption.AllDirectories))
+        var files = Directory.EnumerateFiles(sourceDir, "*", SearchOption.AllDirectories)
+            .Select(filePath => new
+            {
+                FullPath = filePath,
+                RelativePath = NormalizeRelativePath(Path.GetRelativePath(sourceDir, filePath))
+            })
+            .OrderBy(file => file.RelativePath, StringComparer.Ordinal);
+
+        foreach (var file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (PathsEqual(Path.GetFullPath(filePath), outputFullPath))
+            if (PathsEqual(Path.GetFullPath(file.FullPath), outputFullPath))
                 continue;
 
-            var relativePath = Path.GetRelativePath(sourceDir, filePath)
-                .Replace('\\', '/');
-            var archivePath = $"{archiveRoot}/{relativePath}";
+            if (ignoreRules.IgnoreFile(file.RelativePath))
+                continue;
+
+            var archivePath = $"{archiveRoot}/{file.RelativePath}";
 
             var entry = new GnuTarEntry(TarEntryType.RegularFile, archivePath);
-            var fileBytes = relativePath.Equals("Chart.yaml", StringComparison.OrdinalIgnoreCase)
+            var fileBytes = file.RelativePath.Equals("Chart.yaml", StringComparison.OrdinalIgnoreCase)
                 ? Encoding.UTF8.GetBytes(chartYamlContent)
-                : await File.ReadAllBytesAsync(filePath, cancellationToken);
+                : await File.ReadAllBytesAsync(file.FullPath, cancellationToken);
             entry.DataStream = new MemoryStream(fileBytes);
             await tar.WriteEntryAsync(entry, cancellationToken);
         }
@@ -220,5 +231,213 @@ internal static class HelmChartPackager
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
         return string.Equals(left, right, comparison);
+    }
+
+    private static string NormalizeRelativePath(string path)
+        => path.Replace('\\', '/');
+
+    private sealed class HelmIgnoreRules
+    {
+        private readonly IReadOnlyList<HelmIgnorePattern> _patterns;
+
+        private HelmIgnoreRules(IReadOnlyList<HelmIgnorePattern> patterns)
+        {
+            _patterns = patterns;
+        }
+
+        public static async Task<HelmIgnoreRules> LoadAsync(
+            string chartPath,
+            CancellationToken cancellationToken)
+        {
+            var ignorePath = Path.Combine(chartPath, ".helmignore");
+            if (!File.Exists(ignorePath))
+                return new HelmIgnoreRules([]);
+
+            var lines = await File.ReadAllLinesAsync(ignorePath, Encoding.UTF8, cancellationToken);
+            var patterns = new List<HelmIgnorePattern>();
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var line = i == 0
+                    ? lines[i].TrimStart('\uFEFF')
+                    : lines[i];
+                line = NormalizeRelativePath(line.Trim());
+
+                if (line.Length == 0 || line.StartsWith('#'))
+                    continue;
+
+                if (line.Contains("**", StringComparison.Ordinal))
+                    throw new InvalidDataException("double-star (**) syntax is not supported");
+
+                patterns.Add(HelmIgnorePattern.Parse(line));
+            }
+
+            return new HelmIgnoreRules(patterns);
+        }
+
+        public bool IgnoreFile(string relativePath)
+            => Ignore(relativePath, isDirectory: false);
+
+        private bool Ignore(string path, bool isDirectory)
+        {
+            if (string.IsNullOrEmpty(path) || path is "." or "./")
+                return false;
+
+            var ignored = false;
+            foreach (var pattern in _patterns)
+            {
+                var matches = pattern.MustBeDirectory && !isDirectory
+                    ? PatternMatchesAncestorDirectory(pattern, path)
+                    : pattern.IsMatch(path);
+                if (!matches)
+                    continue;
+
+                ignored = !pattern.Negate;
+            }
+
+            return ignored;
+        }
+
+        private static bool PatternMatchesAncestorDirectory(HelmIgnorePattern pattern, string relativePath)
+        {
+            var slash = relativePath.IndexOf('/', StringComparison.Ordinal);
+            while (slash >= 0)
+            {
+                if (pattern.IsMatch(relativePath[..slash]))
+                    return true;
+
+                slash = relativePath.IndexOf('/', slash + 1);
+            }
+
+            return false;
+        }
+    }
+
+    private sealed class HelmIgnorePattern
+    {
+        private readonly Regex _matcher;
+        private readonly bool _matchBasenameOnly;
+
+        private HelmIgnorePattern(
+            Regex matcher,
+            bool matchBasenameOnly,
+            bool negate,
+            bool mustBeDirectory)
+        {
+            _matcher = matcher;
+            _matchBasenameOnly = matchBasenameOnly;
+            Negate = negate;
+            MustBeDirectory = mustBeDirectory;
+        }
+
+        public bool Negate { get; }
+
+        public bool MustBeDirectory { get; }
+
+        public static HelmIgnorePattern Parse(string rule)
+        {
+            var negate = rule.StartsWith('!');
+            if (negate)
+                rule = rule[1..];
+
+            var mustBeDirectory = rule.EndsWith('/');
+            if (mustBeDirectory)
+                rule = rule[..^1];
+
+            var rooted = rule.StartsWith('/');
+            if (rooted)
+                rule = rule[1..];
+
+            var matchBasenameOnly = !rooted && !rule.Contains('/', StringComparison.Ordinal);
+            var regex = new Regex(
+                ConvertGlobToRegex(rule),
+                RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+            return new HelmIgnorePattern(regex, matchBasenameOnly, negate, mustBeDirectory);
+        }
+
+        public bool IsMatch(string path)
+        {
+            var value = _matchBasenameOnly
+                ? GetBasename(path)
+                : path;
+            return _matcher.IsMatch(value);
+        }
+
+        private static string GetBasename(string path)
+        {
+            var slash = path.LastIndexOf('/');
+            return slash >= 0 ? path[(slash + 1)..] : path;
+        }
+
+        private static string ConvertGlobToRegex(string glob)
+        {
+            var regex = new StringBuilder("^");
+            for (var i = 0; i < glob.Length; i++)
+            {
+                var ch = glob[i];
+                switch (ch)
+                {
+                    case '*':
+                        regex.Append("[^/]*");
+                        break;
+                    case '?':
+                        regex.Append("[^/]");
+                        break;
+                    case '[':
+                        regex.Append(ConvertCharacterClass(glob, ref i));
+                        break;
+                    case '\\':
+                        if (i + 1 < glob.Length)
+                        {
+                            i++;
+                            regex.Append(Regex.Escape(glob[i].ToString()));
+                        }
+                        else
+                        {
+                            regex.Append(Regex.Escape(ch.ToString()));
+                        }
+                        break;
+                    default:
+                        regex.Append(Regex.Escape(ch.ToString()));
+                        break;
+                }
+            }
+
+            regex.Append('$');
+            return regex.ToString();
+        }
+
+        private static string ConvertCharacterClass(string glob, ref int index)
+        {
+            var start = index;
+            index++;
+            if (index >= glob.Length)
+                throw new InvalidDataException($"syntax error in pattern: {glob[start..]}");
+
+            var builder = new StringBuilder("[");
+            if (glob[index] == '^')
+            {
+                builder.Append('^');
+                index++;
+            }
+
+            var hasContent = false;
+            for (; index < glob.Length; index++)
+            {
+                var ch = glob[index];
+                if (ch == ']' && hasContent)
+                {
+                    builder.Append(']');
+                    return builder.ToString();
+                }
+
+                hasContent = true;
+                if (ch is '\\' or ']')
+                    builder.Append('\\');
+                builder.Append(ch);
+            }
+
+            throw new InvalidDataException($"syntax error in pattern: {glob[start..]}");
+        }
     }
 }

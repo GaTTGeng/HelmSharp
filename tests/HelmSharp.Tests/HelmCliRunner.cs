@@ -40,7 +40,7 @@ internal static class HelmCliRunner
             [
                 "template",
                 releaseName,
-                chartPath,
+                NormalizeHelmPath(chartPath),
                 "--namespace",
                 releaseNamespace,
                 "--kube-version",
@@ -59,9 +59,9 @@ internal static class HelmCliRunner
         var arguments = new List<string>
         {
             "package",
-            chartPath,
+            NormalizeHelmPath(chartPath),
             "--destination",
-            destination
+            NormalizeHelmPath(destination)
         };
 
         if (version is not null)
@@ -152,6 +152,9 @@ internal static class HelmCliRunner
 
     public static string NormalizeLineEndings(string value)
         => value.Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\r", "\n", StringComparison.Ordinal);
+
+    private static string NormalizeHelmPath(string path)
+        => path.Replace('\\', '/');
 }
 
 internal sealed record HelmCliResult(int ExitCode, string Stdout, string Stderr);
