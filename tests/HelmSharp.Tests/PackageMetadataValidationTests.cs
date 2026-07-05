@@ -381,6 +381,45 @@ public sealed class PackageMetadataValidationTests : IDisposable
         Assert.Equal(payload, await ReadPackageEntryBytesAsync(packagePath, "helmignore-filter/files/payload.bin"));
     }
 
+    [Fact]
+    public async Task PackageAsync_HelmIgnoreNegationRestoresLaterMatches()
+    {
+        var chartDir = await CreateChartAsync("helmignore-negation", """
+            apiVersion: v2
+            name: helmignore-negation
+            version: 1.2.3
+            """);
+        await WriteTextAsync(Path.Combine(chartDir, ".helmignore"), """
+            *.txt
+            !important.txt
+            nested/*.txt
+            !nested/keep.txt
+            generated/
+            !generated/keep.yaml
+            """);
+        await WriteTextAsync(Path.Combine(chartDir, "values.yaml"), "replicaCount: 1\n");
+        await WriteTextAsync(Path.Combine(chartDir, "ordinary.txt"), "ignored\n");
+        await WriteTextAsync(Path.Combine(chartDir, "important.txt"), "kept\n");
+        await WriteTextAsync(Path.Combine(chartDir, "nested", "drop.txt"), "ignored\n");
+        await WriteTextAsync(Path.Combine(chartDir, "nested", "keep.txt"), "kept\n");
+        await WriteTextAsync(Path.Combine(chartDir, "generated", "drop.yaml"), "ignored\n");
+        await WriteTextAsync(Path.Combine(chartDir, "generated", "keep.yaml"), "kept\n");
+        var destination = Path.Combine(_tempDir, "helmignore-negation-output");
+        var client = new HelmClient(new StaticHelmOptionsProvider());
+
+        var result = await client.PackageAsync(chartDir, destination);
+
+        Assert.Equal(0, result.ExitCode);
+        var packagePath = Path.Combine(destination, "helmignore-negation-1.2.3.tgz");
+        var entryNames = await ReadPackageEntryNamesAsync(packagePath);
+        Assert.Contains("helmignore-negation/important.txt", entryNames);
+        Assert.Contains("helmignore-negation/nested/keep.txt", entryNames);
+        Assert.Contains("helmignore-negation/generated/keep.yaml", entryNames);
+        Assert.DoesNotContain("helmignore-negation/ordinary.txt", entryNames);
+        Assert.DoesNotContain("helmignore-negation/nested/drop.txt", entryNames);
+        Assert.DoesNotContain("helmignore-negation/generated/drop.yaml", entryNames);
+    }
+
     [HelmCliFact]
     public async Task PackageAsync_HelmIgnoreEntriesMatchHelmPackage()
     {

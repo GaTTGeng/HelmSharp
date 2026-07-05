@@ -275,52 +275,40 @@ internal static class HelmChartPackager
         }
 
         public bool IgnoreFile(string relativePath)
-        {
-            foreach (var directory in EnumerateAncestorDirectories(relativePath))
-            {
-                if (Ignore(directory, isDirectory: true))
-                    return true;
-            }
-
-            return Ignore(relativePath, isDirectory: false);
-        }
+            => Ignore(relativePath, isDirectory: false);
 
         private bool Ignore(string path, bool isDirectory)
         {
             if (string.IsNullOrEmpty(path) || path is "." or "./")
                 return false;
 
+            var ignored = false;
             foreach (var pattern in _patterns)
             {
-                if (pattern.Negate)
-                {
-                    if (pattern.MustBeDirectory && !isDirectory)
-                        return true;
-
-                    if (!pattern.IsMatch(path))
-                        return true;
-
-                    continue;
-                }
-
-                if (pattern.MustBeDirectory && !isDirectory)
+                var matches = pattern.MustBeDirectory && !isDirectory
+                    ? PatternMatchesAncestorDirectory(pattern, path)
+                    : pattern.IsMatch(path);
+                if (!matches)
                     continue;
 
-                if (pattern.IsMatch(path))
-                    return true;
+                ignored = !pattern.Negate;
             }
 
-            return false;
+            return ignored;
         }
 
-        private static IEnumerable<string> EnumerateAncestorDirectories(string relativePath)
+        private static bool PatternMatchesAncestorDirectory(HelmIgnorePattern pattern, string relativePath)
         {
             var slash = relativePath.IndexOf('/', StringComparison.Ordinal);
             while (slash >= 0)
             {
-                yield return relativePath[..slash];
+                if (pattern.IsMatch(relativePath[..slash]))
+                    return true;
+
                 slash = relativePath.IndexOf('/', slash + 1);
             }
+
+            return false;
         }
     }
 
