@@ -7,6 +7,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="HelmSharp.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\HelmSharp.Chart\HelmSharp.Chart.csproj" />
     <ProjectReference Include="..\HelmSharp.Registry\HelmSharp.Registry.csproj" />
   </ItemGroup>

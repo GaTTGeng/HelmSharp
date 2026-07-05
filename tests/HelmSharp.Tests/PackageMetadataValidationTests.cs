@@ -486,6 +486,52 @@ public sealed class PackageMetadataValidationTests : IDisposable
         Assert.Equal(sourceChartYaml, await File.ReadAllTextAsync(Path.Combine(sharpChartDir, "Chart.yaml")));
     }
 
+    [Fact]
+    public async Task PackageAsync_UsesChartNameRootAndPreservesRegularFiles()
+    {
+        var chartDir = await CreateArchiveLayoutChartAsync("source-folder");
+        var destination = Path.Combine(_tempDir, "archive-layout-output");
+        var client = new HelmClient(new StaticHelmOptionsProvider());
+
+        var result = await client.PackageAsync(chartDir, destination);
+
+        Assert.Equal(0, result.ExitCode);
+        var packagePath = Path.Combine(destination, "archive-layout-1.2.3.tgz");
+        Assert.True(File.Exists(packagePath));
+        var entryNames = await ReadPackageEntryNamesAsync(packagePath);
+        Assert.All(entryNames, entryName => Assert.StartsWith("archive-layout/", entryName));
+        Assert.DoesNotContain(entryNames, entryName => entryName.StartsWith("source-folder/", StringComparison.Ordinal));
+        Assert.DoesNotContain("archive-layout/empty-dir/", entryNames);
+        Assert.Contains("archive-layout/crds/widgets.yaml", entryNames);
+        Assert.Contains("archive-layout/charts/child/Chart.yaml", entryNames);
+        Assert.Equal([0, 1, 2, 127, 128, 255], await ReadPackageEntryBytesAsync(packagePath, "archive-layout/files/payload.bin"));
+    }
+
+    [HelmCliFact]
+    public async Task PackageAsync_ArchiveEntriesMatchHelmPackageForLayoutAndMetadata()
+    {
+        var sharpChartDir = await CreateArchiveLayoutChartAsync("sharp-source-folder");
+        var helmChartDir = await CreateArchiveLayoutChartAsync("helm-source-folder");
+        var sharpDestination = Path.Combine(_tempDir, "sharp-archive-layout-output");
+        var helmDestination = Path.Combine(_tempDir, "helm-archive-layout-output");
+        Directory.CreateDirectory(helmDestination);
+        var client = new HelmClient(new StaticHelmOptionsProvider());
+
+        var sharpResult = await client.PackageAsync(sharpChartDir, sharpDestination);
+        var helmResult = await HelmCliRunner.PackageAsync(
+            helmChartDir,
+            helmDestination,
+            version: null,
+            appVersion: null,
+            CancellationToken.None);
+
+        Assert.Equal(0, sharpResult.ExitCode);
+        Assert.Equal(0, helmResult.ExitCode);
+        var sharpEntries = await ReadPackageEntriesAsync(GetSinglePackagePath(sharpDestination));
+        var helmEntries = await ReadPackageEntriesAsync(GetSinglePackagePath(helmDestination));
+        Assert.Equal(helmEntries, sharpEntries);
+    }
+
     private async Task<string> CreateChartAsync(string directoryName, string? chartYaml)
     {
         var chartDir = Path.Combine(_tempDir, directoryName);
@@ -494,6 +540,33 @@ public sealed class PackageMetadataValidationTests : IDisposable
         if (chartYaml is not null)
             await File.WriteAllTextAsync(Path.Combine(chartDir, "Chart.yaml"), chartYaml, Encoding.UTF8);
 
+        return chartDir;
+    }
+
+    private async Task<string> CreateArchiveLayoutChartAsync(string directoryName)
+    {
+        var chartDir = await CreateChartAsync(directoryName, """
+            apiVersion: v2
+            name: archive-layout
+            version: 1.2.3
+            """);
+        await WriteTextAsync(Path.Combine(chartDir, "values.yaml"), "replicaCount: 1\n");
+        await WriteTextAsync(Path.Combine(chartDir, "templates", "deployment.yaml"), "kind: Deployment\n");
+        await WriteTextAsync(Path.Combine(chartDir, "crds", "widgets.yaml"), """
+            apiVersion: apiextensions.k8s.io/v1
+            kind: CustomResourceDefinition
+            metadata:
+              name: widgets.example.com
+            """);
+        await WriteTextAsync(Path.Combine(chartDir, "charts", "child", "Chart.yaml"), """
+            apiVersion: v2
+            name: child
+            version: 0.1.0
+            """);
+        await WriteTextAsync(Path.Combine(chartDir, "charts", "child", "values.yaml"), "enabled: true\n");
+        await WriteTextAsync(Path.Combine(chartDir, "README.md"), "# Archive layout\n");
+        await WriteBytesAsync(Path.Combine(chartDir, "files", "payload.bin"), [0, 1, 2, 127, 128, 255]);
+        Directory.CreateDirectory(Path.Combine(chartDir, "empty-dir"));
         return chartDir;
     }
 
@@ -589,6 +662,30 @@ public sealed class PackageMetadataValidationTests : IDisposable
         return entries;
     }
 
+    private static async Task<List<PackageEntrySnapshot>> ReadPackageEntriesAsync(string packagePath)
+    {
+        var entries = new List<PackageEntrySnapshot>();
+        await using var file = File.OpenRead(packagePath);
+        await using var gzip = new GZipStream(file, CompressionMode.Decompress);
+        using var reader = new TarReader(gzip);
+
+        TarEntry? entry;
+        while ((entry = reader.GetNextEntry()) is not null)
+        {
+            var size = 0L;
+            if (entry.DataStream is not null)
+            {
+                using var memory = new MemoryStream();
+                await entry.DataStream.CopyToAsync(memory);
+                size = memory.Length;
+            }
+
+            entries.Add(new PackageEntrySnapshot(entry.Name, entry.EntryType, entry.Mode, size));
+        }
+
+        return entries.OrderBy(entry => entry.Name, StringComparer.Ordinal).ToList();
+    }
+
     private static async Task<byte[]> ReadPackageEntryBytesAsync(string packagePath, string entryName)
     {
         await using var file = File.OpenRead(packagePath);
@@ -620,4 +717,10 @@ public sealed class PackageMetadataValidationTests : IDisposable
         public ValueTask<HelmExecutionOptions> GetHelmAsync(CancellationToken cancellationToken = default)
             => ValueTask.FromResult(new HelmExecutionOptions { DefaultNamespace = "default" });
     }
+
+    private sealed record PackageEntrySnapshot(
+        string Name,
+        TarEntryType EntryType,
+        UnixFileMode Mode,
+        long Size);
 }

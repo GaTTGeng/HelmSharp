@@ -1,3 +1,6 @@
+using System.Formats.Tar;
+using System.IO.Compression;
+using System.Text;
 using HelmSharp.Chart;
 using HelmSharp.Engine;
 
@@ -197,6 +200,49 @@ public class HelmChartLoaderTests : IDisposable
     }
 
     [Theory]
+    [InlineData(".tgz")]
+    [InlineData(".tar.gz")]
+    public async Task LoadAsync_RootedArchiveRoundTripsChartContent(string extension)
+    {
+        var chartDir = CreateArchiveLayoutChartDir("source-folder");
+        var archivePath = Path.Combine(_tempDir, "roundtrip-chart-1.2.3" + extension);
+        CreateTgz(chartDir, archivePath, "roundtrip-chart");
+
+        var chart = await HelmChartLoader.LoadAsync(archivePath, CancellationToken.None);
+
+        Assert.Equal("roundtrip-chart", chart.Name);
+        Assert.Equal("1.2.3", chart.Version);
+        Assert.Contains("templates/deployment.yaml", chart.Templates.Keys);
+        Assert.Single(chart.Crds);
+        Assert.Equal([0, 1, 2, 127, 128, 255], chart.Files["files/payload.bin"]);
+        Assert.True(chart.Subcharts.ContainsKey("child"));
+        Assert.Equal("child", chart.Subcharts["child"].Name);
+    }
+
+    [Theory]
+    [InlineData("../evil.txt", ".tgz")]
+    [InlineData("/absolute.txt", ".tgz")]
+    [InlineData("C:/absolute.txt", ".tgz")]
+    [InlineData("safe/../evil.txt", ".tar.gz")]
+    [InlineData("safe//evil.txt", ".tar.gz")]
+    public async Task LoadAsync_RejectsUnsafeArchiveEntryNames(string unsafeEntryName, string extension)
+    {
+        var archivePath = Path.Combine(_tempDir, "unsafe" + extension);
+        CreateArchive(
+            archivePath,
+            ("safe/Chart.yaml", Encoding.UTF8.GetBytes("""
+                apiVersion: v2
+                name: safe
+                version: 1.0.0
+                """)),
+            (unsafeEntryName, Encoding.UTF8.GetBytes("evil")));
+
+        var ex = await Assert.ThrowsAsync<InvalidDataException>(
+            () => HelmChartLoader.LoadAsync(archivePath, CancellationToken.None));
+        Assert.Contains("unsafe", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task LoadAsync_PreservesRawFileBytes(bool useArchive)
@@ -290,16 +336,79 @@ public class HelmChartLoaderTests : IDisposable
         return chartDir;
     }
 
+    private string CreateArchiveLayoutChartDir(string directoryName)
+    {
+        var chartDir = Path.Combine(_tempDir, directoryName);
+        Directory.CreateDirectory(chartDir);
+        Directory.CreateDirectory(Path.Combine(chartDir, "templates"));
+        Directory.CreateDirectory(Path.Combine(chartDir, "crds"));
+        Directory.CreateDirectory(Path.Combine(chartDir, "files"));
+        Directory.CreateDirectory(Path.Combine(chartDir, "charts", "child"));
+        Directory.CreateDirectory(Path.Combine(chartDir, "empty-dir"));
+
+        File.WriteAllText(Path.Combine(chartDir, "Chart.yaml"), """
+            apiVersion: v2
+            name: roundtrip-chart
+            version: 1.2.3
+            """);
+        File.WriteAllText(Path.Combine(chartDir, "values.yaml"), "replicaCount: 1\n");
+        File.WriteAllText(Path.Combine(chartDir, "templates", "deployment.yaml"), "kind: Deployment\n");
+        File.WriteAllText(Path.Combine(chartDir, "crds", "widgets.yaml"), """
+            apiVersion: apiextensions.k8s.io/v1
+            kind: CustomResourceDefinition
+            metadata:
+              name: widgets.example.com
+            """);
+        File.WriteAllText(Path.Combine(chartDir, "charts", "child", "Chart.yaml"), """
+            apiVersion: v2
+            name: child
+            version: 0.1.0
+            """);
+        File.WriteAllText(Path.Combine(chartDir, "charts", "child", "values.yaml"), "enabled: true\n");
+        File.WriteAllBytes(Path.Combine(chartDir, "files", "payload.bin"), [0, 1, 2, 127, 128, 255]);
+
+        return chartDir;
+    }
+
     private static void CreateTgz(string sourceDir, string tgzPath)
     {
         using var fileStream = File.Create(tgzPath);
-        using var gzip = new System.IO.Compression.GZipStream(fileStream, System.IO.Compression.CompressionLevel.Fastest);
-        using var tar = new System.Formats.Tar.TarWriter(gzip);
+        using var gzip = new GZipStream(fileStream, CompressionLevel.Fastest);
+        using var tar = new TarWriter(gzip);
 
         foreach (var file in Directory.EnumerateFiles(sourceDir, "*", SearchOption.AllDirectories))
         {
             var relativePath = Path.GetRelativePath(sourceDir, file).Replace('\\', '/');
             tar.WriteEntry(file, relativePath);
+        }
+    }
+
+    private static void CreateTgz(string sourceDir, string tgzPath, string archiveRoot)
+    {
+        using var fileStream = File.Create(tgzPath);
+        using var gzip = new GZipStream(fileStream, CompressionLevel.Fastest);
+        using var tar = new TarWriter(gzip);
+
+        foreach (var file in Directory.EnumerateFiles(sourceDir, "*", SearchOption.AllDirectories))
+        {
+            var relativePath = Path.GetRelativePath(sourceDir, file).Replace('\\', '/');
+            tar.WriteEntry(file, $"{archiveRoot}/{relativePath}");
+        }
+    }
+
+    private static void CreateArchive(string path, params (string Name, byte[] Content)[] entries)
+    {
+        using var fileStream = File.Create(path);
+        using var gzip = new GZipStream(fileStream, CompressionLevel.Fastest);
+        using var tar = new TarWriter(gzip);
+
+        foreach (var (name, content) in entries)
+        {
+            var entry = new GnuTarEntry(TarEntryType.RegularFile, name)
+            {
+                DataStream = new MemoryStream(content)
+            };
+            tar.WriteEntry(entry);
         }
     }
 

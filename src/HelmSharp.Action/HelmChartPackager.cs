@@ -13,6 +13,11 @@ namespace HelmSharp.Action;
 /// </summary>
 internal static class HelmChartPackager
 {
+    private const UnixFileMode RegularFileMode =
+        UnixFileMode.UserRead | UnixFileMode.UserWrite |
+        UnixFileMode.GroupRead |
+        UnixFileMode.OtherRead;
+
     private static readonly Regex ChartNamePattern = new(
         @"^[A-Za-z0-9][A-Za-z0-9_.-]*$",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -70,6 +75,9 @@ internal static class HelmChartPackager
 
         if (version is not null || appVersion is not null)
             chartYamlContent = HelmYaml.Serialize(metadata);
+
+        if (!chartYamlContent.EndsWith("\n", StringComparison.Ordinal))
+            chartYamlContent += "\n";
 
         var fileName = $"{chartName}-{chartVersion}.tgz";
         var destDir = destination ?? Directory.GetCurrentDirectory();
@@ -200,6 +208,7 @@ internal static class HelmChartPackager
             .Select(filePath => new
             {
                 FullPath = filePath,
+                Attributes = File.GetAttributes(filePath),
                 RelativePath = NormalizeRelativePath(Path.GetRelativePath(sourceDir, filePath))
             })
             .OrderBy(file => file.RelativePath, StringComparer.Ordinal);
@@ -211,18 +220,40 @@ internal static class HelmChartPackager
             if (PathsEqual(Path.GetFullPath(file.FullPath), outputFullPath))
                 continue;
 
+            if ((file.Attributes & FileAttributes.ReparsePoint) != 0)
+                continue;
+
             if (ignoreRules.IgnoreFile(file.RelativePath))
                 continue;
 
             var archivePath = $"{archiveRoot}/{file.RelativePath}";
 
-            var entry = new GnuTarEntry(TarEntryType.RegularFile, archivePath);
+            var entry = new GnuTarEntry(TarEntryType.RegularFile, archivePath)
+            {
+                Mode = RegularFileMode,
+                ModificationTime = File.GetLastWriteTimeUtc(file.FullPath)
+            };
             var fileBytes = file.RelativePath.Equals("Chart.yaml", StringComparison.OrdinalIgnoreCase)
                 ? Encoding.UTF8.GetBytes(chartYamlContent)
-                : await File.ReadAllBytesAsync(file.FullPath, cancellationToken);
+                : await ReadPackagedFileBytesAsync(file.FullPath, file.RelativePath, cancellationToken);
             entry.DataStream = new MemoryStream(fileBytes);
             await tar.WriteEntryAsync(entry, cancellationToken);
         }
+    }
+
+    private static async Task<byte[]> ReadPackagedFileBytesAsync(
+        string fullPath,
+        string relativePath,
+        CancellationToken cancellationToken)
+    {
+        if (!relativePath.EndsWith("/Chart.yaml", StringComparison.OrdinalIgnoreCase))
+            return await File.ReadAllBytesAsync(fullPath, cancellationToken);
+
+        var chartYaml = await File.ReadAllTextAsync(fullPath, Encoding.UTF8, cancellationToken);
+        if (!chartYaml.EndsWith("\n", StringComparison.Ordinal))
+            chartYaml += "\n";
+
+        return Encoding.UTF8.GetBytes(chartYaml);
     }
 
     private static bool PathsEqual(string left, string right)

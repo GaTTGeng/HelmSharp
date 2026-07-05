@@ -253,7 +253,7 @@ public static class HelmChartLoader
 
     private static async Task<Dictionary<string, byte[]>> LoadArchiveAsync(string chartPath, CancellationToken cancellationToken)
     {
-        var files = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+        var archiveFiles = new List<ArchiveFileEntry>();
         await using var file = File.OpenRead(chartPath);
         await using Stream archive = chartPath.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase) ||
                                      chartPath.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase)
@@ -268,9 +268,22 @@ public static class HelmChartLoader
             if (entry.EntryType is TarEntryType.Directory || entry.DataStream is null)
                 continue;
 
+            var entryName = HelmArchivePath.NormalizeEntryName(entry.Name);
+
             using var memory = new MemoryStream();
             await entry.DataStream.CopyToAsync(memory, cancellationToken);
-            files[StripChartRoot(NormalizePath(entry.Name))] = memory.ToArray();
+            archiveFiles.Add(new ArchiveFileEntry(entryName, memory.ToArray()));
+        }
+
+        var chartRoot = HelmArchivePath.FindChartRoot(archiveFiles.Select(fileEntry => fileEntry.Name));
+        var files = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+        foreach (var fileEntry in archiveFiles)
+        {
+            var relativePath = HelmArchivePath.GetChartRelativePath(fileEntry.Name, chartRoot);
+            if (string.IsNullOrWhiteSpace(relativePath))
+                throw new InvalidDataException($"Chart archive entry '{fileEntry.Name}' has no path below the chart root.");
+
+            files[relativePath] = fileEntry.Content;
         }
 
         return files;
@@ -288,18 +301,8 @@ public static class HelmChartLoader
     private static string DecodeText(byte[]? content)
         => content is null ? string.Empty : Encoding.UTF8.GetString(content);
 
-    private static string StripChartRoot(string path)
-    {
-        var slash = path.IndexOf('/', StringComparison.Ordinal);
-        if (slash < 0)
-            return path;
-
-        var first = path[..slash];
-        return first.Equals("templates", StringComparison.OrdinalIgnoreCase)
-            ? path
-            : path[(slash + 1)..];
-    }
-
     internal static string NormalizePath(string path)
         => path.Replace('\\', '/').TrimStart('/');
+
+    private sealed record ArchiveFileEntry(string Name, byte[] Content);
 }
