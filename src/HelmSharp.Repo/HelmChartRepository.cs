@@ -1,3 +1,4 @@
+using System.Formats.Tar;
 using System.IO.Compression;
 using System.Net.Http.Headers;
 using System.Text;
@@ -257,36 +258,70 @@ public sealed class HelmChartRepository : IDisposable
         if (Directory.Exists(extractDir))
             return extractDir;
 
-        Directory.CreateDirectory(extractDir);
-        using var memoryStream = new MemoryStream(chartBytes);
-        using var gzip = new GZipStream(memoryStream, CompressionMode.Decompress);
-        using var tar = new System.Formats.Tar.TarReader(gzip);
-
-        System.Formats.Tar.TarEntry? entry;
-        while ((entry = tar.GetNextEntry()) is not null)
+        var tempExtractDir = Path.Combine(_cacheDir, $"{hash}.tmp-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempExtractDir);
+        try
         {
-            if (entry.EntryType is System.Formats.Tar.TarEntryType.Directory || entry.DataStream is null)
-                continue;
+            await ExtractChartArchiveAsync(chartBytes, tempExtractDir, cancellationToken);
+            if (Directory.Exists(extractDir))
+            {
+                Directory.Delete(tempExtractDir, recursive: true);
+                return extractDir;
+            }
 
-            var entryPath = entry.Name;
-            // Strip chart root directory
-            var slashIndex = entryPath.IndexOf('/', StringComparison.Ordinal);
-            if (slashIndex >= 0)
-                entryPath = entryPath[(slashIndex + 1)..];
-
-            if (string.IsNullOrWhiteSpace(entryPath))
-                continue;
-
-            var fullPath = Path.Combine(extractDir, entryPath.Replace('/', Path.DirectorySeparatorChar));
-            var dir = Path.GetDirectoryName(fullPath);
-            if (dir is not null) Directory.CreateDirectory(dir);
-
-            await using var fileStream = File.Create(fullPath);
-            await entry.DataStream.CopyToAsync(fileStream, cancellationToken);
+            Directory.Move(tempExtractDir, extractDir);
+        }
+        catch
+        {
+            if (Directory.Exists(tempExtractDir))
+                Directory.Delete(tempExtractDir, recursive: true);
+            throw;
         }
 
         return extractDir;
     }
+
+    internal static async Task ExtractChartArchiveAsync(
+        byte[] chartBytes,
+        string extractDir,
+        CancellationToken cancellationToken)
+    {
+        using var memoryStream = new MemoryStream(chartBytes);
+        using var gzip = new GZipStream(memoryStream, CompressionMode.Decompress);
+        using var tar = new TarReader(gzip);
+
+        var archiveFiles = new List<ArchiveFileEntry>();
+        TarEntry? entry;
+        while ((entry = tar.GetNextEntry()) is not null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (entry.EntryType is TarEntryType.Directory || entry.DataStream is null)
+                continue;
+
+            var entryName = HelmArchivePath.NormalizeEntryName(entry.Name);
+            using var fileBytes = new MemoryStream();
+            await entry.DataStream.CopyToAsync(fileBytes, cancellationToken);
+            archiveFiles.Add(new ArchiveFileEntry(entryName, fileBytes.ToArray()));
+        }
+
+        var chartRoot = HelmArchivePath.FindChartRoot(archiveFiles.Select(fileEntry => fileEntry.Name));
+        foreach (var fileEntry in archiveFiles)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var entryPath = HelmArchivePath.GetChartRelativePath(fileEntry.Name, chartRoot);
+            if (string.IsNullOrWhiteSpace(entryPath))
+                throw new InvalidDataException($"Chart archive entry '{fileEntry.Name}' has no path below the chart root.");
+
+            var fullPath = HelmArchivePath.ResolveSafeDestination(extractDir, entryPath);
+            var dir = Path.GetDirectoryName(fullPath);
+            if (dir is not null) Directory.CreateDirectory(dir);
+
+            await using var fileStream = File.Create(fullPath);
+            await fileStream.WriteAsync(fileEntry.Content, cancellationToken);
+        }
+    }
+
+    private sealed record ArchiveFileEntry(string Name, byte[] Content);
 
     private static HelmRepoIndex ParseRepoIndex(string yaml)
     {
