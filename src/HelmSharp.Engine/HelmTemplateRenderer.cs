@@ -414,10 +414,10 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         string identity,
         out HelmChart subchart)
     {
-        if (_chart.Subcharts.TryGetValue(dependency.Name, out subchart!))
+        if (_chart.Subcharts.TryGetValue(identity, out subchart!))
             return true;
 
-        if (_chart.Subcharts.TryGetValue(identity, out subchart!))
+        if (_chart.Subcharts.TryGetValue(dependency.Name, out subchart!))
             return true;
 
         foreach (var candidate in _chart.Subcharts.Values)

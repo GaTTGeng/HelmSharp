@@ -219,6 +219,149 @@ public class HelmChartLoaderTests : IDisposable
         Assert.Equal("child", chart.Subcharts["child"].Name);
     }
 
+    [Fact]
+    public async Task LoadAsync_DirectoryParentLoadsPackagedDependencyArchive()
+    {
+        var chartDir = CreateChartDir("parent", "1.0.0");
+        File.WriteAllText(Path.Combine(chartDir, "Chart.yaml"), """
+            apiVersion: v2
+            name: parent
+            version: 1.0.0
+            dependencies:
+            - name: child
+              version: 0.1.0
+              repository: file://charts/child
+            - name: redis
+              version: 17.0.0
+              repository: file://charts/redis
+              alias: cache
+            """);
+        var chartsDir = Path.Combine(chartDir, "charts");
+        Directory.CreateDirectory(chartsDir);
+
+        var unpackedDir = Path.Combine(chartsDir, "child");
+        CreateDependencyChartDir(unpackedDir, "child", "0.1.0", "marker: unpacked\n");
+
+        var dependencyDir = Path.Combine(_tempDir, "redis-source");
+        CreateDependencyChartDir(dependencyDir, "redis", "17.0.0", "marker: packaged\n");
+        CreateTgz(dependencyDir, Path.Combine(chartsDir, "redis-17.0.0.tgz"), "redis");
+
+        var chart = await HelmChartLoader.LoadAsync(chartDir, CancellationToken.None);
+        var values = await HelmValues.BuildAsync(
+            chart,
+            valuesFiles: null,
+            valuesContent: null,
+            setValues: null,
+            setFileValues: null,
+            setStringValues: null,
+            setJsonValues: null,
+            CancellationToken.None);
+        var rendered = new HelmTemplateRenderer(chart, "release", "default", values).Render();
+
+        Assert.True(chart.Subcharts.ContainsKey("child"));
+        Assert.True(chart.Subcharts.ContainsKey("cache"));
+        Assert.Equal("redis", chart.Subcharts["cache"].Name);
+        Assert.True(values.ContainsKey("cache"));
+        Assert.Contains("name: redis-config", rendered);
+        Assert.Contains("marker: \"packaged\"", rendered);
+        Assert.Contains("name: child-config", rendered);
+    }
+
+    [Fact]
+    public async Task LoadAsync_PackagedDependenciesPreserveDistinctAliasVersions()
+    {
+        var chartDir = CreateChartDir("parent", "1.0.0");
+        File.WriteAllText(Path.Combine(chartDir, "Chart.yaml"), """
+            apiVersion: v2
+            name: parent
+            version: 1.0.0
+            dependencies:
+            - name: redis
+              version: 17.0.0
+              repository: file://charts/redis
+            - name: redis
+              version: 18.0.0
+              repository: file://charts/redis
+              alias: queue
+            """);
+        var chartsDir = Path.Combine(chartDir, "charts");
+        Directory.CreateDirectory(chartsDir);
+
+        var redis17Dir = Path.Combine(_tempDir, "redis-17-source");
+        CreateDependencyChartDir(redis17Dir, "redis", "17.0.0", "marker: redis17\n");
+        CreateTgz(redis17Dir, Path.Combine(chartsDir, "redis-17.0.0.tgz"), "redis");
+
+        var redis18Dir = Path.Combine(_tempDir, "redis-18-source");
+        CreateDependencyChartDir(redis18Dir, "redis", "18.0.0", "marker: redis18\n");
+        CreateTgz(redis18Dir, Path.Combine(chartsDir, "redis-18.0.0.tgz"), "redis");
+
+        var chart = await HelmChartLoader.LoadAsync(chartDir, CancellationToken.None);
+        var values = await HelmValues.BuildAsync(
+            chart,
+            valuesFiles: null,
+            valuesContent: null,
+            setValues: null,
+            setFileValues: null,
+            setStringValues: null,
+            setJsonValues: null,
+            CancellationToken.None);
+        var rendered = new HelmTemplateRenderer(chart, "release", "default", values).Render();
+
+        Assert.Equal("17.0.0", chart.Subcharts["redis"].Version);
+        Assert.Equal("18.0.0", chart.Subcharts["queue"].Version);
+        var redisValues = Assert.IsAssignableFrom<IDictionary<string, object?>>(values["redis"]);
+        var queueValues = Assert.IsAssignableFrom<IDictionary<string, object?>>(values["queue"]);
+        Assert.Equal("redis17", redisValues["marker"]);
+        Assert.Equal("redis18", queueValues["marker"]);
+        Assert.Contains("marker: \"redis17\"", rendered);
+        Assert.Contains("marker: \"redis18\"", rendered);
+    }
+
+    [Fact]
+    public async Task LoadAsync_ArchiveParentLoadsEmbeddedPackagedDependencyArchive()
+    {
+        var chartDir = CreateChartDir("parent", "1.0.0");
+        var chartsDir = Path.Combine(chartDir, "charts");
+        Directory.CreateDirectory(chartsDir);
+        var dependencyDir = Path.Combine(_tempDir, "redis-source");
+        CreateDependencyChartDir(dependencyDir, "redis", "17.0.0", "marker: packaged\n");
+        CreateTgz(dependencyDir, Path.Combine(chartsDir, "redis-17.0.0.tgz"), "redis");
+        var archivePath = Path.Combine(_tempDir, "parent-1.0.0.tgz");
+        CreateTgz(chartDir, archivePath, "parent");
+
+        var chart = await HelmChartLoader.LoadAsync(archivePath, CancellationToken.None);
+        var values = await HelmValues.BuildAsync(
+            chart,
+            valuesFiles: null,
+            valuesContent: null,
+            setValues: null,
+            setFileValues: null,
+            setStringValues: null,
+            setJsonValues: null,
+            CancellationToken.None);
+        var rendered = new HelmTemplateRenderer(chart, "release", "default", values).Render();
+
+        Assert.True(chart.Subcharts.ContainsKey("redis"));
+        Assert.Equal("redis", chart.Subcharts["redis"].Name);
+        Assert.Contains("name: redis-config", rendered);
+        Assert.Contains("marker: \"packaged\"", rendered);
+    }
+
+    [Fact]
+    public async Task LoadAsync_InvalidPackagedDependencyArchiveReportsDependencyPath()
+    {
+        var chartDir = CreateChartDir("parent", "1.0.0");
+        var chartsDir = Path.Combine(chartDir, "charts");
+        Directory.CreateDirectory(chartsDir);
+        File.WriteAllText(Path.Combine(chartsDir, "broken-1.0.0.tgz"), "not a gzip archive");
+
+        var ex = await Assert.ThrowsAsync<InvalidDataException>(
+            () => HelmChartLoader.LoadAsync(chartDir, CancellationToken.None));
+
+        Assert.Contains("charts/broken-1.0.0.tgz", ex.Message);
+        Assert.Contains("parent", ex.Message);
+    }
+
     [Theory]
     [InlineData("../evil.txt", ".tgz")]
     [InlineData("/absolute.txt", ".tgz")]
@@ -368,6 +511,26 @@ public class HelmChartLoaderTests : IDisposable
         File.WriteAllBytes(Path.Combine(chartDir, "files", "payload.bin"), [0, 1, 2, 127, 128, 255]);
 
         return chartDir;
+    }
+
+    private static void CreateDependencyChartDir(string chartDir, string name, string version, string valuesYaml)
+    {
+        Directory.CreateDirectory(chartDir);
+        Directory.CreateDirectory(Path.Combine(chartDir, "templates"));
+        File.WriteAllText(Path.Combine(chartDir, "Chart.yaml"), $"""
+            apiVersion: v2
+            name: {name}
+            version: {version}
+            """);
+        File.WriteAllText(Path.Combine(chartDir, "values.yaml"), valuesYaml);
+        File.WriteAllText(
+            Path.Combine(chartDir, "templates", "configmap.yaml"),
+            "apiVersion: v1\n" +
+            "kind: ConfigMap\n" +
+            "metadata:\n" +
+            $"  name: {name}-config\n" +
+            "data:\n" +
+            "  marker: {{ .Values.marker | quote }}\n");
     }
 
     private static void CreateTgz(string sourceDir, string tgzPath)
