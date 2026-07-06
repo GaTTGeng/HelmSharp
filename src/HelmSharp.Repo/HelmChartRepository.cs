@@ -163,12 +163,20 @@ public sealed class HelmChartRepository : IDisposable
             !url.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase))
         {
             // Treat as repo URL, resolve chart from index
-            var parts = url.Split('/', StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length < 2)
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var chartUri))
                 throw new ArgumentException($"Invalid chart reference: {url}");
 
-            var repoUrl = string.Join("/", parts.Take(parts.Length - 1));
-            var chartName = parts[^1];
+            var segments = chartUri.Segments;
+            var chartName = Uri.UnescapeDataString(segments[^1].Trim('/'));
+            if (segments.Length < 2 || string.IsNullOrWhiteSpace(chartName))
+                throw new ArgumentException($"Invalid chart reference: {url}");
+
+            var repoUri = new UriBuilder(chartUri)
+            {
+                Path = string.Concat(segments.Take(segments.Length - 1)).TrimEnd('/'),
+                Query = null
+            };
+            var repoUrl = repoUri.Uri.ToString().TrimEnd('/');
             var index = await FetchRepoIndexAsync(repoUrl, cancellationToken: cancellationToken);
 
             if (!index.Entries.TryGetValue(chartName, out var versions))
