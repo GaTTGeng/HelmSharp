@@ -38,7 +38,7 @@ public static class HelmChartLoader
         var isDirectory = Directory.Exists(chartPath);
         var files = isDirectory
             ? await LoadDirectoryAsync(chartPath, cancellationToken)
-            : await LoadArchiveAsync(chartPath, cancellationToken);
+            : await LoadArchiveFileAsync(chartPath, cancellationToken);
 
         return await LoadFromFilesAsync(
             chartPath,
@@ -192,10 +192,39 @@ public static class HelmChartLoader
                         // Skip invalid subcharts
                     }
                 }
+
+                foreach (var dependencyArchive in Directory
+                    .EnumerateFiles(chartsDir, "*", SearchOption.TopDirectoryOnly)
+                    .Where(IsDependencyArchiveFile)
+                    .OrderBy(Path.GetFileName, StringComparer.Ordinal))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var dependencyPath = NormalizePath(Path.GetRelativePath(chartDir, dependencyArchive));
+                    var archiveBytes = await File.ReadAllBytesAsync(dependencyArchive, cancellationToken);
+                    var subchart = await LoadDependencyArchiveAsync(
+                        chartPath,
+                        dependencyPath,
+                        archiveBytes,
+                        cancellationToken);
+                    AddPackagedDependencyChart(chart, new PackagedDependencyChart(subchart));
+                }
             }
         }
         else
         {
+            foreach (var (dependencyPath, archiveBytes) in files
+                .Where(kv => IsEmbeddedDependencyArchivePath(kv.Key))
+                .OrderBy(kv => kv.Key, StringComparer.Ordinal))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var subchart = await LoadDependencyArchiveAsync(
+                    chartPath,
+                    dependencyPath,
+                    archiveBytes,
+                    cancellationToken);
+                AddPackagedDependencyChart(chart, new PackagedDependencyChart(subchart));
+            }
+
             // For archives, extract subcharts from the files dictionary
             var subchartGroups = files.Keys
                 .Where(k => k.StartsWith("charts/", StringComparison.Ordinal))
@@ -238,6 +267,31 @@ public static class HelmChartLoader
         return chart;
     }
 
+    private static void AddPackagedDependencyChart(HelmChart chart, PackagedDependencyChart package)
+    {
+        var matchedDependencies = chart.Dependencies
+            .Where(dependency => IsDependencyMatch(dependency, package.Chart))
+            .ToList();
+
+        if (matchedDependencies.Count > 0)
+        {
+            foreach (var dependency in matchedDependencies)
+                chart.Subcharts[dependency.Alias ?? dependency.Name] = package.Chart;
+            return;
+        }
+
+        chart.Subcharts[package.Chart.Name] = package.Chart;
+    }
+
+    private static bool IsDependencyMatch(HelmChartDependency dependency, HelmChart subchart)
+    {
+        if (!string.Equals(dependency.Name, subchart.Name, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return string.IsNullOrWhiteSpace(dependency.Version) ||
+               string.Equals(dependency.Version, subchart.Version, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static async Task<Dictionary<string, byte[]>> LoadDirectoryAsync(string chartPath, CancellationToken cancellationToken)
     {
         var files = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
@@ -251,14 +305,31 @@ public static class HelmChartLoader
         return files;
     }
 
-    private static async Task<Dictionary<string, byte[]>> LoadArchiveAsync(string chartPath, CancellationToken cancellationToken)
+    private static async Task<Dictionary<string, byte[]>> LoadArchiveFileAsync(string chartPath, CancellationToken cancellationToken)
+    {
+        await using var file = File.OpenRead(chartPath);
+        return await LoadArchiveAsync(file, chartPath, cancellationToken);
+    }
+
+    private static async Task<Dictionary<string, byte[]>> LoadArchiveBytesAsync(
+        byte[] archiveBytes,
+        string chartPath,
+        CancellationToken cancellationToken)
+    {
+        await using var memory = new MemoryStream(archiveBytes, writable: false);
+        return await LoadArchiveAsync(memory, chartPath, cancellationToken);
+    }
+
+    private static async Task<Dictionary<string, byte[]>> LoadArchiveAsync(
+        Stream input,
+        string chartPath,
+        CancellationToken cancellationToken)
     {
         var archiveFiles = new List<ArchiveFileEntry>();
-        await using var file = File.OpenRead(chartPath);
         await using Stream archive = chartPath.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase) ||
                                      chartPath.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase)
-            ? new GZipStream(file, CompressionMode.Decompress)
-            : file;
+            ? new GZipStream(input, CompressionMode.Decompress)
+            : input;
 
         using var reader = new TarReader(archive);
         TarEntry? entry;
@@ -289,6 +360,33 @@ public static class HelmChartLoader
         return files;
     }
 
+    private static async Task<HelmChart> LoadDependencyArchiveAsync(
+        string parentChartPath,
+        string dependencyPath,
+        byte[] archiveBytes,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var subchartFiles = await LoadArchiveBytesAsync(
+                archiveBytes,
+                dependencyPath,
+                cancellationToken);
+
+            return await LoadFromFilesAsync(
+                $"{parentChartPath}!{dependencyPath}",
+                subchartFiles,
+                null,
+                cancellationToken);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or IOException)
+        {
+            throw new InvalidDataException(
+                $"Failed to load dependency archive '{dependencyPath}' in chart '{parentChartPath}': {ex.Message}",
+                ex);
+        }
+    }
+
     private static byte[]? FindFile(Dictionary<string, byte[]> files, string fileName)
     {
         if (files.TryGetValue(fileName, out var exact))
@@ -304,5 +402,24 @@ public static class HelmChartLoader
     internal static string NormalizePath(string path)
         => path.Replace('\\', '/').TrimStart('/');
 
+    private static bool IsEmbeddedDependencyArchivePath(string path)
+    {
+        var normalized = NormalizePath(path);
+        if (!normalized.StartsWith("charts/", StringComparison.Ordinal))
+            return false;
+
+        var rest = normalized["charts/".Length..];
+        return rest.IndexOf('/') < 0 && IsDependencyArchivePath(rest);
+    }
+
+    private static bool IsDependencyArchiveFile(string path)
+        => IsDependencyArchivePath(Path.GetFileName(path));
+
+    private static bool IsDependencyArchivePath(string path)
+        => path.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase) ||
+           path.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase);
+
     private sealed record ArchiveFileEntry(string Name, byte[] Content);
+
+    private sealed record PackagedDependencyChart(HelmChart Chart);
 }

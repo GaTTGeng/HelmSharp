@@ -84,10 +84,10 @@ public static class HelmValues
         string key,
         out HelmChart subchart)
     {
-        if (chart.Subcharts.TryGetValue(dependency.Name, out subchart!))
+        if (chart.Subcharts.TryGetValue(key, out subchart!))
             return true;
 
-        if (chart.Subcharts.TryGetValue(key, out subchart!))
+        if (chart.Subcharts.TryGetValue(dependency.Name, out subchart!))
             return true;
 
         foreach (var candidate in chart.Subcharts.Values)
