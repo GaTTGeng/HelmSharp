@@ -388,16 +388,16 @@ internal static class HelmChartPackager
 
         public bool IsMatch(string path)
         {
-            var value = _matchBasenameOnly
-                ? GetBasename(path)
-                : path;
-            return _matcher.IsMatch(value);
-        }
+            if (!_matchBasenameOnly)
+                return _matcher.IsMatch(path);
 
-        private static string GetBasename(string path)
-        {
-            var slash = path.LastIndexOf('/');
-            return slash >= 0 ? path[(slash + 1)..] : path;
+            foreach (var segment in path.Split('/'))
+            {
+                if (_matcher.IsMatch(segment))
+                    return true;
+            }
+
+            return false;
         }
 
         private static string ConvertGlobToRegex(string glob)

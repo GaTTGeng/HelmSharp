@@ -340,6 +340,7 @@ public sealed class PackageMetadataValidationTests : IDisposable
             .git/
             .vscode/
             generated/
+            cache
             *.tmp
             *.bak
             /root-only.txt
@@ -350,6 +351,8 @@ public sealed class PackageMetadataValidationTests : IDisposable
         await WriteTextAsync(Path.Combine(chartDir, ".git", "config"), "ignored\n");
         await WriteTextAsync(Path.Combine(chartDir, ".vscode", "settings.json"), "{}\n");
         await WriteTextAsync(Path.Combine(chartDir, "generated", "nested", "manifest.yaml"), "ignored\n");
+        await WriteTextAsync(Path.Combine(chartDir, "cache", "nested", "manifest.yaml"), "ignored\n");
+        await WriteTextAsync(Path.Combine(chartDir, "nested", "cache", "manifest.yaml"), "ignored\n");
         await WriteTextAsync(Path.Combine(chartDir, "notes.tmp"), "ignored\n");
         await WriteTextAsync(Path.Combine(chartDir, "backup.bak"), "ignored\n");
         await WriteTextAsync(Path.Combine(chartDir, "root-only.txt"), "ignored\n");
@@ -374,6 +377,8 @@ public sealed class PackageMetadataValidationTests : IDisposable
         Assert.DoesNotContain("helmignore-filter/.git/config", entryNames);
         Assert.DoesNotContain("helmignore-filter/.vscode/settings.json", entryNames);
         Assert.DoesNotContain("helmignore-filter/generated/nested/manifest.yaml", entryNames);
+        Assert.DoesNotContain("helmignore-filter/cache/nested/manifest.yaml", entryNames);
+        Assert.DoesNotContain("helmignore-filter/nested/cache/manifest.yaml", entryNames);
         Assert.DoesNotContain("helmignore-filter/notes.tmp", entryNames);
         Assert.DoesNotContain("helmignore-filter/backup.bak", entryNames);
         Assert.DoesNotContain("helmignore-filter/root-only.txt", entryNames);
@@ -584,6 +589,7 @@ public sealed class PackageMetadataValidationTests : IDisposable
             .git/
             .vscode/
             generated/
+            cache
             *.tmp
             *.bak
             /root-only.txt
@@ -595,6 +601,8 @@ public sealed class PackageMetadataValidationTests : IDisposable
         await WriteTextAsync(Path.Combine(chartDir, ".git", "config"), "ignored\n");
         await WriteTextAsync(Path.Combine(chartDir, ".vscode", "settings.json"), "{}\n");
         await WriteTextAsync(Path.Combine(chartDir, "generated", "nested", "manifest.yaml"), "ignored\n");
+        await WriteTextAsync(Path.Combine(chartDir, "cache", "nested", "manifest.yaml"), "ignored\n");
+        await WriteTextAsync(Path.Combine(chartDir, "nested", "cache", "manifest.yaml"), "ignored\n");
         await WriteTextAsync(Path.Combine(chartDir, "notes.tmp"), "ignored\n");
         await WriteTextAsync(Path.Combine(chartDir, "backup.bak"), "ignored\n");
         await WriteTextAsync(Path.Combine(chartDir, "root-only.txt"), "ignored\n");
