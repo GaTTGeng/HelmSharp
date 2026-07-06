@@ -13,6 +13,8 @@ internal static class HelmCliRunner
 
     public static bool IsAvailable() => HelmAvailability.Value;
 
+    public static HelmCliHome CreateHome() => new();
+
     private static bool DetectAvailability()
     {
         try
@@ -79,11 +81,134 @@ internal static class HelmCliRunner
         return RunAsync(arguments, CommandTimeout, cancellationToken);
     }
 
+    public static Task<HelmCliResult> RepoAddAsync(
+        string name,
+        string url,
+        HelmCliHome home,
+        CancellationToken cancellationToken)
+        => RunAsync(
+            [
+                "repo",
+                "add",
+                name,
+                url
+            ],
+            CommandTimeout,
+            cancellationToken,
+            home);
+
+    public static Task<HelmCliResult> RepoIndexAsync(
+        string directory,
+        string? url,
+        CancellationToken cancellationToken)
+    {
+        var arguments = new List<string>
+        {
+            "repo",
+            "index",
+            NormalizeHelmPath(directory)
+        };
+
+        if (url is not null)
+        {
+            arguments.Add("--url");
+            arguments.Add(url);
+        }
+
+        return RunAsync(arguments, CommandTimeout, cancellationToken);
+    }
+
+    public static Task<HelmCliResult> PullAsync(
+        string chartRef,
+        string destination,
+        string? version,
+        string? repoUrl,
+        CancellationToken cancellationToken)
+    {
+        var arguments = new List<string>
+        {
+            "pull",
+            chartRef,
+            "--destination",
+            NormalizeHelmPath(destination)
+        };
+
+        if (version is not null)
+        {
+            arguments.Add("--version");
+            arguments.Add(version);
+        }
+
+        if (repoUrl is not null)
+        {
+            arguments.Add("--repo");
+            arguments.Add(repoUrl);
+        }
+
+        return RunAsync(arguments, CommandTimeout, cancellationToken);
+    }
+
+    public static Task<HelmCliResult> DependencyListAsync(
+        string chartPath,
+        CancellationToken cancellationToken)
+        => RunAsync(
+            [
+                "dependency",
+                "list",
+                NormalizeHelmPath(chartPath)
+            ],
+            CommandTimeout,
+            cancellationToken);
+
+    public static Task<HelmCliResult> DependencyUpdateAsync(
+        string chartPath,
+        CancellationToken cancellationToken)
+        => RunAsync(
+            [
+                "dependency",
+                "update",
+                NormalizeHelmPath(chartPath)
+            ],
+            CommandTimeout,
+            cancellationToken);
+
+    public static Task<HelmCliResult> DependencyBuildAsync(
+        string chartPath,
+        CancellationToken cancellationToken)
+        => RunAsync(
+            [
+                "dependency",
+                "build",
+                NormalizeHelmPath(chartPath),
+                "--skip-refresh"
+            ],
+            CommandTimeout,
+            cancellationToken);
+
+    public static Task<HelmCliResult> DependencyBuildAsync(
+        string chartPath,
+        HelmCliHome home,
+        CancellationToken cancellationToken)
+        => RunAsync(
+            [
+                "dependency",
+                "build",
+                NormalizeHelmPath(chartPath),
+                "--skip-refresh"
+            ],
+            CommandTimeout,
+            cancellationToken,
+            home);
+
     private static async Task<HelmCliResult> RunAsync(
         IReadOnlyCollection<string> arguments,
         TimeSpan timeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        HelmCliHome? home = null)
     {
+        var ownedHome = home is null ? new HelmCliHome() : null;
+        home ??= ownedHome!;
+
         using var process = new Process();
         using var timeoutSource = new CancellationTokenSource(timeout);
         using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(
@@ -100,37 +225,48 @@ internal static class HelmCliRunner
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8
         };
+        process.StartInfo.Environment["HELM_CONFIG_HOME"] = home.ConfigHome;
+        process.StartInfo.Environment["HELM_CACHE_HOME"] = home.CacheHome;
+        process.StartInfo.Environment["HELM_DATA_HOME"] = home.DataHome;
+
         foreach (var argument in arguments)
             process.StartInfo.ArgumentList.Add(argument);
 
-        if (!process.Start())
-            throw new InvalidOperationException("Failed to start Helm CLI.");
-
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
-
         try
         {
-            await process.WaitForExitAsync(linkedSource.Token);
+            if (!process.Start())
+                throw new InvalidOperationException("Failed to start Helm CLI.");
+
+            var stdout = process.StandardOutput.ReadToEndAsync();
+            var stderr = process.StandardError.ReadToEndAsync();
+
+            try
+            {
+                await process.WaitForExitAsync(linkedSource.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                await TerminateProcessAsync(process);
+
+                await Task.WhenAll(stdout, stderr);
+
+                if (timeoutSource.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                    throw new TimeoutException($"Helm CLI did not exit within {timeout.TotalSeconds:0} seconds.");
+
+                throw;
+            }
+
+            var output = await Task.WhenAll(stdout, stderr);
+
+            return new HelmCliResult(
+                process.ExitCode,
+                NormalizeLineEndings(output[0]),
+                NormalizeLineEndings(output[1]));
         }
-        catch (OperationCanceledException)
+        finally
         {
-            await TerminateProcessAsync(process);
-
-            await Task.WhenAll(stdout, stderr);
-
-            if (timeoutSource.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
-                throw new TimeoutException($"Helm CLI did not exit within {timeout.TotalSeconds:0} seconds.");
-
-            throw;
+            ownedHome?.Dispose();
         }
-
-        var output = await Task.WhenAll(stdout, stderr);
-
-        return new HelmCliResult(
-            process.ExitCode,
-            NormalizeLineEndings(output[0]),
-            NormalizeLineEndings(output[1]));
     }
 
     private static async Task TerminateProcessAsync(Process process)
@@ -155,6 +291,40 @@ internal static class HelmCliRunner
 
     private static string NormalizeHelmPath(string path)
         => path.Replace('\\', '/');
+
+    public sealed class HelmCliHome : IDisposable
+    {
+        private readonly string _root;
+
+        internal HelmCliHome()
+        {
+            _root = Path.Combine(Path.GetTempPath(), "helmsharp-helm-cli", Guid.NewGuid().ToString("N"));
+            ConfigHome = Path.Combine(_root, "config");
+            CacheHome = Path.Combine(_root, "cache");
+            DataHome = Path.Combine(_root, "data");
+            Directory.CreateDirectory(ConfigHome);
+            Directory.CreateDirectory(CacheHome);
+            Directory.CreateDirectory(DataHome);
+        }
+
+        public string ConfigHome { get; }
+
+        public string CacheHome { get; }
+
+        public string DataHome { get; }
+
+        public void Dispose()
+        {
+            try
+            {
+                if (Directory.Exists(_root))
+                    Directory.Delete(_root, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+    }
 }
 
 internal sealed record HelmCliResult(int ExitCode, string Stdout, string Stderr);

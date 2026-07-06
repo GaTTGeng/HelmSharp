@@ -10,6 +10,7 @@ This project follows semantic versioning once stable releases begin.
 
 - Expanded the VitePress documentation into workflow guides, real integration examples, package-by-package pages, and generated API reference indexes in English and Simplified Chinese.
 - Added HelmSharp logo and wordmark assets to the READMEs and VitePress documentation site.
+- Added Helm CLI golden coverage for package, repository index, pull, and dependency workflows (#128).
 
 ### Changed
 
@@ -22,6 +23,7 @@ This project follows semantic versioning once stable releases begin.
 - Aligned chart packaging metadata validation and version/appVersion override behavior with Helm package expectations.
 - Matched Helm package `.helmignore` filtering for comments, directory and glob patterns, normalized paths, and supported negation behavior (#126).
 - Hardened chart archive layout and extraction safety for packaged charts, chart loading, and repository pulls (#127).
+- Matched Helm repository index digest casing, version ordering, and HTTP chart-reference parsing used by repository pulls (#128).
 
 ## [1.1.0] - 2026-07-01
 
