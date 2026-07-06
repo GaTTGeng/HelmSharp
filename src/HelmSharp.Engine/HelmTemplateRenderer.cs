@@ -11,47 +11,51 @@ namespace HelmSharp.Engine;
 
 public sealed class HelmTemplateRenderer : IEvaluationContext
 {
+    private static readonly string HelmSharpVersion =
+        typeof(HelmTemplateRenderer).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+
     private static readonly Regex TokenRegex = new(
         "{{-?\\s*(?<expr>.*?)\\s*-?}}",
         RegexOptions.Compiled | RegexOptions.Singleline);
 
     private static readonly IReadOnlyDictionary<string, int> InstallOrder = new Dictionary<string, int>(StringComparer.Ordinal)
     {
-        ["Namespace"] = 0,
-        ["NetworkPolicy"] = 1,
-        ["ResourceQuota"] = 2,
-        ["LimitRange"] = 3,
-        ["PodSecurityPolicy"] = 4,
-        ["PodDisruptionBudget"] = 5,
-        ["ServiceAccount"] = 6,
-        ["Secret"] = 7,
-        ["SecretList"] = 8,
-        ["ConfigMap"] = 9,
-        ["StorageClass"] = 10,
-        ["PersistentVolume"] = 11,
-        ["PersistentVolumeClaim"] = 12,
-        ["CustomResourceDefinition"] = 13,
-        ["ClusterRole"] = 14,
-        ["ClusterRoleList"] = 15,
-        ["ClusterRoleBinding"] = 16,
-        ["ClusterRoleBindingList"] = 17,
-        ["Role"] = 18,
-        ["RoleList"] = 19,
-        ["RoleBinding"] = 20,
-        ["RoleBindingList"] = 21,
-        ["Service"] = 22,
-        ["DaemonSet"] = 23,
-        ["Pod"] = 24,
-        ["ReplicationController"] = 25,
-        ["ReplicaSet"] = 26,
-        ["Deployment"] = 27,
-        ["HorizontalPodAutoscaler"] = 28,
-        ["StatefulSet"] = 29,
-        ["Job"] = 30,
-        ["CronJob"] = 31,
-        ["IngressClass"] = 32,
-        ["Ingress"] = 33,
-        ["APIService"] = 34,
+        ["PriorityClass"] = 0,
+        ["Namespace"] = 1,
+        ["NetworkPolicy"] = 2,
+        ["ResourceQuota"] = 3,
+        ["LimitRange"] = 4,
+        ["PodSecurityPolicy"] = 5,
+        ["PodDisruptionBudget"] = 6,
+        ["ServiceAccount"] = 7,
+        ["Secret"] = 8,
+        ["SecretList"] = 9,
+        ["ConfigMap"] = 10,
+        ["StorageClass"] = 11,
+        ["PersistentVolume"] = 12,
+        ["PersistentVolumeClaim"] = 13,
+        ["CustomResourceDefinition"] = 14,
+        ["ClusterRole"] = 15,
+        ["ClusterRoleList"] = 16,
+        ["ClusterRoleBinding"] = 17,
+        ["ClusterRoleBindingList"] = 18,
+        ["Role"] = 19,
+        ["RoleList"] = 20,
+        ["RoleBinding"] = 21,
+        ["RoleBindingList"] = 22,
+        ["Service"] = 23,
+        ["DaemonSet"] = 24,
+        ["Pod"] = 25,
+        ["ReplicationController"] = 26,
+        ["ReplicaSet"] = 27,
+        ["Deployment"] = 28,
+        ["HorizontalPodAutoscaler"] = 29,
+        ["StatefulSet"] = 30,
+        ["Job"] = 31,
+        ["CronJob"] = 32,
+        ["IngressClass"] = 33,
+        ["Ingress"] = 34,
+        ["APIService"] = 35,
         ["MutatingWebhookConfiguration"] = 36,
         ["ValidatingWebhookConfiguration"] = 37,
     };
@@ -243,11 +247,21 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         }
 
         var output = new StringBuilder();
+        RenderedManifest? previousManifest = null;
         foreach (var manifest in SortManifests(manifests))
         {
+            if (previousManifest is not null &&
+                !string.Equals(previousManifest.SourcePath, manifest.SourcePath, StringComparison.Ordinal) &&
+                !string.IsNullOrEmpty(previousManifest.Kind) &&
+                previousManifest.EndedWithNewline)
+            {
+                output.Append('\n');
+            }
+
             output.Append("---\n");
             output.Append(manifest.Content);
             output.Append('\n');
+            previousManifest = manifest;
         }
 
         return output.ToString();
@@ -257,16 +271,17 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
     {
         foreach (var document in SplitManifestDocuments(NormalizeManifestContent(rendered)))
         {
-            if (string.IsNullOrWhiteSpace(document))
+            if (string.IsNullOrWhiteSpace(document.Content))
                 continue;
 
             var order = manifests.Count;
             manifests.Add(new RenderedManifest(
                 sourcePath,
-                document,
-                ExtractManifestKind(document),
-                IsHookManifest(document),
-                ExtractHookWeight(document),
+                document.Content,
+                document.EndedWithNewline,
+                ExtractManifestKind(document.Content),
+                IsHookManifest(document.Content),
+                ExtractHookWeight(document.Content),
                 order));
         }
     }
@@ -282,37 +297,39 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
     private static int GetManifestKindOrder(string kind)
     {
         if (string.IsNullOrEmpty(kind))
-            return 35;
+            return int.MaxValue;
 
         return InstallOrder.TryGetValue(kind, out var order) ? order : int.MaxValue;
     }
 
-    private static List<string> SplitManifestDocuments(string manifest)
+    private static List<ManifestDocument> SplitManifestDocuments(string manifest)
     {
-        var documents = new List<string>();
-        var current = new StringBuilder();
-        foreach (var line in manifest.Split('\n'))
+        var documents = new List<ManifestDocument>();
+        var separatorRegex = new Regex(@"(?m)^[ \t]*---(?:[ \t]*(?:#.*)?)?$");
+        var start = 0;
+        foreach (Match match in separatorRegex.Matches(manifest))
         {
-            if (IsManifestDocumentSeparator(line))
-            {
-                AddCurrentDocument(documents, current);
-                continue;
-            }
-
-            current.Append(line);
-            current.Append('\n');
+            AddManifestDocumentSegment(documents, manifest[start..match.Index], forceNoTrailingNewline: true);
+            start = match.Index + match.Length;
+            if (start < manifest.Length && manifest[start] == '\n')
+                start++;
         }
 
-        AddCurrentDocument(documents, current);
+        AddManifestDocumentSegment(documents, manifest[start..], forceNoTrailingNewline: false);
         return documents;
     }
 
-    private static void AddCurrentDocument(List<string> documents, StringBuilder current)
+    private static void AddManifestDocumentSegment(
+        List<ManifestDocument> documents,
+        string segment,
+        bool forceNoTrailingNewline)
     {
-        var document = current.ToString().Trim();
-        current.Clear();
-        if (document.Length > 0)
-            documents.Add(document);
+        var content = segment.Trim();
+        if (content.Length == 0)
+            return;
+
+        var endedWithNewline = !forceNoTrailingNewline && segment.TrimEnd(' ', '\t').EndsWith('\n');
+        documents.Add(new ManifestDocument(content, endedWithNewline));
     }
 
     private static string ExtractManifestKind(string manifest)
@@ -320,9 +337,6 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         var match = Regex.Match(manifest, @"(?m)^kind:\s*(.+)$");
         return match.Success ? match.Groups[1].Value.Trim() : string.Empty;
     }
-
-    private static bool IsManifestDocumentSeparator(string line)
-        => Regex.IsMatch(line, @"^\s*---(?:\s*(?:#.*)?)?$");
 
     private static bool IsHookManifest(string manifest)
         => TryGetHookAnnotation(manifest, "helm.sh/hook", out _);
@@ -374,14 +388,16 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
     {
         var normalized = rendered
             .Replace("\r\n", "\n", StringComparison.Ordinal)
-            .Replace("\r", "\n", StringComparison.Ordinal)
-            .Trim();
+            .Replace("\r", "\n", StringComparison.Ordinal);
         return Regex.Replace(normalized, @"(?m)^---\n[ \t]*\n", "---\n");
     }
+
+    private sealed record ManifestDocument(string Content, bool EndedWithNewline);
 
     private sealed record RenderedManifest(
         string SourcePath,
         string Content,
+        bool EndedWithNewline,
         string Kind,
         bool IsHook,
         int HookWeight,
@@ -1492,13 +1508,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             {
                 ["KubeVersion"] = ToTemplateKubeVersion(context.KubeVersion),
                 ["APIVersions"] = context.ApiVersions ?? GetDefaultApiVersions(context.KubeVersion),
-                ["HelmVersion"] = new Dictionary<string, object?>
-                {
-                    ["Version"] = "HelmSharp 0.3.0",
-                    ["GitCommit"] = "managed",
-                    ["GitTreeState"] = "clean",
-                    ["GoVersion"] = "dotnet/9.0"
-                }
+                ["HelmVersion"] = BuildHelmVersionDict()
             },
             ["Files"] = new TemplateFiles(context.Chart.Files),
             ["Template"] = new Dictionary<string, object?>
@@ -1520,13 +1530,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             {
                 ["KubeVersion"] = ToTemplateKubeVersion(context.KubeVersion),
                 ["APIVersions"] = context.ApiVersions ?? GetDefaultApiVersions(context.KubeVersion),
-                ["HelmVersion"] = new Dictionary<string, object?>
-                {
-                    ["Version"] = "HelmSharp 0.3.0",
-                    ["GitCommit"] = "managed",
-                    ["GitTreeState"] = "clean",
-                    ["GoVersion"] = "dotnet/9.0"
-                }
+                ["HelmVersion"] = BuildHelmVersionDict()
             },
             "Files" => new TemplateFiles(context.Chart.Files),
             "Template" => new Dictionary<string, object?>
@@ -1540,6 +1544,15 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         var skip = parts.FirstOrDefault() is "Values" or "Chart" or "Release" or "Capabilities" or "Files" or "Template" ? 1 : 0;
         return ResolveMembers(current, parts.Skip(skip));
     }
+
+    private static Dictionary<string, object?> BuildHelmVersionDict()
+        => new(StringComparer.Ordinal)
+        {
+            ["Version"] = $"HelmSharp {HelmSharpVersion}",
+            ["GitCommit"] = "managed",
+            ["GitTreeState"] = "clean",
+            ["GoVersion"] = $"dotnet/{Environment.Version.Major}.{Environment.Version.Minor}"
+        };
 
     private static Dictionary<string, object?> BuildChartDict(TemplateContext context)
         => new(StringComparer.Ordinal)
@@ -1624,7 +1637,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         var normalized = content
             .Replace("\r\n", "\n", StringComparison.Ordinal)
             .Replace("\r", "\n", StringComparison.Ordinal);
-        return normalized.Split('\n').Cast<object?>().ToList();
+        return normalized.TrimEnd('\n').Split('\n').Cast<object?>().ToList();
     }
 
     private sealed class TemplateFiles

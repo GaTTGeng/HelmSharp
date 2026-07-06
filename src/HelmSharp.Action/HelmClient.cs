@@ -17,6 +17,9 @@ namespace HelmSharp.Action;
 /// </summary>
 public class HelmClient : IHelmClient
 {
+    private static readonly string ProductVersion =
+        typeof(HelmClient).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+
     private readonly IHelmOptionsProvider _optionsProvider;
     private readonly Func<HelmExecutionOptions, string?, string?, CancellationToken, Task<k8s.Kubernetes>> _createKubernetesClientAsync;
 
@@ -34,7 +37,7 @@ public class HelmClient : IHelmClient
     }
 
     public Task<CommandResult> VersionAsync(CancellationToken cancellationToken = default)
-        => Task.FromResult(Ok("HelmSharp 0.3.0"));
+        => Task.FromResult(Ok($"HelmSharp {ProductVersion}"));
 
     public async Task<CommandResult> ListReleasesAsync(
         string? @namespace = null,

@@ -145,7 +145,7 @@ public class TemplateFunctionTests
 
         Assert.Contains("get: \"alpha\\nbeta\\n\"", result);
         Assert.Contains("missing: \"\"", result);
-        Assert.Contains("lineCount: \"3\"", result);
+        Assert.Contains("lineCount: \"2\"", result);
         Assert.Contains("binary: \"AAH+/w==\"", result);
         Assert.Contains("app.txt: |\n      alpha\n      beta", result);
         Assert.Contains("count.txt: \"1\"", result);
@@ -287,6 +287,12 @@ public class TemplateFunctionTests
     public void Render_OrdersManifestDocumentsLikeHelm()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/z-priorityclass.yaml"] = """
+            apiVersion: scheduling.k8s.io/v1
+            kind: PriorityClass
+            metadata:
+              name: app
+            """;
         chart.Templates["templates/deployment.yaml"] = """
             apiVersion: apps/v1
             kind: Deployment
@@ -331,18 +337,42 @@ public class TemplateFunctionTests
         var result = renderer.Render();
         _output.WriteLine(result);
 
+        var priorityClassIndex = result.IndexOf("kind: PriorityClass", StringComparison.Ordinal);
         var configMapIndex = result.IndexOf("kind: ConfigMap", StringComparison.Ordinal);
         var serviceIndex = result.IndexOf("kind: Service", StringComparison.Ordinal);
         var deploymentIndex = result.IndexOf("kind: Deployment", StringComparison.Ordinal);
-        var kindlessIndex = result.IndexOf("# rendered comment-only manifest", StringComparison.Ordinal);
         var webhookIndex = result.IndexOf("kind: ValidatingWebhookConfiguration", StringComparison.Ordinal);
+        var kindlessIndex = result.IndexOf("# rendered comment-only manifest", StringComparison.Ordinal);
         var hookIndex = result.IndexOf("name: app-hook", StringComparison.Ordinal);
 
+        Assert.True(priorityClassIndex < configMapIndex);
         Assert.True(configMapIndex < serviceIndex);
         Assert.True(serviceIndex < deploymentIndex);
-        Assert.True(deploymentIndex < kindlessIndex);
-        Assert.True(kindlessIndex < webhookIndex);
-        Assert.True(webhookIndex < hookIndex);
+        Assert.True(deploymentIndex < webhookIndex);
+        Assert.True(webhookIndex < kindlessIndex);
+        Assert.True(kindlessIndex < hookIndex);
+    }
+
+    [Fact]
+    public void Render_CapabilitiesHelmVersion_UsesAssemblyVersion()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/configmap.yaml"] = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: app
+            data:
+              version: {{ .Capabilities.HelmVersion.Version | quote }}
+            """;
+
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>());
+        var result = renderer.Render();
+        _output.WriteLine(result);
+
+        var expectedVersion = typeof(HelmTemplateRenderer).Assembly.GetName().Version?.ToString(3);
+        Assert.Contains($"version: \"HelmSharp {expectedVersion}\"", result);
     }
 
     [Fact]
@@ -511,7 +541,7 @@ public class TemplateFunctionTests
     }
 
     [Fact]
-    public void ToYaml_RendersNestedNullsLikeHelm()
+    public void ToYaml_OmitsNullMapEntriesLikeHelm()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
         chart.Templates["templates/test.yaml"] = """
@@ -531,7 +561,7 @@ public class TemplateFunctionTests
         var result = renderer.Render();
         _output.WriteLine(result);
 
-        Assert.Contains("limits: null", result);
+        Assert.DoesNotContain("limits", result);
         Assert.Contains("requests:", result);
         Assert.Contains("cpu: 1m", result);
         Assert.Contains("plain: value", result);

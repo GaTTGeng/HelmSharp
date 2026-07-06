@@ -58,7 +58,10 @@ public sealed class PackageMetadataValidationTests : IDisposable
         var result = await client.PackageAsync(chartDir, destination);
 
         Assert.Equal(1, result.ExitCode);
-        Assert.Equal("Error: Chart.yaml file is missing", result.StandardError);
+        var chartYamlPath = Path.Combine(chartDir, "Chart.yaml");
+        Assert.Equal(
+            $"Error: unable to detect chart at {chartYamlPath}: open {chartYamlPath}: The system cannot find the file specified.",
+            result.StandardError);
         Assert.False(ContainsPackage(destination));
     }
 

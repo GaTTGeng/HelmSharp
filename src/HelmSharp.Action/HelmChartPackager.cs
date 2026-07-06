@@ -42,7 +42,8 @@ internal static class HelmChartPackager
 
         var chartYamlPath = Path.Combine(chartPath, "Chart.yaml");
         if (!File.Exists(chartYamlPath))
-            throw new FileNotFoundException("Chart.yaml file is missing");
+            throw new FileNotFoundException(
+                $"unable to detect chart at {chartYamlPath}: open {chartYamlPath}: The system cannot find the file specified.");
 
         var chartYamlContent = await File.ReadAllTextAsync(chartYamlPath, Encoding.UTF8, cancellationToken);
         var metadata = LoadChartMetadata(chartYamlContent);
