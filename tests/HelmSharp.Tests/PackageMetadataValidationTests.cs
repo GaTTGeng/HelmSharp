@@ -60,7 +60,7 @@ public sealed class PackageMetadataValidationTests : IDisposable
         Assert.Equal(1, result.ExitCode);
         var chartYamlPath = Path.Combine(chartDir, "Chart.yaml");
         Assert.Equal(
-            $"Error: unable to detect chart at {chartYamlPath}: open {chartYamlPath}: The system cannot find the file specified.",
+            $"Error: unable to detect chart at {chartYamlPath}: open {chartYamlPath}: {GetMissingFileMessage()}",
             result.StandardError);
         Assert.False(ContainsPackage(destination));
     }
@@ -632,6 +632,11 @@ public sealed class PackageMetadataValidationTests : IDisposable
     private static bool ContainsPackage(string destination)
         => Directory.Exists(destination) &&
            Directory.EnumerateFiles(destination, "*.tgz", SearchOption.AllDirectories).Any();
+
+    private static string GetMissingFileMessage()
+        => OperatingSystem.IsWindows()
+            ? "The system cannot find the file specified."
+            : "no such file or directory";
 
     private static string GetSinglePackagePath(string destination)
         => Directory.EnumerateFiles(destination, "*.tgz", SearchOption.AllDirectories).Single();
