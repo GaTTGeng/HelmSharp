@@ -175,7 +175,7 @@ public static class HelmYaml
     {
         if (value is null)
             return "null\n"; // Match Helm/Go yaml.Marshal(nil) -> "null\n"
-        return NormalizeNullMapScalars(Serializer.Serialize(SortKeys(value, omitNullMapValues: true)));
+        return NormalizeNullMapScalars(Serializer.Serialize(SortKeys(value)));
     }
 
     /// <summary>
@@ -183,18 +183,16 @@ public static class HelmYaml
     /// Helm/Go YAML marshaling output (Go sorts map keys by default).
     /// Pattern matching uses the same interface shapes as Normalize() for consistency.
     /// </summary>
-    private static object? SortKeys(object? value, bool omitNullMapValues)
+    private static object? SortKeys(object? value)
     {
         return value switch
         {
             IDictionary<string, object?> dict => new SortedDictionary<string, object?>(
-                dict
-                    .Where(kvp => !omitNullMapValues || kvp.Value is not null)
-                    .ToDictionary(kvp => kvp.Key, kvp => SortKeys(kvp.Value, omitNullMapValues))!,
+                dict.ToDictionary(kvp => kvp.Key, kvp => SortKeys(kvp.Value))!,
                 StringComparer.Ordinal),
             // Dictionary<object, object> is already normalized by Normalize()
             // before Serialize is called — skip it to avoid key-collision crash.
-            IEnumerable<object> list => list.Select(item => SortKeys(item, omitNullMapValues)).ToList(),
+            IEnumerable<object> list => list.Select(SortKeys).ToList(),
             string text when NeedsQuotedString(text) => new QuotedYamlString(text),
             _ => value
         };

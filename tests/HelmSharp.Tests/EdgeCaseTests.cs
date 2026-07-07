@@ -1188,10 +1188,11 @@ public class EdgeCaseTests
     }
 
     [Fact]
-    public void ToYaml_DictionaryOmitsNullValuedKeys()
+    public void ToYaml_DictionaryPreservesNullValuedKeys()
     {
-        // Helm v4 uses sigs.k8s.io/yaml.Marshal; null-valued map entries are
-        // omitted, while direct nil values still serialize as "null".
+        // Helm v4 toYaml preserves explicit null-valued map entries. Chart
+        // defaults may prune nulls during values coalescing, but serialization
+        // itself must keep explicit null overrides.
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
         chart.Templates["templates/test.yaml"] = """
             apiVersion: v1
@@ -1217,14 +1218,14 @@ public class EdgeCaseTests
             });
         var result = renderer.Render();
         _output.WriteLine(result);
-        Assert.DoesNotContain("limits", result);
+        Assert.Contains("    limits: null", result);
         Assert.Contains("    requests:", result);
         Assert.Contains("      cpu: 1m", result);
         Assert.Contains("      memory: 16Mi", result);
     }
 
     [Fact]
-    public void ToYaml_DictionaryWithOnlyNullValuesRendersEmptyBraces()
+    public void ToYaml_DictionaryWithOnlyNullValuesRendersNullEntry()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
         chart.Templates["templates/test.yaml"] = """
@@ -1243,8 +1244,7 @@ public class EdgeCaseTests
             });
         var result = renderer.Render();
         _output.WriteLine(result);
-        Assert.Contains("    {}", result);
-        Assert.DoesNotContain("limits", result);
+        Assert.Contains("    limits: null", result);
     }
 
     [Fact]

@@ -67,10 +67,16 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
 
         AssertOperationSucceeded("helm repo index", helmResult);
         var helmIndexPath = Path.Combine(helmRepoDir, "index.yaml");
+        var sharpIndexYaml = File.ReadAllText(sharpIndexPath, Encoding.UTF8);
         var sharpIndex = ReadIndexSnapshot(sharpIndexPath, "repo-golden");
         var helmIndex = ReadIndexSnapshot(helmIndexPath, "repo-golden");
 
         Assert.Equal(helmIndex.ApiVersion, sharpIndex.ApiVersion);
+        Assert.DoesNotContain("home: null", sharpIndexYaml);
+        Assert.DoesNotContain("sources: null", sharpIndexYaml);
+        Assert.DoesNotContain("keywords: null", sharpIndexYaml);
+        Assert.DoesNotContain("maintainers: null", sharpIndexYaml);
+        Assert.DoesNotContain("deprecated: null", sharpIndexYaml);
         Assert.Equal(["1.1.0", "1.0.0"], sharpIndex.Versions.Select(version => version.Version));
         Assert.Equal(helmIndex.Versions.Select(version => version.Version), sharpIndex.Versions.Select(version => version.Version));
         Assert.Equal(helmIndex.Versions.Select(version => version.Url), sharpIndex.Versions.Select(version => version.Url));

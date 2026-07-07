@@ -19,6 +19,7 @@ public static class HelmValues
         CancellationToken cancellationToken)
     {
         var result = HelmYaml.DeserializeDictionary(chart.ValuesYaml);
+        PruneNullMapEntries(result);
 
         // Merge subchart default values under each dependency alias (or dependency name).
         foreach (var (key, subchart) in GetSubchartValueInstances(chart))
@@ -109,6 +110,7 @@ public static class HelmValues
         HelmChart subchart)
     {
         var subchartDefaults = HelmYaml.DeserializeDictionary(subchart.ValuesYaml);
+        PruneNullMapEntries(subchartDefaults);
         if (!result.ContainsKey(key))
         {
             result[key] = subchartDefaults;
@@ -151,6 +153,7 @@ public static class HelmValues
         string subchartName)
     {
         var result = HelmYaml.DeserializeDictionary(subchart.ValuesYaml);
+        PruneNullMapEntries(result);
 
         // Extract subchart-scoped values from parent
         if (parentValues.TryGetValue(subchartName, out var scopedObj) &&
@@ -188,6 +191,21 @@ public static class HelmValues
             }
 
             target[key] = value;
+        }
+    }
+
+    private static void PruneNullMapEntries(Dictionary<string, object?> values)
+    {
+        foreach (var key in values.Keys.ToList())
+        {
+            if (values[key] is null)
+            {
+                values.Remove(key);
+                continue;
+            }
+
+            if (values[key] is Dictionary<string, object?> child)
+                PruneNullMapEntries(child);
         }
     }
 
@@ -247,6 +265,14 @@ public static class HelmValues
         }
         else
         {
+            if (current.TryGetValue(lastName, out var existing) &&
+                existing is Dictionary<string, object?> existingDict &&
+                value is Dictionary<string, object?> valueDict)
+            {
+                MergeInto(existingDict, valueDict);
+                return;
+            }
+
             current[lastName] = value;
         }
     }

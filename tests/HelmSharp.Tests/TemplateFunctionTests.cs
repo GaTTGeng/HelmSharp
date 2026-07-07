@@ -541,7 +541,7 @@ public class TemplateFunctionTests
     }
 
     [Fact]
-    public void ToYaml_OmitsNullMapEntriesLikeHelm()
+    public void ToYaml_RendersNestedNullsLikeHelm()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
         chart.Templates["templates/test.yaml"] = """
@@ -561,7 +561,7 @@ public class TemplateFunctionTests
         var result = renderer.Render();
         _output.WriteLine(result);
 
-        Assert.DoesNotContain("limits", result);
+        Assert.Contains("limits: null", result);
         Assert.Contains("requests:", result);
         Assert.Contains("cpu: 1m", result);
         Assert.Contains("plain: value", result);
