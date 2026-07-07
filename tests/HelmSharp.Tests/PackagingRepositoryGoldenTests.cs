@@ -138,6 +138,35 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task PullAsync_RepositoryReferenceResolvesVersionsBySemverConstraint()
+    {
+        var repoDir = Path.Combine(_tempDir, "semver-pull-repo");
+        Directory.CreateDirectory(repoDir);
+        await PackageRepoChartVersionAsync("1.2.0", repoDir);
+        await PackageRepoChartVersionAsync("1.2.5+build.7", repoDir);
+        await PackageRepoChartVersionAsync("1.10.0", repoDir);
+        await PackageRepoChartVersionAsync("2.0.0-beta.1", repoDir);
+        await using var server = await LocalFileServer.StartAsync(repoDir);
+        await HelmRepoIndexer.GenerateIndexAsync(repoDir, server.BaseUrl, CancellationToken.None);
+
+        await AssertPulledVersionAsync(version: null, expectedVersion: "1.10.0");
+        await AssertPulledVersionAsync(version: "~1.2.0", expectedVersion: "1.2.5+build.7");
+        await AssertPulledVersionAsync(version: ">=2.0.0-beta.1 <2.0.0", expectedVersion: "2.0.0-beta.1");
+
+        async Task AssertPulledVersionAsync(string? version, string expectedVersion)
+        {
+            using var repository = new HelmChartRepository(Path.Combine(_tempDir, $"sharp-cache-{Guid.NewGuid():N}"));
+            var sharpPath = await repository.PullChartAsync(
+                $"{server.BaseUrl}/repo-golden",
+                version,
+                CancellationToken.None);
+            var chart = await HelmChartLoader.LoadAsync(sharpPath, CancellationToken.None);
+
+            Assert.Equal(expectedVersion, chart.Version);
+        }
+    }
+
     [HelmCliFact]
     public async Task DependencyWorkflows_LocalRepositoryMatchHelmOutputsAndPackages()
     {
@@ -161,7 +190,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         var helmUpdate = await HelmCliRunner.DependencyUpdateAsync(helmUpdateChart, CancellationToken.None);
         AssertOperationSucceeded("helm dependency update", helmUpdate);
         AssertOperationSucceeded("HelmSharp DependencyUpdateAsync", sharpUpdate);
-        await AssertDependencyPackageMatchesAsync(helmUpdateChart, sharpUpdateChart);
+        await AssertDependencyPackageMatchesAsync(helmUpdateChart, sharpUpdateChart, "0.2.5");
 
         var sharpOk = await client.DependencyListAsync(sharpUpdateChart);
         var helmOk = await HelmCliRunner.DependencyListAsync(helmUpdateChart, CancellationToken.None);
@@ -181,7 +210,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         var helmBuild = await HelmCliRunner.DependencyBuildAsync(helmBuildChart, helmBuildHome, CancellationToken.None);
         AssertOperationSucceeded("helm dependency build", helmBuild);
         AssertOperationSucceeded("HelmSharp DependencyBuildAsync", sharpBuild);
-        await AssertDependencyPackageMatchesAsync(helmBuildChart, sharpBuildChart);
+        await AssertDependencyPackageMatchesAsync(helmBuildChart, sharpBuildChart, "0.2.5");
     }
 
     private async Task<string> CreatePackageGoldenChartAsync(string directoryName, string version)
@@ -236,16 +265,23 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
 
     private async Task PackageDependencyChartAsync(string destination)
     {
-        var chartDir = await CreateChartAsync("child-dep-source", """
+        await PackageDependencyChartVersionAsync("0.2.0", destination);
+        await PackageDependencyChartVersionAsync("0.2.5", destination);
+        await PackageDependencyChartVersionAsync("0.3.0-beta.1", destination);
+    }
+
+    private async Task PackageDependencyChartVersionAsync(string version, string destination)
+    {
+        var chartDir = await CreateChartAsync($"child-dep-source-{version}", $"""
             apiVersion: v2
             name: child-dep
-            version: 0.2.0
+            version: {version}
             appVersion: v2
             description: Local dependency chart
             type: application
             """);
-        await WriteTextAsync(Path.Combine(chartDir, "values.yaml"), "child: true\n");
-        await WriteTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), "kind: ConfigMap\n");
+        await WriteTextAsync(Path.Combine(chartDir, "values.yaml"), $"childVersion: {version}\n");
+        await WriteTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), $"version: {version}\n");
         await HelmChartPackager.PackageAsync(chartDir, destination, cancellationToken: CancellationToken.None);
     }
 
@@ -257,7 +293,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
             version: 0.1.0
             dependencies:
               - name: child-dep
-                version: 0.2.0
+                version: ~0.2.0
                 repository: {repositoryUrl}
             """);
         await WriteTextAsync(Path.Combine(chartDir, "values.yaml"), "parent: true\n");
@@ -273,10 +309,13 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         return chartDir;
     }
 
-    private static async Task AssertDependencyPackageMatchesAsync(string helmChartDir, string sharpChartDir)
+    private static async Task AssertDependencyPackageMatchesAsync(
+        string helmChartDir,
+        string sharpChartDir,
+        string expectedVersion)
     {
-        var helmPackage = Path.Combine(helmChartDir, "charts", "child-dep-0.2.0.tgz");
-        var sharpPackage = Path.Combine(sharpChartDir, "charts", "child-dep-0.2.0.tgz");
+        var helmPackage = Path.Combine(helmChartDir, "charts", $"child-dep-{expectedVersion}.tgz");
+        var sharpPackage = Path.Combine(sharpChartDir, "charts", $"child-dep-{expectedVersion}.tgz");
         Assert.True(File.Exists(helmPackage), $"Helm dependency package was not written: {helmPackage}");
         Assert.True(File.Exists(sharpPackage), $"HelmSharp dependency package was not written: {sharpPackage}");
         Assert.Equal(

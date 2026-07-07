@@ -116,7 +116,7 @@ public sealed class HelmChartRepository : IDisposable
         {
             if (entry.Key.Contains(keyword, StringComparison.OrdinalIgnoreCase))
             {
-                var latest = entry.Value.OrderByDescending(v => v.Version).FirstOrDefault();
+                var latest = HelmChartVersionResolver.Resolve(entry.Value, constraint: null);
                 if (latest is not null)
                 {
                     results.Add(new HelmChartSearchResult
@@ -180,17 +180,7 @@ public sealed class HelmChartRepository : IDisposable
                 Query = null
             };
             var repoUrl = repoUri.Uri.ToString().TrimEnd('/');
-            var index = await FetchRepoIndexAsync(repoUrl, cancellationToken: cancellationToken);
-
-            if (!index.Entries.TryGetValue(chartName, out var versions))
-                throw new InvalidOperationException($"Chart '{chartName}' not found in repository");
-
-            var entry = version is not null
-                ? versions.FirstOrDefault(v => v.Version == version)
-                : versions.OrderByDescending(v => v.Version).FirstOrDefault();
-
-            if (entry is null)
-                throw new InvalidOperationException($"Chart '{chartName}' version '{version}' not found");
+            var entry = await ResolveChartVersionAsync(repoUrl, chartName, version, cancellationToken: cancellationToken);
 
             url = entry.Urls.FirstOrDefault()
                   ?? throw new InvalidOperationException($"No download URL for chart '{chartName}' version '{entry.Version}'");
@@ -200,6 +190,30 @@ public sealed class HelmChartRepository : IDisposable
         }
 
         return await DownloadAndExtractChartAsync(url, cancellationToken);
+    }
+
+    internal async Task<HelmChartVersion> ResolveChartVersionAsync(
+        string repoUrl,
+        string chartName,
+        string? versionConstraint = null,
+        string? username = null,
+        string? password = null,
+        CancellationToken cancellationToken = default)
+    {
+        var index = await FetchRepoIndexAsync(repoUrl, username, password, cancellationToken);
+        if (!index.Entries.TryGetValue(chartName, out var versions))
+            throw new InvalidOperationException($"Chart '{chartName}' not found in repository");
+
+        var entry = HelmChartVersionResolver.Resolve(versions, versionConstraint);
+        if (entry is not null)
+            return entry;
+
+        var requested = string.IsNullOrWhiteSpace(versionConstraint)
+            ? "latest stable version"
+            : $"version constraint '{versionConstraint}'";
+        var available = string.Join(", ", versions.Select(version => version.Version));
+        throw new InvalidOperationException(
+            $"Chart '{chartName}' has no version satisfying {requested}. Available versions: {available}");
     }
 
     private async Task<string> PullFromOciAsync(
