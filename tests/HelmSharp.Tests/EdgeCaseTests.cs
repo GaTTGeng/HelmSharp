@@ -1188,6 +1188,66 @@ public class EdgeCaseTests
     }
 
     [Fact]
+    public void ToYaml_DictionaryPreservesNullValuedKeys()
+    {
+        // Helm v4 toYaml preserves explicit null-valued map entries. Chart
+        // defaults may prune nulls during values coalescing, but serialization
+        // itself must keep explicit null overrides.
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: test
+            data:
+              values: |-
+                {{- toYaml .Values.resources | nindent 4 }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>
+            {
+                ["resources"] = new Dictionary<string, object?>
+                {
+                    ["limits"] = null,
+                    ["requests"] = new Dictionary<string, object?>
+                    {
+                        ["cpu"] = "1m",
+                        ["memory"] = "16Mi"
+                    }
+                }
+            });
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        Assert.Contains("    limits: null", result);
+        Assert.Contains("    requests:", result);
+        Assert.Contains("      cpu: 1m", result);
+        Assert.Contains("      memory: 16Mi", result);
+    }
+
+    [Fact]
+    public void ToYaml_DictionaryWithOnlyNullValuesRendersNullEntry()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: test
+            data:
+              values: |-
+                {{- toYaml .Values.resources | nindent 4 }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>
+            {
+                ["resources"] = new Dictionary<string, object?> { ["limits"] = null }
+            });
+        var result = renderer.Render();
+        _output.WriteLine(result);
+        Assert.Contains("    limits: null", result);
+    }
+
+    [Fact]
     public void WithBlock_ToYaml_NilSkipsBody()
     {
         // cert-manager: {{- with .Values.cainjector.extraArgs }}

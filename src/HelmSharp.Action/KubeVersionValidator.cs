@@ -109,7 +109,7 @@ public static class KubeVersionValidator
             if (bare.Value.Patch == 0 && constraint.Count(c => c == '.') == 1)
             {
                 // Bare minor version: >=1.25.0 <1.26.0
-                return cluster.Major == bare.Value.Major && cluster.Minor >= bare.Value.Minor;
+                return cluster.Major == bare.Value.Major && cluster.Minor == bare.Value.Minor;
             }
             return CompareVersions(cluster, bare.Value) == 0;
         }

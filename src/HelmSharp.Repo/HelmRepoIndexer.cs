@@ -39,18 +39,19 @@ public static class HelmRepoIndexer
                     ["version"] = chart.Version,
                     ["description"] = chart.Description ?? "",
                     ["type"] = chart.Type ?? "application",
-                    ["appVersion"] = chart.AppVersion,
-                    ["home"] = chart.Home,
-                    ["sources"] = chart.Sources,
-                    ["keywords"] = chart.Keywords,
-                    ["maintainers"] = chart.Maintainers,
-                    ["deprecated"] = chart.Deprecated ? true : null,
                     ["digest"] = digest,
                     ["urls"] = url is not null
                         ? new List<object?> { $"{url.TrimEnd('/')}/{Path.GetFileName(tgzFile)}" }
                         : new List<object?> { Path.GetFileName(tgzFile) },
                     ["created"] = fileInfo.LastWriteTimeUtc.ToString("yyyy-MM-ddTHH:mm:ss.ffffffZ"),
                 };
+                AddIfNotNull(entry, "appVersion", chart.AppVersion);
+                AddIfNotNull(entry, "home", chart.Home);
+                AddIfNotNull(entry, "sources", chart.Sources);
+                AddIfNotNull(entry, "keywords", chart.Keywords);
+                AddIfNotNull(entry, "maintainers", chart.Maintainers);
+                if (chart.Deprecated)
+                    entry["deprecated"] = true;
 
                 if (!entries.ContainsKey(chart.Name))
                     entries[chart.Name] = new List<Dictionary<string, object?>>();
@@ -76,6 +77,15 @@ public static class HelmRepoIndexer
         var indexPath = Path.Combine(dirPath, "index.yaml");
         await File.WriteAllTextAsync(indexPath, yaml, ct);
         return indexPath;
+    }
+
+    private static void AddIfNotNull(
+        Dictionary<string, object?> entry,
+        string key,
+        object? value)
+    {
+        if (value is not null)
+            entry[key] = value;
     }
 
     private static int CompareChartVersionsDescending(

@@ -13,6 +13,9 @@ namespace HelmSharp.Repo;
 /// </summary>
 public sealed class HelmChartRepository : IDisposable
 {
+    private static readonly string ProductVersion =
+        typeof(HelmChartRepository).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+
     private readonly HttpClient _httpClient;
     private readonly string _cacheDir;
 
@@ -22,7 +25,7 @@ public sealed class HelmChartRepository : IDisposable
         Directory.CreateDirectory(_cacheDir);
 
         _httpClient = new HttpClient();
-        _httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("helmsharp", "0.3.0"));
+        _httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("helmsharp", ProductVersion));
     }
 
     /// <summary>

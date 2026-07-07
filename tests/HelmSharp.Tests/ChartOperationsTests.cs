@@ -541,7 +541,8 @@ public class ChartOperationsTests : IDisposable
         var result = await client.VersionAsync();
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Contains("HelmSharp", result.StandardOutput);
+        var expectedVersion = typeof(HelmClient).Assembly.GetName().Version?.ToString(3);
+        Assert.Equal($"HelmSharp {expectedVersion}", result.StandardOutput);
     }
 
     [Fact]

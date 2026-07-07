@@ -22,6 +22,8 @@ public class KubeVersionValidatorTests
     [InlineData("1.25.x", "v1.25.3", true)]
     [InlineData("1.25.x", "v1.26.0", false)]
     [InlineData("1.25.*", "v1.25.0", true)]
+    [InlineData("1.25", "v1.25.3", true)]
+    [InlineData("1.25", "v1.26.0", false)]
     [InlineData("", "v1.25.0", true)]
     public void IsCompatible_ReturnsCorrectResult(string constraint, string clusterVersion, bool expected)
     {

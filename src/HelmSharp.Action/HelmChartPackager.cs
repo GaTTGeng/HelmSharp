@@ -42,7 +42,8 @@ internal static class HelmChartPackager
 
         var chartYamlPath = Path.Combine(chartPath, "Chart.yaml");
         if (!File.Exists(chartYamlPath))
-            throw new FileNotFoundException("Chart.yaml file is missing");
+            throw new FileNotFoundException(
+                $"unable to detect chart at {chartYamlPath}: open {chartYamlPath}: {GetMissingFileMessage()}");
 
         var chartYamlContent = await File.ReadAllTextAsync(chartYamlPath, Encoding.UTF8, cancellationToken);
         var metadata = LoadChartMetadata(chartYamlContent);
@@ -94,6 +95,11 @@ internal static class HelmChartPackager
 
         return outputPath;
     }
+
+    private static string GetMissingFileMessage()
+        => OperatingSystem.IsWindows()
+            ? "The system cannot find the file specified."
+            : "no such file or directory";
 
     private static Dictionary<string, object?> LoadChartMetadata(string chartYamlContent)
     {

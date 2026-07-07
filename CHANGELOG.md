@@ -21,6 +21,11 @@ This project follows semantic versioning once stable releases begin.
 
 ### Fixed
 
+- Matched Helm manifest sorting for `PriorityClass`.
+- Matched Helm v4 manifest separator formatting and chart-default null pruning while preserving explicit null overrides.
+- Updated Helm CLI compatibility references and CI oracle version to Helm `v4.2.2`.
+- Reported HelmSharp package versions from assembly metadata instead of stale hardcoded values.
+- Tightened bare minor `kubeVersion` compatibility checks to avoid matching later Kubernetes minors.
 - Aligned chart packaging metadata validation and version/appVersion override behavior with Helm package expectations.
 - Matched Helm package `.helmignore` filtering for comments, directory and glob patterns, normalized paths, and supported negation behavior (#126).
 - Hardened chart archive layout and extraction safety for packaged charts, chart loading, and repository pulls (#127).

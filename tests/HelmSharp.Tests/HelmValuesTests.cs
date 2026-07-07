@@ -64,6 +64,105 @@ public class HelmValuesTests
     }
 
     [Fact]
+    public async Task BuildAsync_ChartDefaultsPruneNullMapEntries()
+    {
+        var chart = new HelmChart
+        {
+            Name = "test",
+            Version = "1.0.0",
+            ValuesYaml = """
+                resources:
+                  limits:
+                  requests:
+                    cpu: 1m
+                    memory: 16Mi
+                """
+        };
+
+        var result = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, null, null, null, null, null, CancellationToken.None);
+
+        var resources = Assert.IsType<Dictionary<string, object?>>(result["resources"]);
+        Assert.False(resources.ContainsKey("limits"));
+        Assert.True(resources.ContainsKey("requests"));
+    }
+
+    [Fact]
+    public async Task BuildAsync_ValuesFilePreservesExplicitNullMapEntries()
+    {
+        var chart = new HelmChart
+        {
+            Name = "test",
+            Version = "1.0.0",
+            ValuesYaml = """
+                resources:
+                  requests:
+                    memory: 16Mi
+                """
+        };
+        var dir = Path.Combine(Path.GetTempPath(), "helmsharp-values-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var file = Path.Combine(dir, "values.yaml");
+            await File.WriteAllTextAsync(file, """
+                resources:
+                  limits: null
+                  requests:
+                    cpu: 1m
+                """);
+
+            var result = await HelmValues.BuildAsync(chart, new[] { file }, null, null, null, null, null, CancellationToken.None);
+
+            var resources = Assert.IsType<Dictionary<string, object?>>(result["resources"]);
+            Assert.True(resources.ContainsKey("limits"));
+            Assert.Null(resources["limits"]);
+            var requests = Assert.IsType<Dictionary<string, object?>>(resources["requests"]);
+            Assert.Equal("1m", requests["cpu"]);
+            Assert.Equal("16Mi", requests["memory"]);
+        }
+        finally
+        {
+            try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+            catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public async Task BuildAsync_SetJsonPreservesExplicitNullMapEntries()
+    {
+        var chart = new HelmChart
+        {
+            Name = "test",
+            Version = "1.0.0",
+            ValuesYaml = """
+                resources:
+                  requests:
+                    memory: 16Mi
+                """
+        };
+
+        var result = await HelmValues.BuildAsync(
+            chart,
+            (IEnumerable<string>?)null,
+            null,
+            null,
+            null,
+            null,
+            new Dictionary<string, string>
+            {
+                ["resources"] = """{"limits":null,"requests":{"cpu":"1m"}}"""
+            },
+            CancellationToken.None);
+
+        var resources = Assert.IsType<Dictionary<string, object?>>(result["resources"]);
+        Assert.True(resources.ContainsKey("limits"));
+        Assert.Null(resources["limits"]);
+        var requests = Assert.IsType<Dictionary<string, object?>>(resources["requests"]);
+        Assert.Equal("1m", requests["cpu"]);
+        Assert.Equal("16Mi", requests["memory"]);
+    }
+
+    [Fact]
     public async Task BuildAsync_SetValuesOverrideValuesContent()
     {
         var chart = new HelmChart
