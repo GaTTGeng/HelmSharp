@@ -171,8 +171,14 @@ internal static class HelmChartVersionResolver
         if (operatorText is "^")
             return TryAppendCaretRange(versionText, comparators);
 
-        if (!TryParseConstraintVersion(versionText, out var version))
+        if (!TryParseConstraintVersion(versionText, out var version, out var specifiedParts))
             return false;
+
+        if (operatorText.Length == 0 && specifiedParts < 3 && !version.HasPrerelease)
+        {
+            AppendPartialVersionRange(version, specifiedParts, comparators);
+            return true;
+        }
 
         var op = operatorText switch
         {
@@ -190,6 +196,19 @@ internal static class HelmChartVersionResolver
 
         comparators.Add(new Comparator(op.Value, version));
         return true;
+    }
+
+    private static void AppendPartialVersionRange(
+        SemanticVersion lower,
+        int specifiedParts,
+        List<Comparator> comparators)
+    {
+        var upper = specifiedParts <= 1
+            ? new SemanticVersion(lower.Major + 1, 0, 0, [])
+            : new SemanticVersion(lower.Major, lower.Minor + 1, 0, []);
+
+        comparators.Add(new Comparator(ComparisonOperator.GreaterThanOrEqual, lower));
+        comparators.Add(new Comparator(ComparisonOperator.LessThan, upper));
     }
 
     private static (string Operator, string Version) SplitOperator(string token)
