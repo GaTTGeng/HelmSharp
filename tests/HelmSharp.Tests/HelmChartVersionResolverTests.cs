@@ -16,6 +16,17 @@ public sealed class HelmChartVersionResolverTests
         Assert.Equal("1.10.0", selected.Version);
     }
 
+    [Fact]
+    public void Resolve_WithoutConstraintAcceptsShortChartVersions()
+    {
+        var selected = HelmChartVersionResolver.Resolve(CreateVersions(
+            "1",
+            "1.2"), constraint: null);
+
+        Assert.NotNull(selected);
+        Assert.Equal("1.2", selected.Version);
+    }
+
     [Theory]
     [InlineData("1.2.0", "1.2.0")]
     [InlineData("1.2", "1.2.5+build.7")]
@@ -50,7 +61,9 @@ public sealed class HelmChartVersionResolverTests
     public void CompareVersions_UsesSemanticPrecedenceAndIgnoresBuildMetadata()
     {
         Assert.True(HelmChartVersionResolver.CompareVersions("1.10.0", "1.2.0") > 0);
+        Assert.True(HelmChartVersionResolver.CompareVersions("1.2", "1.1.9") > 0);
         Assert.True(HelmChartVersionResolver.CompareVersions("2.0.0", "2.0.0-beta.1") > 0);
+        Assert.Equal(0, HelmChartVersionResolver.CompareVersions("1.2", "1.2.0"));
         Assert.Equal(0, HelmChartVersionResolver.CompareVersions("1.2.0+build.1", "1.2.0+build.2"));
     }
 

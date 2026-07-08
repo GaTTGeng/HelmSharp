@@ -167,6 +167,32 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task PullAsync_RepositoryReferenceResolvesShortChartVersions()
+    {
+        var repoDir = Path.Combine(_tempDir, "short-version-pull-repo");
+        Directory.CreateDirectory(repoDir);
+        await PackageRepoChartVersionAsync("1", repoDir);
+        await PackageRepoChartVersionAsync("1.2", repoDir);
+        await using var server = await LocalFileServer.StartAsync(repoDir);
+        await HelmRepoIndexer.GenerateIndexAsync(repoDir, server.BaseUrl, CancellationToken.None);
+
+        await AssertPulledVersionAsync(version: null, expectedVersion: "1.2");
+        await AssertPulledVersionAsync(version: "1.2", expectedVersion: "1.2");
+
+        async Task AssertPulledVersionAsync(string? version, string expectedVersion)
+        {
+            using var repository = new HelmChartRepository(Path.Combine(_tempDir, $"sharp-cache-{Guid.NewGuid():N}"));
+            var sharpPath = await repository.PullChartAsync(
+                $"{server.BaseUrl}/repo-golden",
+                version,
+                CancellationToken.None);
+            var chart = await HelmChartLoader.LoadAsync(sharpPath, CancellationToken.None);
+
+            Assert.Equal(expectedVersion, chart.Version);
+        }
+    }
+
     [HelmCliFact]
     public async Task DependencyWorkflows_LocalRepositoryMatchHelmOutputsAndPackages()
     {

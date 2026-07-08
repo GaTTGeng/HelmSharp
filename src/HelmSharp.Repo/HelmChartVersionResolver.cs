@@ -398,7 +398,7 @@ internal static class HelmChartVersionResolver
         IReadOnlyList<PrereleaseIdentifier> Prerelease)
     {
         private static readonly Regex VersionRegex = new(
-            @"^[vV]?(?<major>0|[1-9]\d*)\.(?<minor>0|[1-9]\d*)\.(?<patch>0|[1-9]\d*)(?:-(?<pre>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$",
+            @"^[vV]?(?<major>0|[1-9]\d*)(?:\.(?<minor>0|[1-9]\d*))?(?:\.(?<patch>0|[1-9]\d*))?(?:-(?<pre>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$",
             RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
         public bool HasPrerelease => Prerelease.Count > 0;
@@ -414,8 +414,8 @@ internal static class HelmChartVersionResolver
 
             version = new SemanticVersion(
                 int.Parse(match.Groups["major"].Value),
-                int.Parse(match.Groups["minor"].Value),
-                int.Parse(match.Groups["patch"].Value),
+                match.Groups["minor"].Success ? int.Parse(match.Groups["minor"].Value) : 0,
+                match.Groups["patch"].Success ? int.Parse(match.Groups["patch"].Value) : 0,
                 match.Groups["pre"].Success
                     ? match.Groups["pre"].Value.Split('.').Select(PrereleaseIdentifier.Parse).ToArray()
                     : []);
