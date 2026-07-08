@@ -32,6 +32,7 @@ public sealed class HelmChartVersionResolverTests
     [InlineData("1.2", "1.2.5+build.7")]
     [InlineData("1", "1.10.0")]
     [InlineData("1.2.x", "1.2.5+build.7")]
+    [InlineData(">=1.2.x", "1.10.0")]
     [InlineData("*", "1.10.0")]
     [InlineData("~1.2.0", "1.2.5+build.7")]
     [InlineData(">=1.0.0 <2.0.0", "1.10.0")]
@@ -43,6 +44,33 @@ public sealed class HelmChartVersionResolverTests
             "1.2.5+build.7",
             "1.10.0",
             "2.0.0-beta.1"), constraint);
+
+        Assert.NotNull(selected);
+        Assert.Equal(expectedVersion, selected.Version);
+    }
+
+    [Theory]
+    [InlineData("<=2.x", "2.5.0")]
+    [InlineData("^0", "0.9.0")]
+    [InlineData("^0.0", "0.0.5")]
+    [InlineData("^0.2", "0.2.9")]
+    [InlineData("^1.2.x", "1.4.0")]
+    public void Resolve_WithDocumentedMastermindsConstraintFormsSelectsNewestMatchingVersion(
+        string constraint,
+        string expectedVersion)
+    {
+        var selected = HelmChartVersionResolver.Resolve(CreateVersions(
+            "0.0.1",
+            "0.0.5",
+            "0.1.0",
+            "0.2.3",
+            "0.2.9",
+            "0.3.0",
+            "0.9.0",
+            "1.2.0",
+            "1.4.0",
+            "2.5.0",
+            "3.0.0"), constraint);
 
         Assert.NotNull(selected);
         Assert.Equal(expectedVersion, selected.Version);

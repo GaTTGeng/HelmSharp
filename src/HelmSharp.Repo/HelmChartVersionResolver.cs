@@ -162,14 +162,14 @@ internal static class HelmChartVersionResolver
         if (string.IsNullOrWhiteSpace(versionText))
             return false;
 
-        if (ContainsWildcard(versionText))
-            return TryAppendWildcardRange(versionText, comparators);
-
         if (operatorText is "~" or "~>")
             return TryAppendTildeRange(versionText, comparators);
 
         if (operatorText is "^")
             return TryAppendCaretRange(versionText, comparators);
+
+        if (ContainsWildcard(versionText))
+            return TryAppendWildcardRange(operatorText, versionText, comparators);
 
         if (!TryParseConstraintVersion(versionText, out var version, out var specifiedParts))
             return false;
@@ -229,49 +229,118 @@ internal static class HelmChartVersionResolver
         => version.Contains('*', StringComparison.Ordinal) ||
            version.Contains('x', StringComparison.OrdinalIgnoreCase);
 
-    private static bool TryAppendWildcardRange(string versionText, List<Comparator> comparators)
+    private static bool TryAppendWildcardRange(
+        string operatorText,
+        string versionText,
+        List<Comparator> comparators)
     {
-        var parts = StripBuild(versionText).Split('.');
-        var numbers = new int[3];
-        var wildcardIndex = -1;
-
-        for (var i = 0; i < Math.Min(parts.Length, 3); i++)
+        if (!TryParseVersionPattern(versionText, out var lower, out _, out var wildcardIndex) ||
+            wildcardIndex is null)
         {
-            if (parts[i] is "*" or "x" or "X")
-            {
-                wildcardIndex = i;
-                break;
-            }
-
-            if (!int.TryParse(parts[i], out numbers[i]))
-                return false;
+            return false;
         }
 
-        if (wildcardIndex == 0)
-            return true;
-
-        if (wildcardIndex < 0)
-            wildcardIndex = Math.Min(parts.Length, 3);
-
-        var lower = new SemanticVersion(numbers[0], numbers[1], numbers[2], []);
-        comparators.Add(new Comparator(ComparisonOperator.GreaterThanOrEqual, lower));
-
-        var upper = wildcardIndex switch
+        var upper = GetWildcardUpperBound(lower, wildcardIndex.Value);
+        switch (operatorText)
         {
-            1 => new SemanticVersion(numbers[0] + 1, 0, 0, []),
-            2 => new SemanticVersion(numbers[0], numbers[1] + 1, 0, []),
+            case "" or "=" or "==":
+                comparators.Add(new Comparator(ComparisonOperator.GreaterThanOrEqual, lower));
+                if (upper is not null)
+                    comparators.Add(new Comparator(ComparisonOperator.LessThan, upper));
+                return true;
+            case ">=":
+                comparators.Add(new Comparator(ComparisonOperator.GreaterThanOrEqual, lower));
+                return true;
+            case ">":
+                comparators.Add(upper is not null
+                    ? new Comparator(ComparisonOperator.GreaterThanOrEqual, upper)
+                    : new Comparator(ComparisonOperator.GreaterThan, lower));
+                return true;
+            case "<=":
+                if (upper is not null)
+                    comparators.Add(new Comparator(ComparisonOperator.LessThan, upper));
+                return true;
+            case "<":
+                comparators.Add(new Comparator(ComparisonOperator.LessThan, lower));
+                return true;
+            case "!=":
+                comparators.Add(new Comparator(ComparisonOperator.NotEqual, lower));
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static SemanticVersion? GetWildcardUpperBound(SemanticVersion lower, int wildcardIndex)
+        => wildcardIndex switch
+        {
+            0 => null,
+            1 => new SemanticVersion(lower.Major + 1, 0, 0, []),
+            2 => new SemanticVersion(lower.Major, lower.Minor + 1, 0, []),
             _ => null
         };
 
-        if (upper is not null)
-            comparators.Add(new Comparator(ComparisonOperator.LessThan, upper));
+    private static bool TryParseVersionPattern(
+        string versionText,
+        out SemanticVersion lower,
+        out int specifiedParts,
+        out int? wildcardIndex)
+    {
+        var withoutBuild = StripBuild(versionText);
+        var prereleaseSplit = withoutBuild.Split('-', 2);
+        var parts = prereleaseSplit[0].TrimStart('v', 'V').Split('.');
+        specifiedParts = parts.Length;
+        wildcardIndex = null;
 
+        if (parts.Length is < 1 or > 3)
+        {
+            lower = default!;
+            return false;
+        }
+
+        var numbers = new int[3];
+        for (var i = 0; i < parts.Length; i++)
+        {
+            var part = parts[i];
+            if (part is "*" or "x" or "X")
+            {
+                wildcardIndex = i;
+                specifiedParts = i;
+                if (parts.Skip(i + 1).Any(remaining => remaining is not ("*" or "x" or "X")))
+                {
+                    lower = default!;
+                    return false;
+                }
+
+                break;
+            }
+
+            if (wildcardIndex is not null || !int.TryParse(part, out numbers[i]))
+            {
+                lower = default!;
+                return false;
+            }
+        }
+
+        if (wildcardIndex is not null && prereleaseSplit.Length == 2)
+        {
+            lower = default!;
+            return false;
+        }
+
+        var prerelease = prereleaseSplit.Length == 2
+            ? prereleaseSplit[1].Split('.', StringSplitOptions.RemoveEmptyEntries)
+                .Select(PrereleaseIdentifier.Parse)
+                .ToArray()
+            : [];
+
+        lower = new SemanticVersion(numbers[0], numbers[1], numbers[2], prerelease);
         return true;
     }
 
     private static bool TryAppendTildeRange(string versionText, List<Comparator> comparators)
     {
-        if (!TryParseConstraintVersion(versionText, out var lower, out var specifiedParts))
+        if (!TryParseVersionPattern(versionText, out var lower, out var specifiedParts, out _))
             return false;
 
         var upper = specifiedParts <= 1
@@ -285,16 +354,30 @@ internal static class HelmChartVersionResolver
 
     private static bool TryAppendCaretRange(string versionText, List<Comparator> comparators)
     {
-        if (!TryParseConstraintVersion(versionText, out var lower))
+        if (!TryParseVersionPattern(versionText, out var lower, out var specifiedParts, out _))
             return false;
 
         SemanticVersion upper;
         if (lower.Major > 0)
+        {
             upper = new SemanticVersion(lower.Major + 1, 0, 0, []);
+        }
         else if (lower.Minor > 0)
+        {
             upper = new SemanticVersion(0, lower.Minor + 1, 0, []);
-        else
+        }
+        else if (lower.Patch > 0)
+        {
             upper = new SemanticVersion(0, 0, lower.Patch + 1, []);
+        }
+        else
+        {
+            upper = specifiedParts <= 1
+                ? new SemanticVersion(1, 0, 0, [])
+                : specifiedParts == 2
+                    ? new SemanticVersion(0, 1, 0, [])
+                    : new SemanticVersion(0, 0, 1, []);
+        }
 
         comparators.Add(new Comparator(ComparisonOperator.GreaterThanOrEqual, lower));
         comparators.Add(new Comparator(ComparisonOperator.LessThan, upper));
@@ -306,35 +389,14 @@ internal static class HelmChartVersionResolver
 
     private static bool TryParseConstraintVersion(string text, out SemanticVersion version, out int specifiedParts)
     {
-        var withoutBuild = StripBuild(text);
-        var prereleaseSplit = withoutBuild.Split('-', 2);
-        var parts = prereleaseSplit[0].TrimStart('v', 'V').Split('.');
-        specifiedParts = parts.Length;
-
-        if (parts.Length is < 1 or > 3)
+        if (TryParseVersionPattern(text, out version, out specifiedParts, out var wildcardIndex) &&
+            wildcardIndex is null)
         {
-            version = default!;
-            return false;
+            return true;
         }
 
-        var numbers = new int[3];
-        for (var i = 0; i < parts.Length; i++)
-        {
-            if (!int.TryParse(parts[i], out numbers[i]))
-            {
-                version = default!;
-                return false;
-            }
-        }
-
-        var prerelease = prereleaseSplit.Length == 2
-            ? prereleaseSplit[1].Split('.', StringSplitOptions.RemoveEmptyEntries)
-                .Select(PrereleaseIdentifier.Parse)
-                .ToArray()
-            : [];
-
-        version = new SemanticVersion(numbers[0], numbers[1], numbers[2], prerelease);
-        return true;
+        version = default!;
+        return false;
     }
 
     private static string StripBuild(string text)
