@@ -1012,15 +1012,22 @@ public class HelmClient : IHelmClient
 
             try
             {
-                output.AppendLine($"Downloading dependency: {dep.Name} ({dep.Version}) from {dep.Repository}");
+                var selected = await repo.ResolveChartVersionAsync(
+                    dep.Repository.TrimEnd('/'),
+                    dep.Name,
+                    dep.Version,
+                    cancellationToken: cancellationToken);
+
+                var requestedVersion = string.IsNullOrWhiteSpace(dep.Version) ? selected.Version : dep.Version;
+                output.AppendLine($"Downloading dependency: {dep.Name} ({requestedVersion}) from {dep.Repository}");
                 var pulledPath = await repo.PullChartAsync(
                     $"{dep.Repository.TrimEnd('/')}/{dep.Name}",
-                    dep.Version, cancellationToken);
+                    selected.Version, cancellationToken);
 
-                var destPath = Path.Combine(chartsDir, $"{dep.Name}-{dep.Version}.tgz");
+                var destPath = Path.Combine(chartsDir, $"{dep.Name}-{selected.Version}.tgz");
                 if (Directory.Exists(pulledPath))
                 {
-                    var tgzPath = await HelmChartPackager.PackageAsync(pulledPath, chartsDir, dep.Version, null, cancellationToken);
+                    var tgzPath = await HelmChartPackager.PackageAsync(pulledPath, chartsDir, selected.Version, null, cancellationToken);
                     output.AppendLine($"Dependency {dep.Name} saved to {tgzPath}");
                 }
                 else if (File.Exists(pulledPath))
@@ -1363,14 +1370,22 @@ public class HelmClient : IHelmClient
             else
             {
                 // Check if dependency is present in charts/
-                var expectedTgz = Path.Combine(chartsDir, $"{dep.Name}-{dep.Version}.tgz");
-                var anyTgz = Directory.Exists(chartsDir)
-                    ? Directory.GetFiles(chartsDir, $"{dep.Name}-*.tgz").FirstOrDefault()
-                    : null;
+                var archiveVersions = new List<string>();
+                if (Directory.Exists(chartsDir))
+                {
+                    archiveVersions.AddRange(
+                        Directory.GetFiles(chartsDir, $"{dep.Name}-*.tgz")
+                            .Select(path => GetDependencyArchiveVersion(dep.Name, path))
+                            .OfType<string>());
+                }
 
-                if (File.Exists(expectedTgz))
+                var matchingVersion = HelmChartVersionResolver.ResolveVersion(
+                    archiveVersions,
+                    dep.Version);
+
+                if (matchingVersion is not null)
                     status = "ok";
-                else if (anyTgz is not null)
+                else if (archiveVersions.Count > 0)
                     status = "mismatch";
                 else
                     status = "missing";
@@ -1380,6 +1395,19 @@ public class HelmClient : IHelmClient
         }
 
         return Ok(output.ToString());
+    }
+
+    private static string? GetDependencyArchiveVersion(string dependencyName, string archivePath)
+    {
+        var fileName = Path.GetFileName(archivePath);
+        if (!fileName.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var packageName = fileName[..^".tgz".Length];
+        var prefix = dependencyName + "-";
+        return packageName.StartsWith(prefix, StringComparison.Ordinal)
+            ? packageName[prefix.Length..]
+            : null;
     }
 
     private static async Task<string> ResolveChartPathAsync(

@@ -12,6 +12,7 @@ This project follows semantic versioning once stable releases begin.
 - Added HelmSharp logo and wordmark assets to the READMEs and VitePress documentation site.
 - Added Helm CLI golden coverage for package, repository index, pull, and dependency workflows (#128).
 - Added chart loader support for packaged dependency archives under `charts/` in directory and archive charts (#129).
+- Added Helm-compatible SemVer resolution for repository chart versions and dependency constraints (#130).
 
 ### Changed
 

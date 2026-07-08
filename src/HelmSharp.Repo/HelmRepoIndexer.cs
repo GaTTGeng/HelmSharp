@@ -94,37 +94,6 @@ public static class HelmRepoIndexer
     {
         var leftVersion = HelmYaml.GetString(left, "version") ?? string.Empty;
         var rightVersion = HelmYaml.GetString(right, "version") ?? string.Empty;
-        return CompareChartVersions(rightVersion, leftVersion);
-    }
-
-    private static int CompareChartVersions(string left, string right)
-    {
-        var leftParts = SplitVersion(left);
-        var rightParts = SplitVersion(right);
-        for (var i = 0; i < Math.Max(leftParts.Core.Count, rightParts.Core.Count); i++)
-        {
-            var leftValue = i < leftParts.Core.Count ? leftParts.Core[i] : 0;
-            var rightValue = i < rightParts.Core.Count ? rightParts.Core[i] : 0;
-            var comparison = leftValue.CompareTo(rightValue);
-            if (comparison != 0)
-                return comparison;
-        }
-
-        if (leftParts.Prerelease is null && rightParts.Prerelease is not null)
-            return 1;
-        if (leftParts.Prerelease is not null && rightParts.Prerelease is null)
-            return -1;
-        return string.CompareOrdinal(leftParts.Prerelease, rightParts.Prerelease);
-    }
-
-    private static (List<int> Core, string? Prerelease) SplitVersion(string version)
-    {
-        var withoutBuild = version.Split('+', 2)[0];
-        var prereleaseSplit = withoutBuild.Split('-', 2);
-        var core = prereleaseSplit[0]
-            .Split('.', StringSplitOptions.RemoveEmptyEntries)
-            .Select(part => int.TryParse(part, out var value) ? value : 0)
-            .ToList();
-        return (core, prereleaseSplit.Length > 1 ? prereleaseSplit[1] : null);
+        return HelmChartVersionResolver.CompareVersions(rightVersion, leftVersion);
     }
 }
