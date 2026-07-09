@@ -76,6 +76,48 @@ public sealed class HelmChartVersionResolverTests
         Assert.Equal(expectedVersion, selected.Version);
     }
 
+    [Theory]
+    [InlineData("<=1.2", "1.2.5")]
+    [InlineData("0.9.0 - 1.2", "1.2.5")]
+    public void Resolve_WithPartialComparatorRangesSelectsNewestMatchingVersion(
+        string constraint,
+        string expectedVersion)
+    {
+        var selected = HelmChartVersionResolver.Resolve(CreateVersions(
+            "0.8.0",
+            "0.9.0",
+            "1.1.0",
+            "1.2.0",
+            "1.2.5",
+            "1.3.0"), constraint);
+
+        Assert.NotNull(selected);
+        Assert.Equal(expectedVersion, selected.Version);
+    }
+
+    [Fact]
+    public void Resolve_WithWildcardNotEqualExcludesEntireWildcardRange()
+    {
+        var selected = HelmChartVersionResolver.Resolve(CreateVersions(
+            "1.1.0",
+            "1.2.5"), "!=1.2.x");
+
+        Assert.NotNull(selected);
+        Assert.Equal("1.1.0", selected.Version);
+    }
+
+    [Fact]
+    public void Resolve_WithPrereleaseContainingXDoesNotTreatIdentifierAsWildcard()
+    {
+        var selected = HelmChartVersionResolver.Resolve(CreateVersions(
+            "1.0.0-next.1",
+            "1.0.0-next.2",
+            "1.0.0"), ">=1.0.0-next.1 <1.0.0");
+
+        Assert.NotNull(selected);
+        Assert.Equal("1.0.0-next.2", selected.Version);
+    }
+
     [Fact]
     public void Resolve_ExcludesPrereleaseWhenConstraintDoesNotOptIn()
     {
