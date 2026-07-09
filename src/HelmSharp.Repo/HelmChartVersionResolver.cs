@@ -225,7 +225,7 @@ internal static class HelmChartVersionResolver
                 comparators.Add(new Comparator(ComparisonOperator.GreaterThanOrEqual, lower));
                 return true;
             case ">":
-                comparators.Add(new Comparator(ComparisonOperator.GreaterThanOrEqual, upper));
+                comparators.Add(new Comparator(ComparisonOperator.GreaterThanOrEqualCore, upper));
                 return true;
             case "<=":
                 comparators.Add(new Comparator(ComparisonOperator.LessThanCore, upper));
@@ -287,7 +287,7 @@ internal static class HelmChartVersionResolver
                 return true;
             case ">":
                 comparators.Add(upper is not null
-                    ? new Comparator(ComparisonOperator.GreaterThanOrEqual, upper)
+                    ? new Comparator(ComparisonOperator.GreaterThanOrEqualCore, upper)
                     : new Comparator(ComparisonOperator.GreaterThan, lower));
                 return true;
             case "<=":
@@ -473,6 +473,8 @@ internal static class HelmChartVersionResolver
                 ComparisonOperator.NotEqual => comparison != 0,
                 ComparisonOperator.GreaterThan => comparison > 0,
                 ComparisonOperator.GreaterThanOrEqual => comparison >= 0,
+                ComparisonOperator.GreaterThanOrEqualCore =>
+                    SemanticVersionComparer.CompareCore(version, Version) >= 0,
                 ComparisonOperator.LessThan => comparison < 0,
                 ComparisonOperator.LessThanOrEqual => comparison <= 0,
                 ComparisonOperator.LessThanCore => SemanticVersionComparer.CompareCore(version, Version) < 0,
@@ -490,6 +492,7 @@ internal static class HelmChartVersionResolver
         NotEqual,
         GreaterThan,
         GreaterThanOrEqual,
+        GreaterThanOrEqualCore,
         LessThan,
         LessThanOrEqual,
         LessThanCore,
