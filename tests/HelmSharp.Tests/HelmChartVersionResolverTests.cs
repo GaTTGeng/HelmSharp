@@ -96,6 +96,17 @@ public sealed class HelmChartVersionResolverTests
     }
 
     [Fact]
+    public void Resolve_WithPartialUpperBoundExcludesNextMinorPrerelease()
+    {
+        var selected = HelmChartVersionResolver.Resolve(CreateVersions(
+            "1.2.5",
+            "1.3.0-alpha.1"), ">=0.0.0-0 <=1.2");
+
+        Assert.NotNull(selected);
+        Assert.Equal("1.2.5", selected.Version);
+    }
+
+    [Fact]
     public void Resolve_WithWildcardNotEqualExcludesEntireWildcardRange()
     {
         var selected = HelmChartVersionResolver.Resolve(CreateVersions(
