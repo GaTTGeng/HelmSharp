@@ -40,7 +40,7 @@
                 {{ t.dropText }}<a href="javascript:void(0)" @click="triggerFileInput">{{ t.clickText }}</a> Helm Chart
                 <template v-if="examples.length > 0">
                   <span class="drop-text-separator">·</span>
-                  <button class="drop-example-link" type="button" @click.stop="examplesOpen = true">
+                  <button class="drop-example-link" type="button" @click.stop="openExamples">
                     {{ t.examplesHeader }}
                   </button>
                 </template>
@@ -97,7 +97,7 @@
     <div
       class="examples-modal-backdrop"
       v-if="examplesOpen"
-      @click.self="examplesOpen = false"
+      @click.self="closeExamples"
     >
       <div class="examples-modal" role="dialog" aria-modal="true" :aria-label="t.examplesHeader">
         <div class="examples-modal-header">
@@ -105,20 +105,32 @@
             <div class="examples-title">{{ t.examplesHeader }}</div>
             <div class="examples-subtitle">{{ t.examplesSubtitle }}</div>
           </div>
-          <button class="btn-modal-close" type="button" @click="examplesOpen = false">{{ t.close }}</button>
+          <button class="btn-modal-close" type="button" @click="closeExamples">
+            {{ t.close }}
+          </button>
         </div>
+        <div class="example-error" v-if="exampleError" role="alert">{{ exampleError }}</div>
         <div class="examples-list">
           <button
             v-for="ex in examples"
             :key="ex.id"
             class="example-card"
+            :class="{ 'is-loading': exampleLoadingId === ex.id }"
             type="button"
+            :disabled="exampleLoadingId !== null"
+            :aria-busy="exampleLoadingId === ex.id"
             @click="runExample(ex)"
           >
             <span class="example-card-mark" aria-hidden="true">{{ exampleInitial(ex.name) }}</span>
             <span class="example-card-body">
               <span class="example-card-name">{{ ex.name }}</span>
               <span class="example-card-source">{{ ex.source }}</span>
+              <span class="example-card-description">
+                {{ isZh && ex.descriptionZh ? ex.descriptionZh : ex.description }}
+              </span>
+              <span class="example-card-loading" v-if="exampleLoadingId === ex.id" role="status">
+                {{ t.exampleLoading }}
+              </span>
             </span>
           </button>
         </div>
@@ -301,31 +313,72 @@ interface ExampleInfo {
 
 const examples = ref<ExampleInfo[]>([])
 const examplesOpen = ref(false)
+const exampleLoadingId = ref<string | null>(null)
+const exampleError = ref('')
+let exampleAbortController: AbortController | null = null
+
+function openExamples() {
+  exampleError.value = ''
+  examplesOpen.value = true
+}
+
+function closeExamples() {
+  exampleAbortController?.abort()
+  exampleAbortController = null
+  exampleLoadingId.value = null
+  exampleError.value = ''
+  examplesOpen.value = false
+}
 
 async function runExample(example: ExampleInfo) {
+  if (exampleLoadingId.value !== null) return
+
   errorMessage.value = ''
   result.value = null
   frontendValidation.value = ''
+  exampleError.value = ''
+  exampleLoadingId.value = example.id
+  const controller = new AbortController()
+  exampleAbortController = controller
+  let timedOut = false
+  const timeoutId = window.setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, 30000)
 
   try {
     const base = API_BASE || ''
     const chartUrl = base
       ? `${base}/api/v1/examples/${example.id}/chart`
       : `/api/v1/examples/${example.id}/chart`
-    const res = await fetch(chartUrl)
+    const res = await fetch(chartUrl, { signal: controller.signal })
     if (!res.ok) {
-      state.value = 'error'
-      errorMessage.value = t.value.requestFailed(res.status)
+      let data: { error?: string } | null = null
+      try {
+        data = await res.json() as { error?: string }
+      } catch (error) {
+        if (controller.signal.aborted) throw error
+      }
+      if (exampleAbortController !== controller || controller.signal.aborted) return
+      const fallback = t.value.requestFailed(res.status)
+      exampleError.value = isZh.value ? fallback : (data?.error || fallback)
       return
     }
     const blob = await res.blob()
+    if (exampleAbortController !== controller || controller.signal.aborted) return
     chartFile.value = new File([blob], `${example.id}.tgz`, { type: 'application/gzip' })
     valuesContent.value = example.defaultValues || ''
     state.value = 'idle'
     examplesOpen.value = false
   } catch (e: any) {
-    state.value = 'error'
-    errorMessage.value = t.value.connectFailed(e.message)
+    if (controller.signal.aborted && !timedOut) return
+    exampleError.value = timedOut ? t.value.exampleTimeout : t.value.connectFailed(e.message)
+  } finally {
+    window.clearTimeout(timeoutId)
+    if (exampleAbortController === controller) {
+      exampleAbortController = null
+      exampleLoadingId.value = null
+    }
   }
 }
 
@@ -379,6 +432,8 @@ const t = computed(() => {
       : 'The compare service is currently unreachable. Upload has been disabled. Please try again later.',
     examplesHeader: zh ? '快速示例' : 'Quick Examples',
     examplesSubtitle: zh ? '选择一个公开 Chart 自动填充对比' : 'Pick a public chart to auto-fill the comparison',
+    exampleLoading: zh ? '正在加载 Chart...' : 'Loading chart...',
+    exampleTimeout: zh ? '加载 Chart 超时，请重试' : 'Loading the chart timed out. Please try again.',
     close: zh ? '关闭' : 'Close',
   }
 })
@@ -1699,6 +1754,16 @@ function reset() {
   border-color: var(--vp-c-brand-1);
   color: var(--vp-c-brand-1);
 }
+.example-error {
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--vp-c-danger-1);
+  border-radius: 6px;
+  padding: 0.55rem 0.7rem;
+  background: var(--vp-c-danger-soft);
+  color: var(--vp-c-danger-1);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
 .examples-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1725,6 +1790,15 @@ function reset() {
   border-color: var(--vp-c-brand-1);
   background: color-mix(in srgb, var(--vp-c-brand-soft) 52%, var(--vp-c-bg));
   transform: translateY(-1px);
+}
+.example-card:disabled {
+  cursor: wait;
+  opacity: 0.65;
+  transform: none;
+}
+.example-card.is-loading {
+  border-color: var(--vp-c-brand-1);
+  opacity: 1;
 }
 .example-card:focus-visible {
   outline: 2px solid var(--vp-c-brand-1);
@@ -1767,6 +1841,23 @@ function reset() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.example-card-description {
+  display: -webkit-box;
+  margin-top: 0.35rem;
+  overflow: hidden;
+  color: var(--vp-c-text-2);
+  font-size: 0.74rem;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.example-card-loading {
+  display: block;
+  margin-top: 0.35rem;
+  color: var(--vp-c-brand-1);
+  font-size: 0.72rem;
+  font-weight: 600;
 }
 
 @media (max-width: 520px) {
