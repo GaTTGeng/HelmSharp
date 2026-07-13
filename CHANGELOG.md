@@ -22,6 +22,7 @@ This project follows semantic versioning once stable releases begin.
 
 ### Fixed
 
+- Completed the Helm Compare Quick Examples flow with localized chart descriptions and visible loading and download-error feedback.
 - Matched Helm manifest sorting for `PriorityClass`.
 - Matched Helm v4 manifest separator formatting and chart-default null pruning while preserving explicit null overrides.
 - Updated Helm CLI compatibility references and CI oracle version to Helm `v4.2.2`.
