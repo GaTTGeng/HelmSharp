@@ -130,6 +130,19 @@ public sealed class HelmChartVersionResolverTests
         Assert.Equal("1.1.0", selected.Version);
     }
 
+    [Theory]
+    [InlineData("!=1.2")]
+    [InlineData("!=1.2.x")]
+    public void Resolve_WithPartialNotEqualIncludesDifferentPrerelease(string constraint)
+    {
+        var selected = HelmChartVersionResolver.Resolve(CreateVersions(
+            "1.1.0",
+            "1.2.5-alpha.1"), $">=0.0.0-0 {constraint}");
+
+        Assert.NotNull(selected);
+        Assert.Equal("1.2.5-alpha.1", selected.Version);
+    }
+
     [Fact]
     public void Resolve_WithPrereleaseContainingXDoesNotTreatIdentifierAsWildcard()
     {

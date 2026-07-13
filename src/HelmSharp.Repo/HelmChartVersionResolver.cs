@@ -219,7 +219,11 @@ internal static class HelmChartVersionResolver
                 AppendPartialVersionRange(lower, specifiedParts, comparators);
                 return true;
             case "!=":
-                comparators.Add(new Comparator(ComparisonOperator.OutsideRange, lower, upper));
+                comparators.Add(new Comparator(
+                    ComparisonOperator.OutsideRange,
+                    lower,
+                    upper,
+                    AllowsPrereleaseInsideRange: specifiedParts == 2));
                 return true;
             case ">=":
                 comparators.Add(new Comparator(ComparisonOperator.GreaterThanOrEqual, lower));
@@ -298,7 +302,11 @@ internal static class HelmChartVersionResolver
                 comparators.Add(new Comparator(ComparisonOperator.LessThan, lower));
                 return true;
             case "!=":
-                comparators.Add(new Comparator(ComparisonOperator.OutsideRange, lower, upper));
+                comparators.Add(new Comparator(
+                    ComparisonOperator.OutsideRange,
+                    lower,
+                    upper,
+                    AllowsPrereleaseInsideRange: wildcardIndex == 2));
                 return true;
             default:
                 return false;
@@ -462,7 +470,8 @@ internal static class HelmChartVersionResolver
     private sealed record Comparator(
         ComparisonOperator Operator,
         SemanticVersion Version,
-        SemanticVersion? UpperBound = null)
+        SemanticVersion? UpperBound = null,
+        bool AllowsPrereleaseInsideRange = false)
     {
         public bool IsSatisfiedBy(SemanticVersion version)
         {
@@ -480,7 +489,8 @@ internal static class HelmChartVersionResolver
                 ComparisonOperator.LessThanCore => SemanticVersionComparer.CompareCore(version, Version) < 0,
                 ComparisonOperator.OutsideRange => SemanticVersionComparer.CompareCore(version, Version) < 0 ||
                                                    UpperBound is not null &&
-                                                   SemanticVersionComparer.CompareCore(version, UpperBound) >= 0,
+                                                   SemanticVersionComparer.CompareCore(version, UpperBound) >= 0 ||
+                                                   AllowsPrereleaseInsideRange && version.HasPrerelease,
                 _ => false
             };
         }
