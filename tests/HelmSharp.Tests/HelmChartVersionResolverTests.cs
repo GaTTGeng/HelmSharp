@@ -34,6 +34,8 @@ public sealed class HelmChartVersionResolverTests
     [InlineData("1.2.x", "1.2.5+build.7")]
     [InlineData(">=1.2.x", "1.10.0")]
     [InlineData("*", "1.10.0")]
+    [InlineData("v*", "1.10.0")]
+    [InlineData("=vx", "1.10.0")]
     [InlineData("~1.2.0", "1.2.5+build.7")]
     [InlineData(">=1.0.0 <2.0.0", "1.10.0")]
     [InlineData(">=2.0.0-beta.1 <2.0.0", "2.0.0-beta.1")]

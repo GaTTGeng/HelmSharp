@@ -264,6 +264,7 @@ internal static class HelmChartVersionResolver
     private static bool ContainsCoreWildcard(string version)
         => StripBuild(version)
             .Split('-', 2)[0]
+            .TrimStart('v', 'V')
             .Split('.')
             .Any(part => part is "*" or "x" or "X");
 
