@@ -90,6 +90,59 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
     }
 
     [HelmCliFact]
+    public async Task RepoIndexAsync_FullMetadataEntryStructurallyMatchesHelmRepoIndex()
+    {
+        var sharpRepoDir = Path.Combine(_tempDir, "sharp-full-metadata-repo-index");
+        var helmRepoDir = Path.Combine(_tempDir, "helm-full-metadata-repo-index");
+        Directory.CreateDirectory(sharpRepoDir);
+        Directory.CreateDirectory(helmRepoDir);
+        await PackageFullMetadataRepoChartAsync(sharpRepoDir);
+        CopyPackages(sharpRepoDir, helmRepoDir);
+
+        var sharpIndexPath = await HelmRepoIndexer.GenerateIndexAsync(
+            sharpRepoDir,
+            "https://repo.example.test/base",
+            CancellationToken.None);
+        var helmResult = await HelmCliRunner.RepoIndexAsync(
+            helmRepoDir,
+            "https://repo.example.test/base",
+            CancellationToken.None);
+
+        AssertOperationSucceeded("helm repo index", helmResult);
+        var helmIndexPath = Path.Combine(helmRepoDir, "index.yaml");
+        var sharpIndex = ReadNormalizedIndexEntry(sharpIndexPath, "repo-full-metadata");
+        var helmIndex = ReadNormalizedIndexEntry(helmIndexPath, "repo-full-metadata");
+
+        Assert.Equal(HelmYaml.Serialize(helmIndex), HelmYaml.Serialize(sharpIndex));
+        Assert.Equal(
+            await ComputeSha256Async(GetSinglePackagePath(sharpRepoDir)),
+            HelmYaml.GetString(sharpIndex, "digest"));
+    }
+
+    [Fact]
+    public async Task RepoIndexAsync_InvalidArchiveReportsDiagnosticAndIndexesValidPackages()
+    {
+        var repoDir = Path.Combine(_tempDir, "repo-index-invalid-archive");
+        Directory.CreateDirectory(repoDir);
+        await PackageMinimalRepoChartAsync(repoDir);
+        var invalidPackagePath = Path.Combine(repoDir, "broken-0.1.0.tgz");
+        await File.WriteAllTextAsync(invalidPackagePath, "not a gzipped chart archive", Encoding.UTF8);
+
+        var result = await HelmRepoIndexer.GenerateIndexWithDiagnosticsAsync(
+            repoDir,
+            "https://repo.example.test/base",
+            CancellationToken.None);
+
+        var index = HelmYaml.DeserializeDictionary(File.ReadAllText(result.IndexPath, Encoding.UTF8));
+        var entries = Assert.IsAssignableFrom<IDictionary<string, object?>>(index["entries"]);
+        Assert.True(entries.ContainsKey("repo-minimal"));
+        var diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Equal(invalidPackagePath, diagnostic.PackagePath);
+        Assert.Contains("broken-0.1.0.tgz", diagnostic.PackagePath, StringComparison.Ordinal);
+        Assert.False(string.IsNullOrWhiteSpace(diagnostic.Message));
+    }
+
+    [HelmCliFact]
     public async Task PullAsync_DirectArchiveUrlAndRepositoryReferenceMatchHelmPull()
     {
         var repoDir = Path.Combine(_tempDir, "pull-repo");
@@ -289,6 +342,64 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         await HelmChartPackager.PackageAsync(chartDir, destination, cancellationToken: CancellationToken.None);
     }
 
+    private async Task PackageFullMetadataRepoChartAsync(string destination)
+    {
+        var chartDir = await CreateChartAsync("repo-full-metadata-source", """
+            apiVersion: v2
+            name: repo-full-metadata
+            version: 2.0.0-beta.1
+            appVersion: "3.4"
+            description: Repository full metadata chart
+            type: library
+            home: https://example.test/repo-full-metadata
+            kubeVersion: ">=1.25.0"
+            deprecated: true
+            keywords:
+              - repository
+              - golden
+            sources:
+              - https://github.com/example/repo-full-metadata
+            maintainers:
+              - name: HelmSharp Maintainer
+                email: maintainer@example.test
+                url: https://example.test/maintainer
+            annotations:
+              category: tests
+              empty: ""
+            dependencies:
+              - name: repo-child
+                version: 0.1.0
+                repository: file://charts/repo-child
+                condition: repoChild.enabled
+                tags:
+                  - optional
+                import-values:
+                  - child
+                  - child: parent
+                alias: child-alias
+            """);
+        var childDir = Path.Combine(chartDir, "charts", "repo-child");
+        Directory.CreateDirectory(childDir);
+        await WriteTextAsync(Path.Combine(childDir, "Chart.yaml"), """
+            apiVersion: v2
+            name: repo-child
+            version: 0.1.0
+            """);
+        await WriteTextAsync(Path.Combine(chartDir, "values.yaml"), "repoChild:\n  enabled: true\n");
+        await WriteTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), "kind: ConfigMap\n");
+        await HelmChartPackager.PackageAsync(chartDir, destination, cancellationToken: CancellationToken.None);
+    }
+
+    private async Task PackageMinimalRepoChartAsync(string destination)
+    {
+        var chartDir = await CreateChartAsync("repo-minimal-source", """
+            apiVersion: v2
+            name: repo-minimal
+            version: 1.0.0
+            """);
+        await HelmChartPackager.PackageAsync(chartDir, destination, cancellationToken: CancellationToken.None);
+    }
+
     private async Task PackageDependencyChartAsync(string destination)
     {
         await PackageDependencyChartVersionAsync("0.2.0", destination);
@@ -374,6 +485,20 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
                 .ToList());
     }
 
+    private static Dictionary<string, object?> ReadNormalizedIndexEntry(string indexPath, string chartName)
+    {
+        var index = HelmYaml.DeserializeDictionary(File.ReadAllText(indexPath, Encoding.UTF8));
+        Assert.True(index.TryGetValue("entries", out var entriesObject), $"entries missing from {indexPath}");
+        var entries = Assert.IsAssignableFrom<IDictionary<string, object?>>(entriesObject);
+        Assert.True(entries.TryGetValue(chartName, out var versionsObject), $"{chartName} missing from {indexPath}");
+        var versions = Assert.IsAssignableFrom<IList<object?>>(versionsObject);
+        var entry = new Dictionary<string, object?>(
+            Assert.IsAssignableFrom<IDictionary<string, object?>>(Assert.Single(versions)),
+            StringComparer.OrdinalIgnoreCase);
+        entry.Remove("created");
+        return entry;
+    }
+
     private static ChartSnapshot CreateChartSnapshot(HelmChart chart)
         => new(
             chart.Name,
@@ -439,6 +564,9 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
 
         return entries.OrderBy(entry => entry.Name, StringComparer.Ordinal).ToList();
     }
+
+    private static async Task<string> ComputeSha256Async(string path)
+        => Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(path))).ToLowerInvariant();
 
     private static byte[] NormalizeArchiveEntryContent(string entryName, byte[] content)
     {

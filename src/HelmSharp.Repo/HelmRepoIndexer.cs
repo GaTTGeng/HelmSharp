@@ -16,10 +16,23 @@ public static class HelmRepoIndexer
         string? url = null,
         CancellationToken ct = default)
     {
+        var result = await GenerateIndexWithDiagnosticsAsync(dirPath, url, ct);
+        return result.IndexPath;
+    }
+
+    /// <summary>
+    /// Generates an index.yaml and returns diagnostics for packages that could not be indexed.
+    /// </summary>
+    public static async Task<HelmRepoIndexGenerationResult> GenerateIndexWithDiagnosticsAsync(
+        string dirPath,
+        string? url = null,
+        CancellationToken ct = default)
+    {
         if (!Directory.Exists(dirPath))
             throw new DirectoryNotFoundException($"Directory not found: {dirPath}");
 
         var entries = new Dictionary<string, List<Dictionary<string, object?>>>(StringComparer.OrdinalIgnoreCase);
+        var diagnostics = new List<HelmRepoIndexDiagnostic>();
 
         foreach (var tgzFile in Directory.GetFiles(dirPath, "*.tgz"))
         {
@@ -34,11 +47,9 @@ public static class HelmRepoIndexer
 
                 var entry = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
                 {
-                    ["apiVersion"] = "v2",
+                    ["apiVersion"] = string.IsNullOrWhiteSpace(chart.ApiVersion) ? "v2" : chart.ApiVersion,
                     ["name"] = chart.Name,
                     ["version"] = chart.Version,
-                    ["description"] = chart.Description ?? "",
-                    ["type"] = chart.Type ?? "application",
                     ["digest"] = digest,
                     ["urls"] = url is not null
                         ? new List<object?> { $"{url.TrimEnd('/')}/{Path.GetFileName(tgzFile)}" }
@@ -46,10 +57,16 @@ public static class HelmRepoIndexer
                     ["created"] = fileInfo.LastWriteTimeUtc.ToString("yyyy-MM-ddTHH:mm:ss.ffffffZ"),
                 };
                 AddIfNotNull(entry, "appVersion", chart.AppVersion);
+                AddIfNotNull(entry, "description", chart.Description);
+                AddIfNotNull(entry, "type", chart.Type);
                 AddIfNotNull(entry, "home", chart.Home);
                 AddIfNotNull(entry, "sources", chart.Sources);
                 AddIfNotNull(entry, "keywords", chart.Keywords);
                 AddIfNotNull(entry, "maintainers", chart.Maintainers);
+                AddIfNotNull(entry, "kubeVersion", chart.KubeVersion);
+                AddIfNotNull(entry, "annotations", chart.Annotations);
+                if (chart.Dependencies.Count > 0)
+                    entry["dependencies"] = chart.Dependencies.Select(CreateDependencyIndexEntry).ToList();
                 if (chart.Deprecated)
                     entry["deprecated"] = true;
 
@@ -57,9 +74,9 @@ public static class HelmRepoIndexer
                     entries[chart.Name] = new List<Dictionary<string, object?>>();
                 entries[chart.Name].Add(entry);
             }
-            catch
+            catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or IOException)
             {
-                // Skip invalid chart packages
+                diagnostics.Add(new HelmRepoIndexDiagnostic(tgzFile, ex.Message, ex));
             }
         }
 
@@ -76,7 +93,7 @@ public static class HelmRepoIndexer
         var yaml = HelmYaml.Serialize(index);
         var indexPath = Path.Combine(dirPath, "index.yaml");
         await File.WriteAllTextAsync(indexPath, yaml, ct);
-        return indexPath;
+        return new HelmRepoIndexGenerationResult(indexPath, diagnostics);
     }
 
     private static void AddIfNotNull(
@@ -88,6 +105,22 @@ public static class HelmRepoIndexer
             entry[key] = value;
     }
 
+    private static Dictionary<string, object?> CreateDependencyIndexEntry(HelmChartDependency dependency)
+    {
+        var entry = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["name"] = dependency.Name
+        };
+
+        AddIfNotNull(entry, "version", dependency.Version);
+        AddIfNotNull(entry, "repository", dependency.Repository);
+        AddIfNotNull(entry, "condition", dependency.Condition);
+        AddIfNotNull(entry, "tags", dependency.Tags);
+        AddIfNotNull(entry, "import-values", dependency.ImportValues);
+        AddIfNotNull(entry, "alias", dependency.Alias);
+        return entry;
+    }
+
     private static int CompareChartVersionsDescending(
         Dictionary<string, object?> left,
         Dictionary<string, object?> right)
@@ -97,3 +130,23 @@ public static class HelmRepoIndexer
         return HelmChartVersionResolver.CompareVersions(rightVersion, leftVersion);
     }
 }
+
+/// <summary>
+/// Describes the generated repository index and packages that were skipped.
+/// </summary>
+/// <param name="IndexPath">The path to the generated index.yaml file.</param>
+/// <param name="Diagnostics">Diagnostics for invalid chart packages skipped during indexing.</param>
+public sealed record HelmRepoIndexGenerationResult(
+    string IndexPath,
+    IReadOnlyList<HelmRepoIndexDiagnostic> Diagnostics);
+
+/// <summary>
+/// Describes an invalid chart package skipped while generating a repository index.
+/// </summary>
+/// <param name="PackagePath">The invalid chart package path.</param>
+/// <param name="Message">The diagnostic message describing why the package was skipped.</param>
+/// <param name="Exception">The underlying exception.</param>
+public sealed record HelmRepoIndexDiagnostic(
+    string PackagePath,
+    string Message,
+    Exception Exception);
