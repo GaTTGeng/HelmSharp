@@ -168,17 +168,14 @@ internal static class HelmChartVersionResolver
         if (operatorText is "^")
             return TryAppendCaretRange(versionText, comparators);
 
-        if (ContainsWildcard(versionText))
+        if (ContainsCoreWildcard(versionText))
             return TryAppendWildcardRange(operatorText, versionText, comparators);
 
         if (!TryParseConstraintVersion(versionText, out var version, out var specifiedParts))
             return false;
 
-        if (operatorText.Length == 0 && specifiedParts < 3 && !version.HasPrerelease)
-        {
-            AppendPartialVersionRange(version, specifiedParts, comparators);
-            return true;
-        }
+        if (specifiedParts < 3 && !version.HasPrerelease)
+            return TryAppendPartialVersionComparators(operatorText, version, specifiedParts, comparators);
 
         var op = operatorText switch
         {
@@ -203,13 +200,52 @@ internal static class HelmChartVersionResolver
         int specifiedParts,
         List<Comparator> comparators)
     {
-        var upper = specifiedParts <= 1
-            ? new SemanticVersion(lower.Major + 1, 0, 0, [])
-            : new SemanticVersion(lower.Major, lower.Minor + 1, 0, []);
+        var upper = GetPartialVersionUpperBound(lower, specifiedParts);
 
         comparators.Add(new Comparator(ComparisonOperator.GreaterThanOrEqual, lower));
-        comparators.Add(new Comparator(ComparisonOperator.LessThan, upper));
+        comparators.Add(new Comparator(ComparisonOperator.LessThanCore, upper));
     }
+
+    private static bool TryAppendPartialVersionComparators(
+        string operatorText,
+        SemanticVersion lower,
+        int specifiedParts,
+        List<Comparator> comparators)
+    {
+        var upper = GetPartialVersionUpperBound(lower, specifiedParts);
+        switch (operatorText)
+        {
+            case "" or "=" or "==":
+                AppendPartialVersionRange(lower, specifiedParts, comparators);
+                return true;
+            case "!=":
+                comparators.Add(new Comparator(
+                    ComparisonOperator.OutsideRange,
+                    lower,
+                    upper,
+                    AllowsPrereleaseInsideRange: specifiedParts == 2));
+                return true;
+            case ">=":
+                comparators.Add(new Comparator(ComparisonOperator.GreaterThanOrEqual, lower));
+                return true;
+            case ">":
+                comparators.Add(new Comparator(ComparisonOperator.GreaterThanOrEqualCore, upper));
+                return true;
+            case "<=":
+                comparators.Add(new Comparator(ComparisonOperator.LessThanCore, upper));
+                return true;
+            case "<":
+                comparators.Add(new Comparator(ComparisonOperator.LessThan, lower));
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static SemanticVersion GetPartialVersionUpperBound(SemanticVersion lower, int specifiedParts)
+        => specifiedParts <= 1
+            ? new SemanticVersion(lower.Major + 1, 0, 0, [])
+            : new SemanticVersion(lower.Major, lower.Minor + 1, 0, []);
 
     private static (string Operator, string Version) SplitOperator(string token)
     {
@@ -225,9 +261,12 @@ internal static class HelmChartVersionResolver
     private static bool IsOperatorToken(string token)
         => token is ">=" or "<=" or "==" or "!=" or "~>" or ">" or "<" or "=" or "~" or "^";
 
-    private static bool ContainsWildcard(string version)
-        => version.Contains('*', StringComparison.Ordinal) ||
-           version.Contains('x', StringComparison.OrdinalIgnoreCase);
+    private static bool ContainsCoreWildcard(string version)
+        => StripBuild(version)
+            .Split('-', 2)[0]
+            .TrimStart('v', 'V')
+            .Split('.')
+            .Any(part => part is "*" or "x" or "X");
 
     private static bool TryAppendWildcardRange(
         string operatorText,
@@ -246,25 +285,29 @@ internal static class HelmChartVersionResolver
             case "" or "=" or "==":
                 comparators.Add(new Comparator(ComparisonOperator.GreaterThanOrEqual, lower));
                 if (upper is not null)
-                    comparators.Add(new Comparator(ComparisonOperator.LessThan, upper));
+                    comparators.Add(new Comparator(ComparisonOperator.LessThanCore, upper));
                 return true;
             case ">=":
                 comparators.Add(new Comparator(ComparisonOperator.GreaterThanOrEqual, lower));
                 return true;
             case ">":
                 comparators.Add(upper is not null
-                    ? new Comparator(ComparisonOperator.GreaterThanOrEqual, upper)
+                    ? new Comparator(ComparisonOperator.GreaterThanOrEqualCore, upper)
                     : new Comparator(ComparisonOperator.GreaterThan, lower));
                 return true;
             case "<=":
                 if (upper is not null)
-                    comparators.Add(new Comparator(ComparisonOperator.LessThan, upper));
+                    comparators.Add(new Comparator(ComparisonOperator.LessThanCore, upper));
                 return true;
             case "<":
                 comparators.Add(new Comparator(ComparisonOperator.LessThan, lower));
                 return true;
             case "!=":
-                comparators.Add(new Comparator(ComparisonOperator.NotEqual, lower));
+                comparators.Add(new Comparator(
+                    ComparisonOperator.OutsideRange,
+                    lower,
+                    upper,
+                    AllowsPrereleaseInsideRange: wildcardIndex == 2));
                 return true;
             default:
                 return false;
@@ -348,7 +391,7 @@ internal static class HelmChartVersionResolver
             : new SemanticVersion(lower.Major, lower.Minor + 1, 0, []);
 
         comparators.Add(new Comparator(ComparisonOperator.GreaterThanOrEqual, lower));
-        comparators.Add(new Comparator(ComparisonOperator.LessThan, upper));
+        comparators.Add(new Comparator(ComparisonOperator.LessThanCore, upper));
         return true;
     }
 
@@ -380,7 +423,7 @@ internal static class HelmChartVersionResolver
         }
 
         comparators.Add(new Comparator(ComparisonOperator.GreaterThanOrEqual, lower));
-        comparators.Add(new Comparator(ComparisonOperator.LessThan, upper));
+        comparators.Add(new Comparator(ComparisonOperator.LessThanCore, upper));
         return true;
     }
 
@@ -425,7 +468,11 @@ internal static class HelmChartVersionResolver
                Comparators.All(comparator => comparator.IsSatisfiedBy(version));
     }
 
-    private sealed record Comparator(ComparisonOperator Operator, SemanticVersion Version)
+    private sealed record Comparator(
+        ComparisonOperator Operator,
+        SemanticVersion Version,
+        SemanticVersion? UpperBound = null,
+        bool AllowsPrereleaseInsideRange = false)
     {
         public bool IsSatisfiedBy(SemanticVersion version)
         {
@@ -436,8 +483,15 @@ internal static class HelmChartVersionResolver
                 ComparisonOperator.NotEqual => comparison != 0,
                 ComparisonOperator.GreaterThan => comparison > 0,
                 ComparisonOperator.GreaterThanOrEqual => comparison >= 0,
+                ComparisonOperator.GreaterThanOrEqualCore =>
+                    SemanticVersionComparer.CompareCore(version, Version) >= 0,
                 ComparisonOperator.LessThan => comparison < 0,
                 ComparisonOperator.LessThanOrEqual => comparison <= 0,
+                ComparisonOperator.LessThanCore => SemanticVersionComparer.CompareCore(version, Version) < 0,
+                ComparisonOperator.OutsideRange => SemanticVersionComparer.CompareCore(version, Version) < 0 ||
+                                                   UpperBound is not null &&
+                                                   SemanticVersionComparer.CompareCore(version, UpperBound) >= 0 ||
+                                                   AllowsPrereleaseInsideRange && version.HasPrerelease,
                 _ => false
             };
         }
@@ -449,8 +503,11 @@ internal static class HelmChartVersionResolver
         NotEqual,
         GreaterThan,
         GreaterThanOrEqual,
+        GreaterThanOrEqualCore,
         LessThan,
-        LessThanOrEqual
+        LessThanOrEqual,
+        LessThanCore,
+        OutsideRange
     }
 
     private sealed record SemanticVersion(
@@ -506,13 +563,7 @@ internal static class HelmChartVersionResolver
             if (y is null)
                 return 1;
 
-            var coreComparison = x.Major.CompareTo(y.Major);
-            if (coreComparison != 0)
-                return coreComparison;
-            coreComparison = x.Minor.CompareTo(y.Minor);
-            if (coreComparison != 0)
-                return coreComparison;
-            coreComparison = x.Patch.CompareTo(y.Patch);
+            var coreComparison = CompareCore(x, y);
             if (coreComparison != 0)
                 return coreComparison;
 
@@ -529,6 +580,16 @@ internal static class HelmChartVersionResolver
             }
 
             return x.Prerelease.Count.CompareTo(y.Prerelease.Count);
+        }
+
+        public static int CompareCore(SemanticVersion left, SemanticVersion right)
+        {
+            var comparison = left.Major.CompareTo(right.Major);
+            if (comparison != 0)
+                return comparison;
+
+            comparison = left.Minor.CompareTo(right.Minor);
+            return comparison != 0 ? comparison : left.Patch.CompareTo(right.Patch);
         }
 
         private static int ComparePrereleaseIdentifier(PrereleaseIdentifier left, PrereleaseIdentifier right)

@@ -32,6 +32,7 @@ This project follows semantic versioning once stable releases begin.
 - Matched Helm package `.helmignore` filtering for comments, directory and glob patterns, normalized paths, and supported negation behavior (#126).
 - Hardened chart archive layout and extraction safety for packaged charts, chart loading, and repository pulls (#127).
 - Matched Helm repository index digest casing, version ordering, and HTTP chart-reference parsing used by repository pulls (#128).
+- Matched Helm partial comparator, wildcard exclusion, and prerelease constraint semantics in chart version resolution (#130).
 
 ## [1.1.0] - 2026-07-01
 
