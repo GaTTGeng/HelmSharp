@@ -43,6 +43,18 @@ public class EdgeCaseTests
     }
 
     [Fact]
+    public void Include_ResolvesNamedOrdinaryChartTemplate()
+    {
+        var chart = new HelmChart { Name = "parent", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/configmap.yaml"] = "value: rendered";
+        chart.Templates["templates/deployment.yaml"] = "{{ include \"parent/templates/configmap.yaml\" . }}";
+
+        var result = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>()).Render();
+
+        Assert.Contains("value: rendered", result);
+    }
+
+    [Fact]
     public void NotesTxt_NotIncludedInRender()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
