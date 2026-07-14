@@ -119,6 +119,107 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
             HelmYaml.GetString(sharpIndex, "digest"));
     }
 
+    [HelmCliFact]
+    public async Task RepoIndexAsync_MergePreservesAbsentVersionsAndUrls()
+    {
+        var sharpRepoDir = Path.Combine(_tempDir, "sharp-merge-repo-index");
+        var helmRepoDir = Path.Combine(_tempDir, "helm-merge-repo-index");
+        Directory.CreateDirectory(sharpRepoDir);
+        Directory.CreateDirectory(helmRepoDir);
+        await PackageRepoChartVersionAsync("1.0.0", sharpRepoDir);
+        CopyPackages(sharpRepoDir, helmRepoDir);
+
+        var sharpExistingIndex = Path.Combine(_tempDir, "sharp-existing-index.yaml");
+        var helmExistingIndex = Path.Combine(_tempDir, "helm-existing-index.yaml");
+        File.Copy(
+            await HelmRepoIndexer.GenerateIndexAsync(sharpRepoDir, "https://old.example.test/charts", CancellationToken.None),
+            sharpExistingIndex);
+        var helmInitial = await HelmCliRunner.RepoIndexAsync(
+            helmRepoDir,
+            "https://old.example.test/charts",
+            CancellationToken.None);
+        AssertOperationSucceeded("helm repo index initial merge fixture", helmInitial);
+        File.Copy(Path.Combine(helmRepoDir, "index.yaml"), helmExistingIndex);
+
+        File.Delete(Path.Combine(sharpRepoDir, "repo-golden-1.0.0.tgz"));
+        File.Delete(Path.Combine(helmRepoDir, "repo-golden-1.0.0.tgz"));
+        await PackageRepoChartVersionAsync("1.1.0", sharpRepoDir);
+        CopyPackages(sharpRepoDir, helmRepoDir);
+
+        var sharpIndexPath = await HelmRepoIndexer.GenerateIndexAsync(
+            sharpRepoDir,
+            "https://new.example.test/charts/",
+            CancellationToken.None,
+            mergeIndexPath: sharpExistingIndex);
+        var helmMerged = await HelmCliRunner.RepoIndexAsync(
+            helmRepoDir,
+            "https://new.example.test/charts/",
+            CancellationToken.None,
+            mergeIndexPath: helmExistingIndex);
+        AssertOperationSucceeded("helm repo index merge", helmMerged);
+
+        var sharpIndex = ReadIndexSnapshot(sharpIndexPath, "repo-golden");
+        var helmIndex = ReadIndexSnapshot(Path.Combine(helmRepoDir, "index.yaml"), "repo-golden");
+        Assert.Equal(helmIndex.Versions.Select(version => version.Version), sharpIndex.Versions.Select(version => version.Version));
+        Assert.Equal(helmIndex.Versions.Select(version => version.Url), sharpIndex.Versions.Select(version => version.Url));
+        Assert.Equal(helmIndex.Versions.Select(version => version.Digest), sharpIndex.Versions.Select(version => version.Digest));
+        Assert.Equal(
+            ["https://new.example.test/charts/repo-golden-1.1.0.tgz", "https://old.example.test/charts/repo-golden-1.0.0.tgz"],
+            sharpIndex.Versions.Select(version => version.Url));
+    }
+
+    [HelmCliFact]
+    public async Task RepoIndexAsync_MergeReplacesMatchingLocalVersion()
+    {
+        var sharpRepoDir = Path.Combine(_tempDir, "sharp-merge-replacement-repo-index");
+        var helmRepoDir = Path.Combine(_tempDir, "helm-merge-replacement-repo-index");
+        Directory.CreateDirectory(sharpRepoDir);
+        Directory.CreateDirectory(helmRepoDir);
+        await PackageRepoChartVersionAsync("1.0.0", sharpRepoDir, "Original chart");
+        CopyPackages(sharpRepoDir, helmRepoDir);
+
+        var sharpExistingIndex = Path.Combine(_tempDir, "sharp-replacement-existing-index.yaml");
+        var helmExistingIndex = Path.Combine(_tempDir, "helm-replacement-existing-index.yaml");
+        var sharpInitialPath = await HelmRepoIndexer.GenerateIndexAsync(
+            sharpRepoDir,
+            "https://old.example.test/charts",
+            CancellationToken.None);
+        File.Copy(sharpInitialPath, sharpExistingIndex);
+        var originalDigest = ReadIndexSnapshot(sharpInitialPath, "repo-golden").Versions.Single().Digest;
+        var helmInitial = await HelmCliRunner.RepoIndexAsync(
+            helmRepoDir,
+            "https://old.example.test/charts",
+            CancellationToken.None);
+        AssertOperationSucceeded("helm repo index initial replacement fixture", helmInitial);
+        File.Copy(Path.Combine(helmRepoDir, "index.yaml"), helmExistingIndex);
+
+        File.Delete(Path.Combine(sharpRepoDir, "repo-golden-1.0.0.tgz"));
+        File.Delete(Path.Combine(helmRepoDir, "repo-golden-1.0.0.tgz"));
+        await PackageRepoChartVersionAsync("1.0.0", sharpRepoDir, "Replacement chart");
+        CopyPackages(sharpRepoDir, helmRepoDir);
+
+        var sharpIndexPath = await HelmRepoIndexer.GenerateIndexAsync(
+            sharpRepoDir,
+            "https://new.example.test/charts/",
+            CancellationToken.None,
+            mergeIndexPath: sharpExistingIndex);
+        var helmMerged = await HelmCliRunner.RepoIndexAsync(
+            helmRepoDir,
+            "https://new.example.test/charts/",
+            CancellationToken.None,
+            mergeIndexPath: helmExistingIndex);
+        AssertOperationSucceeded("helm repo index replacement merge", helmMerged);
+
+        var sharpIndex = ReadIndexSnapshot(sharpIndexPath, "repo-golden");
+        var helmIndex = ReadIndexSnapshot(Path.Combine(helmRepoDir, "index.yaml"), "repo-golden");
+        Assert.Single(sharpIndex.Versions);
+        Assert.Equal(helmIndex.Versions.Select(version => version.Version), sharpIndex.Versions.Select(version => version.Version));
+        Assert.Equal(helmIndex.Versions.Select(version => version.Url), sharpIndex.Versions.Select(version => version.Url));
+        Assert.Equal(helmIndex.Versions.Select(version => version.Digest), sharpIndex.Versions.Select(version => version.Digest));
+        Assert.NotEqual(originalDigest, sharpIndex.Versions.Single().Digest);
+        Assert.Equal("https://new.example.test/charts/repo-golden-1.0.0.tgz", sharpIndex.Versions.Single().Url);
+    }
+
     [Fact]
     public async Task RepoIndexAsync_InvalidArchiveReportsDiagnosticAndIndexesValidPackages()
     {
@@ -329,14 +430,17 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         return chartDir;
     }
 
-    private async Task PackageRepoChartVersionAsync(string version, string destination)
+    private async Task PackageRepoChartVersionAsync(
+        string version,
+        string destination,
+        string description = "Repository golden chart")
     {
         var chartDir = await CreateChartAsync($"repo-golden-{version}", $"""
             apiVersion: v2
             name: repo-golden
             version: {version}
             appVersion: v1.0
-            description: Repository golden chart
+            description: {description}
             type: application
             """);
         await WriteTextAsync(Path.Combine(chartDir, "values.yaml"), $"version: {version}\n");
