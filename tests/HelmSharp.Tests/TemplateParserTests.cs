@@ -1,3 +1,4 @@
+using HelmSharp.Chart;
 using HelmSharp.Engine;
 
 namespace HelmSharp.Tests;
@@ -469,6 +470,70 @@ public class TemplateParserTests
         Assert.Contains("Unclosed action delimiter", ex.Message);
         Assert.True(ex.Line > 0);
         Assert.True(ex.Offset >= 0);
+    }
+
+    [Fact]
+    public void Tokenize_RawStringContainingActionDelimiter()
+    {
+        var tokens = new TemplateTokenizer("{{ `{{not-an-action}}` }}").TokenizeFlat().ToList();
+
+        Assert.Equal(" `{{not-an-action}}` ", tokens.Single(token => token.Kind == TokenKind.ActionContent).Value);
+    }
+
+    [Fact]
+    public void Render_RawStringContainingDelimitersSpacesAndPipes()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = "value: {{ `{{ .Release.Name }} | literal text` }}";
+
+        var result = new HelmTemplateRenderer(chart, "release", "default", new Dictionary<string, object?>()).Render();
+
+        Assert.Contains("value: {{ .Release.Name }} | literal text", result);
+    }
+
+    [Fact]
+    public void Render_RawStringInsideParentheses()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = "value: {{ print (`a ) b`) }}";
+
+        var result = new HelmTemplateRenderer(chart, "release", "default", new Dictionary<string, object?>()).Render();
+
+        Assert.Contains("value: a ) b", result);
+    }
+
+    [Fact]
+    public void Render_RawStringWithPipeInsideParentheses()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = "value: {{ print (`a ) | b`) }}";
+
+        var result = new HelmTemplateRenderer(chart, "release", "default", new Dictionary<string, object?>()).Render();
+
+        Assert.Contains("value: a ) | b", result);
+    }
+
+    [Fact]
+    public void Render_RawStringDiscardsCarriageReturns()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = "value: {{ `first\r\nsecond` }}";
+
+        var result = new HelmTemplateRenderer(chart, "release", "default", new Dictionary<string, object?>()).Render();
+
+        Assert.DoesNotContain("\r", result);
+        Assert.Contains("first\nsecond", result);
+    }
+
+    [Fact]
+    public void Render_RawStringDefineName()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = "{{ define `name` }}rendered{{ end }}{{ template `name` . }}";
+
+        var result = new HelmTemplateRenderer(chart, "release", "default", new Dictionary<string, object?>()).Render();
+
+        Assert.Contains("rendered", result);
     }
 
     [Fact]

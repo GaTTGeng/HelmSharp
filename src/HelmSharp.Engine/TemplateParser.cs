@@ -362,7 +362,7 @@ public sealed class TemplateParser
         if (remaining.Length >= 2)
         {
             var quote = remaining[0];
-            if (quote is '"' or '\'')
+            if (quote is '"' or '\'' or '`')
             {
                 var i = remaining.IndexOf(quote, 1);
                 if (i > 0) return remaining[1..i];

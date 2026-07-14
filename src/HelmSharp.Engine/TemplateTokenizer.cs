@@ -221,7 +221,7 @@ public sealed class TemplateTokenizer
             }
 
             // Skip quoted strings (don't mistake }} inside strings for delimiters)
-            if (_input[_pos] is '"' or '\'')
+            if (_input[_pos] is '"' or '\'' or '`')
             {
                 var quote = _input[_pos];
                 sb.Append(quote);
@@ -230,7 +230,7 @@ public sealed class TemplateTokenizer
 
                 while (_pos < _input.Length)
                 {
-                    if (_input[_pos] == '\\' && _pos + 1 < _input.Length)
+                    if (quote != '`' && _input[_pos] == '\\' && _pos + 1 < _input.Length)
                     {
                         sb.Append(_input[_pos]);
                         sb.Append(_input[_pos + 1]);
