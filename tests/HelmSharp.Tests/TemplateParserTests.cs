@@ -480,6 +480,17 @@ public class TemplateParserTests
     }
 
     [Fact]
+    public void Render_RawStringContainingDelimitersSpacesAndPipes()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = "value: {{ `{{ .Release.Name }} | literal text` }}";
+
+        var result = new HelmTemplateRenderer(chart, "release", "default", new Dictionary<string, object?>()).Render();
+
+        Assert.Contains("value: {{ .Release.Name }} | literal text", result);
+    }
+
+    [Fact]
     public void Tokenize_UnclosedActionDelimiterWithTrim_ThrowsTemplateParseException()
     {
         var tokenizer = new TemplateTokenizer("{{- .Values.foo");
