@@ -452,7 +452,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
     private void ExtractDefines(string content)
     {
         var defineOpenRegex = new Regex(
-            "{{-?\\s*define\\s+\"(?<name>[^\"]+)\"\\s*-?}}",
+            "{{-?\\s*define\\s+(?<quote>[\"`])(?<name>[^\"`]+)\\k<quote>\\s*-?}}",
             RegexOptions.Singleline);
 
         var matches = defineOpenRegex.Matches(content);
@@ -2146,7 +2146,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         var parenDepth = 0;
         foreach (var ch in expression)
         {
-            if ((ch == '"' || ch == '\'' || ch == '`') && (!inQuote || quote == ch) && parenDepth == 0)
+            if ((ch == '"' || ch == '\'' || ch == '`') && (!inQuote || quote == ch))
             {
                 inQuote = !inQuote;
                 quote = inQuote ? ch : '\0';
