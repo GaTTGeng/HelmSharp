@@ -1102,9 +1102,9 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                 TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context)),
                 TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(pipelineValue != null ? 2 : 3), context))),
             "mustRegexReplaceAllLiteral" => StringFunctions.RegexReplaceAllLiteral(
-                TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context)),
+                TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(2), context)),
                 TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-                TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(pipelineValue != null ? 2 : 3), context))),
+                TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(3), context))),
             "regexSplit" => StringFunctions.RegexSplit(
                 TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(2), context)),
                 TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context))),
