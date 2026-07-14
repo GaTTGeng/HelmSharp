@@ -1,3 +1,4 @@
+using HelmSharp.Chart;
 using HelmSharp.Engine;
 
 namespace HelmSharp.Tests;
