@@ -280,6 +280,36 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         Assert.False(File.Exists(Path.Combine(helmRepoDir, "index.yaml")));
     }
 
+    [HelmCliFact]
+    public async Task RepoIndexAsync_MergeWithDirectoryPathFailsWithoutWritingIndex()
+    {
+        var sharpRepoDir = Path.Combine(_tempDir, "sharp-directory-merge-repo-index");
+        var helmRepoDir = Path.Combine(_tempDir, "helm-directory-merge-repo-index");
+        var sharpMergeDirectory = Path.Combine(_tempDir, "sharp-merge-directory");
+        var helmMergeDirectory = Path.Combine(_tempDir, "helm-merge-directory");
+        Directory.CreateDirectory(sharpRepoDir);
+        Directory.CreateDirectory(helmRepoDir);
+        Directory.CreateDirectory(sharpMergeDirectory);
+        Directory.CreateDirectory(helmMergeDirectory);
+        await PackageRepoChartVersionAsync("1.0.0", sharpRepoDir);
+        CopyPackages(sharpRepoDir, helmRepoDir);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => HelmRepoIndexer.GenerateIndexAsync(
+            sharpRepoDir,
+            "https://repo.example.test/charts",
+            CancellationToken.None,
+            mergeIndexPath: sharpMergeDirectory));
+        var helmResult = await HelmCliRunner.RepoIndexAsync(
+            helmRepoDir,
+            "https://repo.example.test/charts",
+            CancellationToken.None,
+            mergeIndexPath: helmMergeDirectory);
+
+        Assert.NotEqual(0, helmResult.ExitCode);
+        Assert.False(File.Exists(Path.Combine(sharpRepoDir, "index.yaml")));
+        Assert.False(File.Exists(Path.Combine(helmRepoDir, "index.yaml")));
+    }
+
     [Fact]
     public async Task RepoIndexAsync_InvalidArchiveReportsDiagnosticAndIndexesValidPackages()
     {
