@@ -128,23 +128,24 @@ public static class HelmRepoIndexer
             return;
 
         var existingIndex = HelmYaml.DeserializeDictionary(File.ReadAllText(mergeIndexPath));
-        if (!existingIndex.TryGetValue("entries", out var existingEntriesObject)
+        if (!string.Equals(HelmYaml.GetString(existingIndex, "apiVersion"), "v1", StringComparison.Ordinal)
+            || !existingIndex.TryGetValue("entries", out var existingEntriesObject)
             || existingEntriesObject is not IDictionary<string, object?> existingEntries)
-        {
-            return;
-        }
+            throw new InvalidDataException($"Merge index is not a valid Helm repository index: {mergeIndexPath}");
 
         foreach (var (chartName, existingVersionsObject) in existingEntries)
         {
             if (existingVersionsObject is not IEnumerable<object?> existingVersions)
-                continue;
+                throw new InvalidDataException($"Merge index contains invalid entries for chart '{chartName}': {mergeIndexPath}");
 
-            var parsedVersions = existingVersions
-                .OfType<IDictionary<string, object?>>()
-                .Select(version => new Dictionary<string, object?>(version, StringComparer.OrdinalIgnoreCase))
-                .ToList();
-            if (parsedVersions.Count == 0)
-                continue;
+            var parsedVersions = new List<Dictionary<string, object?>>();
+            foreach (var version in existingVersions)
+            {
+                if (version is not IDictionary<string, object?> entry)
+                    throw new InvalidDataException($"Merge index contains an invalid chart version for '{chartName}': {mergeIndexPath}");
+
+                parsedVersions.Add(new Dictionary<string, object?>(entry, StringComparer.OrdinalIgnoreCase));
+            }
 
             if (!entries.TryGetValue(chartName, out var generatedVersions))
             {
