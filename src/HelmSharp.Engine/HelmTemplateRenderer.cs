@@ -2194,7 +2194,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         var parenDepth = 0;
         foreach (var ch in expression)
         {
-            if ((ch == '"' || ch == '\'' || ch == '`') && (!inQuote || quote == ch) && parenDepth == 0)
+            if ((ch == '"' || ch == '\'' || ch == '`') && (!inQuote || quote == ch))
             {
                 inQuote = !inQuote;
                 quote = inQuote ? ch : '\0';
