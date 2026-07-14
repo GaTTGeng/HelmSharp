@@ -13,6 +13,7 @@ This project follows semantic versioning once stable releases begin.
 - Added Helm CLI golden coverage for package, repository index, pull, and dependency workflows (#128).
 - Added chart loader support for packaged dependency archives under `charts/` in directory and archive charts (#129).
 - Added Helm-compatible SemVer resolution for repository chart versions and dependency constraints (#130).
+- Added repository index generation diagnostics for invalid chart packages while continuing to index valid packages (#131).
 
 ### Changed
 
@@ -33,6 +34,7 @@ This project follows semantic versioning once stable releases begin.
 - Hardened chart archive layout and extraction safety for packaged charts, chart loading, and repository pulls (#127).
 - Matched Helm repository index digest casing, version ordering, and HTTP chart-reference parsing used by repository pulls (#128).
 - Matched Helm partial comparator, wildcard exclusion, and prerelease constraint semantics in chart version resolution (#130).
+- Matched Helm repository index entry metadata for annotations, dependencies, maintainers, sources, keywords, home, kubeVersion, appVersion, deprecated, and chart type fields (#131).
 
 ## [1.1.0] - 2026-07-01
 

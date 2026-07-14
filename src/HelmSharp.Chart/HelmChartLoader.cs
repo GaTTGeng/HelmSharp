@@ -15,6 +15,7 @@ public sealed class HelmChart
     public string? AppVersion { get; init; }
     public string? Description { get; init; }
     public string? Home { get; init; }
+    public string? Icon { get; init; }
     public List<object?>? Sources { get; set; }
     public List<object?>? Keywords { get; set; }
     public List<object?>? Maintainers { get; set; }
@@ -67,6 +68,7 @@ public static class HelmChartLoader
             AppVersion = HelmYaml.GetString(metadata, "appVersion"),
             Description = HelmYaml.GetString(metadata, "description"),
             Home = HelmYaml.GetString(metadata, "home"),
+            Icon = HelmYaml.GetString(metadata, "icon"),
             Type = HelmYaml.GetString(metadata, "type"),
             Deprecated = string.Equals(HelmYaml.GetString(metadata, "deprecated"), "true", StringComparison.OrdinalIgnoreCase),
             KubeVersion = HelmYaml.GetString(metadata, "kubeVersion"),

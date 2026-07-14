@@ -192,7 +192,12 @@ public static class HelmYaml
                 StringComparer.Ordinal),
             // Dictionary<object, object> is already normalized by Normalize()
             // before Serialize is called — skip it to avoid key-collision crash.
-            IEnumerable<object> list => list.Select(SortKeys).ToList(),
+            System.Collections.IDictionary dict => new SortedDictionary<string, object?>(
+                dict.Keys.Cast<object>().ToDictionary(
+                    key => Convert.ToString(key) ?? string.Empty,
+                    key => SortKeys(dict[key])),
+                StringComparer.Ordinal),
+            System.Collections.IEnumerable list when value is not string => list.Cast<object?>().Select(SortKeys).ToList(),
             string text when NeedsQuotedString(text) => new QuotedYamlString(text),
             _ => value
         };
