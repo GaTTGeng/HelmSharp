@@ -1252,6 +1252,22 @@ public class TemplateFunctionTests
     }
 
     [Fact]
+    public void RegexFunctions_MustRegexReplaceAllLiteral()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            direct: {{ mustRegexReplaceAllLiteral "[0-9]+" "abc123def" "$1" }}
+            piped: {{ "$1" | mustRegexReplaceAllLiteral "[0-9]+" "abc123def" }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>());
+
+        var result = renderer.Render();
+
+        Assert.Contains("direct: abc$1def", result);
+        Assert.Contains("piped: abc$1def", result);
+    }
+
+    [Fact]
     public void MustVariants_WorkCorrectly()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
