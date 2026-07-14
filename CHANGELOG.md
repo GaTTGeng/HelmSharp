@@ -6,6 +6,8 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-07-13
+
 ### Added
 
 - Expanded the VitePress documentation into workflow guides, real integration examples, package-by-package pages, and generated API reference indexes in English and Simplified Chinese.
