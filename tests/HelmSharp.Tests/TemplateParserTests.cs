@@ -514,6 +514,18 @@ public class TemplateParserTests
     }
 
     [Fact]
+    public void Render_RawStringDiscardsCarriageReturns()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = "value: {{ `first\r\nsecond` }}";
+
+        var result = new HelmTemplateRenderer(chart, "release", "default", new Dictionary<string, object?>()).Render();
+
+        Assert.DoesNotContain("\r", result);
+        Assert.Contains("first\nsecond", result);
+    }
+
+    [Fact]
     public void Render_RawStringDefineName()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };

@@ -1464,7 +1464,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         if (token.StartsWith('\'') && token.EndsWith('\''))
             return token[1..^1];
         if (token.StartsWith('`') && token.EndsWith('`'))
-            return token[1..^1];
+            return token[1..^1].Replace("\r", string.Empty, StringComparison.Ordinal);
         if (token.StartsWith('('))
         {
             var memberSeparator = token.LastIndexOf(").", StringComparison.Ordinal);
@@ -2247,7 +2247,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         if (token.StartsWith('\'') && token.EndsWith('\''))
             return token[1..^1];
         if (token.StartsWith('`') && token.EndsWith('`'))
-            return token[1..^1];
+            return token[1..^1].Replace("\r", string.Empty, StringComparison.Ordinal);
         if (token == ".") return context.Dot;
         if (token == "true") return true;
         if (token == "false") return false;
