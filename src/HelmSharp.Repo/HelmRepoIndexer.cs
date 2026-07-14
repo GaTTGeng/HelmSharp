@@ -158,8 +158,8 @@ public static class HelmRepoIndexer
                 var mergedChartName = versionsByMetadataName.Key;
                 if (!entries.TryGetValue(mergedChartName, out var generatedVersions))
                 {
-                    entries[mergedChartName] = versionsByMetadataName.ToList();
-                    continue;
+                    generatedVersions = [];
+                    entries[mergedChartName] = generatedVersions;
                 }
 
                 var generatedVersionNames = generatedVersions
@@ -167,13 +167,18 @@ public static class HelmRepoIndexer
                     .Where(version => !string.IsNullOrWhiteSpace(version))
                     .Select(version => version!)
                     .ToList();
-                generatedVersions.AddRange(versionsByMetadataName.Where(version =>
+                foreach (var version in versionsByMetadataName)
                 {
                     var mergedVersion = HelmYaml.GetString(version, "version");
-                    return !generatedVersionNames.Any(generatedVersion =>
+                    if (generatedVersionNames.Any(generatedVersion =>
                         VersionsAreEquivalent(generatedVersion, mergedVersion) ||
-                        HelmChartVersionResolver.Satisfies(generatedVersion, mergedVersion));
-                }));
+                        HelmChartVersionResolver.Satisfies(generatedVersion, mergedVersion)))
+                        continue;
+
+                    generatedVersions.Add(version);
+                    if (!string.IsNullOrWhiteSpace(mergedVersion))
+                        generatedVersionNames.Add(mergedVersion);
+                }
             }
         }
     }
