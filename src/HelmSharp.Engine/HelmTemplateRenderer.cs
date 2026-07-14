@@ -132,9 +132,9 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         }
 
         // Extract defines from subchart templates (shared globally)
-        foreach (var (_, subchart) in _chart.Subcharts)
+        foreach (var (subchartIdentity, subchart) in GetSubchartRenderInstances())
         {
-            RegisterNamedChartTemplates(subchart, $"{_chart.Name}/charts/{subchart.Name}");
+            RegisterNamedChartTemplates(subchart, $"{_chart.Name}/charts/{subchartIdentity}");
             foreach (var content in subchart.Templates.Values)
             {
                 ExtractDefines(content);
