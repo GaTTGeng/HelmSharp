@@ -221,6 +221,60 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
     }
 
     [HelmCliFact]
+    public async Task RepoIndexAsync_MergeReplacesSemanticallyEquivalentLocalVersions()
+    {
+        var versionPairs = new[]
+        {
+            (Existing: "1.2.0", Local: "1.2"),
+            (Existing: "1.2.0+existing", Local: "1.2.0+local")
+        };
+
+        for (var index = 0; index < versionPairs.Length; index++)
+        {
+            var (existingVersion, localVersion) = versionPairs[index];
+            var sharpRepoDir = Path.Combine(_tempDir, $"sharp-semver-merge-repo-index-{index}");
+            var helmRepoDir = Path.Combine(_tempDir, $"helm-semver-merge-repo-index-{index}");
+            Directory.CreateDirectory(sharpRepoDir);
+            Directory.CreateDirectory(helmRepoDir);
+            await PackageRepoChartVersionAsync(existingVersion, sharpRepoDir);
+            CopyPackages(sharpRepoDir, helmRepoDir);
+
+            var sharpExistingIndex = Path.Combine(_tempDir, $"sharp-semver-existing-index-{index}.yaml");
+            var helmExistingIndex = Path.Combine(_tempDir, $"helm-semver-existing-index-{index}.yaml");
+            File.Copy(
+                await HelmRepoIndexer.GenerateIndexAsync(sharpRepoDir, ct: CancellationToken.None),
+                sharpExistingIndex);
+            var helmInitial = await HelmCliRunner.RepoIndexAsync(helmRepoDir, url: null, CancellationToken.None);
+            AssertOperationSucceeded("helm repo index initial semantic merge fixture", helmInitial);
+            File.Copy(Path.Combine(helmRepoDir, "index.yaml"), helmExistingIndex);
+
+            File.Delete(Path.Combine(sharpRepoDir, $"repo-golden-{existingVersion}.tgz"));
+            File.Delete(Path.Combine(helmRepoDir, $"repo-golden-{existingVersion}.tgz"));
+            await PackageRepoChartVersionAsync(localVersion, sharpRepoDir);
+            CopyPackages(sharpRepoDir, helmRepoDir);
+
+            var sharpIndexPath = await HelmRepoIndexer.GenerateIndexAsync(
+                sharpRepoDir,
+                url: null,
+                ct: CancellationToken.None,
+                mergeIndexPath: sharpExistingIndex);
+            var helmMerged = await HelmCliRunner.RepoIndexAsync(
+                helmRepoDir,
+                url: null,
+                cancellationToken: CancellationToken.None,
+                mergeIndexPath: helmExistingIndex);
+            AssertOperationSucceeded("helm repo index semantic merge", helmMerged);
+
+            var sharpIndex = ReadIndexSnapshot(sharpIndexPath, "repo-golden");
+            var helmIndex = ReadIndexSnapshot(Path.Combine(helmRepoDir, "index.yaml"), "repo-golden");
+            Assert.Single(sharpIndex.Versions);
+            Assert.Equal(localVersion, sharpIndex.Versions.Single().Version);
+            Assert.Equal(helmIndex.Versions.Select(version => version.Version), sharpIndex.Versions.Select(version => version.Version));
+            Assert.Equal(helmIndex.Versions.Select(version => version.Digest), sharpIndex.Versions.Select(version => version.Digest));
+        }
+    }
+
+    [HelmCliFact]
     public async Task RepoIndexAsync_MergeWithMissingIndexGeneratesNewIndex()
     {
         var sharpRepoDir = Path.Combine(_tempDir, "sharp-missing-merge-repo-index");

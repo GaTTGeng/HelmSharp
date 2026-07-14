@@ -160,11 +160,20 @@ public static class HelmRepoIndexer
             var generatedVersionNames = generatedVersions
                 .Select(version => HelmYaml.GetString(version, "version"))
                 .Where(version => !string.IsNullOrWhiteSpace(version))
-                .ToHashSet(StringComparer.Ordinal);
+                .ToList();
             generatedVersions.AddRange(parsedVersions.Where(version =>
-                !generatedVersionNames.Contains(HelmYaml.GetString(version, "version"))));
+            {
+                var mergedVersion = HelmYaml.GetString(version, "version");
+                return !generatedVersionNames.Any(generatedVersion =>
+                    VersionsAreEquivalent(generatedVersion, mergedVersion));
+            }));
         }
     }
+
+    private static bool VersionsAreEquivalent(string? left, string? right)
+        => !string.IsNullOrWhiteSpace(left)
+           && !string.IsNullOrWhiteSpace(right)
+           && HelmChartVersionResolver.CompareVersions(left, right) == 0;
 
     private static void AddIfNotNull(
         Dictionary<string, object?> entry,
