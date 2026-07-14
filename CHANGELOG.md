@@ -9,6 +9,7 @@ This project follows semantic versioning once stable releases begin.
 ### Changed
 
 - Updated English and Simplified Chinese installation guidance for the 1.1.1 release.
+- Aligned chart repository configuration and cache locations with Helm-style durable settings (#133).
 
 ## [1.1.1] - 2026-07-13
 

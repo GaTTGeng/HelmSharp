@@ -18,15 +18,41 @@ public sealed class HelmChartRepository : IDisposable
 
     private readonly HttpClient _httpClient;
     private readonly string _cacheDir;
+    private readonly string _repositoryConfigPath;
 
+    /// <summary>
+    /// Creates a repository client using Helm-compatible environment settings and defaults.
+    /// </summary>
     public HelmChartRepository(string? cacheDir = null)
+        : this(cacheDir is null
+            ? new HelmRepositoryOptions()
+            : new HelmRepositoryOptions { CacheDirectory = cacheDir, ConfigDirectory = cacheDir })
     {
-        _cacheDir = cacheDir ?? Path.Combine(Path.GetTempPath(), "helmsharp", "cache");
+    }
+
+    /// <summary>
+    /// Creates a repository client with explicit configuration and cache locations.
+    /// </summary>
+    public HelmChartRepository(HelmRepositoryOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        _cacheDir = ResolveCacheDirectory(options);
+        _repositoryConfigPath = ResolveRepositoryConfigPath(options);
         Directory.CreateDirectory(_cacheDir);
+        var configDirectory = Path.GetDirectoryName(_repositoryConfigPath);
+        if (!string.IsNullOrWhiteSpace(configDirectory))
+            Directory.CreateDirectory(configDirectory);
 
         _httpClient = new HttpClient();
         _httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("helmsharp", ProductVersion));
     }
+
+    /// <summary>Gets the directory used for downloaded charts and repository indexes.</summary>
+    public string CacheDirectory => _cacheDir;
+
+    /// <summary>Gets the Helm-compatible <c>repositories.yaml</c> configuration path.</summary>
+    public string RepositoryConfigPath => _repositoryConfigPath;
 
     /// <summary>
     /// Downloads a chart to a local directory. Supports:
@@ -66,16 +92,20 @@ public sealed class HelmChartRepository : IDisposable
         string? password = null,
         CancellationToken cancellationToken = default)
     {
-        var repoFile = Path.Combine(_cacheDir, "repositories.json");
-        var repos = await LoadRepositoriesAsync(repoFile, cancellationToken);
+        ValidateRepositoryName(name);
+        var normalizedUrl = NormalizeRepositoryUrl(url);
+        var repos = await LoadRepositoriesAsync(_repositoryConfigPath, cancellationToken);
+        if (repos.ContainsKey(name))
+            throw new InvalidOperationException($"Repository '{name}' already exists. Remove it before adding it again.");
+
         repos[name] = new HelmRepository
         {
             Name = name,
-            Url = url,
+            Url = normalizedUrl,
             Username = username,
             Password = password
         };
-        await SaveRepositoriesAsync(repoFile, repos, cancellationToken);
+        await SaveRepositoriesAsync(_repositoryConfigPath, repos, cancellationToken);
     }
 
     /// <summary>
@@ -83,10 +113,10 @@ public sealed class HelmChartRepository : IDisposable
     /// </summary>
     public async Task RemoveRepositoryAsync(string name, CancellationToken cancellationToken = default)
     {
-        var repoFile = Path.Combine(_cacheDir, "repositories.json");
-        var repos = await LoadRepositoriesAsync(repoFile, cancellationToken);
-        repos.Remove(name);
-        await SaveRepositoriesAsync(repoFile, repos, cancellationToken);
+        var repos = await LoadRepositoriesAsync(_repositoryConfigPath, cancellationToken);
+        if (!repos.Remove(name))
+            throw new InvalidOperationException($"Repository '{name}' does not exist.");
+        await SaveRepositoriesAsync(_repositoryConfigPath, repos, cancellationToken);
     }
 
     /// <summary>
@@ -94,9 +124,8 @@ public sealed class HelmChartRepository : IDisposable
     /// </summary>
     public async Task<List<HelmRepository>> ListRepositoriesAsync(CancellationToken cancellationToken = default)
     {
-        var repoFile = Path.Combine(_cacheDir, "repositories.json");
-        var repos = await LoadRepositoriesAsync(repoFile, cancellationToken);
-        return repos.Values.ToList();
+        var repos = await LoadRepositoriesAsync(_repositoryConfigPath, cancellationToken);
+        return repos.Values.OrderBy(repo => repo.Name, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     /// <summary>
@@ -153,6 +182,7 @@ public sealed class HelmChartRepository : IDisposable
         var response = await _httpClient.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
         var yaml = await response.Content.ReadAsStringAsync(cancellationToken);
+        await CacheRepositoryIndexAsync(repoUrl, yaml, cancellationToken);
         return ParseRepoIndex(yaml);
     }
 
@@ -398,15 +428,138 @@ public sealed class HelmChartRepository : IDisposable
         if (!File.Exists(path))
             return new Dictionary<string, HelmRepository>(StringComparer.OrdinalIgnoreCase);
 
-        var json = await File.ReadAllTextAsync(path, ct);
-        var repos = JsonSerializer.Deserialize<Dictionary<string, HelmRepository>>(json);
-        return repos ?? new Dictionary<string, HelmRepository>(StringComparer.OrdinalIgnoreCase);
+        var yaml = await File.ReadAllTextAsync(path, ct);
+        var root = HelmYaml.DeserializeDictionary(yaml);
+        var repos = new Dictionary<string, HelmRepository>(StringComparer.OrdinalIgnoreCase);
+        if (root.TryGetValue("repositories", out var repositoriesObject)
+            && repositoriesObject is IList<object?> repositories)
+        {
+            foreach (var entry in repositories.OfType<IDictionary<string, object?>>())
+            {
+                var name = HelmYaml.GetString(entry, "name");
+                var url = HelmYaml.GetString(entry, "url");
+                if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(url))
+                    continue;
+
+                repos[name] = new HelmRepository
+                {
+                    Name = name,
+                    Url = url,
+                    Username = HelmYaml.GetString(entry, "username"),
+                    Password = HelmYaml.GetString(entry, "password"),
+                    CertFile = HelmYaml.GetString(entry, "certFile"),
+                    KeyFile = HelmYaml.GetString(entry, "keyFile"),
+                    CaFile = HelmYaml.GetString(entry, "caFile"),
+                    InsecureSkipTlsVerify = GetBoolean(entry, "insecure_skip_tls_verify"),
+                    PassCredentialsAll = GetBoolean(entry, "pass_credentials_all")
+                };
+            }
+        }
+
+        return repos;
     }
 
     private async Task SaveRepositoriesAsync(string path, Dictionary<string, HelmRepository> repos, CancellationToken ct)
     {
-        var json = JsonSerializer.Serialize(repos, new JsonSerializerOptions { WriteIndented = true });
-        await File.WriteAllTextAsync(path, json, ct);
+        var document = new Dictionary<string, object?>
+        {
+            ["apiVersion"] = "v1",
+            ["generated"] = DateTimeOffset.UtcNow.ToString("O"),
+            ["repositories"] = repos.Values
+                .OrderBy(repo => repo.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(ToRepositoryConfiguration)
+                .Cast<object?>()
+                .ToList()
+        };
+        await File.WriteAllTextAsync(path, HelmYaml.Serialize(document), ct);
+    }
+
+    private async Task CacheRepositoryIndexAsync(string repoUrl, string yaml, CancellationToken cancellationToken)
+    {
+        var repositories = await LoadRepositoriesAsync(_repositoryConfigPath, cancellationToken);
+        var name = repositories.Values.FirstOrDefault(repository =>
+            string.Equals(repository.Url, NormalizeRepositoryUrl(repoUrl), StringComparison.OrdinalIgnoreCase))?.Name
+            ?? "repository";
+        var cachePath = Path.Combine(_cacheDir, GetRepositoryIndexCacheFileName(name, repoUrl));
+        await File.WriteAllTextAsync(cachePath, yaml, cancellationToken);
+    }
+
+    internal static string GetRepositoryIndexCacheFileName(string repositoryName, string repositoryUrl)
+    {
+        var safeName = Regex.Replace(repositoryName, "[^A-Za-z0-9._-]", "-").Trim('-', '.');
+        if (string.IsNullOrEmpty(safeName))
+            safeName = "repository";
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(repositoryUrl)))[..12]
+            .ToLowerInvariant();
+        return $"{safeName}-{hash}-index.yaml";
+    }
+
+    private static Dictionary<string, object?> ToRepositoryConfiguration(HelmRepository repository)
+    {
+        var entry = new Dictionary<string, object?>
+        {
+            ["name"] = repository.Name,
+            ["url"] = repository.Url,
+            ["username"] = repository.Username,
+            ["password"] = repository.Password,
+            ["certFile"] = repository.CertFile,
+            ["keyFile"] = repository.KeyFile,
+            ["caFile"] = repository.CaFile,
+            ["insecure_skip_tls_verify"] = repository.InsecureSkipTlsVerify,
+            ["pass_credentials_all"] = repository.PassCredentialsAll
+        };
+        return entry.Where(pair => pair.Value is not null).ToDictionary(pair => pair.Key, pair => pair.Value);
+    }
+
+    private static bool GetBoolean(IDictionary<string, object?> values, string key)
+        => values.TryGetValue(key, out var value) && value is not null && Convert.ToBoolean(value);
+
+    private static void ValidateRepositoryName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name) || !Regex.IsMatch(name, "^[A-Za-z0-9][A-Za-z0-9._-]*$"))
+            throw new ArgumentException("Repository names must start with a letter or digit and contain only letters, digits, '.', '_' or '-'.", nameof(name));
+    }
+
+    private static string NormalizeRepositoryUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            throw new ArgumentException("Repository URL must be an absolute HTTP or HTTPS URL.", nameof(url));
+
+        return uri.AbsoluteUri.TrimEnd('/');
+    }
+
+    private static string ResolveCacheDirectory(HelmRepositoryOptions options)
+    {
+        var configuredDirectory = options.CacheDirectory
+            ?? Environment.GetEnvironmentVariable("HELM_REPOSITORY_CACHE")
+            ?? Environment.GetEnvironmentVariable("HELM_CACHE_HOME");
+        if (!string.IsNullOrWhiteSpace(configuredDirectory))
+            return configuredDirectory;
+
+        var xdgCache = Environment.GetEnvironmentVariable("XDG_CACHE_HOME");
+        return !string.IsNullOrWhiteSpace(xdgCache)
+            ? Path.Combine(xdgCache, "helm", "repository")
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "helm", "repository");
+    }
+
+    private static string ResolveRepositoryConfigPath(HelmRepositoryOptions options)
+    {
+        if (!string.IsNullOrWhiteSpace(options.RepositoryConfigPath))
+            return options.RepositoryConfigPath;
+        var configuredPath = Environment.GetEnvironmentVariable("HELM_REPOSITORY_CONFIG");
+        if (!string.IsNullOrWhiteSpace(configuredPath))
+            return configuredPath;
+
+        var configDirectory = options.ConfigDirectory
+            ?? Environment.GetEnvironmentVariable("HELM_CONFIG_HOME")
+            ?? Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
+        if (string.IsNullOrWhiteSpace(configDirectory))
+            configDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "helm");
+        else if (string.IsNullOrWhiteSpace(options.ConfigDirectory)
+                 && string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("HELM_CONFIG_HOME")))
+            configDirectory = Path.Combine(configDirectory, "helm");
+        return Path.Combine(configDirectory, "repositories.yaml");
     }
 
     /// <summary>
@@ -536,6 +689,11 @@ public class HelmRepository
     public string Url { get; set; } = string.Empty;
     public string? Username { get; set; }
     public string? Password { get; set; }
+    public string? CertFile { get; set; }
+    public string? KeyFile { get; set; }
+    public string? CaFile { get; set; }
+    public bool InsecureSkipTlsVerify { get; set; }
+    public bool PassCredentialsAll { get; set; }
 }
 
 public class HelmRepoIndex
