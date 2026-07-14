@@ -220,6 +220,35 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         Assert.Equal("https://new.example.test/charts/repo-golden-1.0.0.tgz", sharpIndex.Versions.Single().Url);
     }
 
+    [HelmCliFact]
+    public async Task RepoIndexAsync_MergeWithMissingIndexGeneratesNewIndex()
+    {
+        var sharpRepoDir = Path.Combine(_tempDir, "sharp-missing-merge-repo-index");
+        var helmRepoDir = Path.Combine(_tempDir, "helm-missing-merge-repo-index");
+        Directory.CreateDirectory(sharpRepoDir);
+        Directory.CreateDirectory(helmRepoDir);
+        await PackageRepoChartVersionAsync("1.0.0", sharpRepoDir);
+        CopyPackages(sharpRepoDir, helmRepoDir);
+
+        var sharpIndexPath = await HelmRepoIndexer.GenerateIndexAsync(
+            sharpRepoDir,
+            "https://repo.example.test/charts",
+            CancellationToken.None,
+            mergeIndexPath: Path.Combine(_tempDir, "missing-sharp-index.yaml"));
+        var helmResult = await HelmCliRunner.RepoIndexAsync(
+            helmRepoDir,
+            "https://repo.example.test/charts",
+            CancellationToken.None,
+            mergeIndexPath: Path.Combine(_tempDir, "missing-helm-index.yaml"));
+        AssertOperationSucceeded("helm repo index with missing merge file", helmResult);
+
+        var sharpIndex = ReadIndexSnapshot(sharpIndexPath, "repo-golden");
+        var helmIndex = ReadIndexSnapshot(Path.Combine(helmRepoDir, "index.yaml"), "repo-golden");
+        Assert.Equal(helmIndex.Versions.Select(version => version.Version), sharpIndex.Versions.Select(version => version.Version));
+        Assert.Equal(helmIndex.Versions.Select(version => version.Url), sharpIndex.Versions.Select(version => version.Url));
+        Assert.Equal(helmIndex.Versions.Select(version => version.Digest), sharpIndex.Versions.Select(version => version.Digest));
+    }
+
     [Fact]
     public async Task RepoIndexAsync_InvalidArchiveReportsDiagnosticAndIndexesValidPackages()
     {

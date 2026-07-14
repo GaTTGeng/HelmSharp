@@ -124,7 +124,7 @@ public static class HelmRepoIndexer
         Dictionary<string, List<Dictionary<string, object?>>> entries,
         string? mergeIndexPath)
     {
-        if (string.IsNullOrWhiteSpace(mergeIndexPath))
+        if (string.IsNullOrWhiteSpace(mergeIndexPath) || !File.Exists(mergeIndexPath))
             return;
 
         var existingIndex = HelmYaml.DeserializeDictionary(File.ReadAllText(mergeIndexPath));
