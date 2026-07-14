@@ -472,6 +472,14 @@ public class TemplateParserTests
     }
 
     [Fact]
+    public void Tokenize_RawStringContainingActionDelimiter()
+    {
+        var tokens = new TemplateTokenizer("{{ `{{not-an-action}}` }}").TokenizeFlat().ToList();
+
+        Assert.Equal(" `{{not-an-action}}` ", tokens.Single(token => token.Kind == TokenKind.ActionContent).Value);
+    }
+
+    [Fact]
     public void Tokenize_UnclosedActionDelimiterWithTrim_ThrowsTemplateParseException()
     {
         var tokenizer = new TemplateTokenizer("{{- .Values.foo");

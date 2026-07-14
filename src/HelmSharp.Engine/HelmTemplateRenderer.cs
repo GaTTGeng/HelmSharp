@@ -1463,6 +1463,8 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             return StringHelpers.Unquote(token);
         if (token.StartsWith('\'') && token.EndsWith('\''))
             return token[1..^1];
+        if (token.StartsWith('`') && token.EndsWith('`'))
+            return token[1..^1];
         if (token.StartsWith('('))
         {
             var memberSeparator = token.LastIndexOf(").", StringComparison.Ordinal);
