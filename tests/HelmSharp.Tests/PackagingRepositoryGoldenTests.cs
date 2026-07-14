@@ -127,6 +127,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         await PackageMinimalRepoChartAsync(repoDir);
         var invalidPackagePath = Path.Combine(repoDir, "broken-0.1.0.tgz");
         await File.WriteAllTextAsync(invalidPackagePath, "not a gzipped chart archive", Encoding.UTF8);
+        var malformedChartYamlPath = await PackageMalformedChartYamlAsync(repoDir);
 
         var result = await HelmRepoIndexer.GenerateIndexWithDiagnosticsAsync(
             repoDir,
@@ -136,10 +137,11 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         var index = HelmYaml.DeserializeDictionary(File.ReadAllText(result.IndexPath, Encoding.UTF8));
         var entries = Assert.IsAssignableFrom<IDictionary<string, object?>>(index["entries"]);
         Assert.True(entries.ContainsKey("repo-minimal"));
-        var diagnostic = Assert.Single(result.Diagnostics);
-        Assert.Equal(invalidPackagePath, diagnostic.PackagePath);
-        Assert.Contains("broken-0.1.0.tgz", diagnostic.PackagePath, StringComparison.Ordinal);
-        Assert.False(string.IsNullOrWhiteSpace(diagnostic.Message));
+        Assert.Equal(
+            [invalidPackagePath, malformedChartYamlPath],
+            result.Diagnostics.Select(diagnostic => diagnostic.PackagePath).Order(StringComparer.Ordinal));
+        Assert.All(result.Diagnostics, diagnostic =>
+            Assert.False(string.IsNullOrWhiteSpace(diagnostic.Message)));
     }
 
     [HelmCliFact]
@@ -352,6 +354,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
             description: Repository full metadata chart
             type: library
             home: https://example.test/repo-full-metadata
+            icon: https://example.test/repo-full-metadata/icon.svg
             kubeVersion: ">=1.25.0"
             deprecated: true
             keywords:
@@ -388,6 +391,22 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         await WriteTextAsync(Path.Combine(chartDir, "values.yaml"), "repoChild:\n  enabled: true\n");
         await WriteTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), "kind: ConfigMap\n");
         await HelmChartPackager.PackageAsync(chartDir, destination, cancellationToken: CancellationToken.None);
+    }
+
+    private static async Task<string> PackageMalformedChartYamlAsync(string destination)
+    {
+        var packagePath = Path.Combine(destination, "broken-yaml-0.1.0.tgz");
+        await using var file = File.Create(packagePath);
+        await using var gzip = new GZipStream(file, CompressionLevel.Optimal);
+        await using var tar = new TarWriter(gzip);
+
+        await WriteTarEntryAsync(tar, "broken-yaml/Chart.yaml", """
+            apiVersion: v2
+            name: [broken
+            version: 0.1.0
+            """);
+        await WriteTarEntryAsync(tar, "broken-yaml/values.yaml", "valid: true\n");
+        return packagePath;
     }
 
     private async Task PackageMinimalRepoChartAsync(string destination)
@@ -619,6 +638,19 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+    }
+
+    private static async Task WriteTarEntryAsync(TarWriter tar, string entryName, string content)
+    {
+        var bytes = Encoding.UTF8.GetBytes(content);
+        var entry = new GnuTarEntry(TarEntryType.RegularFile, entryName)
+        {
+            DataStream = new MemoryStream(bytes)
+        };
+        await using (entry.DataStream)
+        {
+            await tar.WriteEntryAsync(entry);
+        }
     }
 
     private static async Task WriteBytesAsync(string path, byte[] content)

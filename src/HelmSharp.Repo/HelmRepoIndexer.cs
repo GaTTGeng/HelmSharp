@@ -1,4 +1,5 @@
 using HelmSharp.Chart;
+using YamlDotNet.Core;
 
 namespace HelmSharp.Repo;
 
@@ -60,6 +61,7 @@ public static class HelmRepoIndexer
                 AddIfNotNull(entry, "description", chart.Description);
                 AddIfNotNull(entry, "type", chart.Type);
                 AddIfNotNull(entry, "home", chart.Home);
+                AddIfNotNull(entry, "icon", chart.Icon);
                 AddIfNotNull(entry, "sources", chart.Sources);
                 AddIfNotNull(entry, "keywords", chart.Keywords);
                 AddIfNotNull(entry, "maintainers", chart.Maintainers);
@@ -74,7 +76,7 @@ public static class HelmRepoIndexer
                     entries[chart.Name] = new List<Dictionary<string, object?>>();
                 entries[chart.Name].Add(entry);
             }
-            catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or IOException)
+            catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or IOException or YamlException)
             {
                 diagnostics.Add(new HelmRepoIndexDiagnostic(tgzFile, ex.Message, ex));
             }
