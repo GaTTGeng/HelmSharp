@@ -43,6 +43,33 @@ public class EdgeCaseTests
     }
 
     [Fact]
+    public void Include_ResolvesNamedOrdinaryChartTemplate()
+    {
+        var chart = new HelmChart { Name = "parent", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/configmap.yaml"] = "value: rendered";
+        chart.Templates["templates/deployment.yaml"] = "{{ include \"parent/templates/configmap.yaml\" . }}";
+
+        var result = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>()).Render();
+
+        Assert.Contains("value: rendered", result);
+    }
+
+    [Fact]
+    public void Include_ResolvesNamedOrdinaryAliasedSubchartTemplate()
+    {
+        var chart = new HelmChart { Name = "parent", Version = "1.0.0", ValuesYaml = "" };
+        chart.Dependencies.Add(new HelmChartDependency { Name = "postgres", Alias = "db" });
+        var subchart = new HelmChart { Name = "postgres", Version = "1.0.0", ValuesYaml = "" };
+        subchart.Templates["templates/configmap.yaml"] = "value: from-db";
+        chart.Subcharts["postgres"] = subchart;
+        chart.Templates["templates/deployment.yaml"] = "{{ include \"parent/charts/db/templates/configmap.yaml\" . }}";
+
+        var result = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>()).Render();
+
+        Assert.Contains("value: from-db", result);
+    }
+
+    [Fact]
     public void NotesTxt_NotIncludedInRender()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };

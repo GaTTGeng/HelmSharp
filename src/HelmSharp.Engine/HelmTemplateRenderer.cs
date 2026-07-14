@@ -123,6 +123,8 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
     /// </exception>
     public string Render()
     {
+        RegisterNamedChartTemplates(_chart, _chart.Name);
+
         // Extract defines from main chart templates
         foreach (var content in _chart.Templates.Values)
         {
@@ -130,8 +132,9 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         }
 
         // Extract defines from subchart templates (shared globally)
-        foreach (var (_, subchart) in _chart.Subcharts)
+        foreach (var (subchartIdentity, subchart) in GetSubchartRenderInstances())
         {
+            RegisterNamedChartTemplates(subchart, $"{_chart.Name}/charts/{subchartIdentity}");
             foreach (var content in subchart.Templates.Values)
             {
                 ExtractDefines(content);
@@ -265,6 +268,17 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         }
 
         return output.ToString();
+    }
+
+    private void RegisterNamedChartTemplates(HelmChart chart, string chartPath)
+    {
+        foreach (var (path, content) in chart.Templates)
+        {
+            var relativePath = path.StartsWith("templates/", StringComparison.Ordinal)
+                ? path
+                : $"templates/{path}";
+            _definedTemplates[$"{chartPath}/{relativePath}"] = content;
+        }
     }
 
     private static void AddManifestDocuments(List<RenderedManifest> manifests, string sourcePath, string rendered)
