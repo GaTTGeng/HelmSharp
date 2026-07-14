@@ -100,7 +100,8 @@ internal static class HelmCliRunner
     public static Task<HelmCliResult> RepoIndexAsync(
         string directory,
         string? url,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? mergeIndexPath = null)
     {
         var arguments = new List<string>
         {
@@ -113,6 +114,12 @@ internal static class HelmCliRunner
         {
             arguments.Add("--url");
             arguments.Add(url);
+        }
+
+        if (mergeIndexPath is not null)
+        {
+            arguments.Add("--merge");
+            arguments.Add(NormalizeHelmPath(mergeIndexPath));
         }
 
         return RunAsync(arguments, CommandTimeout, cancellationToken);

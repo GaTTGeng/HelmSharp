@@ -14,6 +14,7 @@ This project follows semantic versioning once stable releases begin.
 - Added chart loader support for packaged dependency archives under `charts/` in directory and archive charts (#129).
 - Added Helm-compatible SemVer resolution for repository chart versions and dependency constraints (#130).
 - Added repository index generation diagnostics for invalid chart packages while continuing to index valid packages (#131).
+- Added Helm-compatible repository index merge and URL rewriting support (#132).
 
 ### Changed
 

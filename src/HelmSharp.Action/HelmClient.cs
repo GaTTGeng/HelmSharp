@@ -1217,8 +1217,15 @@ public class HelmClient : IHelmClient
         string dirPath,
         string? url = null,
         CancellationToken cancellationToken = default)
+        => await RepoIndexAsync(dirPath, url, cancellationToken, mergeIndexPath: null);
+
+    public async Task<CommandResult> RepoIndexAsync(
+        string dirPath,
+        string? url,
+        CancellationToken cancellationToken,
+        string? mergeIndexPath)
     {
-        var indexPath = await HelmRepoIndexer.GenerateIndexAsync(dirPath, url, cancellationToken);
+        var indexPath = await HelmRepoIndexer.GenerateIndexAsync(dirPath, url, cancellationToken, mergeIndexPath);
         return Ok($"Index generated at: {indexPath}");
     }
 

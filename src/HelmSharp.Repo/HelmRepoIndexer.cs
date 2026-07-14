@@ -12,22 +12,42 @@ public static class HelmRepoIndexer
     /// <summary>
     /// Generates an index.yaml for a directory containing .tgz chart packages.
     /// </summary>
-    public static async Task<string> GenerateIndexAsync(
+    public static Task<string> GenerateIndexAsync(
         string dirPath,
         string? url = null,
         CancellationToken ct = default)
+        => GenerateIndexAsync(dirPath, url, ct, mergeIndexPath: null);
+
+    /// <summary>
+    /// Generates an index.yaml for a directory containing .tgz chart packages, optionally merging an existing index.
+    /// </summary>
+    public static async Task<string> GenerateIndexAsync(
+        string dirPath,
+        string? url,
+        CancellationToken ct,
+        string? mergeIndexPath)
     {
-        var result = await GenerateIndexWithDiagnosticsAsync(dirPath, url, ct);
+        var result = await GenerateIndexWithDiagnosticsAsync(dirPath, url, ct, mergeIndexPath);
         return result.IndexPath;
     }
 
     /// <summary>
     /// Generates an index.yaml and returns diagnostics for packages that could not be indexed.
     /// </summary>
-    public static async Task<HelmRepoIndexGenerationResult> GenerateIndexWithDiagnosticsAsync(
+    public static Task<HelmRepoIndexGenerationResult> GenerateIndexWithDiagnosticsAsync(
         string dirPath,
         string? url = null,
         CancellationToken ct = default)
+        => GenerateIndexWithDiagnosticsAsync(dirPath, url, ct, mergeIndexPath: null);
+
+    /// <summary>
+    /// Generates an index.yaml and returns diagnostics for packages that could not be indexed, optionally merging an existing index.
+    /// </summary>
+    public static async Task<HelmRepoIndexGenerationResult> GenerateIndexWithDiagnosticsAsync(
+        string dirPath,
+        string? url,
+        CancellationToken ct,
+        string? mergeIndexPath)
     {
         if (!Directory.Exists(dirPath))
             throw new DirectoryNotFoundException($"Directory not found: {dirPath}");
@@ -82,6 +102,8 @@ public static class HelmRepoIndexer
             }
         }
 
+        MergeExistingEntries(entries, mergeIndexPath);
+
         foreach (var (_, versions) in entries)
             versions.Sort(CompareChartVersionsDescending);
 
@@ -97,6 +119,74 @@ public static class HelmRepoIndexer
         await File.WriteAllTextAsync(indexPath, yaml, ct);
         return new HelmRepoIndexGenerationResult(indexPath, diagnostics);
     }
+
+    private static void MergeExistingEntries(
+        Dictionary<string, List<Dictionary<string, object?>>> entries,
+        string? mergeIndexPath)
+    {
+        if (string.IsNullOrWhiteSpace(mergeIndexPath))
+            return;
+        if (Directory.Exists(mergeIndexPath))
+            throw new InvalidDataException($"Merge index path is a directory: {mergeIndexPath}");
+        if (!File.Exists(mergeIndexPath))
+            return;
+
+        var existingIndex = HelmYaml.DeserializeDictionary(File.ReadAllText(mergeIndexPath));
+        if (!string.Equals(HelmYaml.GetString(existingIndex, "apiVersion"), "v1", StringComparison.Ordinal)
+            || !existingIndex.TryGetValue("entries", out var existingEntriesObject)
+            || existingEntriesObject is not IDictionary<string, object?> existingEntries)
+            throw new InvalidDataException($"Merge index is not a valid Helm repository index: {mergeIndexPath}");
+
+        foreach (var (chartName, existingVersionsObject) in existingEntries)
+        {
+            if (existingVersionsObject is not IEnumerable<object?> existingVersions)
+                throw new InvalidDataException($"Merge index contains invalid entries for chart '{chartName}': {mergeIndexPath}");
+
+            var parsedVersions = new List<Dictionary<string, object?>>();
+            foreach (var version in existingVersions)
+            {
+                if (version is not IDictionary<string, object?> entry)
+                    throw new InvalidDataException($"Merge index contains an invalid chart version for '{chartName}': {mergeIndexPath}");
+
+                parsedVersions.Add(new Dictionary<string, object?>(entry, StringComparer.OrdinalIgnoreCase));
+            }
+
+            foreach (var versionsByMetadataName in parsedVersions.GroupBy(
+                         version => HelmYaml.GetString(version, "name") ?? chartName,
+                         StringComparer.OrdinalIgnoreCase))
+            {
+                var mergedChartName = versionsByMetadataName.Key;
+                if (!entries.TryGetValue(mergedChartName, out var generatedVersions))
+                {
+                    generatedVersions = [];
+                    entries[mergedChartName] = generatedVersions;
+                }
+
+                var generatedVersionNames = generatedVersions
+                    .Select(version => HelmYaml.GetString(version, "version"))
+                    .Where(version => !string.IsNullOrWhiteSpace(version))
+                    .Select(version => version!)
+                    .ToList();
+                foreach (var version in versionsByMetadataName)
+                {
+                    var mergedVersion = HelmYaml.GetString(version, "version");
+                    if (generatedVersionNames.Any(generatedVersion =>
+                        VersionsAreEquivalent(generatedVersion, mergedVersion) ||
+                        HelmChartVersionResolver.Satisfies(generatedVersion, mergedVersion)))
+                        continue;
+
+                    generatedVersions.Add(version);
+                    if (!string.IsNullOrWhiteSpace(mergedVersion))
+                        generatedVersionNames.Add(mergedVersion);
+                }
+            }
+        }
+    }
+
+    private static bool VersionsAreEquivalent(string? left, string? right)
+        => !string.IsNullOrWhiteSpace(left)
+           && !string.IsNullOrWhiteSpace(right)
+           && HelmChartVersionResolver.CompareVersions(left, right) == 0;
 
     private static void AddIfNotNull(
         Dictionary<string, object?> entry,
