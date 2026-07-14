@@ -1288,6 +1288,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
 
             // JSON / YAML / TOML
             "toJson" => SerializationFunctions.ToJson(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
+            "mustToJson" => SerializationFunctions.ToJson(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "fromJson" => SerializationFunctions.FromJson(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "toPrettyJson" => SerializationFunctions.ToPrettyJson(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
             "toYaml" => HelmYaml.Serialize(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)).TrimEnd(),
@@ -1388,6 +1389,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "squote" => StringFunctions.Squote(value),
             "toYaml" => HelmYaml.Serialize(value).TrimEnd(),
             "toJson" => SerializationFunctions.ToJson(value),
+            "mustToJson" => SerializationFunctions.ToJson(value),
             "lower" => TypeConverters.ToTemplateString(value).ToLowerInvariant(),
             "upper" => TypeConverters.ToTemplateString(value).ToUpperInvariant(),
             "b64enc" => EncodingHelpers.Base64Encode(value),

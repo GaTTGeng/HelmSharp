@@ -766,6 +766,26 @@ public class TemplateFunctionTests
     }
 
     [Fact]
+    public void JsonFunctions_MustToJson()
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = """
+            direct: {{ mustToJson .Values.data }}
+            piped: {{ .Values.data | mustToJson }}
+            """;
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default",
+            new Dictionary<string, object?>
+            {
+                ["data"] = new Dictionary<string, object?> { ["key"] = "value" }
+            });
+
+        var result = renderer.Render();
+
+        Assert.Contains("direct: {\"key\":\"value\"}", result);
+        Assert.Contains("piped: {\"key\":\"value\"}", result);
+    }
+
+    [Fact]
     public void RangeOverMap_IteratesKeyValuePairs()
     {
         var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
