@@ -9,7 +9,7 @@
 任何只渲染集成都会用到：
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.1.0
+dotnet add package HelmSharp.Chart --version 1.1.1
 ```
 
 ## 依赖关系

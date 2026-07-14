@@ -7,7 +7,7 @@
 ## 安装哪些包
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.1.0
+dotnet add package HelmSharp.Action --version 1.1.1
 ```
 
 ## 完整最小代码

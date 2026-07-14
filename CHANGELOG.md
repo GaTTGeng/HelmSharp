@@ -6,6 +6,10 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+### Changed
+
+- Updated English and Simplified Chinese installation guidance for the 1.1.1 release.
+
 ## [1.1.1] - 2026-07-13
 
 ### Added
@@ -187,7 +191,8 @@ This was achieved by fixing two parser bugs that blocked full-chart rendering (#
 - Open source project documentation.
 - GitHub Actions workflows for CI and NuGet release publishing.
 
-[Unreleased]: https://github.com/GaTTGeng/HelmSharp/compare/1.1.0...HEAD
+[Unreleased]: https://github.com/GaTTGeng/HelmSharp/compare/1.1.1...HEAD
+[1.1.1]: https://github.com/GaTTGeng/HelmSharp/compare/1.1.0...1.1.1
 [1.1.0]: https://github.com/GaTTGeng/HelmSharp/compare/1.0.4...1.1.0
 [1.0.4]: https://github.com/GaTTGeng/HelmSharp/compare/1.0.3...1.0.4
 [1.0.3]: https://github.com/GaTTGeng/HelmSharp/compare/1.0.2...1.0.3

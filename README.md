@@ -147,7 +147,7 @@ HelmSharp's template engine is continuously validated with golden tests. The sui
 
 These results are a compatibility signal for the pinned chart versions in the table, not a blanket certification for every chart in the Helm ecosystem. Validate your own chart when it relies on uncommon Helm behavior.
 
-> **Last updated:** 2026-07-01 · **HelmSharp version:** 1.1.0 · **Helm version:** v4.2.2 · **Test framework:** net10.0
+> **Last updated:** 2026-07-13 · **HelmSharp version:** 1.1.1 · **Helm version:** v4.2.2 · **Test framework:** net10.0
 
 ### Summary
 

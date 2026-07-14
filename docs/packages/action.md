@@ -9,7 +9,7 @@
 Install this package when your product thinks in release workflows or command-style results:
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.1.0
+dotnet add package HelmSharp.Action --version 1.1.1
 ```
 
 ## Dependencies

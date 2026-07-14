@@ -96,14 +96,14 @@ Console.WriteLine(result.StandardOutput);
 多数应用从高层包开始：
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.1.0
+dotnet add package HelmSharp.Action --version 1.1.1
 ```
 
 如果只需要渲染，可以依赖更小的层：
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.1.0
-dotnet add package HelmSharp.Engine --version 1.1.0
+dotnet add package HelmSharp.Chart --version 1.1.1
+dotnet add package HelmSharp.Engine --version 1.1.1
 ```
 
 ## 当前范围

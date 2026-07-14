@@ -9,7 +9,7 @@
 Install this package with `HelmSharp.Chart` when you need manifest output but not release lifecycle operations:
 
 ```powershell
-dotnet add package HelmSharp.Engine --version 1.1.0
+dotnet add package HelmSharp.Engine --version 1.1.1
 ```
 
 ## Dependencies

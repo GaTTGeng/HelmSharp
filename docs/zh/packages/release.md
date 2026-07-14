@@ -9,7 +9,7 @@
 大多数应用通过 `HelmSharp.Action` 间接使用。只有自定义 release storage 工作流才需要直接安装。
 
 ```powershell
-dotnet add package HelmSharp.Release --version 1.1.0
+dotnet add package HelmSharp.Release --version 1.1.1
 ```
 
 ## 依赖关系

@@ -9,7 +9,7 @@
 当产品按发布工作流或类命令结果组织逻辑时安装：
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.1.0
+dotnet add package HelmSharp.Action --version 1.1.1
 ```
 
 ## 依赖关系
@@ -34,4 +34,4 @@ dotnet add package HelmSharp.Action --version 1.1.0
 
 ## 当前边界
 
-HelmSharp 不调用 `helm`。插件、来源证明、OCI 认证和少见 Kubernetes 边界仍不是 1.1.0 的完整 Helm CLI 对齐范围。
+HelmSharp 不调用 `helm`。插件、来源证明、OCI 认证和少见 Kubernetes 边界仍不是 1.1.1 的完整 Helm CLI 对齐范围。

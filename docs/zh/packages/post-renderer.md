@@ -9,7 +9,7 @@
 构建自定义后处理集成时直接安装：
 
 ```powershell
-dotnet add package HelmSharp.PostRenderer --version 1.1.0
+dotnet add package HelmSharp.PostRenderer --version 1.1.1
 ```
 
 ## 依赖关系

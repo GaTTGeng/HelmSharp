@@ -9,7 +9,7 @@
 只需要清单输出、不需要发布生命周期时，与 `HelmSharp.Chart` 一起安装：
 
 ```powershell
-dotnet add package HelmSharp.Engine --version 1.1.0
+dotnet add package HelmSharp.Engine --version 1.1.1
 ```
 
 ## 依赖关系

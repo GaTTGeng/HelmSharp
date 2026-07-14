@@ -9,7 +9,7 @@
 大多数应用不直接安装。它会被 `HelmSharp.Action` 和 `HelmSharp.Repo` 引用。
 
 ```powershell
-dotnet add package HelmSharp.Registry --version 1.1.0
+dotnet add package HelmSharp.Registry --version 1.1.1
 ```
 
 ## 依赖关系
@@ -28,4 +28,4 @@ dotnet add package HelmSharp.Registry --version 1.1.0
 
 ## 当前边界
 
-完整 Helm OCI 认证对齐是计划工作，不是 1.1.0 保证。
+完整 Helm OCI 认证对齐是计划工作，不是 1.1.1 保证。

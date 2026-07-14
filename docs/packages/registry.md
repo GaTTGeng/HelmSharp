@@ -9,7 +9,7 @@
 Most applications do not install this package directly. It is referenced by `HelmSharp.Action` and `HelmSharp.Repo`.
 
 ```powershell
-dotnet add package HelmSharp.Registry --version 1.1.0
+dotnet add package HelmSharp.Registry --version 1.1.1
 ```
 
 ## Dependencies
@@ -28,4 +28,4 @@ Use it when experimenting with custom registry clients around HelmSharp reposito
 
 ## Current boundaries
 
-Full Helm OCI authentication parity is planned work, not a 1.1.0 guarantee.
+Full Helm OCI authentication parity is planned work, not a 1.1.1 guarantee.

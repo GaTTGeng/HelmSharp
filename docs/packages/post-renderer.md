@@ -9,7 +9,7 @@
 Install directly when building a custom post-rendering integration:
 
 ```powershell
-dotnet add package HelmSharp.PostRenderer --version 1.1.0
+dotnet add package HelmSharp.PostRenderer --version 1.1.1
 ```
 
 ## Dependencies

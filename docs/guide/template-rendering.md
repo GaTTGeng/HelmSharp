@@ -7,8 +7,8 @@ Template rendering turns a loaded chart and merged values into Kubernetes manife
 ## Packages to install
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.1.0
-dotnet add package HelmSharp.Engine --version 1.1.0
+dotnet add package HelmSharp.Chart --version 1.1.1
+dotnet add package HelmSharp.Engine --version 1.1.1
 ```
 
 ## Minimal complete code

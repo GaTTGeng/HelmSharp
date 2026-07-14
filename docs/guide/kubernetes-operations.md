@@ -7,7 +7,7 @@ Use `HelmSharp.Kube` when you already have rendered YAML and want managed apply,
 ## Packages to install
 
 ```powershell
-dotnet add package HelmSharp.Kube --version 1.1.0
+dotnet add package HelmSharp.Kube --version 1.1.1
 ```
 
 ## Minimal complete code

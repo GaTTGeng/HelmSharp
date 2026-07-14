@@ -96,14 +96,14 @@ Console.WriteLine(result.StandardOutput);
 Most applications start with the high-level package:
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.1.0
+dotnet add package HelmSharp.Action --version 1.1.1
 ```
 
 Use narrower packages when your application only needs rendering:
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.1.0
-dotnet add package HelmSharp.Engine --version 1.1.0
+dotnet add package HelmSharp.Chart --version 1.1.1
+dotnet add package HelmSharp.Engine --version 1.1.1
 ```
 
 ## Current Scope

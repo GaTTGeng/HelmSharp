@@ -9,7 +9,7 @@
 Install this package for any render-only integration:
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.1.0
+dotnet add package HelmSharp.Chart --version 1.1.1
 ```
 
 ## Dependencies

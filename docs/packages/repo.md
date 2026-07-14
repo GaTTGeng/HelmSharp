@@ -9,7 +9,7 @@
 Install directly when building repository management tools:
 
 ```powershell
-dotnet add package HelmSharp.Repo --version 1.1.0
+dotnet add package HelmSharp.Repo --version 1.1.1
 ```
 
 ## Dependencies
@@ -33,4 +33,4 @@ Use repository helpers before calling `HelmChartLoader` or high-level `HelmClien
 
 ## Current boundaries
 
-Authentication and OCI flows are intentionally limited in 1.1.0 compared with the full Helm CLI.
+Authentication and OCI flows are intentionally limited in 1.1.1 compared with the full Helm CLI.

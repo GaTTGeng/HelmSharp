@@ -9,7 +9,7 @@ HelmSharp exposes two failure shapes: high-level `CommandResult` failures for co
 Use the package that owns the failing workflow. Most application-level error handling starts from:
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.1.0
+dotnet add package HelmSharp.Action --version 1.1.1
 ```
 
 ## Minimal complete code

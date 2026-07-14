@@ -9,7 +9,7 @@
 构建仓库管理工具时直接安装：
 
 ```powershell
-dotnet add package HelmSharp.Repo --version 1.1.0
+dotnet add package HelmSharp.Repo --version 1.1.1
 ```
 
 ## 依赖关系
@@ -33,4 +33,4 @@ dotnet add package HelmSharp.Repo --version 1.1.0
 
 ## 当前边界
 
-认证和 OCI 流程在 1.1.0 中仍比完整 Helm CLI 更有限。
+认证和 OCI 流程在 1.1.1 中仍比完整 Helm CLI 更有限。

@@ -9,7 +9,7 @@
 Install this package when you already have manifests and want lower-level Kubernetes operations:
 
 ```powershell
-dotnet add package HelmSharp.Kube --version 1.1.0
+dotnet add package HelmSharp.Kube --version 1.1.1
 ```
 
 ## Dependencies
