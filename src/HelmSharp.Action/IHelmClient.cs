@@ -194,8 +194,13 @@ public interface IHelmClient
     Task<CommandResult> RepoIndexAsync(
         string dirPath,
         string? url = null,
-        CancellationToken cancellationToken = default,
-        string? mergeIndexPath = null);
+        CancellationToken cancellationToken = default);
+
+    Task<CommandResult> RepoIndexAsync(
+        string dirPath,
+        string? url,
+        CancellationToken cancellationToken,
+        string? mergeIndexPath);
 
     Task<CommandResult> RepoUpdateAsync(
         CancellationToken cancellationToken = default);

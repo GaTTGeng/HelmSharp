@@ -245,6 +245,17 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
             Assert.False(string.IsNullOrWhiteSpace(diagnostic.Message)));
     }
 
+    [Fact]
+    public void RepoIndexAsync_PublicApiPreservesExistingOverloads()
+    {
+        var parameters = new[] { typeof(string), typeof(string), typeof(CancellationToken) };
+
+        Assert.NotNull(typeof(HelmRepoIndexer).GetMethod(nameof(HelmRepoIndexer.GenerateIndexAsync), parameters));
+        Assert.NotNull(typeof(HelmRepoIndexer).GetMethod(nameof(HelmRepoIndexer.GenerateIndexWithDiagnosticsAsync), parameters));
+        Assert.NotNull(typeof(HelmClient).GetMethod(nameof(HelmClient.RepoIndexAsync), parameters));
+        Assert.NotNull(typeof(IHelmClient).GetMethod(nameof(IHelmClient.RepoIndexAsync), parameters));
+    }
+
     [HelmCliFact]
     public async Task PullAsync_DirectArchiveUrlAndRepositoryReferenceMatchHelmPull()
     {

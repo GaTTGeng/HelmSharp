@@ -10,26 +10,44 @@ namespace HelmSharp.Repo;
 public static class HelmRepoIndexer
 {
     /// <summary>
+    /// Generates an index.yaml for a directory containing .tgz chart packages.
+    /// </summary>
+    public static Task<string> GenerateIndexAsync(
+        string dirPath,
+        string? url = null,
+        CancellationToken ct = default)
+        => GenerateIndexAsync(dirPath, url, ct, mergeIndexPath: null);
+
+    /// <summary>
     /// Generates an index.yaml for a directory containing .tgz chart packages, optionally merging an existing index.
     /// </summary>
     public static async Task<string> GenerateIndexAsync(
         string dirPath,
-        string? url = null,
-        CancellationToken ct = default,
-        string? mergeIndexPath = null)
+        string? url,
+        CancellationToken ct,
+        string? mergeIndexPath)
     {
         var result = await GenerateIndexWithDiagnosticsAsync(dirPath, url, ct, mergeIndexPath);
         return result.IndexPath;
     }
 
     /// <summary>
+    /// Generates an index.yaml and returns diagnostics for packages that could not be indexed.
+    /// </summary>
+    public static Task<HelmRepoIndexGenerationResult> GenerateIndexWithDiagnosticsAsync(
+        string dirPath,
+        string? url = null,
+        CancellationToken ct = default)
+        => GenerateIndexWithDiagnosticsAsync(dirPath, url, ct, mergeIndexPath: null);
+
+    /// <summary>
     /// Generates an index.yaml and returns diagnostics for packages that could not be indexed, optionally merging an existing index.
     /// </summary>
     public static async Task<HelmRepoIndexGenerationResult> GenerateIndexWithDiagnosticsAsync(
         string dirPath,
-        string? url = null,
-        CancellationToken ct = default,
-        string? mergeIndexPath = null)
+        string? url,
+        CancellationToken ct,
+        string? mergeIndexPath)
     {
         if (!Directory.Exists(dirPath))
             throw new DirectoryNotFoundException($"Directory not found: {dirPath}");
