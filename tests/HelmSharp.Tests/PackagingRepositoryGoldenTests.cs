@@ -226,7 +226,8 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         var versionPairs = new[]
         {
             (Existing: "1.2.0", Local: "1.2"),
-            (Existing: "1.2.0+existing", Local: "1.2.0+local")
+            (Existing: "1.2.0+existing", Local: "1.2.0+local"),
+            (Existing: "1.2", Local: "1.2.5")
         };
 
         for (var index = 0; index < versionPairs.Length; index++)

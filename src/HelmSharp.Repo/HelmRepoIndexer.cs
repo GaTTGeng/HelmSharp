@@ -165,12 +165,14 @@ public static class HelmRepoIndexer
                 var generatedVersionNames = generatedVersions
                     .Select(version => HelmYaml.GetString(version, "version"))
                     .Where(version => !string.IsNullOrWhiteSpace(version))
+                    .Select(version => version!)
                     .ToList();
                 generatedVersions.AddRange(versionsByMetadataName.Where(version =>
                 {
                     var mergedVersion = HelmYaml.GetString(version, "version");
                     return !generatedVersionNames.Any(generatedVersion =>
-                        VersionsAreEquivalent(generatedVersion, mergedVersion));
+                        VersionsAreEquivalent(generatedVersion, mergedVersion) ||
+                        HelmChartVersionResolver.Satisfies(generatedVersion, mergedVersion));
                 }));
             }
         }
