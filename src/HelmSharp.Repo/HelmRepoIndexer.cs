@@ -151,22 +151,28 @@ public static class HelmRepoIndexer
                 parsedVersions.Add(new Dictionary<string, object?>(entry, StringComparer.OrdinalIgnoreCase));
             }
 
-            if (!entries.TryGetValue(chartName, out var generatedVersions))
+            foreach (var versionsByMetadataName in parsedVersions.GroupBy(
+                         version => HelmYaml.GetString(version, "name") ?? chartName,
+                         StringComparer.OrdinalIgnoreCase))
             {
-                entries[chartName] = parsedVersions;
-                continue;
-            }
+                var mergedChartName = versionsByMetadataName.Key;
+                if (!entries.TryGetValue(mergedChartName, out var generatedVersions))
+                {
+                    entries[mergedChartName] = versionsByMetadataName.ToList();
+                    continue;
+                }
 
-            var generatedVersionNames = generatedVersions
-                .Select(version => HelmYaml.GetString(version, "version"))
-                .Where(version => !string.IsNullOrWhiteSpace(version))
-                .ToList();
-            generatedVersions.AddRange(parsedVersions.Where(version =>
-            {
-                var mergedVersion = HelmYaml.GetString(version, "version");
-                return !generatedVersionNames.Any(generatedVersion =>
-                    VersionsAreEquivalent(generatedVersion, mergedVersion));
-            }));
+                var generatedVersionNames = generatedVersions
+                    .Select(version => HelmYaml.GetString(version, "version"))
+                    .Where(version => !string.IsNullOrWhiteSpace(version))
+                    .ToList();
+                generatedVersions.AddRange(versionsByMetadataName.Where(version =>
+                {
+                    var mergedVersion = HelmYaml.GetString(version, "version");
+                    return !generatedVersionNames.Any(generatedVersion =>
+                        VersionsAreEquivalent(generatedVersion, mergedVersion));
+                }));
+            }
         }
     }
 

@@ -275,6 +275,58 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
     }
 
     [HelmCliFact]
+    public async Task RepoIndexAsync_MergeUsesChartMetadataNameInsteadOfEntryKey()
+    {
+        var sharpRepoDir = Path.Combine(_tempDir, "sharp-metadata-name-merge-repo-index");
+        var helmRepoDir = Path.Combine(_tempDir, "helm-metadata-name-merge-repo-index");
+        Directory.CreateDirectory(sharpRepoDir);
+        Directory.CreateDirectory(helmRepoDir);
+        await PackageRepoChartVersionAsync("1.0.0", sharpRepoDir);
+        CopyPackages(sharpRepoDir, helmRepoDir);
+
+        const string staleEntryKeyIndex = """
+            apiVersion: v1
+            entries:
+              stale-entry-key:
+                - apiVersion: v2
+                  name: repo-golden
+                  version: 0.1.0
+                  created: 2024-01-01T00:00:00Z
+                  urls:
+                    - https://old.example.test/charts/repo-golden-0.1.0.tgz
+            """;
+        var sharpExistingIndex = Path.Combine(_tempDir, "sharp-metadata-name-existing-index.yaml");
+        var helmExistingIndex = Path.Combine(_tempDir, "helm-metadata-name-existing-index.yaml");
+        await WriteTextAsync(sharpExistingIndex, staleEntryKeyIndex);
+        await WriteTextAsync(helmExistingIndex, staleEntryKeyIndex);
+
+        var sharpIndexPath = await HelmRepoIndexer.GenerateIndexAsync(
+            sharpRepoDir,
+            "https://new.example.test/charts",
+            CancellationToken.None,
+            mergeIndexPath: sharpExistingIndex);
+        var helmMerged = await HelmCliRunner.RepoIndexAsync(
+            helmRepoDir,
+            "https://new.example.test/charts",
+            CancellationToken.None,
+            mergeIndexPath: helmExistingIndex);
+        AssertOperationSucceeded("helm repo index metadata-name merge", helmMerged);
+
+        var sharpIndex = HelmYaml.DeserializeDictionary(File.ReadAllText(sharpIndexPath, Encoding.UTF8));
+        var helmIndex = HelmYaml.DeserializeDictionary(File.ReadAllText(Path.Combine(helmRepoDir, "index.yaml"), Encoding.UTF8));
+        var sharpEntries = Assert.IsAssignableFrom<IDictionary<string, object?>>(sharpIndex["entries"]);
+        var helmEntries = Assert.IsAssignableFrom<IDictionary<string, object?>>(helmIndex["entries"]);
+        Assert.DoesNotContain("stale-entry-key", sharpEntries.Keys);
+        Assert.DoesNotContain("stale-entry-key", helmEntries.Keys);
+        Assert.Equal(helmEntries.Keys.Order(), sharpEntries.Keys.Order());
+
+        var sharpSnapshot = ReadIndexSnapshot(sharpIndexPath, "repo-golden");
+        var helmSnapshot = ReadIndexSnapshot(Path.Combine(helmRepoDir, "index.yaml"), "repo-golden");
+        Assert.Equal(helmSnapshot.Versions.Select(version => version.Version), sharpSnapshot.Versions.Select(version => version.Version));
+        Assert.Equal(helmSnapshot.Versions.Select(version => version.Url), sharpSnapshot.Versions.Select(version => version.Url));
+    }
+
+    [HelmCliFact]
     public async Task RepoIndexAsync_MergeWithMissingIndexGeneratesNewIndex()
     {
         var sharpRepoDir = Path.Combine(_tempDir, "sharp-missing-merge-repo-index");
