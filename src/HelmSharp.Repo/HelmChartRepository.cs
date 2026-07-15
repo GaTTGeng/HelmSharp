@@ -222,8 +222,6 @@ public sealed class HelmChartRepository : IDisposable
             AllowAutoRedirect = !repository.PassCredentialsAll,
             PreAuthenticate = repository.PassCredentialsAll
         };
-        if (!string.IsNullOrWhiteSpace(repository.Username))
-            handler.Credentials = new NetworkCredential(repository.Username, repository.Password);
         if (repository.InsecureSkipTlsVerify)
             handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
         else if (!string.IsNullOrWhiteSpace(repository.CaFile))
@@ -269,10 +267,11 @@ public sealed class HelmChartRepository : IDisposable
         CancellationToken cancellationToken)
     {
         var currentUri = new Uri(repository.Url.TrimEnd('/') + "/index.yaml", UriKind.Absolute);
+        var repositoryUri = new Uri(repository.Url, UriKind.Absolute);
         const int maxRedirects = 10;
         for (var redirectCount = 0; redirectCount <= maxRedirects; redirectCount++)
         {
-            using var request = CreateRepositoryIndexRequest(currentUri, repository);
+            using var request = CreateRepositoryIndexRequest(currentUri, repository, repositoryUri);
             var response = await client.SendAsync(request, cancellationToken);
             if (!repository.PassCredentialsAll || !IsRedirect(response.StatusCode))
                 return response;
@@ -288,10 +287,14 @@ public sealed class HelmChartRepository : IDisposable
         throw new HttpRequestException($"Repository index request exceeded {maxRedirects} redirects.");
     }
 
-    private static HttpRequestMessage CreateRepositoryIndexRequest(Uri indexUri, HelmRepository repository)
+    internal static HttpRequestMessage CreateRepositoryIndexRequest(
+        Uri indexUri,
+        HelmRepository repository,
+        Uri repositoryUri)
     {
         var request = new HttpRequestMessage(HttpMethod.Get, indexUri);
-        if (!string.IsNullOrWhiteSpace(repository.Username))
+        if (!string.IsNullOrWhiteSpace(repository.Username)
+            && (repository.PassCredentialsAll || IsSameHost(indexUri, repositoryUri)))
         {
             var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{repository.Username}:{repository.Password}"));
             request.Headers.Authorization = new AuthenticationHeaderValue("Basic", credentials);
@@ -307,6 +310,11 @@ public sealed class HelmChartRepository : IDisposable
             or HttpStatusCode.TemporaryRedirect
             or HttpStatusCode.PermanentRedirect
             or HttpStatusCode.MultipleChoices;
+
+    private static bool IsSameHost(Uri left, Uri right)
+        => string.Equals(left.Scheme, right.Scheme, StringComparison.OrdinalIgnoreCase)
+           && string.Equals(left.IdnHost, right.IdnHost, StringComparison.OrdinalIgnoreCase)
+           && left.Port == right.Port;
 
     private async Task<string> PullFromHttpAsync(
         string chartUrl,
@@ -662,7 +670,10 @@ public sealed class HelmChartRepository : IDisposable
 
     internal static string GetRepositoryIndexCacheFileName(string repositoryName)
     {
-        var safeName = Regex.Replace(repositoryName, "[^A-Za-z0-9._-]", "-").Trim('-', '.');
+        var safeName = repositoryName
+            .Replace(Path.DirectorySeparatorChar, '-')
+            .Replace(Path.AltDirectorySeparatorChar, '-')
+            .Trim(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         if (string.IsNullOrEmpty(safeName))
             safeName = "repository";
         return $"{safeName}-index.yaml";
@@ -670,10 +681,8 @@ public sealed class HelmChartRepository : IDisposable
 
     internal static string GetRepositoryConfigLockPath(string repositoryConfigPath)
     {
-        var directory = Path.GetDirectoryName(repositoryConfigPath);
-        return string.IsNullOrWhiteSpace(directory)
-            ? "repositories.lock"
-            : Path.Combine(directory, "repositories.lock");
+        var lockPath = Path.ChangeExtension(repositoryConfigPath, ".lock");
+        return string.IsNullOrWhiteSpace(lockPath) ? "repositories.lock" : lockPath;
     }
 
     private static Dictionary<string, object?> ToRepositoryConfiguration(HelmRepository repository)

@@ -146,7 +146,49 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
 
         var lockPath = HelmChartRepository.GetRepositoryConfigLockPath(configPath);
 
-        Assert.Equal(Path.Combine(_tempDir, "config", "repositories.lock"), lockPath);
+        Assert.Equal(Path.Combine(_tempDir, "config", "custom-repositories.lock"), lockPath);
+    }
+
+    [Fact]
+    public void CreateRepositoryIndexRequest_ScopesCredentialsToOriginalHostByDefault()
+    {
+        var repository = new HelmRepository
+        {
+            Name = "private",
+            Url = "https://repo.example.test/charts",
+            Username = "alice",
+            Password = "secret"
+        };
+        using var sameHostRequest = HelmChartRepository.CreateRepositoryIndexRequest(
+            new Uri("https://repo.example.test/charts/index.yaml"),
+            repository,
+            new Uri(repository.Url));
+        using var otherHostRequest = HelmChartRepository.CreateRepositoryIndexRequest(
+            new Uri("https://cdn.example.test/charts/index.yaml"),
+            repository,
+            new Uri(repository.Url));
+
+        Assert.NotNull(sameHostRequest.Headers.Authorization);
+        Assert.Null(otherHostRequest.Headers.Authorization);
+    }
+
+    [Fact]
+    public void CreateRepositoryIndexRequest_PassesCredentialsToAllHostsWhenConfigured()
+    {
+        var repository = new HelmRepository
+        {
+            Name = "private",
+            Url = "https://repo.example.test/charts",
+            Username = "alice",
+            Password = "secret",
+            PassCredentialsAll = true
+        };
+        using var request = HelmChartRepository.CreateRepositoryIndexRequest(
+            new Uri("https://cdn.example.test/charts/index.yaml"),
+            repository,
+            new Uri(repository.Url));
+
+        Assert.NotNull(request.Headers.Authorization);
     }
 
     [Theory]
@@ -221,9 +263,18 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
         var cacheFileName = HelmChartRepository.GetRepositoryIndexCacheFileName("../../unsafe");
 
         Assert.Equal(cacheFileName, HelmChartRepository.GetRepositoryIndexCacheFileName("../../unsafe"));
-        Assert.Equal("unsafe-index.yaml", cacheFileName);
+        Assert.Equal("..-..-unsafe-index.yaml", cacheFileName);
         Assert.DoesNotContain(Path.DirectorySeparatorChar, cacheFileName);
         Assert.DoesNotContain(Path.AltDirectorySeparatorChar, cacheFileName);
+    }
+
+    [Theory]
+    [InlineData("repo with spaces", "repo with spaces-index.yaml")]
+    [InlineData("@scope", "@scope-index.yaml")]
+    [InlineData(".private", ".private-index.yaml")]
+    public void GetRepositoryIndexCacheFileName_PreservesHelmValidNames(string repositoryName, string expected)
+    {
+        Assert.Equal(expected, HelmChartRepository.GetRepositoryIndexCacheFileName(repositoryName));
     }
 
     [Fact]
