@@ -69,6 +69,25 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
     }
 
     [Fact]
+    public async Task AddRepositoryAsync_PreservesExistingNamesThatDifferOnlyByCase()
+    {
+        var options = CreateOptions();
+        var configPath = Path.Combine(options.ConfigDirectory!, "repositories.yaml");
+        Directory.CreateDirectory(options.ConfigDirectory!);
+        await File.WriteAllTextAsync(configPath, """
+            apiVersion: v1
+            repositories:
+              - name: Stable
+                url: https://stable.example.test
+            """);
+        using var repository = new HelmChartRepository(options);
+
+        await repository.AddRepositoryAsync("stable", "https://lowercase.example.test");
+
+        Assert.Equal(["Stable", "stable"], (await repository.ListRepositoriesAsync()).Select(entry => entry.Name));
+    }
+
+    [Fact]
     public async Task RepositoryConfigPath_OverridesConfigDirectory()
     {
         var configuredPath = Path.Combine(_tempDir, "custom", "named-repositories.yaml");

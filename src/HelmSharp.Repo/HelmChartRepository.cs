@@ -165,12 +165,22 @@ public sealed class HelmChartRepository : IDisposable
     /// <summary>
     /// Fetches and caches a repository index.
     /// </summary>
-    public async Task<HelmRepoIndex> FetchRepoIndexAsync(
+    public Task<HelmRepoIndex> FetchRepoIndexAsync(
         string repoUrl,
         string? username = null,
         string? password = null,
-        CancellationToken cancellationToken = default,
-        string? repositoryName = null)
+        CancellationToken cancellationToken = default)
+        => FetchRepoIndexAsync(repoUrl, username, password, repositoryName: null, cancellationToken: cancellationToken);
+
+    /// <summary>
+    /// Fetches and caches a repository index using the provided repository name for the cache filename.
+    /// </summary>
+    public async Task<HelmRepoIndex> FetchRepoIndexAsync(
+        string repoUrl,
+        string? username,
+        string? password,
+        string? repositoryName,
+        CancellationToken cancellationToken = default)
     {
         var indexUrl = repoUrl.TrimEnd('/') + "/index.yaml";
         var request = new HttpRequestMessage(HttpMethod.Get, indexUrl);
@@ -427,11 +437,11 @@ public sealed class HelmChartRepository : IDisposable
     private async Task<Dictionary<string, HelmRepository>> LoadRepositoriesAsync(string path, CancellationToken ct)
     {
         if (!File.Exists(path))
-            return new Dictionary<string, HelmRepository>(StringComparer.OrdinalIgnoreCase);
+            return new Dictionary<string, HelmRepository>(StringComparer.Ordinal);
 
         var yaml = await File.ReadAllTextAsync(path, ct);
         var root = HelmYaml.DeserializeDictionary(yaml);
-        var repos = new Dictionary<string, HelmRepository>(StringComparer.OrdinalIgnoreCase);
+        var repos = new Dictionary<string, HelmRepository>(StringComparer.Ordinal);
         if (root.TryGetValue("repositories", out var repositoriesObject)
             && repositoriesObject is IList<object?> repositories)
         {

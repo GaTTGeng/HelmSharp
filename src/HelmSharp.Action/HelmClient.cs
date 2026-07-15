@@ -1242,7 +1242,7 @@ public class HelmClient : IHelmClient
         {
             try
             {
-                await repo.FetchRepoIndexAsync(r.Url, r.Username, r.Password, cancellationToken, r.Name);
+                await repo.FetchRepoIndexAsync(r.Url, r.Username, r.Password, r.Name, cancellationToken);
                 updated++;
                 output.AppendLine($"Successfully updated: {r.Name}");
             }
