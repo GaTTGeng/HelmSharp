@@ -171,8 +171,7 @@ public static class HelmRepoIndexer
                 {
                     var mergedVersion = HelmYaml.GetString(version, "version");
                     if (generatedVersionNames.Any(generatedVersion =>
-                        VersionsAreEquivalent(generatedVersion, mergedVersion) ||
-                        HelmChartVersionResolver.Satisfies(generatedVersion, mergedVersion)))
+                        VersionsAreEquivalent(generatedVersion, mergedVersion)))
                         continue;
 
                     generatedVersions.Add(version);
