@@ -1,0 +1,9 @@
+exports:
+  defaults:
+    importedScalar: child-default
+    exportedOnly: child-export
+config:
+  color: child-blue
+  childOnly: child-mapped
+grand:
+  enabled: true

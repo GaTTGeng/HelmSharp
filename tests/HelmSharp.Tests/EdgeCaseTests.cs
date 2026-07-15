@@ -752,6 +752,7 @@ public class EdgeCaseTests
               name: parent
             data:
               dependencyCount: {{ len .Chart.Dependencies | quote }}
+              hasSubchart: {{ hasKey .Subcharts "child" | quote }}
             """;
         var subchart = new HelmChart { Name = "child", Version = "1.0.0", ValuesYaml = "" };
         subchart.Templates["templates/child.yaml"] = """
@@ -780,6 +781,7 @@ public class EdgeCaseTests
         Assert.Contains(
             $"dependencyCount: \"{(expectedEnabled ? 1 : 0)}\"",
             result);
+        Assert.Contains($"hasSubchart: \"{expectedEnabled.ToString().ToLowerInvariant()}\"", result);
         Assert.Equal(
             expectedEnabled,
             result.Contains("name: child", StringComparison.Ordinal));
@@ -787,11 +789,11 @@ public class EdgeCaseTests
     }
 
     [Theory]
-    [InlineData(false, null, null, false)]
+    [InlineData(false, null, null, true)]
     [InlineData(false, true, null, true)]
     [InlineData(false, null, true, true)]
     [InlineData(true, false, null, false)]
-    public void Dependencies_UseExplicitEnabledAsInitialState(
+    public void Dependencies_DefaultToEnabledBeforeTagsAndConditions(
         bool declaredEnabled,
         bool? tagValue,
         bool? conditionValue,

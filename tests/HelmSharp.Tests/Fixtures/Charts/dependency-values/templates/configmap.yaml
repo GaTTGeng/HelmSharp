@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: parent
+data:
+  dependencyCount: {{ len .Chart.Dependencies | quote }}
+  firstDependency: {{ (index .Chart.Dependencies 0).Name | quote }}
+  importedScalar: {{ .Values.importedScalar | quote }}
+  importedOnly: {{ default "" .Values.exportedOnly | quote }}
+  mappedColor: {{ .Values.imported.config.color | quote }}
+  mappedOnly: {{ default "" .Values.imported.config.childOnly | quote }}

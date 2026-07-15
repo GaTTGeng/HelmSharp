@@ -38,18 +38,33 @@ internal static class HelmCliRunner
         string releaseName,
         string releaseNamespace,
         CancellationToken cancellationToken)
-        => RunAsync(
-            [
-                "template",
-                releaseName,
-                NormalizeHelmPath(chartPath),
-                "--namespace",
-                releaseNamespace,
-                "--kube-version",
-                "v1.29.0"
-            ],
-            CommandTimeout,
-            cancellationToken);
+        => TemplateAsync(chartPath, releaseName, releaseNamespace, null, cancellationToken);
+
+    public static Task<HelmCliResult> TemplateAsync(
+        string chartPath,
+        string releaseName,
+        string releaseNamespace,
+        string? valuesFile,
+        CancellationToken cancellationToken)
+    {
+        var arguments = new List<string>
+        {
+            "template",
+            releaseName,
+            NormalizeHelmPath(chartPath),
+            "--namespace",
+            releaseNamespace,
+            "--kube-version",
+            "v1.29.0"
+        };
+        if (valuesFile is not null)
+        {
+            arguments.Add("--values");
+            arguments.Add(NormalizeHelmPath(valuesFile));
+        }
+
+        return RunAsync(arguments, CommandTimeout, cancellationToken);
+    }
 
     public static Task<HelmCliResult> PackageAsync(
         string chartPath,

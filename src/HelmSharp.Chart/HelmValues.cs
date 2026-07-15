@@ -18,14 +18,7 @@ public static class HelmValues
         Dictionary<string, string>? setJsonValues,
         CancellationToken cancellationToken)
     {
-        var result = HelmYaml.DeserializeDictionary(chart.ValuesYaml);
-        PruneNullMapEntries(result);
-
-        // Merge subchart default values under each dependency alias (or dependency name).
-        foreach (var (key, subchart) in GetSubchartValueInstances(chart))
-        {
-            MergeSubchartDefaults(result, key, subchart);
-        }
+        var overrides = new Dictionary<string, object?>(StringComparer.Ordinal);
 
         // Multiple values files (equivalent to helm -f / --values, applied in order)
         foreach (var filePath in valuesFiles ?? [])
@@ -33,94 +26,207 @@ public static class HelmValues
             if (!string.IsNullOrWhiteSpace(filePath))
             {
                 var fileContent = await File.ReadAllTextAsync(filePath, cancellationToken);
-                MergeInto(result, HelmYaml.DeserializeDictionary(fileContent));
+                MergeInto(overrides, HelmYaml.DeserializeDictionary(fileContent));
             }
         }
 
         // Inline values content (equivalent to helm --values with stdin or direct YAML)
         if (!string.IsNullOrWhiteSpace(valuesContent))
         {
-            MergeInto(result, HelmYaml.DeserializeDictionary(valuesContent));
+            MergeInto(overrides, HelmYaml.DeserializeDictionary(valuesContent));
         }
 
         // --set-file: raw file content as string (LOWEST precedence among set flags)
         foreach (var (key, value) in setFileValues ?? [])
-            SetPath(result, key, value);
+            SetPath(overrides, key, value);
 
         // --set-string: force string values (no coercion)
         foreach (var (key, value) in setStringValues ?? [])
-            SetPath(result, key, value);
+            SetPath(overrides, key, value);
 
         // --set: coerce scalar types (higher precedence than set-file and set-string)
         foreach (var (key, value) in setValues ?? [])
-            SetPath(result, key, CoerceScalar(value));
+            SetPath(overrides, key, CoerceScalar(value));
 
         // --set-json: parse JSON values (HIGHEST precedence)
         foreach (var (key, value) in setJsonValues ?? [])
-            SetPath(result, key, ParseJsonValue(value));
+            SetPath(overrides, key, ParseJsonValue(value));
+
+        // Helm first coalesces all loaded dependencies to evaluate enablement, then
+        // removes disabled nodes before importing child values and doing the final merge.
+        var evaluationValues = BuildChartValues(chart, overrides, HelmDependencyProcessor.BuildAll(chart));
+        var effectiveGraph = HelmDependencyProcessor.BuildEffective(chart, evaluationValues);
+        var result = BuildChartValues(chart, new Dictionary<string, object?>(), effectiveGraph);
+        ProcessImports(effectiveGraph, result);
+        MergeInto(result, overrides);
+        PropagateGlobals(effectiveGraph, result, GetMap(result, "global"));
 
         return result;
     }
 
-    private static IEnumerable<(string Key, HelmChart Chart)> GetSubchartValueInstances(HelmChart chart)
+    private static Dictionary<string, object?> BuildChartValues(
+        HelmChart chart,
+        IDictionary<string, object?> overrides,
+        HelmDependencyNode node)
     {
-        if (chart.Dependencies.Count == 0)
+        var result = HelmYaml.DeserializeDictionary(chart.ValuesYaml);
+        PruneNullMapEntries(result);
+        MergeInto(result, CloneDictionary(overrides));
+
+        foreach (var child in node.Children)
         {
-            foreach (var (name, subchart) in chart.Subcharts)
-                yield return (name, subchart);
-            yield break;
+            var childOverrides = GetMap(result, child.Identity)
+                                 ?? new Dictionary<string, object?>(StringComparer.Ordinal);
+            var childValues = BuildChartValues(child.Chart, childOverrides, child);
+            MergeGlobalValues(childValues, GetMap(result, "global"));
+            result[child.Identity] = childValues;
         }
 
-        foreach (var dependency in chart.Dependencies)
-        {
-            var key = dependency.Alias ?? dependency.Name;
-            if (TryGetSubchartForDependency(chart, dependency, key, out var subchart))
-                yield return (key, subchart);
-        }
+        return result;
     }
 
-    private static bool TryGetSubchartForDependency(
-        HelmChart chart,
-        HelmChartDependency dependency,
-        string key,
-        out HelmChart subchart)
+    private static void ProcessImports(HelmDependencyNode node, Dictionary<string, object?> values)
     {
-        if (chart.Subcharts.TryGetValue(key, out subchart!))
-            return true;
-
-        if (chart.Subcharts.TryGetValue(dependency.Name, out subchart!))
-            return true;
-
-        foreach (var candidate in chart.Subcharts.Values)
+        foreach (var child in node.Children)
         {
-            if (string.Equals(candidate.Name, dependency.Name, StringComparison.OrdinalIgnoreCase))
+            if (GetMap(values, child.Identity) is { } childValues)
+                ProcessImports(child, childValues);
+        }
+
+        var imported = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var child in node.Children)
+        {
+            if (child.Metadata?.ImportValues is not { Count: > 0 } importValues ||
+                GetMap(values, child.Identity) is not { } childValues)
+                continue;
+
+            foreach (var importValue in importValues)
             {
-                subchart = candidate;
-                return true;
+                if (importValue is string exportName)
+                {
+                    if (GetMapAtPath(childValues, $"exports.{exportName}") is { } exported)
+                        MergeMissing(imported, exported);
+                    continue;
+                }
+
+                if (importValue is not IDictionary<string, object?> mapping)
+                    continue;
+
+                mapping.TryGetValue("child", out var childValue);
+                mapping.TryGetValue("parent", out var parentValue);
+                var childPath = Convert.ToString(childValue) ?? string.Empty;
+                var parentPath = Convert.ToString(parentValue) ?? string.Empty;
+                if (GetMapAtPath(childValues, childPath) is not { } source)
+                    continue;
+
+                MergeMissing(imported, WrapAtPath(parentPath, source));
             }
         }
 
-        subchart = null!;
-        return false;
+        MergeMissing(values, imported);
     }
 
-    private static void MergeSubchartDefaults(
-        Dictionary<string, object?> result,
-        string key,
-        HelmChart subchart)
+    private static void PropagateGlobals(
+        HelmDependencyNode node,
+        Dictionary<string, object?> values,
+        Dictionary<string, object?>? globalValues)
     {
-        var subchartDefaults = HelmYaml.DeserializeDictionary(subchart.ValuesYaml);
-        PruneNullMapEntries(subchartDefaults);
-        if (!result.ContainsKey(key))
+        foreach (var child in node.Children)
         {
-            result[key] = subchartDefaults;
+            if (GetMap(values, child.Identity) is not { } childValues)
+                continue;
+            MergeGlobalValues(childValues, globalValues);
+            PropagateGlobals(child, childValues, globalValues);
         }
-        else if (result[key] is Dictionary<string, object?> existingDict &&
-                 subchartDefaults is Dictionary<string, object?> subDefaults)
+    }
+
+    private static void MergeGlobalValues(
+        Dictionary<string, object?> values,
+        Dictionary<string, object?>? globalValues)
+    {
+        if (globalValues is null)
+            return;
+
+        var merged = GetMap(values, "global") is { } existing
+            ? CloneDictionary(existing)
+            : new Dictionary<string, object?>(StringComparer.Ordinal);
+        MergeInto(merged, CloneDictionary(globalValues));
+        values["global"] = merged;
+    }
+
+    private static Dictionary<string, object?> WrapAtPath(
+        string path,
+        Dictionary<string, object?> values)
+    {
+        if (string.IsNullOrWhiteSpace(path) || path == ".")
+            return CloneDictionary(values);
+
+        Dictionary<string, object?> current = CloneDictionary(values);
+        foreach (var segment in path.Split('.', StringSplitOptions.RemoveEmptyEntries).Reverse())
         {
-            // Merge parent overrides into a copy of subchart defaults so parent values take precedence
-            MergeInto(subDefaults, existingDict);
-            result[key] = subDefaults;
+            current = new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                [segment] = current
+            };
+        }
+        return current;
+    }
+
+    private static Dictionary<string, object?>? GetMapAtPath(
+        IDictionary<string, object?> values,
+        string path)
+    {
+        object? current = values;
+        foreach (var segment in path.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (current is not IDictionary<string, object?> dictionary ||
+                !dictionary.TryGetValue(segment, out current))
+                return null;
+        }
+        return current as Dictionary<string, object?>
+               ?? (current as IDictionary<string, object?>)?.ToDictionary(
+                   pair => pair.Key,
+                   pair => pair.Value,
+                   StringComparer.Ordinal);
+    }
+
+    private static Dictionary<string, object?>? GetMap(
+        IDictionary<string, object?> values,
+        string key)
+        => values.TryGetValue(key, out var value)
+            ? value as Dictionary<string, object?>
+              ?? (value as IDictionary<string, object?>)?.ToDictionary(
+                  pair => pair.Key,
+                  pair => pair.Value,
+                  StringComparer.Ordinal)
+            : null;
+
+    private static Dictionary<string, object?> CloneDictionary(IDictionary<string, object?> source)
+        => source.ToDictionary(pair => pair.Key, pair => CloneValue(pair.Value), StringComparer.Ordinal);
+
+    private static object? CloneValue(object? value)
+        => value switch
+        {
+            IDictionary<string, object?> dictionary => CloneDictionary(dictionary),
+            IList<object?> list => list.Select(CloneValue).ToList(),
+            _ => value
+        };
+
+    private static void MergeMissing(
+        Dictionary<string, object?> target,
+        IDictionary<string, object?> source)
+    {
+        foreach (var (key, value) in source)
+        {
+            if (!target.TryGetValue(key, out var existing))
+            {
+                target[key] = CloneValue(value);
+                continue;
+            }
+
+            if (existing is Dictionary<string, object?> existingMap &&
+                value is IDictionary<string, object?> sourceMap)
+                MergeMissing(existingMap, sourceMap);
         }
     }
 
