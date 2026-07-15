@@ -1,0 +1,7 @@
+apiVersion: v2
+name: dependency-list-without-lock
+version: 0.1.0
+dependencies:
+  - name: range-dep
+    version: ~1.2.0
+    repository: https://example.test/charts

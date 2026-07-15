@@ -1364,60 +1364,23 @@ public class HelmClient : IHelmClient
     {
         var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
         if (chart.Dependencies.Count == 0)
-            return Ok("No dependencies found in Chart.yaml");
+            return Ok($"WARNING: no dependencies at {Path.Combine(chartPath, "charts")}{Environment.NewLine}");
 
-        var chartsDir = Path.Combine(chartPath, "charts");
-        var output = new System.Text.StringBuilder();
-        output.AppendLine("NAME\t\tVERSION\t\tREPOSITORY\t\tSTATUS");
+        var output = new StringBuilder();
+        output.AppendLine("NAME\tVERSION\tREPOSITORY\tSTATUS");
 
         foreach (var dep in chart.Dependencies)
         {
-            var status = "unknown";
-            if (!dep.Enabled)
-            {
-                status = "disabled";
-            }
-            else
-            {
-                // Check if dependency is present in charts/
-                var archiveVersions = new List<string>();
-                if (Directory.Exists(chartsDir))
-                {
-                    archiveVersions.AddRange(
-                        Directory.GetFiles(chartsDir, $"{dep.Name}-*.tgz")
-                            .Select(path => GetDependencyArchiveVersion(dep.Name, path))
-                            .OfType<string>());
-                }
-
-                var matchingVersion = HelmChartVersionResolver.ResolveVersion(
-                    archiveVersions,
-                    dep.Version);
-
-                if (matchingVersion is not null)
-                    status = "ok";
-                else if (archiveVersions.Count > 0)
-                    status = "mismatch";
-                else
-                    status = "missing";
-            }
-
-            output.AppendLine($"{dep.Name}\t\t{dep.Version ?? "?"}\t\t{dep.Repository ?? "local"}\t\t{status}");
+            var status = await HelmDependencyStatusInspector.InspectAsync(
+                chartPath,
+                chart,
+                dep,
+                cancellationToken);
+            output.AppendLine($"{dep.Name}\t{dep.Version ?? string.Empty}\t{dep.Repository ?? string.Empty}\t{status}");
         }
 
+        output.AppendLine();
         return Ok(output.ToString());
-    }
-
-    private static string? GetDependencyArchiveVersion(string dependencyName, string archivePath)
-    {
-        var fileName = Path.GetFileName(archivePath);
-        if (!fileName.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase))
-            return null;
-
-        var packageName = fileName[..^".tgz".Length];
-        var prefix = dependencyName + "-";
-        return packageName.StartsWith(prefix, StringComparison.Ordinal)
-            ? packageName[prefix.Length..]
-            : null;
     }
 
     private static async Task<string> ResolveChartPathAsync(
