@@ -219,7 +219,7 @@ public sealed class HelmChartRepository : IDisposable
     {
         using var handler = new HttpClientHandler
         {
-            AllowAutoRedirect = !repository.PassCredentialsAll,
+            AllowAutoRedirect = false,
             PreAuthenticate = repository.PassCredentialsAll
         };
         if (repository.InsecureSkipTlsVerify)
@@ -261,7 +261,7 @@ public sealed class HelmChartRepository : IDisposable
         return index;
     }
 
-    private static async Task<HttpResponseMessage> SendRepositoryIndexRequestAsync(
+    internal static async Task<HttpResponseMessage> SendRepositoryIndexRequestAsync(
         HttpClient client,
         HelmRepository repository,
         CancellationToken cancellationToken)
@@ -273,7 +273,7 @@ public sealed class HelmChartRepository : IDisposable
         {
             using var request = CreateRepositoryIndexRequest(currentUri, repository, repositoryUri);
             var response = await client.SendAsync(request, cancellationToken);
-            if (!repository.PassCredentialsAll || !IsRedirect(response.StatusCode))
+            if (!IsRedirect(response.StatusCode))
                 return response;
 
             var location = response.Headers.Location;

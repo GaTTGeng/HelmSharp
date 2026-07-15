@@ -1,3 +1,4 @@
+using System.Net;
 using HelmSharp.Repo;
 
 namespace HelmSharp.Tests;
@@ -191,6 +192,70 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
         Assert.NotNull(request.Headers.Authorization);
     }
 
+    [Fact]
+    public async Task SendRepositoryIndexRequestAsync_PreservesCredentialsAcrossSameHostRedirect()
+    {
+        using var handler = new RecordingHandler(
+            new HttpResponseMessage(HttpStatusCode.Found)
+            {
+                Headers = { Location = new Uri("https://repo.example.test/redirected/index.yaml") }
+            },
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("apiVersion: v1\nentries: {}\n")
+            });
+        using var client = new HttpClient(handler);
+        var repository = new HelmRepository
+        {
+            Name = "private",
+            Url = "https://repo.example.test/charts",
+            Username = "alice",
+            Password = "secret"
+        };
+
+        using var response = await HelmChartRepository.SendRepositoryIndexRequestAsync(
+            client,
+            repository,
+            CancellationToken.None);
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.NotNull(handler.Requests[0].Headers.Authorization);
+        Assert.NotNull(handler.Requests[1].Headers.Authorization);
+    }
+
+    [Fact]
+    public async Task SendRepositoryIndexRequestAsync_DoesNotPassCredentialsAcrossCrossHostRedirectByDefault()
+    {
+        using var handler = new RecordingHandler(
+            new HttpResponseMessage(HttpStatusCode.Found)
+            {
+                Headers = { Location = new Uri("https://cdn.example.test/redirected/index.yaml") }
+            },
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("apiVersion: v1\nentries: {}\n")
+            });
+        using var client = new HttpClient(handler);
+        var repository = new HelmRepository
+        {
+            Name = "private",
+            Url = "https://repo.example.test/charts",
+            Username = "alice",
+            Password = "secret"
+        };
+
+        using var response = await HelmChartRepository.SendRepositoryIndexRequestAsync(
+            client,
+            repository,
+            CancellationToken.None);
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.NotNull(handler.Requests[0].Headers.Authorization);
+        Assert.Null(handler.Requests[1].Headers.Authorization);
+    }
+
     [Theory]
     [InlineData("entries: {}\n")]
     [InlineData("apiVersion: v1\nentries: []\n")]
@@ -303,5 +368,25 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
     {
         try { Directory.Delete(_tempDir, recursive: true); }
         catch { }
+    }
+
+    private sealed class RecordingHandler(params HttpResponseMessage[] responses) : HttpMessageHandler
+    {
+        private readonly Queue<HttpResponseMessage> _responses = new(responses);
+
+        public List<HttpRequestMessage> Requests { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var clone = new HttpRequestMessage(request.Method, request.RequestUri);
+            foreach (var header in request.Headers)
+            {
+                clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            }
+            Requests.Add(clone);
+            return Task.FromResult(_responses.Dequeue());
+        }
     }
 }
