@@ -111,6 +111,24 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
     }
 
     [Fact]
+    public async Task AddRepositoryAsync_NormalizesLoadedUrlBeforeIdempotentComparison()
+    {
+        var options = CreateOptions();
+        Directory.CreateDirectory(options.ConfigDirectory!);
+        await File.WriteAllTextAsync(Path.Combine(options.ConfigDirectory!, "repositories.yaml"), """
+            apiVersion: v1
+            repositories:
+              - name: stable
+                url: https://charts.example.test/
+            """);
+        using var repository = new HelmChartRepository(options);
+
+        await repository.AddRepositoryAsync("stable", "https://charts.example.test");
+
+        Assert.Single(await repository.ListRepositoriesAsync());
+    }
+
+    [Fact]
     public async Task AddRepositoryAsync_PreservesExistingNamesThatDifferOnlyByCase()
     {
         var options = CreateOptions();
@@ -152,6 +170,20 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
 
         var added = Assert.Single(await repository.ListRepositoriesAsync());
         Assert.Equal("stable", added.Name);
+    }
+
+    [Fact]
+    public async Task AddRepositoryAsync_RethrowsRepositoryLockPermissionFailure()
+    {
+        var options = CreateOptions();
+        Directory.CreateDirectory(options.ConfigDirectory!);
+        var lockPath = HelmChartRepository.GetRepositoryConfigLockPath(
+            Path.Combine(options.ConfigDirectory!, "repositories.yaml"));
+        Directory.CreateDirectory(lockPath);
+        using var repository = new HelmChartRepository(options);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(
+            () => repository.AddRepositoryAsync("stable", "https://charts.example.test"));
     }
 
     [Fact]

@@ -615,7 +615,7 @@ public sealed class HelmChartRepository : IDisposable
                 .Cast<object?>()
                 .ToList()
         };
-        await File.WriteAllTextAsync(path, HelmYaml.Serialize(document), ct);
+        await WriteAllTextAtomicallyAsync(path, HelmYaml.Serialize(document), ct);
     }
 
     private async Task<FileStream> AcquireRepositoryConfigurationLockAsync(CancellationToken cancellationToken)
@@ -639,10 +639,6 @@ public sealed class HelmChartRepository : IDisposable
                     FileOptions.Asynchronous);
             }
             catch (IOException)
-            {
-                await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
-            }
-            catch (UnauthorizedAccessException)
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
             }
@@ -730,7 +726,10 @@ public sealed class HelmChartRepository : IDisposable
         => values.TryGetValue(key, out var value) && value is not null && Convert.ToBoolean(value);
 
     private static bool RepositoryConfigurationsMatch(HelmRepository left, HelmRepository right)
-        => string.Equals(left.Url, right.Url, StringComparison.Ordinal)
+        => string.Equals(
+               NormalizeRepositoryUrl(left.Url),
+               NormalizeRepositoryUrl(right.Url),
+               StringComparison.Ordinal)
            && string.Equals(left.Username, right.Username, StringComparison.Ordinal)
            && string.Equals(left.Password, right.Password, StringComparison.Ordinal)
            && string.Equals(left.CertFile, right.CertFile, StringComparison.Ordinal)
