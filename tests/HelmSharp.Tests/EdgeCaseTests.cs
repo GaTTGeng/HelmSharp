@@ -752,6 +752,7 @@ public class EdgeCaseTests
               name: parent
             data:
               dependencyCount: {{ len .Chart.Dependencies | quote }}
+              hasSubchart: {{ hasKey .Subcharts "child" | quote }}
             """;
         var subchart = new HelmChart { Name = "child", Version = "1.0.0", ValuesYaml = "" };
         subchart.Templates["templates/child.yaml"] = """
@@ -780,6 +781,7 @@ public class EdgeCaseTests
         Assert.Contains(
             $"dependencyCount: \"{(expectedEnabled ? 1 : 0)}\"",
             result);
+        Assert.Contains($"hasSubchart: \"{expectedEnabled.ToString().ToLowerInvariant()}\"", result);
         Assert.Equal(
             expectedEnabled,
             result.Contains("name: child", StringComparison.Ordinal));
@@ -787,11 +789,11 @@ public class EdgeCaseTests
     }
 
     [Theory]
-    [InlineData(false, null, null, false)]
+    [InlineData(false, null, null, true)]
     [InlineData(false, true, null, true)]
     [InlineData(false, null, true, true)]
     [InlineData(true, false, null, false)]
-    public void Dependencies_UseExplicitEnabledAsInitialState(
+    public void Dependencies_DefaultToEnabledBeforeTagsAndConditions(
         bool declaredEnabled,
         bool? tagValue,
         bool? conditionValue,
@@ -849,6 +851,87 @@ public class EdgeCaseTests
             expectedEnabled,
             result.Contains("name: child", StringComparison.Ordinal));
         Assert.Equal(declaredEnabled, chart.Dependencies[0].Enabled);
+    }
+
+    [Fact]
+    public async Task Dependencies_DoNotReevaluateConditionsAfterImports()
+    {
+        var chart = new HelmChart { Name = "parent", Version = "1.0.0", ValuesYaml = "" };
+        chart.Dependencies.Add(new HelmChartDependency
+        {
+            Name = "importer",
+            Version = "1.0.0",
+            ImportValues = ["gates"]
+        });
+        chart.Dependencies.Add(new HelmChartDependency
+        {
+            Name = "sibling",
+            Version = "1.0.0",
+            Condition = "flags.sibling"
+        });
+        chart.Subcharts["importer"] = new HelmChart
+        {
+            Name = "importer",
+            Version = "1.0.0",
+            ValuesYaml = "exports:\n  gates:\n    flags:\n      sibling: false\n"
+        };
+        var sibling = new HelmChart { Name = "sibling", Version = "1.0.0", ValuesYaml = "" };
+        sibling.Templates["templates/sibling.yaml"] = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: sibling\n";
+        chart.Subcharts["sibling"] = sibling;
+
+        var values = await HelmValues.BuildAsync(
+            chart,
+            (IEnumerable<string>?)null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            CancellationToken.None);
+        var flags = Assert.IsType<Dictionary<string, object?>>(values["flags"]);
+        Assert.False(Assert.IsType<bool>(flags["sibling"]));
+
+        var copiedValues = new Dictionary<string, object?>(values, StringComparer.Ordinal);
+        var result = new HelmTemplateRenderer(chart, "rel", "default", copiedValues).Render();
+
+        Assert.Contains("name: sibling", result);
+    }
+
+    [Fact]
+    public void Renderer_DirectValuesCoalesceSubchartDefaultsAndGlobals()
+    {
+        var chart = new HelmChart
+        {
+            Name = "parent",
+            Version = "1.0.0",
+            ValuesYaml = "global:\n  shared: parent-global\n"
+        };
+        chart.Dependencies.Add(new HelmChartDependency { Name = "child", Version = "1.0.0" });
+        var child = new HelmChart
+        {
+            Name = "child",
+            Version = "1.0.0",
+            ValuesYaml = "marker: child-default\n"
+        };
+        child.Templates["templates/child.yaml"] = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: child
+            data:
+              marker: {{ .Values.marker | quote }}
+              global: {{ .Values.global.shared | quote }}
+            """;
+        chart.Subcharts["child"] = child;
+
+        var result = new HelmTemplateRenderer(
+            chart,
+            "rel",
+            "default",
+            new Dictionary<string, object?>()).Render();
+
+        Assert.Contains("marker: \"child-default\"", result);
+        Assert.Contains("global: \"parent-global\"", result);
     }
 
     [Fact]

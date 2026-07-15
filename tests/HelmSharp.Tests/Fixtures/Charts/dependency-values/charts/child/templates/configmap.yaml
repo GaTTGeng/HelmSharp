@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: child
+data:
+  dependencyCount: {{ len .Chart.Dependencies | quote }}
+  global: {{ .Values.global.shared | quote }}

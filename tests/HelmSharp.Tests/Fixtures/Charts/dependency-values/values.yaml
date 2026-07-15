@@ -1,0 +1,15 @@
+global:
+  shared: parent-global
+child:
+  nonbool: ignored
+  enabled: true
+  grand:
+    enabled: false
+tags:
+  mixedFalse: false
+  mixedTrue: true
+  disabledOnly: false
+importedScalar: parent-wins
+imported:
+  config:
+    color: parent-red

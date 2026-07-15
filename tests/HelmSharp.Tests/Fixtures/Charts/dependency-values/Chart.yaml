@@ -1,0 +1,28 @@
+apiVersion: v2
+name: dependency-values
+version: 1.0.0
+dependencies:
+  - name: child
+    version: 1.0.0
+    repository: file://charts/child
+    condition: child.nonbool,child.enabled
+    tags:
+      - mixedFalse
+    import-values:
+      - defaults
+      - child: config
+        parent: imported.config
+  - name: tagged
+    version: 1.0.0
+    repository: file://charts/tagged
+    condition: postImportGates.tagged
+    tags:
+      - mixedFalse
+      - mixedTrue
+  - name: disabled
+    version: 1.0.0
+    repository: file://charts/disabled
+    tags:
+      - disabledOnly
+    import-values:
+      - ignored

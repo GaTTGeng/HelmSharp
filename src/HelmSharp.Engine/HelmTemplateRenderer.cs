@@ -62,6 +62,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
 
     private readonly HelmChart _chart;
     private readonly TemplateContext _root;
+    private readonly HelmDependencyNode _dependencyGraph;
     private readonly Dictionary<string, string> _definedTemplates = new(StringComparer.Ordinal);
 
     /// <summary>
@@ -89,12 +90,13 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         int revision = 1)
     {
         _chart = chart;
+        var renderValues = HelmValues.PrepareForRender(chart, values, out _dependencyGraph);
         _root = new TemplateContext(
             chart,
             releaseName,
             releaseNamespace,
-            values,
-            values,
+            renderValues,
+            renderValues,
             new Dictionary<string, object?>(StringComparer.Ordinal))
         {
             IsInstall = !isUpgrade,
@@ -102,7 +104,8 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             Revision = revision,
             KubeVersion = kubeVersion,
             ApiVersions = BuildApiVersions(apiVersions, kubeVersion),
-            Dependencies = BuildEffectiveDependencies(chart.Dependencies, values)
+            Dependencies = _dependencyGraph.Dependencies.ToList(),
+            DependencyNode = _dependencyGraph
         };
     }
 
@@ -131,11 +134,11 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             ExtractDefines(content);
         }
 
-        // Extract defines from subchart templates (shared globally)
-        foreach (var (subchartIdentity, subchart) in GetSubchartRenderInstances())
+        // Extract defines from every enabled descendant (shared globally).
+        foreach (var (node, chartPath) in EnumerateDescendants(_dependencyGraph, _chart.Name))
         {
-            RegisterNamedChartTemplates(subchart, $"{_chart.Name}/charts/{subchartIdentity}");
-            foreach (var content in subchart.Templates.Values)
+            RegisterNamedChartTemplates(node.Chart, chartPath);
+            foreach (var content in node.Chart.Templates.Values)
             {
                 ExtractDefines(content);
             }
@@ -179,66 +182,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             // Other exceptions (fail, arity errors, etc.) propagate immediately
         }
 
-        // Render subchart templates
-        foreach (var (subchartIdentity, subchart) in GetSubchartRenderInstances())
-        {
-            var subchartValues = HelmValues.BuildSubchartValues(
-                subchart,
-                _root.Values,
-                subchartIdentity);
-            var subchartContext = new TemplateContext(
-                subchart, _root.ReleaseName, _root.ReleaseNamespace,
-                subchartValues, subchartValues,
-                new Dictionary<string, object?>(_root.Variables, StringComparer.Ordinal))
-            {
-                IsInstall = _root.IsInstall,
-                IsUpgrade = _root.IsUpgrade,
-                Revision = _root.Revision,
-                KubeVersion = _root.KubeVersion,
-                ApiVersions = _root.ApiVersions,
-                TemplateChartName = subchartIdentity,
-                TemplateChartPath = $"{_chart.Name}/charts/{subchartIdentity}",
-                Dependencies = BuildEffectiveDependencies(subchart.Dependencies, subchartValues)
-            };
-
-            foreach (var (path, content) in subchart.Templates)
-            {
-                var fileName = Path.GetFileName(path);
-                if (fileName.StartsWith('_') || fileName.Equals("NOTES.txt", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                try
-                {
-                    var withoutDefines = StripDefines(content);
-                    var rendered = RenderSection(
-                        withoutDefines,
-                        subchartContext with
-                        {
-                            CurrentTemplatePath = path,
-                            Variables = new Dictionary<string, object?>(subchartContext.Variables, StringComparer.Ordinal)
-                        });
-                    if (string.IsNullOrWhiteSpace(rendered))
-                        continue;
-
-                    AddManifestDocuments(
-                        manifests,
-                        $"{_chart.Name}/charts/{subchartIdentity}/{path}",
-                        rendered);
-                }
-                catch (NotSupportedException ex)
-                {
-                    // Engine-level gaps (missing function, parser limitation) — collect and continue
-                    errors.Add((path, new NotSupportedException($"{Path.GetFileName(path)} (subchart: {subchartIdentity}): {ex.Message}")));
-                }
-                catch (TemplateParseException ex)
-                {
-                    // Malformed template syntax — collect and continue so the remaining
-                    // templates in the chart can still render
-                    errors.Add((path, new TemplateParseException($"{Path.GetFileName(path)} (subchart: {subchartIdentity}): {ex.Message}", ex.Line, ex.Column, ex.Offset)));
-                }
-                // Other exceptions (fail, arity errors, etc.) propagate immediately
-            }
-        }
+        RenderDescendants(_dependencyGraph, _root, _chart.Name, manifests, errors);
 
         if (errors.Count > 0)
         {
@@ -417,51 +361,95 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         int HookWeight,
         int OriginalOrder);
 
-    private IEnumerable<(string Identity, HelmChart Chart)> GetSubchartRenderInstances()
+    private static IEnumerable<(HelmDependencyNode Node, string ChartPath)> EnumerateDescendants(
+        HelmDependencyNode parent,
+        string parentPath)
     {
-        if (_chart.Dependencies.Count == 0)
+        foreach (var child in parent.Children)
         {
-            foreach (var (name, subchart) in _chart.Subcharts)
-                yield return (name, subchart);
-            yield break;
-        }
-
-        foreach (var dependency in _chart.Dependencies)
-        {
-            var identity = dependency.Alias ?? dependency.Name;
-            var enabled = _root.Dependencies.Any(
-                effective => string.Equals(effective.Name, identity, StringComparison.OrdinalIgnoreCase));
-            if (!enabled)
-                continue;
-
-            if (TryGetSubchartForDependency(dependency, identity, out var subchart))
-                yield return (identity, subchart);
+            var chartPath = $"{parentPath}/charts/{child.Identity}";
+            yield return (child, chartPath);
+            foreach (var descendant in EnumerateDescendants(child, chartPath))
+                yield return descendant;
         }
     }
 
-    private bool TryGetSubchartForDependency(
-        HelmChartDependency dependency,
-        string identity,
-        out HelmChart subchart)
+    private void RenderDescendants(
+        HelmDependencyNode parent,
+        TemplateContext parentContext,
+        string parentPath,
+        List<RenderedManifest> manifests,
+        List<(string Path, Exception Exception)> errors)
     {
-        if (_chart.Subcharts.TryGetValue(identity, out subchart!))
-            return true;
-
-        if (_chart.Subcharts.TryGetValue(dependency.Name, out subchart!))
-            return true;
-
-        foreach (var candidate in _chart.Subcharts.Values)
+        foreach (var child in parent.Children)
         {
-            if (string.Equals(candidate.Name, dependency.Name, StringComparison.OrdinalIgnoreCase))
+            var chartPath = $"{parentPath}/charts/{child.Identity}";
+            var childValues = parentContext.Values.TryGetValue(child.Identity, out var scoped) &&
+                              scoped is Dictionary<string, object?> scopedValues
+                ? scopedValues
+                : new Dictionary<string, object?>(StringComparer.Ordinal);
+            var childContext = CreateChildContext(parentContext, child, childValues, chartPath);
+
+            foreach (var (path, content) in child.Chart.Templates)
             {
-                subchart = candidate;
-                return true;
-            }
-        }
+                var fileName = Path.GetFileName(path);
+                if (fileName.StartsWith('_') || fileName.Equals("NOTES.txt", StringComparison.OrdinalIgnoreCase))
+                    continue;
 
-        subchart = null!;
-        return false;
+                try
+                {
+                    var rendered = RenderSection(
+                        StripDefines(content),
+                        childContext with
+                        {
+                            CurrentTemplatePath = path,
+                            Variables = new Dictionary<string, object?>(childContext.Variables, StringComparer.Ordinal)
+                        });
+                    if (!string.IsNullOrWhiteSpace(rendered))
+                        AddManifestDocuments(manifests, $"{chartPath}/{path}", rendered);
+                }
+                catch (NotSupportedException ex)
+                {
+                    errors.Add((path, new NotSupportedException(
+                        $"{Path.GetFileName(path)} (subchart: {child.Identity}): {ex.Message}")));
+                }
+                catch (TemplateParseException ex)
+                {
+                    errors.Add((path, new TemplateParseException(
+                        $"{Path.GetFileName(path)} (subchart: {child.Identity}): {ex.Message}",
+                        ex.Line,
+                        ex.Column,
+                        ex.Offset)));
+                }
+            }
+
+            RenderDescendants(child, childContext, chartPath, manifests, errors);
+        }
     }
+
+    private static TemplateContext CreateChildContext(
+        TemplateContext parentContext,
+        HelmDependencyNode child,
+        Dictionary<string, object?> childValues,
+        string chartPath)
+        => new(
+            child.Chart,
+            parentContext.ReleaseName,
+            parentContext.ReleaseNamespace,
+            childValues,
+            childValues,
+            new Dictionary<string, object?>(parentContext.Variables, StringComparer.Ordinal))
+        {
+            IsInstall = parentContext.IsInstall,
+            IsUpgrade = parentContext.IsUpgrade,
+            Revision = parentContext.Revision,
+            KubeVersion = parentContext.KubeVersion,
+            ApiVersions = parentContext.ApiVersions,
+            TemplateChartName = child.Identity,
+            TemplateChartPath = chartPath,
+            Dependencies = child.Dependencies.ToList(),
+            DependencyNode = child
+        };
 
     private void ExtractDefines(string content)
     {
@@ -1533,6 +1521,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                 ["HelmVersion"] = BuildHelmVersionDict()
             },
             ["Files"] = new TemplateFiles(context.Chart.Files),
+            ["Subcharts"] = BuildSubchartsDict(context),
             ["Template"] = new Dictionary<string, object?>
             {
                 ["Name"] = $"{context.TemplateChartPath ?? context.Chart.Name}/{context.CurrentTemplatePath}",
@@ -1555,6 +1544,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                 ["HelmVersion"] = BuildHelmVersionDict()
             },
             "Files" => new TemplateFiles(context.Chart.Files),
+            "Subcharts" => BuildSubchartsDict(context),
             "Template" => new Dictionary<string, object?>
             {
                 ["Name"] = $"{context.TemplateChartPath ?? context.Chart.Name}/{context.CurrentTemplatePath}",
@@ -1563,8 +1553,27 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             _ => context.Dot
         };
 
-        var skip = parts.FirstOrDefault() is "Values" or "Chart" or "Release" or "Capabilities" or "Files" or "Template" ? 1 : 0;
+        var skip = parts.FirstOrDefault() is "Values" or "Chart" or "Release" or "Capabilities" or "Files" or "Subcharts" or "Template" ? 1 : 0;
         return ResolveMembers(current, parts.Skip(skip));
+    }
+
+    private static Dictionary<string, object?> BuildSubchartsDict(TemplateContext context)
+    {
+        var result = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var child in context.DependencyNode?.Children ?? [])
+        {
+            var values = context.Values.TryGetValue(child.Identity, out var scoped) &&
+                         scoped is Dictionary<string, object?> scopedValues
+                ? scopedValues
+                : new Dictionary<string, object?>(StringComparer.Ordinal);
+            var childContext = CreateChildContext(
+                context,
+                child,
+                values,
+                $"{context.TemplateChartPath ?? context.Chart.Name}/charts/{child.Identity}");
+            result[child.Identity] = CreateRootDot(childContext);
+        }
+        return result;
     }
 
     private static Dictionary<string, object?> BuildHelmVersionDict()
@@ -1913,104 +1922,6 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             ["ImportValues"] = dependency.ImportValues ?? new List<object?>(),
             ["Alias"] = dependency.Alias ?? string.Empty
         };
-
-    private static List<HelmChartDependency> BuildEffectiveDependencies(
-        IEnumerable<HelmChartDependency> dependencies,
-        IDictionary<string, object?> values)
-    {
-        var tags = values.TryGetValue("tags", out var tagsValue)
-            ? tagsValue as IDictionary<string, object?>
-            : null;
-        var result = new List<HelmChartDependency>();
-
-        foreach (var dependency in dependencies)
-        {
-            var enabled = dependency.Enabled;
-            var tagOverride = EvaluateDependencyTags(dependency.Tags, tags);
-            if (tagOverride.HasValue)
-                enabled = tagOverride.Value;
-
-            foreach (var condition in (dependency.Condition ?? string.Empty)
-                         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            {
-                if (TryGetBooleanPath(values, condition, out var conditionValue))
-                {
-                    enabled = conditionValue;
-                    break;
-                }
-            }
-
-            if (!enabled)
-                continue;
-
-            result.Add(new HelmChartDependency
-            {
-                Name = dependency.Alias ?? dependency.Name,
-                Version = dependency.Version,
-                Repository = dependency.Repository,
-                Condition = dependency.Condition,
-                Tags = dependency.Tags?.ToList(),
-                Enabled = true,
-                ImportValues = dependency.ImportValues?.ToList(),
-                Alias = dependency.Alias
-            });
-        }
-
-        return result;
-    }
-
-    private static bool? EvaluateDependencyTags(
-        IEnumerable<string>? dependencyTags,
-        IDictionary<string, object?>? valuesTags)
-    {
-        var hasTrue = false;
-        var hasFalse = false;
-
-        foreach (var tag in dependencyTags ?? [])
-        {
-            if (valuesTags?.TryGetValue(tag, out var value) != true || value is not bool enabled)
-                continue;
-
-            if (enabled)
-                hasTrue = true;
-            else
-                hasFalse = true;
-        }
-
-        if (hasTrue)
-            return true;
-        if (hasFalse)
-            return false;
-        return null;
-    }
-
-    private static bool TryGetBooleanPath(
-        IDictionary<string, object?> values,
-        string path,
-        out bool result)
-    {
-        object? current = values;
-        foreach (var part in path.Split(
-                     '.',
-                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            if (current is not IDictionary<string, object?> dictionary ||
-                !dictionary.TryGetValue(part, out current))
-            {
-                result = false;
-                return false;
-            }
-        }
-
-        if (current is bool boolean)
-        {
-            result = boolean;
-            return true;
-        }
-
-        result = false;
-        return false;
-    }
 
     private static Dictionary<string, object?> ToTemplateMaintainer(object? maintainer)
     {

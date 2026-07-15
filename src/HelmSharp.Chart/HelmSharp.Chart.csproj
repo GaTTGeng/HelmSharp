@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="HelmSharp.Action" />
+    <InternalsVisibleTo Include="HelmSharp.Engine" />
     <InternalsVisibleTo Include="HelmSharp.Repo" />
   </ItemGroup>
 

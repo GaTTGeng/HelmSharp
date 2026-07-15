@@ -16,6 +16,7 @@ public class HelmTemplateGoldenTests
     [InlineData("whitespace-formatting")]
     [InlineData("named-templates")]
     [InlineData("dependencies")]
+    [InlineData("dependency-values")]
     [InlineData("control-flow")]
     public async Task Render_FixtureChart_MatchesHelmTemplate(string fixtureName)
     {
@@ -53,6 +54,43 @@ public class HelmTemplateGoldenTests
             + "Namespace: golden-namespace\n"
             + "Service port: 8080",
             notes);
+    }
+
+    [HelmCliFact]
+    public async Task Render_DependencyConditionOverride_MatchesHelmTemplate()
+    {
+        var chartPath = TestFixtures.ChartPath("dependency-values");
+        var valuesFile = Path.Combine(Path.GetTempPath(), $"helmsharp-dependency-values-{Guid.NewGuid():N}.yaml");
+        await File.WriteAllTextAsync(valuesFile, "child:\n  enabled: false\n");
+        try
+        {
+            var expected = await HelmCliRunner.TemplateAsync(
+                chartPath,
+                "golden-release",
+                "golden-namespace",
+                valuesFile,
+                CancellationToken.None);
+            Assert.True(expected.ExitCode == 0, expected.Stderr);
+
+            var chart = await HelmChartLoader.LoadAsync(chartPath, CancellationToken.None);
+            var values = await HelmValues.BuildAsync(
+                chart,
+                new[] { valuesFile },
+                null,
+                null,
+                null,
+                null,
+                null,
+                CancellationToken.None);
+            var renderer = new HelmTemplateRenderer(chart, "golden-release", "golden-namespace", values);
+
+            Assert.Equal(NormalizeManifest(expected.Stdout), NormalizeManifest(renderer.Render()));
+            Assert.False(values.ContainsKey("exportedOnly"));
+        }
+        finally
+        {
+            File.Delete(valuesFile);
+        }
     }
 
     [Fact]

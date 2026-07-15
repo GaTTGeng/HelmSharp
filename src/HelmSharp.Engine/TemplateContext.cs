@@ -19,4 +19,5 @@ internal sealed record TemplateContext(
     public string? TemplateChartName { get; init; }
     public string? TemplateChartPath { get; init; }
     public List<HelmChartDependency> Dependencies { get; init; } = [];
+    public HelmDependencyNode? DependencyNode { get; init; }
 }

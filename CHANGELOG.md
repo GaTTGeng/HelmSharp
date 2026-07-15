@@ -12,6 +12,7 @@ This project follows semantic versioning once stable releases begin.
 - Updated English and Simplified Chinese installation guidance for the 1.1.1 release.
 - Aligned chart repository configuration and cache locations with Helm-style durable settings (#133).
 - Added offline chart search across updated repository caches with repository-qualified results and partial update failure handling (#134).
+- Aligned dependency tags, ordered conditions, recursive enablement, and `import-values` processing with Helm chartutil semantics (#147).
 
 ## [1.1.1] - 2026-07-13
 
