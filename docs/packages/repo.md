@@ -47,6 +47,8 @@ This package references `HelmSharp.Chart` and `HelmSharp.Registry`.
 
 Use repository helpers before calling `HelmChartLoader` or high-level `HelmClient` operations.
 
+For an end-to-end add/list/update/search, index-generation, and pull example, including isolated config/cache paths, see [Chart Packaging and Repository Workflows](../guide/chart-distribution.md).
+
 ## Current boundaries
 
-Authentication and OCI flows are intentionally limited in 1.1.1 compared with the full Helm CLI.
+Traditional HTTP repository configuration, cached search, semantic-version pull, digest verification, and safe extraction are covered. Provenance verification and complete OCI registry workflows remain later milestone work.

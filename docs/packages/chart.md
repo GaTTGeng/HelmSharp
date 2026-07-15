@@ -31,6 +31,8 @@ This package depends on `YamlDotNet` and has no Kubernetes dependency.
 
 Use `HelmChartLoader` with `HelmValues`, then pass both into `HelmTemplateRenderer` from `HelmSharp.Engine`.
 
+Packaged dependencies under `charts/` are loaded as subcharts. When `Chart.lock` selects an exact version, the loader uses that identity to map multiple versions or aliases of the same chart. Alias-scoped defaults and overrides use the alias key. See [Chart Packaging and Repository Workflows](../guide/chart-distribution.md) for `Chart.yaml` examples.
+
 ## Current boundaries
 
 This package does not render templates or mutate Kubernetes resources. It is intentionally the chart and values layer.

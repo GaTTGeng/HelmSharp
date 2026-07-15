@@ -12,6 +12,7 @@ Start with the workflow, then choose the smallest package. The detailed member i
 | Apply already-rendered YAML | `HelmSharp.Kube` | [Kubernetes Operations](guide/kubernetes-operations.md) |
 | Manage release history directly | `HelmSharp.Release` | [Release package](packages/release.md) |
 | Search or pull from chart repos | `HelmSharp.Repo` | [Repo package](packages/repo.md) |
+| Package, publish, or restore dependencies | `HelmSharp.Action` + `HelmSharp.Repo` | [Chart Distribution](guide/chart-distribution.md) |
 
 ## Core workflow shape
 
@@ -76,6 +77,8 @@ await client.DependencyUpdateAsync(new HelmDependencyUpdateRequest
 Pull credentials are limited to the repository origin by default. Set `PassCredentialsAll = true` only when a trusted index intentionally serves chart archives from another authenticated origin.
 
 The request types make defaults explicit and leave room for M2 behavior without adding more optional parameters to `IHelmClient`.
+
+For complete package, index, pull, update, and build examples, see [Chart Packaging and Repository Workflows](guide/chart-distribution.md).
 
 ## Generated API reference
 

@@ -24,14 +24,19 @@ dotnet add package HelmSharp.Action --version 1.1.1
 | `HelmTemplateRequest` | 渲染 Chart，不提交。 |
 | `HelmUpgradeInstallRequest` | 安装或升级，包括试运行。 |
 | `HelmUninstallRequest` | 删除发布资源。 |
+| `HelmPackageRequest` | 使用元数据与依赖选项打包 Chart。 |
+| `HelmDependencyUpdateRequest` | 解析依赖并更新 `Chart.lock`。 |
+| `HelmDependencyBuildRequest` | 按 `Chart.lock` 恢复精确版本。 |
 | `HelmExecutionOptions` | 集中管理环境默认值。 |
 | `IHelmOptionsProvider` | 从配置、DI 或租户上下文提供选项。 |
 | `CommandResult` | 捕获标准输出、标准错误和退出码。 |
 
 ## 常见组合
 
-`TemplateAsync` 用于预览，`UpgradeInstallAsync` + `DryRun = true` 用于审核，审批后才使用 `DryRun = false`。状态和审计可用 `StatusAsync`、`HistoryAsync`、`GetManifestAsync`、`GetValuesAsync`。
+`TemplateAsync` 用于预览，`UpgradeInstallAsync` + `DryRun = true` 用于审核，审批后才使用 `DryRun = false`。状态和审计可用 `StatusAsync`、`HistoryAsync`、`GetManifestAsync`、`GetValuesAsync`。Chart 分发使用 `PackageAsync`、`PullAsync` 与 `RepoIndexAsync`；依赖生命周期使用 `DependencyListAsync`、`DependencyUpdateAsync` 与 `DependencyBuildAsync`。
+
+完整请求示例、锁文件行为、仓库隔离与兼容性边界见 [Chart 打包与仓库工作流](../guide/chart-distribution.md)。
 
 ## 当前边界
 
-HelmSharp 不调用 `helm`。插件、来源证明、OCI 认证和少见 Kubernetes 边界仍不是 1.1.1 的完整 Helm CLI 对齐范围。
+HelmSharp 不调用 `helm`。M2 覆盖传统 HTTP 仓库与本地文件依赖；来源证明以及完整 OCI 认证和拉取/推送对齐仍属于后续兼容性工作。

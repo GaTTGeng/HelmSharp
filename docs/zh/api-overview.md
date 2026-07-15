@@ -12,6 +12,7 @@
 | 提交已渲染 YAML | `HelmSharp.Kube` | [Kubernetes 操作](guide/kubernetes-operations.md) |
 | 直接管理发布历史 | `HelmSharp.Release` | [Release 包](packages/release.md) |
 | 搜索或拉取 Chart 仓库 | `HelmSharp.Repo` | [Repo 包](packages/repo.md) |
+| 打包、发布或恢复依赖 | `HelmSharp.Action` + `HelmSharp.Repo` | [Chart 分发](guide/chart-distribution.md) |
 
 ## 核心工作流形态
 
@@ -76,6 +77,8 @@ await client.DependencyUpdateAsync(new HelmDependencyUpdateRequest
 拉取凭据默认仅发送到仓库同源地址。只有当可信索引确实从另一个需要认证的来源提供 Chart 归档时，才设置 `PassCredentialsAll = true`。
 
 这些请求类型明确表达默认值，也为 M2 行为留出扩展空间，避免继续向 `IHelmClient` 增加可选参数。
+
+完整的打包、索引、拉取、更新和构建示例见 [Chart 打包与仓库工作流](guide/chart-distribution.md)。
 
 ## 生成 API 参考
 
