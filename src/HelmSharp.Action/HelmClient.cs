@@ -966,8 +966,7 @@ public class HelmClient : IHelmClient
             {
                 ChartReference = chartRef,
                 Version = version,
-                Destination = destination,
-                Untar = true
+                Destination = destination
             },
             cancellationToken);
 

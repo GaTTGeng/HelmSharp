@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Security;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
@@ -77,14 +78,25 @@ public sealed class HelmChartRepository : IDisposable
         string chartRef,
         string? version = null,
         CancellationToken cancellationToken = default)
-        => await PullChartAsync(
-            new HelmPullRequest
-            {
-                ChartReference = chartRef,
-                Version = version,
-                Untar = true
-            },
-            cancellationToken);
+    {
+        if (Directory.Exists(chartRef) || File.Exists(chartRef))
+            return chartRef;
+        if (chartRef.StartsWith("oci://", StringComparison.OrdinalIgnoreCase))
+            return await PullFromOciAsync(chartRef, version, cancellationToken);
+        if (chartRef.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            chartRef.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            return await PullFromHttpToCacheAsync(
+                chartRef,
+                version,
+                username: null,
+                password: null,
+                passCredentialsAll: false,
+                cancellationToken);
+        }
+
+        return chartRef;
+    }
 
     /// <summary>
     /// Downloads a chart using an extensible request object.
@@ -94,14 +106,9 @@ public sealed class HelmChartRepository : IDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(request.ChartReference))
+            throw new ArgumentException("ChartReference is required.", nameof(request));
         var chartRef = request.ChartReference;
-        if (!string.IsNullOrWhiteSpace(request.RepositoryUrl) &&
-            !chartRef.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
-            !chartRef.StartsWith("https://", StringComparison.OrdinalIgnoreCase) &&
-            !chartRef.StartsWith("oci://", StringComparison.OrdinalIgnoreCase))
-        {
-            chartRef = $"{request.RepositoryUrl.TrimEnd('/')}/{chartRef.TrimStart('/')}";
-        }
 
         // Local path
         if (Directory.Exists(chartRef) || File.Exists(chartRef))
@@ -111,19 +118,15 @@ public sealed class HelmChartRepository : IDisposable
         if (chartRef.StartsWith("oci://", StringComparison.OrdinalIgnoreCase))
             return await PullFromOciAsync(chartRef, request.Version, cancellationToken);
 
-        // HTTP/HTTPS URL or repo/name reference
+        // HTTP/HTTPS URL, explicit repository URL, or configured repo/name reference.
         if (chartRef.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-            chartRef.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-            return await PullFromHttpAsync(
-                chartRef,
-                request.Version,
-                request.Username,
-                request.Password,
-                request.PassCredentialsAll,
-                cancellationToken);
+            chartRef.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+            !string.IsNullOrWhiteSpace(request.RepositoryUrl) ||
+            chartRef.Contains('/', StringComparison.Ordinal))
+            return await PullTraditionalChartAsync(request, cancellationToken);
 
-        // Assume it's a local path that doesn't exist yet
-        return chartRef;
+        throw new InvalidOperationException(
+            $"Chart reference '{chartRef}' is neither a local chart, a direct URL, nor a configured repo/chart reference.");
     }
 
     /// <summary>
@@ -441,7 +444,148 @@ public sealed class HelmChartRepository : IDisposable
            && string.Equals(left.IdnHost, right.IdnHost, StringComparison.OrdinalIgnoreCase)
            && left.Port == right.Port;
 
-    private async Task<string> PullFromHttpAsync(
+    private async Task<string> PullTraditionalChartAsync(
+        HelmPullRequest request,
+        CancellationToken cancellationToken)
+    {
+        var chartReference = request.ChartReference;
+        string chartName;
+        string archiveFileName;
+        string archiveUrl;
+        string? expectedDigest = null;
+        var username = request.Username;
+        var password = request.Password;
+        var passCredentials = true;
+        HelmRepository? configuredRepository = null;
+
+        if (IsArchiveUrl(chartReference))
+        {
+            var archiveUri = ParseAbsoluteHttpUri(chartReference, "chart archive");
+            archiveUrl = archiveUri.AbsoluteUri;
+            archiveFileName = Uri.UnescapeDataString(Path.GetFileName(archiveUri.AbsolutePath));
+            chartName = RemoveChartArchiveExtension(archiveFileName);
+        }
+        else
+        {
+            HelmChartVersion entry;
+            Uri repositoryUri;
+
+            if (!string.IsNullOrWhiteSpace(request.RepositoryUrl))
+            {
+                repositoryUri = ParseAbsoluteHttpUri(request.RepositoryUrl, "repository");
+                chartName = GetChartName(chartReference);
+                entry = await ResolveChartVersionAsync(
+                    repositoryUri.AbsoluteUri.TrimEnd('/'),
+                    chartName,
+                    request.Version,
+                    username,
+                    password,
+                    cancellationToken);
+            }
+            else if (chartReference.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                     chartReference.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                var chartUri = ParseAbsoluteHttpUri(chartReference, "chart reference");
+                chartName = GetChartName(chartUri.AbsolutePath);
+                repositoryUri = new Uri(chartUri, "./");
+                entry = await ResolveChartVersionAsync(
+                    repositoryUri.AbsoluteUri.TrimEnd('/'),
+                    chartName,
+                    request.Version,
+                    username,
+                    password,
+                    cancellationToken);
+            }
+            else
+            {
+                var separator = chartReference.IndexOf('/', StringComparison.Ordinal);
+                if (separator <= 0 || separator == chartReference.Length - 1)
+                    throw new InvalidOperationException(
+                        $"Configured repository references must use repo/chart syntax: '{chartReference}'.");
+
+                var repositoryName = chartReference[..separator];
+                chartName = chartReference[(separator + 1)..];
+                var repositories = await LoadRepositoriesAsync(_repositoryConfigPath, cancellationToken);
+                if (!repositories.TryGetValue(repositoryName, out configuredRepository))
+                    throw new InvalidOperationException($"Repository '{repositoryName}' is not configured.");
+
+                repositoryUri = ParseAbsoluteHttpUri(configuredRepository.Url, "repository");
+                username ??= configuredRepository.Username;
+                password ??= configuredRepository.Password;
+                var index = await LoadConfiguredRepositoryIndexAsync(configuredRepository, cancellationToken);
+                entry = ResolveChartVersion(index, chartName, request.Version);
+            }
+
+            var entryUrl = entry.Urls.FirstOrDefault()
+                           ?? throw new InvalidOperationException(
+                               $"No download URL for chart '{chartName}' version '{entry.Version}'.");
+            var archiveUri = Uri.TryCreate(entryUrl, UriKind.Absolute, out var absoluteArchiveUri)
+                ? absoluteArchiveUri
+                : new Uri(new Uri(repositoryUri.AbsoluteUri.TrimEnd('/') + "/"), entryUrl);
+            passCredentials = request.PassCredentialsAll
+                              || configuredRepository?.PassCredentialsAll == true
+                              || HaveSameOrigin(repositoryUri, archiveUri);
+            archiveUrl = archiveUri.AbsoluteUri;
+            archiveFileName = $"{chartName}-{entry.Version}.tgz";
+            expectedDigest = entry.Digest;
+        }
+
+        var chartBytes = configuredRepository is null
+            ? await DownloadChartArchiveAsync(
+                archiveUrl,
+                passCredentials ? username : null,
+                passCredentials ? password : null,
+                cancellationToken)
+            : await DownloadConfiguredChartArchiveAsync(
+                archiveUrl,
+                configuredRepository,
+                username,
+                password,
+                request.PassCredentialsAll || configuredRepository.PassCredentialsAll,
+                cancellationToken);
+        if (request.VerifyDigest && !string.IsNullOrWhiteSpace(expectedDigest))
+            VerifyArchiveDigest(chartBytes, expectedDigest, chartName);
+
+        var destination = Path.GetFullPath(string.IsNullOrWhiteSpace(request.Destination)
+            ? Directory.GetCurrentDirectory()
+            : request.Destination);
+        Directory.CreateDirectory(destination);
+        archiveFileName = Path.GetFileName(archiveFileName);
+        if (string.IsNullOrWhiteSpace(archiveFileName))
+            throw new InvalidDataException("The chart archive URL does not contain a valid filename.");
+        var archivePath = Path.Combine(destination, archiveFileName);
+        await WriteAllBytesAtomicallyAsync(archivePath, chartBytes, cancellationToken);
+
+        if (!request.Untar)
+            return archivePath;
+
+        var extractionRoot = Path.GetFullPath(string.IsNullOrWhiteSpace(request.UntarDirectory)
+            ? destination
+            : request.UntarDirectory);
+        Directory.CreateDirectory(extractionRoot);
+        var archiveRoot = GetChartArchiveRoot(chartBytes) ?? chartName;
+        var extractDirectory = HelmArchivePath.ResolveSafeDestination(extractionRoot, archiveRoot);
+        var tempExtractDirectory = $"{extractDirectory}.tmp-{Guid.NewGuid():N}";
+        Directory.CreateDirectory(tempExtractDirectory);
+        try
+        {
+            await ExtractChartArchiveAsync(chartBytes, tempExtractDirectory, cancellationToken);
+            if (Directory.Exists(extractDirectory))
+                Directory.Delete(extractDirectory, recursive: true);
+
+            Directory.Move(tempExtractDirectory, extractDirectory);
+        }
+        catch
+        {
+            if (Directory.Exists(tempExtractDirectory))
+                Directory.Delete(tempExtractDirectory, recursive: true);
+            throw;
+        }
+
+        return extractDirectory;
+    }
+
+    private async Task<string> PullFromHttpToCacheAsync(
         string chartUrl,
         string? version,
         string? username,
@@ -451,39 +595,25 @@ public sealed class HelmChartRepository : IDisposable
     {
         var url = chartUrl;
         var passCredentials = true;
-        if (!url.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase) &&
-            !url.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase))
+        if (!IsArchiveUrl(url))
         {
-            // Treat as repo URL, resolve chart from index
-            if (!Uri.TryCreate(url, UriKind.Absolute, out var chartUri))
-                throw new ArgumentException($"Invalid chart reference: {url}");
-
-            var segments = chartUri.Segments;
-            var chartName = Uri.UnescapeDataString(segments[^1].Trim('/'));
-            if (segments.Length < 2 || string.IsNullOrWhiteSpace(chartName))
-                throw new ArgumentException($"Invalid chart reference: {url}");
-
-            var repoUri = new UriBuilder(chartUri)
-            {
-                Path = string.Concat(segments.Take(segments.Length - 1)).TrimEnd('/'),
-                Query = null
-            };
-            var repoUrl = repoUri.Uri.ToString().TrimEnd('/');
+            var chartUri = ParseAbsoluteHttpUri(url, "chart reference");
+            var chartName = GetChartName(chartUri.AbsolutePath);
+            var repositoryUri = new Uri(chartUri, "./");
             var entry = await ResolveChartVersionAsync(
-                repoUrl,
+                repositoryUri.AbsoluteUri.TrimEnd('/'),
                 chartName,
                 version,
                 username,
                 password,
                 cancellationToken);
-
-            url = entry.Urls.FirstOrDefault()
-                  ?? throw new InvalidOperationException($"No download URL for chart '{chartName}' version '{entry.Version}'");
-
-            var archiveUri = Uri.TryCreate(url, UriKind.Absolute, out var absoluteArchiveUri)
+            var entryUrl = entry.Urls.FirstOrDefault()
+                           ?? throw new InvalidOperationException(
+                               $"No download URL for chart '{chartName}' version '{entry.Version}'.");
+            var archiveUri = Uri.TryCreate(entryUrl, UriKind.Absolute, out var absoluteArchiveUri)
                 ? absoluteArchiveUri
-                : new Uri(new Uri(repoUrl.TrimEnd('/') + "/"), url);
-            passCredentials = passCredentialsAll || HaveSameOrigin(repoUri.Uri, archiveUri);
+                : new Uri(repositoryUri, entryUrl);
+            passCredentials = passCredentialsAll || HaveSameOrigin(repositoryUri, archiveUri);
             url = archiveUri.AbsoluteUri;
         }
 
@@ -493,6 +623,73 @@ public sealed class HelmChartRepository : IDisposable
             passCredentials ? password : null,
             cancellationToken);
     }
+
+    private async Task<HelmRepoIndex> LoadConfiguredRepositoryIndexAsync(
+        HelmRepository repository,
+        CancellationToken cancellationToken)
+    {
+        var cachePath = Path.Combine(_cacheDir, GetRepositoryIndexCacheFileName(repository.Name));
+        if (File.Exists(cachePath))
+        {
+            var yaml = await File.ReadAllTextAsync(cachePath, cancellationToken);
+            return ParseRepoIndex(yaml);
+        }
+
+        return await FetchRepoIndexAsync(repository, cancellationToken);
+    }
+
+    private static HelmChartVersion ResolveChartVersion(
+        HelmRepoIndex index,
+        string chartName,
+        string? versionConstraint)
+    {
+        if (!index.Entries.TryGetValue(chartName, out var versions))
+            throw new InvalidOperationException($"Chart '{chartName}' not found in repository.");
+
+        var entry = HelmChartVersionResolver.Resolve(versions, versionConstraint);
+        if (entry is not null)
+            return entry;
+
+        var requested = string.IsNullOrWhiteSpace(versionConstraint)
+            ? "latest stable version"
+            : $"version constraint '{versionConstraint}'";
+        throw new InvalidOperationException(
+            $"Chart '{chartName}' has no version satisfying {requested}. Available versions: " +
+            string.Join(", ", versions.Select(candidate => candidate.Version)));
+    }
+
+    private static bool IsArchiveUrl(string value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            return false;
+
+        return uri.AbsolutePath.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase) ||
+               uri.AbsolutePath.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static Uri ParseAbsoluteHttpUri(string value, string description)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            throw new ArgumentException($"Invalid {description} URL: {value}");
+        return uri;
+    }
+
+    private static string GetChartName(string chartReference)
+    {
+        var chartName = Uri.UnescapeDataString(chartReference.TrimEnd('/').Split('/').LastOrDefault() ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(chartName))
+            throw new ArgumentException($"Invalid chart reference: {chartReference}");
+        return chartName;
+    }
+
+    private static string RemoveChartArchiveExtension(string fileName)
+        => fileName.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase)
+            ? fileName[..^7]
+            : fileName.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase)
+                ? fileName[..^4]
+                : fileName;
 
     private static bool HaveSameOrigin(Uri left, Uri right)
         => string.Equals(left.Scheme, right.Scheme, StringComparison.OrdinalIgnoreCase)
@@ -583,17 +780,7 @@ public sealed class HelmChartRepository : IDisposable
         string? password,
         CancellationToken cancellationToken)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        if (!string.IsNullOrWhiteSpace(username))
-        {
-            var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}"));
-            request.Headers.Authorization = new AuthenticationHeaderValue("Basic", credentials);
-        }
-
-        var response = await _httpClient.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
-
-        var chartBytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+        var chartBytes = await DownloadChartArchiveAsync(url, username, password, cancellationToken);
 
         // Create a cache key from the URL hash
         var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(chartBytes))[..12];
@@ -622,6 +809,125 @@ public sealed class HelmChartRepository : IDisposable
         }
 
         return extractDir;
+    }
+
+    private async Task<byte[]> DownloadChartArchiveAsync(
+        string url,
+        string? username,
+        string? password,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        if (!string.IsNullOrWhiteSpace(username))
+        {
+            var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}"));
+            request.Headers.Authorization = new AuthenticationHeaderValue("Basic", credentials);
+        }
+
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsByteArrayAsync(cancellationToken);
+    }
+
+    private async Task<byte[]> DownloadConfiguredChartArchiveAsync(
+        string url,
+        HelmRepository repository,
+        string? username,
+        string? password,
+        bool passCredentialsAll,
+        CancellationToken cancellationToken)
+    {
+        using var handler = _createRepositoryHandler(repository);
+        using var client = new HttpClient(handler);
+        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("helmsharp", ProductVersion));
+        var repositoryUri = new Uri(repository.Url, UriKind.Absolute);
+        var currentUri = new Uri(url, UriKind.Absolute);
+        const int maxRedirects = 10;
+
+        for (var redirectCount = 0; redirectCount <= maxRedirects; redirectCount++)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, currentUri);
+            if (!string.IsNullOrWhiteSpace(username) &&
+                (passCredentialsAll || HaveSameOrigin(repositoryUri, currentUri)))
+            {
+                var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}"));
+                request.Headers.Authorization = new AuthenticationHeaderValue("Basic", credentials);
+            }
+
+            using var response = await client.SendAsync(request, cancellationToken);
+            if (!IsRedirect(response.StatusCode))
+            {
+                response.EnsureSuccessStatusCode();
+                return await response.Content.ReadAsByteArrayAsync(cancellationToken);
+            }
+
+            var location = response.Headers.Location;
+            if (location is null)
+            {
+                response.EnsureSuccessStatusCode();
+                throw new HttpRequestException("Chart archive redirect response did not include a Location header.");
+            }
+
+            currentUri = location.IsAbsoluteUri ? location : new Uri(currentUri, location);
+        }
+
+        throw new HttpRequestException($"Chart archive request exceeded {maxRedirects} redirects.");
+    }
+
+    private static void VerifyArchiveDigest(byte[] chartBytes, string expectedDigest, string chartName)
+    {
+        const string sha256Prefix = "sha256:";
+        var expectedHash = expectedDigest;
+        var separator = expectedDigest.IndexOf(':', StringComparison.Ordinal);
+        if (separator >= 0 && !expectedDigest.StartsWith(sha256Prefix, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException(
+                $"Chart '{chartName}' has unsupported digest '{expectedDigest}'. Only SHA-256 digests are supported.");
+        if (expectedDigest.StartsWith(sha256Prefix, StringComparison.OrdinalIgnoreCase))
+            expectedHash = expectedDigest[sha256Prefix.Length..];
+
+        if (expectedHash.Length != 64 || expectedHash.Any(character => !Uri.IsHexDigit(character)))
+            throw new InvalidDataException($"Chart '{chartName}' has invalid SHA-256 digest '{expectedDigest}'.");
+
+        var actualHash = Convert.ToHexString(SHA256.HashData(chartBytes));
+        if (!actualHash.Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException(
+                $"Chart '{chartName}' digest mismatch: expected {expectedDigest}, actual sha256:{actualHash.ToLowerInvariant()}.");
+    }
+
+    private static async Task WriteAllBytesAtomicallyAsync(
+        string path,
+        byte[] content,
+        CancellationToken cancellationToken)
+    {
+        var temporaryPath = $"{path}.tmp-{Guid.NewGuid():N}";
+        try
+        {
+            await File.WriteAllBytesAsync(temporaryPath, content, cancellationToken);
+            File.Move(temporaryPath, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+                File.Delete(temporaryPath);
+        }
+    }
+
+    private static string? GetChartArchiveRoot(byte[] chartBytes)
+    {
+        using var memoryStream = new MemoryStream(chartBytes);
+        using var gzip = new GZipStream(memoryStream, CompressionMode.Decompress);
+        using var tar = new TarReader(gzip);
+
+        var entryNames = new List<string>();
+        TarEntry? entry;
+        while ((entry = tar.GetNextEntry(copyData: false)) is not null)
+        {
+            if (entry.EntryType is TarEntryType.Directory)
+                continue;
+            entryNames.Add(HelmArchivePath.NormalizeEntryName(entry.Name));
+        }
+
+        return HelmArchivePath.FindChartRoot(entryNames);
     }
 
     internal static async Task ExtractChartArchiveAsync(

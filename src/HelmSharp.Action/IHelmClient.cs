@@ -133,6 +133,7 @@ public interface IHelmClient
         string chartPath,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Downloads a chart archive to the requested destination without extracting it.</summary>
     Task<CommandResult> PullAsync(
         string chartRef,
         string? version = null,
