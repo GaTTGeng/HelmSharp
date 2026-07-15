@@ -6,10 +6,54 @@ using HelmSharp.Chart;
 
 namespace HelmSharp.Action;
 
-internal sealed record HelmResolvedDependency(string Name, string Version, string Repository);
+internal sealed record HelmResolvedDependency(
+    string Name,
+    string Version,
+    string Repository,
+    string? ArchiveDigest = null);
+
+internal sealed record HelmDependencyLock(
+    string Digest,
+    IReadOnlyList<HelmResolvedDependency> Dependencies);
 
 internal static class HelmDependencyLockFile
 {
+    public static async Task<HelmDependencyLock?> LoadAsync(
+        string chartPath,
+        CancellationToken cancellationToken)
+    {
+        var lockPath = Path.Combine(chartPath, "Chart.lock");
+        if (!File.Exists(lockPath))
+            return null;
+
+        var root = HelmYaml.DeserializeDictionary(await File.ReadAllTextAsync(lockPath, cancellationToken));
+        var digest = HelmYaml.GetString(root, "digest");
+        if (string.IsNullOrWhiteSpace(digest))
+            throw new InvalidDataException("Chart.lock is missing the required digest.");
+        if (!root.TryGetValue("dependencies", out var dependenciesObject) ||
+            dependenciesObject is not IList<object?> dependencies)
+            throw new InvalidDataException("Chart.lock is missing the required dependencies list.");
+
+        var lockedDependencies = new List<HelmResolvedDependency>(dependencies.Count);
+        foreach (var dependencyObject in dependencies)
+        {
+            if (dependencyObject is not IDictionary<string, object?> dependency)
+                throw new InvalidDataException("Chart.lock contains an invalid dependency entry.");
+
+            var name = HelmYaml.GetString(dependency, "name");
+            var version = HelmYaml.GetString(dependency, "version");
+            if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(version))
+                throw new InvalidDataException("Chart.lock dependency entries require name and version values.");
+            lockedDependencies.Add(new HelmResolvedDependency(
+                name,
+                version,
+                HelmYaml.GetString(dependency, "repository") ?? string.Empty,
+                HelmYaml.GetString(dependency, "digest")));
+        }
+
+        return new HelmDependencyLock(digest, lockedDependencies);
+    }
+
     public static async Task<IReadOnlyList<Dictionary<string, object?>>> LoadRequestedDependenciesAsync(
         string chartPath,
         CancellationToken cancellationToken)
