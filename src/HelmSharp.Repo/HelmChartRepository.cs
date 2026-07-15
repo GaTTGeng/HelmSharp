@@ -193,8 +193,9 @@ public sealed class HelmChartRepository : IDisposable
         var response = await _httpClient.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
         var yaml = await response.Content.ReadAsStringAsync(cancellationToken);
+        var index = ParseRepoIndex(yaml);
         await CacheRepositoryIndexAsync(repoUrl, yaml, repositoryName, cancellationToken);
-        return ParseRepoIndex(yaml);
+        return index;
     }
 
     private async Task<string> PullFromHttpAsync(
