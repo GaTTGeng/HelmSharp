@@ -112,6 +112,13 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
     }
 
     [Fact]
+    public void GetRepositoryIndexCacheFileName_UsesEachRepositoryName()
+    {
+        Assert.Equal("first-index.yaml", HelmChartRepository.GetRepositoryIndexCacheFileName("first"));
+        Assert.Equal("second-index.yaml", HelmChartRepository.GetRepositoryIndexCacheFileName("second"));
+    }
+
+    [Fact]
     public void GetRepositoryCacheDirectory_AppendsRepositoryDirectoryToHelmCacheHome()
     {
         var cacheHome = Path.Combine(_tempDir, "helm-cache");

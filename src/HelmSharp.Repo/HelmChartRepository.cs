@@ -169,7 +169,8 @@ public sealed class HelmChartRepository : IDisposable
         string repoUrl,
         string? username = null,
         string? password = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? repositoryName = null)
     {
         var indexUrl = repoUrl.TrimEnd('/') + "/index.yaml";
         var request = new HttpRequestMessage(HttpMethod.Get, indexUrl);
@@ -182,7 +183,7 @@ public sealed class HelmChartRepository : IDisposable
         var response = await _httpClient.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
         var yaml = await response.Content.ReadAsStringAsync(cancellationToken);
-        await CacheRepositoryIndexAsync(repoUrl, yaml, cancellationToken);
+        await CacheRepositoryIndexAsync(repoUrl, yaml, repositoryName, cancellationToken);
         return ParseRepoIndex(yaml);
     }
 
@@ -474,12 +475,20 @@ public sealed class HelmChartRepository : IDisposable
         await File.WriteAllTextAsync(path, HelmYaml.Serialize(document), ct);
     }
 
-    private async Task CacheRepositoryIndexAsync(string repoUrl, string yaml, CancellationToken cancellationToken)
+    private async Task CacheRepositoryIndexAsync(
+        string repoUrl,
+        string yaml,
+        string? repositoryName,
+        CancellationToken cancellationToken)
     {
-        var repositories = await LoadRepositoriesAsync(_repositoryConfigPath, cancellationToken);
-        var name = repositories.Values.FirstOrDefault(repository =>
-            string.Equals(repository.Url, NormalizeRepositoryUrl(repoUrl), StringComparison.OrdinalIgnoreCase))?.Name
-            ?? "repository";
+        var name = repositoryName;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            var repositories = await LoadRepositoriesAsync(_repositoryConfigPath, cancellationToken);
+            name = repositories.Values.FirstOrDefault(repository =>
+                string.Equals(repository.Url, NormalizeRepositoryUrl(repoUrl), StringComparison.OrdinalIgnoreCase))?.Name
+                ?? "repository";
+        }
         var cachePath = Path.Combine(_cacheDir, GetRepositoryIndexCacheFileName(name));
         await File.WriteAllTextAsync(cachePath, yaml, cancellationToken);
     }
