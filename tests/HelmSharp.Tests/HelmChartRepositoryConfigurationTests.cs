@@ -323,6 +323,52 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
     }
 
     [Fact]
+    public void ResolveHelmConfigDirectory_UsesMacOSPreferencesFallback()
+    {
+        var home = Path.Combine(_tempDir, "home");
+        var applicationData = Path.Combine(_tempDir, "application-data");
+
+        var configDirectory = HelmChartRepository.ResolveHelmConfigDirectory(
+            helmConfigHome: null,
+            xdgConfigHome: null,
+            isMacOS: true,
+            userProfile: home,
+            applicationData: applicationData);
+
+        Assert.Equal(Path.Combine(home, "Library", "Preferences", "helm"), configDirectory);
+    }
+
+    [Fact]
+    public void ResolveHelmConfigDirectory_HelmConfigHomeOverridesMacOSFallback()
+    {
+        var helmConfigHome = Path.Combine(_tempDir, "helm-config");
+
+        var configDirectory = HelmChartRepository.ResolveHelmConfigDirectory(
+            helmConfigHome,
+            xdgConfigHome: Path.Combine(_tempDir, "xdg-config"),
+            isMacOS: true,
+            userProfile: Path.Combine(_tempDir, "home"),
+            applicationData: Path.Combine(_tempDir, "application-data"));
+
+        Assert.Equal(helmConfigHome, configDirectory);
+    }
+
+    [Fact]
+    public void ResolveHelmConfigDirectory_AppendsHelmToXdgConfigHome()
+    {
+        var xdgConfigHome = Path.Combine(_tempDir, "xdg-config");
+
+        var configDirectory = HelmChartRepository.ResolveHelmConfigDirectory(
+            helmConfigHome: null,
+            xdgConfigHome: xdgConfigHome,
+            isMacOS: true,
+            userProfile: Path.Combine(_tempDir, "home"),
+            applicationData: Path.Combine(_tempDir, "application-data"));
+
+        Assert.Equal(Path.Combine(xdgConfigHome, "helm"), configDirectory);
+    }
+
+    [Fact]
     public void GetRepositoryIndexCacheFileName_IsDeterministicAndSafe()
     {
         var cacheFileName = HelmChartRepository.GetRepositoryIndexCacheFileName("../../unsafe");

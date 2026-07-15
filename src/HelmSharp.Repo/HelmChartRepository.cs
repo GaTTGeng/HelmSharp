@@ -786,13 +786,29 @@ public sealed class HelmChartRepository : IDisposable
         if (!string.IsNullOrWhiteSpace(environmentRepositoryConfigPath))
             return environmentRepositoryConfigPath;
 
-        var configDirectory = Environment.GetEnvironmentVariable("HELM_CONFIG_HOME")
-            ?? Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
-        if (string.IsNullOrWhiteSpace(configDirectory))
-            configDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "helm");
-        else if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("HELM_CONFIG_HOME")))
-            configDirectory = Path.Combine(configDirectory, "helm");
+        var configDirectory = ResolveHelmConfigDirectory(
+            Environment.GetEnvironmentVariable("HELM_CONFIG_HOME"),
+            Environment.GetEnvironmentVariable("XDG_CONFIG_HOME"),
+            OperatingSystem.IsMacOS(),
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData));
         return Path.Combine(configDirectory, "repositories.yaml");
+    }
+
+    internal static string ResolveHelmConfigDirectory(
+        string? helmConfigHome,
+        string? xdgConfigHome,
+        bool isMacOS,
+        string userProfile,
+        string applicationData)
+    {
+        if (!string.IsNullOrWhiteSpace(helmConfigHome))
+            return helmConfigHome;
+        if (!string.IsNullOrWhiteSpace(xdgConfigHome))
+            return Path.Combine(xdgConfigHome, "helm");
+        if (isMacOS && !string.IsNullOrWhiteSpace(userProfile))
+            return Path.Combine(userProfile, "Library", "Preferences", "helm");
+        return Path.Combine(applicationData, "helm");
     }
 
     /// <summary>
