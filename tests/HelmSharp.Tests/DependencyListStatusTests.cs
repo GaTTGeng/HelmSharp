@@ -111,6 +111,35 @@ public sealed class DependencyListStatusTests : IDisposable
         Assert.Equal("disabled", FindStatus(rows, "optional-dep"));
     }
 
+    [HelmCliFact]
+    public async Task DependencyListAsync_TagValueDoesNotChangeHelmListStatus()
+    {
+        var chartDirectory = Path.Combine(_tempDirectory, "tag-disabled");
+        await WriteTextAsync(Path.Combine(chartDirectory, "Chart.yaml"), """
+            apiVersion: v2
+            name: tag-disabled
+            version: 0.1.0
+            dependencies:
+              - name: optional-dep
+                version: 1.0.0
+                repository: https://example.test/charts
+                tags:
+                  - optional
+            """);
+        await WriteTextAsync(Path.Combine(chartDirectory, "values.yaml"), """
+            tags:
+              optional: false
+            """);
+
+        var sharpResult = await CreateClient().DependencyListAsync(chartDirectory);
+        var helmResult = await HelmCliRunner.DependencyListAsync(chartDirectory, CancellationToken.None);
+
+        AssertSuccess("HelmSharp dependency list", sharpResult.ExitCode, sharpResult.StandardError);
+        AssertSuccess("helm dependency list", helmResult.ExitCode, helmResult.Stderr);
+        Assert.Equal(ParseRows(helmResult.Stdout), ParseRows(sharpResult.StandardOutput));
+        Assert.Equal("missing", FindStatus(ParseRows(sharpResult.StandardOutput), "optional-dep"));
+    }
+
     [Fact]
     public async Task DependencyListAsync_IgnoresPrefixSharingArchiveWhenCountingVersions()
     {
