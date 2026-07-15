@@ -73,6 +73,8 @@ await client.DependencyUpdateAsync(new HelmDependencyUpdateRequest
 });
 ```
 
+拉取凭据默认仅发送到仓库同源地址。只有当可信索引确实从另一个需要认证的来源提供 Chart 归档时，才设置 `PassCredentialsAll = true`。
+
 这些请求类型明确表达默认值，也为 M2 行为留出扩展空间，避免继续向 `IHelmClient` 增加可选参数。
 
 ## 生成 API 参考

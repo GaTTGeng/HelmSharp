@@ -34,6 +34,7 @@ public sealed class OperationRequestTests : IDisposable
         Assert.Null(pull.RepositoryUrl);
         Assert.Null(pull.Username);
         Assert.Null(pull.Password);
+        Assert.False(pull.PassCredentialsAll);
         Assert.True(pull.VerifyDigest);
 
         var repoIndex = new HelmRepoIndexRequest();
@@ -86,10 +87,12 @@ public sealed class OperationRequestTests : IDisposable
             RepositoryUrl = "https://charts.example.test",
             Username = "user",
             Password = "secret",
+            PassCredentialsAll = true,
             VerifyDigest = false
         };
         Assert.Equal("https://charts.example.test", pull.RepositoryUrl);
         Assert.True(pull.Untar);
+        Assert.True(pull.PassCredentialsAll);
         Assert.False(pull.VerifyDigest);
 
         var repoIndex = new HelmRepoIndexRequest
@@ -203,6 +206,8 @@ public sealed class OperationRequestTests : IDisposable
         var packages = Path.Combine(_tempDirectory, "repository");
         var output = Path.Combine(_tempDirectory, "published", "charts.yaml");
         Directory.CreateDirectory(packages);
+        var existingIndex = Path.Combine(packages, "index.yaml");
+        await File.WriteAllTextAsync(existingIndex, "existing index");
         var client = new HelmClient(new StaticHelmOptionsProvider());
 
         var result = await client.RepoIndexAsync(new HelmRepoIndexRequest
@@ -214,7 +219,26 @@ public sealed class OperationRequestTests : IDisposable
 
         Assert.True(result.Succeeded);
         Assert.True(File.Exists(output));
-        Assert.False(File.Exists(Path.Combine(packages, "index.yaml")));
+        Assert.Equal("existing index", await File.ReadAllTextAsync(existingIndex));
+    }
+
+    [Fact]
+    public async Task RepoIndexAsync_FailOnInvalidPackagePreservesExistingIndex()
+    {
+        var packages = Path.Combine(_tempDirectory, "invalid-repository");
+        Directory.CreateDirectory(packages);
+        await File.WriteAllTextAsync(Path.Combine(packages, "invalid.tgz"), "not a chart archive");
+        var existingIndex = Path.Combine(packages, "index.yaml");
+        await File.WriteAllTextAsync(existingIndex, "existing index");
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => HelmRepoIndexer.GenerateIndexAsync(
+            new HelmRepoIndexRequest
+            {
+                DirectoryPath = packages,
+                FailOnInvalidPackage = true
+            }));
+
+        Assert.Equal("existing index", await File.ReadAllTextAsync(existingIndex));
     }
 
     [Fact]

@@ -17,39 +17,57 @@ public static class HelmRepoIndexer
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var result = await GenerateIndexWithDiagnosticsAsync(
-            request.DirectoryPath,
-            request.Url,
-            cancellationToken,
-            request.MergeIndexPath);
-
-        if (request.FailOnInvalidPackage && result.Diagnostics.Count > 0)
-        {
-            File.Delete(result.IndexPath);
-            throw new InvalidDataException(
-                $"Repository index generation failed for {result.Diagnostics.Count} invalid chart package(s): " +
-                result.Diagnostics[0].Message,
-                result.Diagnostics[0].Exception);
-        }
-
-        if (string.IsNullOrWhiteSpace(request.OutputPath))
-            return result.IndexPath;
-
-        var outputPath = Path.GetFullPath(request.OutputPath);
-        var generatedPath = Path.GetFullPath(result.IndexPath);
-        if (string.Equals(
-                generatedPath,
-                outputPath,
-                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
-        {
-            return result.IndexPath;
-        }
-
+        if (!Directory.Exists(request.DirectoryPath))
+            throw new DirectoryNotFoundException($"Directory not found: {request.DirectoryPath}");
+        var outputPath = string.IsNullOrWhiteSpace(request.OutputPath)
+            ? Path.Combine(Path.GetFullPath(request.DirectoryPath), "index.yaml")
+            : Path.GetFullPath(request.OutputPath);
         var outputDirectory = Path.GetDirectoryName(outputPath);
         if (!string.IsNullOrEmpty(outputDirectory))
             Directory.CreateDirectory(outputDirectory);
-        File.Move(result.IndexPath, outputPath, overwrite: true);
-        return outputPath;
+
+        var scratchPath = request.FailOnInvalidPackage
+            ? Path.Combine(
+                outputDirectory ?? Path.GetTempPath(),
+                $".{Path.GetFileName(outputPath)}.{Guid.NewGuid():N}.tmp")
+            : outputPath;
+        try
+        {
+            var result = await GenerateIndexWithDiagnosticsAsync(
+                request.DirectoryPath,
+                request.Url,
+                cancellationToken,
+                request.MergeIndexPath,
+                scratchPath);
+
+            if (request.FailOnInvalidPackage && result.Diagnostics.Count > 0)
+            {
+                throw new InvalidDataException(
+                    $"Repository index generation failed for {result.Diagnostics.Count} invalid chart package(s): " +
+                    result.Diagnostics[0].Message,
+                    result.Diagnostics[0].Exception);
+            }
+
+            if (!string.Equals(
+                    scratchPath,
+                    outputPath,
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            {
+                File.Move(scratchPath, outputPath, overwrite: true);
+            }
+
+            return outputPath;
+        }
+        finally
+        {
+            if (!string.Equals(
+                    scratchPath,
+                    outputPath,
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            {
+                File.Delete(scratchPath);
+            }
+        }
     }
 
     /// <summary>
@@ -91,6 +109,19 @@ public static class HelmRepoIndexer
         string? url,
         CancellationToken ct,
         string? mergeIndexPath)
+        => await GenerateIndexWithDiagnosticsAsync(
+            dirPath,
+            url,
+            ct,
+            mergeIndexPath,
+            Path.Combine(dirPath, "index.yaml"));
+
+    private static async Task<HelmRepoIndexGenerationResult> GenerateIndexWithDiagnosticsAsync(
+        string dirPath,
+        string? url,
+        CancellationToken ct,
+        string? mergeIndexPath,
+        string outputPath)
     {
         if (!Directory.Exists(dirPath))
             throw new DirectoryNotFoundException($"Directory not found: {dirPath}");
@@ -158,9 +189,8 @@ public static class HelmRepoIndexer
         };
 
         var yaml = HelmYaml.Serialize(index);
-        var indexPath = Path.Combine(dirPath, "index.yaml");
-        await File.WriteAllTextAsync(indexPath, yaml, ct);
-        return new HelmRepoIndexGenerationResult(indexPath, diagnostics);
+        await File.WriteAllTextAsync(outputPath, yaml, ct);
+        return new HelmRepoIndexGenerationResult(outputPath, diagnostics);
     }
 
     private static void MergeExistingEntries(

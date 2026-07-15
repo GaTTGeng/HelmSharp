@@ -69,6 +69,7 @@
 ### 属性
 - `ChartReference`
 - `Destination`
+- `PassCredentialsAll`
 - `Password`
 - `RepositoryUrl`
 - `Untar`

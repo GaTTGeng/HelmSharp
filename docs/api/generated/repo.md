@@ -69,6 +69,7 @@ Read the corresponding package page first, then use this member index to locate 
 ### Properties
 - `ChartReference`
 - `Destination`
+- `PassCredentialsAll`
 - `Password`
 - `RepositoryUrl`
 - `Untar`

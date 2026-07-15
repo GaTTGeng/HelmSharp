@@ -29,6 +29,12 @@ public sealed class HelmPullRequest
     /// <summary>Gets or sets the repository password.</summary>
     public string? Password { get; set; }
 
+    /// <summary>
+    /// Gets or sets whether repository credentials may be sent to chart archive URLs on other origins.
+    /// The default is <see langword="false"/>, which limits credentials to the repository origin.
+    /// </summary>
+    public bool PassCredentialsAll { get; set; }
+
     /// <summary>Gets or sets whether repository-provided archive digest validation is requested. The default is <see langword="true"/>.</summary>
     public bool VerifyDigest { get; set; } = true;
 }

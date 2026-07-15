@@ -659,6 +659,73 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         Assert.Equal("1.2.3", chart.Version);
     }
 
+    [Fact]
+    public async Task PullAsync_RequestDoesNotForwardCredentialsToCrossOriginArchiveByDefault()
+    {
+        const string username = "chart-user";
+        const string password = "chart-password";
+        var archiveDir = Path.Combine(_tempDir, "cross-origin-archive");
+        var indexDir = Path.Combine(_tempDir, "cross-origin-index");
+        Directory.CreateDirectory(archiveDir);
+        Directory.CreateDirectory(indexDir);
+        await PackageRepoChartVersionAsync("1.2.3", archiveDir);
+        File.Copy(
+            Path.Combine(archiveDir, "repo-golden-1.2.3.tgz"),
+            Path.Combine(indexDir, "repo-golden-1.2.3.tgz"));
+        await using var archiveServer = await LocalFileServer.StartAsync(archiveDir);
+        await HelmRepoIndexer.GenerateIndexAsync(indexDir, archiveServer.BaseUrl, CancellationToken.None);
+        await using var indexServer = await LocalFileServer.StartAsync(indexDir, username, password);
+
+        using var repository = new HelmChartRepository(Path.Combine(_tempDir, "cross-origin-cache"));
+        var chartPath = await repository.PullChartAsync(
+            new HelmPullRequest
+            {
+                ChartReference = "repo-golden",
+                RepositoryUrl = indexServer.BaseUrl,
+                Username = username,
+                Password = password
+            },
+            CancellationToken.None);
+
+        var chart = await HelmChartLoader.LoadAsync(chartPath, CancellationToken.None);
+        Assert.Equal("1.2.3", chart.Version);
+        Assert.Null(archiveServer.LastAuthorization);
+    }
+
+    [Fact]
+    public async Task PullAsync_RequestCanExplicitlyForwardCredentialsToCrossOriginArchive()
+    {
+        const string username = "chart-user";
+        const string password = "chart-password";
+        var archiveDir = Path.Combine(_tempDir, "pass-credentials-archive");
+        var indexDir = Path.Combine(_tempDir, "pass-credentials-index");
+        Directory.CreateDirectory(archiveDir);
+        Directory.CreateDirectory(indexDir);
+        await PackageRepoChartVersionAsync("1.2.3", archiveDir);
+        File.Copy(
+            Path.Combine(archiveDir, "repo-golden-1.2.3.tgz"),
+            Path.Combine(indexDir, "repo-golden-1.2.3.tgz"));
+        await using var archiveServer = await LocalFileServer.StartAsync(archiveDir, username, password);
+        await HelmRepoIndexer.GenerateIndexAsync(indexDir, archiveServer.BaseUrl, CancellationToken.None);
+        await using var indexServer = await LocalFileServer.StartAsync(indexDir, username, password);
+
+        using var repository = new HelmChartRepository(Path.Combine(_tempDir, "pass-credentials-cache"));
+        var chartPath = await repository.PullChartAsync(
+            new HelmPullRequest
+            {
+                ChartReference = "repo-golden",
+                RepositoryUrl = indexServer.BaseUrl,
+                Username = username,
+                Password = password,
+                PassCredentialsAll = true
+            },
+            CancellationToken.None);
+
+        var chart = await HelmChartLoader.LoadAsync(chartPath, CancellationToken.None);
+        Assert.Equal("1.2.3", chart.Version);
+        Assert.NotNull(archiveServer.LastAuthorization);
+    }
+
     [HelmCliFact]
     public async Task DependencyWorkflows_LocalRepositoryMatchHelmOutputsAndPackages()
     {
@@ -1108,6 +1175,8 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
 
         public string BaseUrl { get; }
 
+        public string? LastAuthorization { get; private set; }
+
         public static Task<LocalFileServer> StartAsync(
             string rootDirectory,
             string? username = null,
@@ -1161,6 +1230,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
                     if (headerLine.StartsWith(authorizationPrefix, StringComparison.OrdinalIgnoreCase))
                         authorization = headerLine[authorizationPrefix.Length..].Trim();
                 }
+                LastAuthorization = authorization;
 
                 var parts = requestLine.Split(' ');
                 if (parts.Length < 2 || !parts[0].Equals("GET", StringComparison.OrdinalIgnoreCase))

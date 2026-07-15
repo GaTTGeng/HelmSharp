@@ -119,6 +119,7 @@ public sealed class HelmChartRepository : IDisposable
                 request.Version,
                 request.Username,
                 request.Password,
+                request.PassCredentialsAll,
                 cancellationToken);
 
         // Assume it's a local path that doesn't exist yet
@@ -445,9 +446,11 @@ public sealed class HelmChartRepository : IDisposable
         string? version,
         string? username,
         string? password,
+        bool passCredentialsAll,
         CancellationToken cancellationToken)
     {
         var url = chartUrl;
+        var passCredentials = true;
         if (!url.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase) &&
             !url.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase))
         {
@@ -477,12 +480,24 @@ public sealed class HelmChartRepository : IDisposable
             url = entry.Urls.FirstOrDefault()
                   ?? throw new InvalidOperationException($"No download URL for chart '{chartName}' version '{entry.Version}'");
 
-            if (!url.StartsWith("http", StringComparison.OrdinalIgnoreCase))
-                url = repoUrl.TrimEnd('/') + "/" + url;
+            var archiveUri = Uri.TryCreate(url, UriKind.Absolute, out var absoluteArchiveUri)
+                ? absoluteArchiveUri
+                : new Uri(new Uri(repoUrl.TrimEnd('/') + "/"), url);
+            passCredentials = passCredentialsAll || HaveSameOrigin(repoUri.Uri, archiveUri);
+            url = archiveUri.AbsoluteUri;
         }
 
-        return await DownloadAndExtractChartAsync(url, username, password, cancellationToken);
+        return await DownloadAndExtractChartAsync(
+            url,
+            passCredentials ? username : null,
+            passCredentials ? password : null,
+            cancellationToken);
     }
+
+    private static bool HaveSameOrigin(Uri left, Uri right)
+        => string.Equals(left.Scheme, right.Scheme, StringComparison.OrdinalIgnoreCase)
+           && string.Equals(left.IdnHost, right.IdnHost, StringComparison.OrdinalIgnoreCase)
+           && left.Port == right.Port;
 
     internal async Task<HelmChartVersion> ResolveChartVersionAsync(
         string repoUrl,

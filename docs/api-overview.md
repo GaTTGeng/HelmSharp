@@ -73,6 +73,8 @@ await client.DependencyUpdateAsync(new HelmDependencyUpdateRequest
 });
 ```
 
+Pull credentials are limited to the repository origin by default. Set `PassCredentialsAll = true` only when a trusted index intentionally serves chart archives from another authenticated origin.
+
 The request types make defaults explicit and leave room for M2 behavior without adding more optional parameters to `IHelmClient`.
 
 ## Generated API reference
