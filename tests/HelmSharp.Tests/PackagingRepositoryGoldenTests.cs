@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text;
 using HelmSharp.Action;
 using HelmSharp.Chart;
+using HelmSharp.Engine;
 using HelmSharp.Repo;
 
 namespace HelmSharp.Tests;
@@ -1002,6 +1003,123 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         Assert.True(File.Exists(Path.Combine(chartPath, "Chart.lock")));
     }
 
+    [Theory]
+    [InlineData("@local")]
+    [InlineData("alias:local")]
+    public async Task DependencyUpdateAndBuild_ResolveConfiguredRepositoryAliases(string repositoryReference)
+    {
+        var suffix = repositoryReference.Replace("@", "at", StringComparison.Ordinal)
+            .Replace(":", "-", StringComparison.Ordinal);
+        var repoDir = Path.Combine(_tempDir, $"dependency-alias-repository-{suffix}");
+        Directory.CreateDirectory(repoDir);
+        await PackageDependencyChartAsync(repoDir);
+        await using var server = await LocalFileServer.StartAsync(repoDir);
+        await HelmRepoIndexer.GenerateIndexAsync(repoDir, server.BaseUrl, CancellationToken.None);
+        var configPath = Path.Combine(_tempDir, $"dependency-alias-{suffix}", "repositories.yaml");
+        var cachePath = Path.Combine(_tempDir, $"dependency-alias-{suffix}", "cache");
+        using (var repository = new HelmChartRepository(
+                   new HelmRepositoryOptions
+                   {
+                       RepositoryConfigPath = configPath,
+                       CacheDirectory = cachePath
+                   },
+                   new HttpClientHandler { UseProxy = false },
+                   _ => new HttpClientHandler { UseProxy = false }))
+        {
+            await repository.AddRepositoryAsync("local", server.BaseUrl);
+        }
+
+        var chartPath = await CreateDependencyParentChartAsync(
+            $"dependency-alias-parent-{suffix}",
+            repositoryReference);
+        var client = CreateClient();
+        var update = await client.DependencyUpdateAsync(new HelmDependencyUpdateRequest
+        {
+            ChartPath = chartPath,
+            RepositoryConfigPath = configPath,
+            RepositoryCachePath = cachePath
+        });
+        AssertOperationSucceeded("repository alias dependency update", update);
+        var lockSnapshot = ReadDependencyLockSnapshot(chartPath);
+        Assert.Equal(repositoryReference, Assert.Single(lockSnapshot.Dependencies).Repository);
+        var archivePath = Path.Combine(chartPath, "charts", "child-dep-0.2.5.tgz");
+        Assert.True(File.Exists(archivePath));
+
+        File.Delete(archivePath);
+        var build = await client.DependencyBuildAsync(new HelmDependencyBuildRequest
+        {
+            ChartPath = chartPath,
+            RepositoryConfigPath = configPath,
+            RepositoryCachePath = cachePath
+        });
+
+        AssertOperationSucceeded("repository alias dependency build", build);
+        Assert.True(File.Exists(archivePath));
+    }
+
+    [HelmCliFact]
+    public async Task DependencyUpdateAndBuild_FileDependenciesWithAliasesMatchHelm()
+    {
+        var childChart = await CreateChartAsync("file-local-child", """
+            apiVersion: v2
+            name: local-child
+            version: 1.2.3
+            """);
+        await WriteTextAsync(Path.Combine(childChart, "values.yaml"), "marker: file-default\n");
+        await WriteTextAsync(
+            Path.Combine(childChart, "templates", "configmap.yaml"),
+            "kind: ConfigMap\nmetadata:\n  name: {{ .Chart.Name }}\ndata:\n  marker: {{ .Values.marker | quote }}\n");
+        var sharpChart = await CreateAliasedFileParentChartAsync("sharp-file-parent");
+        var helmChart = await CreateAliasedFileParentChartAsync("helm-file-parent");
+        var client = CreateClient();
+
+        var sharpUpdate = await client.DependencyUpdateAsync(sharpChart);
+        var helmUpdate = await HelmCliRunner.DependencyUpdateAsync(helmChart, CancellationToken.None);
+        AssertOperationSucceeded("file dependency HelmSharp update", sharpUpdate);
+        AssertOperationSucceeded("file dependency Helm update", helmUpdate);
+        var sharpLock = ReadDependencyLockSnapshot(sharpChart);
+        var helmLock = ReadDependencyLockSnapshot(helmChart);
+        Assert.Equal(helmLock.Digest, sharpLock.Digest);
+        Assert.Equal(helmLock.Dependencies, sharpLock.Dependencies);
+        var sharpArchive = Path.Combine(sharpChart, "charts", "local-child-1.2.3.tgz");
+        var helmArchive = Path.Combine(helmChart, "charts", "local-child-1.2.3.tgz");
+        Assert.Equal(
+            await ReadArchiveSnapshotAsync(helmArchive),
+            await ReadArchiveSnapshotAsync(sharpArchive));
+
+        var loaded = await HelmChartLoader.LoadAsync(sharpChart, CancellationToken.None);
+        Assert.Equal("local-child", loaded.Subcharts["cache"].Name);
+        Assert.Equal("local-child", loaded.Subcharts["session"].Name);
+        var values = await HelmValues.BuildAsync(
+            loaded,
+            (IEnumerable<string>?)null,
+            "session:\n  marker: session-override\n",
+            null,
+            null,
+            null,
+            null,
+            CancellationToken.None);
+        Assert.Equal("file-default", Assert.IsType<Dictionary<string, object?>>(values["cache"])["marker"]);
+        Assert.Equal("session-override", Assert.IsType<Dictionary<string, object?>>(values["session"])["marker"]);
+        var rendered = new HelmTemplateRenderer(loaded, "release", "default", values).Render();
+        Assert.Contains("name: cache", rendered);
+        Assert.Contains("marker: \"file-default\"", rendered);
+        Assert.Contains("name: session", rendered);
+        Assert.Contains("marker: \"session-override\"", rendered);
+
+        var lockBeforeBuild = await File.ReadAllBytesAsync(Path.Combine(sharpChart, "Chart.lock"));
+        File.Delete(sharpArchive);
+        File.Delete(helmArchive);
+        var sharpBuild = await client.DependencyBuildAsync(sharpChart);
+        var helmBuild = await HelmCliRunner.DependencyBuildAsync(helmChart, CancellationToken.None);
+        AssertOperationSucceeded("file dependency HelmSharp build", sharpBuild);
+        AssertOperationSucceeded("file dependency Helm build", helmBuild);
+        Assert.Equal(lockBeforeBuild, await File.ReadAllBytesAsync(Path.Combine(sharpChart, "Chart.lock")));
+        Assert.Equal(
+            await ReadArchiveSnapshotAsync(helmArchive),
+            await ReadArchiveSnapshotAsync(sharpArchive));
+    }
+
     [Fact]
     public async Task DependencyUpdateAsync_IsIdempotentAndReplacesStaleConstraintResult()
     {
@@ -1236,10 +1354,30 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
             dependencies:
               - name: child-dep
                 version: ~0.2.0
-                repository: {repositoryUrl}
+                repository: "{repositoryUrl}"
             """);
         await WriteTextAsync(Path.Combine(chartDir, "values.yaml"), "parent: true\n");
         await WriteTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), "kind: ConfigMap\n");
+        return chartDir;
+    }
+
+    private async Task<string> CreateAliasedFileParentChartAsync(string directoryName)
+    {
+        var chartDir = await CreateChartAsync(directoryName, """
+            apiVersion: v2
+            name: aliased-file-parent
+            version: 0.1.0
+            dependencies:
+              - name: local-child
+                alias: cache
+                version: ^1.0.0
+                repository: file://../file-local-child
+              - name: local-child
+                alias: session
+                version: ^1.0.0
+                repository: file://../file-local-child
+            """);
+        await WriteTextAsync(Path.Combine(chartDir, "values.yaml"), "parent: true\n");
         return chartDir;
     }
 

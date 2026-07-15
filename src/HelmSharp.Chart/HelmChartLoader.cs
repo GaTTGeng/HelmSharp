@@ -272,7 +272,7 @@ public static class HelmChartLoader
     private static void AddPackagedDependencyChart(HelmChart chart, PackagedDependencyChart package)
     {
         var matchedDependencies = chart.Dependencies
-            .Where(dependency => IsDependencyMatch(dependency, package.Chart))
+            .Where(dependency => IsDependencyMatch(chart, dependency, package.Chart))
             .ToList();
 
         if (matchedDependencies.Count > 0)
@@ -285,13 +285,27 @@ public static class HelmChartLoader
         chart.Subcharts[package.Chart.Name] = package.Chart;
     }
 
-    private static bool IsDependencyMatch(HelmChartDependency dependency, HelmChart subchart)
+    private static bool IsDependencyMatch(
+        HelmChart parent,
+        HelmChartDependency dependency,
+        HelmChart subchart)
     {
         if (!string.Equals(dependency.Name, subchart.Name, StringComparison.OrdinalIgnoreCase))
             return false;
 
-        return string.IsNullOrWhiteSpace(dependency.Version) ||
-               string.Equals(dependency.Version, subchart.Version, StringComparison.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(dependency.Version) ||
+            string.Equals(dependency.Version, subchart.Version, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        var dependencyIndex = parent.Dependencies.IndexOf(dependency);
+        if (dependencyIndex >= 0 && dependencyIndex < parent.LockEntries.Count)
+        {
+            var locked = parent.LockEntries[dependencyIndex];
+            return string.Equals(locked.Name, dependency.Name, StringComparison.OrdinalIgnoreCase) &&
+                   string.Equals(locked.Version, subchart.Version, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return false;
     }
 
     private static async Task<Dictionary<string, byte[]>> LoadDirectoryAsync(string chartPath, CancellationToken cancellationToken)
