@@ -1073,6 +1073,8 @@ public class HelmClient : IHelmClient
                     RepositoryConfigPath = request.RepositoryConfigPath,
                     CacheDirectory = request.RepositoryCachePath
                 });
+            var configuredRepositories = await repo.ListRepositoriesAsync(cancellationToken);
+            var refreshedRepositories = new HashSet<string>(StringComparer.Ordinal);
 
             foreach (var dependency in chart.Dependencies)
             {
@@ -1085,32 +1087,27 @@ public class HelmClient : IHelmClient
 
                 try
                 {
-                    var repositoryUrl = dependency.Repository.TrimEnd('/');
-                    var selected = await repo.ResolveChartVersionAsync(
-                        repositoryUrl,
+                    var staged = await HelmDependencySource.StageAsync(
+                        repo,
+                        configuredRepositories,
+                        refreshedRepositories,
+                        chartPath,
                         dependency.Name,
                         dependency.Version,
-                        cancellationToken: cancellationToken);
-                    output.AppendLine(
-                        $"Downloading dependency: {dependency.Name} ({selected.Version}) from {dependency.Repository}");
-                    var archivePath = await repo.PullChartAsync(
-                        new HelmPullRequest
-                        {
-                            ChartReference = dependency.Name,
-                            RepositoryUrl = repositoryUrl,
-                            Version = selected.Version,
-                            Destination = stagingDirectory,
-                            VerifyDigest = true
-                        },
+                        dependency.Repository,
+                        stagingDirectory,
+                        verifyDigest: true,
+                        refreshConfiguredRepository: !request.SkipRepositoryRefresh,
+                        requireConfiguredCache: request.SkipRepositoryRefresh,
                         cancellationToken);
-                    if (!File.Exists(archivePath))
-                        throw new InvalidDataException($"Dependency download did not produce an archive: {archivePath}");
+                    output.AppendLine(
+                        $"Resolved dependency: {dependency.Name} ({staged.Version}) from {dependency.Repository}");
 
                     resolvedDependencies.Add(new HelmResolvedDependency(
                         dependency.Name,
-                        selected.Version,
+                        staged.Version,
                         dependency.Repository));
-                    stagedArchives.Add(archivePath);
+                    stagedArchives.Add(staged.ArchivePath);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -1177,7 +1174,9 @@ public class HelmClient : IHelmClient
     {
         Directory.CreateDirectory(chartsDirectory);
         var desiredArchiveNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var stagedArchive in stagedArchives)
+        foreach (var stagedArchive in stagedArchives
+                     .GroupBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
+                     .Select(group => group.Last()))
         {
             var archiveName = Path.GetFileName(stagedArchive);
             desiredArchiveNames.Add(archiveName);
@@ -1587,6 +1586,8 @@ public class HelmClient : IHelmClient
                     RepositoryConfigPath = request.RepositoryConfigPath,
                     CacheDirectory = request.RepositoryCachePath
                 });
+            var configuredRepositories = await repository.ListRepositoriesAsync(cancellationToken);
+            var refreshedRepositories = new HashSet<string>(StringComparer.Ordinal);
 
             foreach (var dependency in lockFile.Dependencies)
             {
@@ -1602,16 +1603,20 @@ public class HelmClient : IHelmClient
                     output.AppendLine(
                         $"Downloading locked dependency: {dependency.Name} ({dependency.Version}) " +
                         $"from {dependency.Repository}");
-                    var archivePath = await repository.PullChartAsync(
-                        new HelmPullRequest
-                        {
-                            ChartReference = dependency.Name,
-                            RepositoryUrl = dependency.Repository.TrimEnd('/'),
-                            Version = dependency.Version,
-                            Destination = stagingDirectory,
-                            VerifyDigest = request.VerifyDigests
-                        },
+                    var staged = await HelmDependencySource.StageAsync(
+                        repository,
+                        configuredRepositories,
+                        refreshedRepositories,
+                        chartPath,
+                        dependency.Name,
+                        dependency.Version,
+                        dependency.Repository,
+                        stagingDirectory,
+                        request.VerifyDigests,
+                        refreshConfiguredRepository: false,
+                        requireConfiguredCache: true,
                         cancellationToken);
+                    var archivePath = staged.ArchivePath;
                     if (!File.Exists(archivePath))
                         throw new InvalidDataException($"Dependency download did not produce an archive: {archivePath}");
                     if (request.VerifyDigests && !string.IsNullOrWhiteSpace(dependency.ArchiveDigest))
