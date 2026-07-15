@@ -12,6 +12,7 @@ This project follows semantic versioning once stable releases begin.
 
 ### Changed
 
+- Aligned dependency updates with exact version resolution, original repository archives, Helm-compatible `Chart.lock` generation, stale archive cleanup, and failing diagnostics (#137).
 - Aligned traditional chart pulls with configured repository references, archive destinations, optional extraction, semantic version selection, and digest verification (#135).
 - Aligned dependency list status inspection for lock files, packaged and unpacked charts, semantic versions, aliases, and conditional dependencies (#136).
 - Updated English and Simplified Chinese installation guidance for the 1.1.1 release.
