@@ -1051,69 +1051,146 @@ public class HelmClient : IHelmClient
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var chart = await HelmChartLoader.LoadAsync(request.ChartPath, cancellationToken);
+        var chartPath = Path.GetFullPath(request.ChartPath);
+        var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
         if (chart.Dependencies.Count == 0)
             return Ok("No dependencies found in Chart.yaml");
 
-        var chartsDir = Path.Combine(request.ChartPath, "charts");
-        Directory.CreateDirectory(chartsDir);
-
+        var chartsDir = Path.Combine(chartPath, "charts");
+        var stagingDirectory = Path.Combine(chartPath, $".helmsharp-dependency-update-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(stagingDirectory);
         var output = new StringBuilder();
-        using var repo = request.RepositoryConfigPath is null && request.RepositoryCachePath is null
-            ? _createChartRepository()
-            : new HelmChartRepository(new HelmRepositoryOptions
-            {
-                RepositoryConfigPath = request.RepositoryConfigPath,
-                CacheDirectory = request.RepositoryCachePath
-            });
+        var resolvedDependencies = new List<HelmResolvedDependency>(chart.Dependencies.Count);
+        var stagedArchives = new List<string>(chart.Dependencies.Count);
+        var errors = new List<string>();
 
-        foreach (var dep in chart.Dependencies)
+        try
         {
-            if (!dep.Enabled)
-            {
-                output.AppendLine($"Skipping disabled dependency: {dep.Name}");
-                continue;
-            }
-
-            if (string.IsNullOrWhiteSpace(dep.Repository))
-            {
-                output.AppendLine($"Skipping dependency {dep.Name}: no repository specified");
-                continue;
-            }
-
-            try
-            {
-                var selected = await repo.ResolveChartVersionAsync(
-                    dep.Repository.TrimEnd('/'),
-                    dep.Name,
-                    dep.Version,
-                    cancellationToken: cancellationToken);
-
-                var requestedVersion = string.IsNullOrWhiteSpace(dep.Version) ? selected.Version : dep.Version;
-                output.AppendLine($"Downloading dependency: {dep.Name} ({requestedVersion}) from {dep.Repository}");
-                var pulledPath = await repo.PullChartAsync(
-                    $"{dep.Repository.TrimEnd('/')}/{dep.Name}",
-                    selected.Version, cancellationToken);
-
-                var destPath = Path.Combine(chartsDir, $"{dep.Name}-{selected.Version}.tgz");
-                if (Directory.Exists(pulledPath))
+            using var repo = request.RepositoryConfigPath is null && request.RepositoryCachePath is null
+                ? _createChartRepository()
+                : new HelmChartRepository(new HelmRepositoryOptions
                 {
-                    var tgzPath = await HelmChartPackager.PackageAsync(pulledPath, chartsDir, selected.Version, null, cancellationToken);
-                    output.AppendLine($"Dependency {dep.Name} saved to {tgzPath}");
-                }
-                else if (File.Exists(pulledPath))
-                {
-                    File.Copy(pulledPath, destPath, overwrite: true);
-                    output.AppendLine($"Dependency {dep.Name} saved to {destPath}");
-                }
-            }
-            catch (Exception ex)
+                    RepositoryConfigPath = request.RepositoryConfigPath,
+                    CacheDirectory = request.RepositoryCachePath
+                });
+
+            foreach (var dependency in chart.Dependencies)
             {
-                output.AppendLine($"Error downloading dependency {dep.Name}: {ex.Message}");
+                cancellationToken.ThrowIfCancellationRequested();
+                if (string.IsNullOrWhiteSpace(dependency.Repository))
+                {
+                    errors.Add($"Dependency '{dependency.Name}' does not specify a repository.");
+                    continue;
+                }
+
+                try
+                {
+                    var repositoryUrl = dependency.Repository.TrimEnd('/');
+                    var selected = await repo.ResolveChartVersionAsync(
+                        repositoryUrl,
+                        dependency.Name,
+                        dependency.Version,
+                        cancellationToken: cancellationToken);
+                    output.AppendLine(
+                        $"Downloading dependency: {dependency.Name} ({selected.Version}) from {dependency.Repository}");
+                    var archivePath = await repo.PullChartAsync(
+                        new HelmPullRequest
+                        {
+                            ChartReference = dependency.Name,
+                            RepositoryUrl = repositoryUrl,
+                            Version = selected.Version,
+                            Destination = stagingDirectory,
+                            VerifyDigest = true
+                        },
+                        cancellationToken);
+                    if (!File.Exists(archivePath))
+                        throw new InvalidDataException($"Dependency download did not produce an archive: {archivePath}");
+
+                    resolvedDependencies.Add(new HelmResolvedDependency(
+                        dependency.Name,
+                        selected.Version,
+                        dependency.Repository));
+                    stagedArchives.Add(archivePath);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    errors.Add($"Dependency '{dependency.Name}' failed: {ex.Message}");
+                }
             }
+
+            if (errors.Count > 0)
+            {
+                foreach (var error in errors)
+                    output.AppendLine($"Error: {error}");
+                return Fail(output.ToString());
+            }
+
+            var requestedDependencies = await HelmDependencyLockFile.LoadRequestedDependenciesAsync(
+                chartPath,
+                cancellationToken);
+            var digest = HelmDependencyLockFile.ComputeDigest(requestedDependencies, resolvedDependencies);
+            Directory.CreateDirectory(chartsDir);
+            var desiredArchiveNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var stagedArchive in stagedArchives)
+            {
+                var archiveName = Path.GetFileName(stagedArchive);
+                desiredArchiveNames.Add(archiveName);
+                var destinationPath = Path.Combine(chartsDir, archiveName);
+                if (File.Exists(destinationPath) && await FilesHaveSameDigestAsync(
+                        stagedArchive,
+                        destinationPath,
+                        cancellationToken))
+                {
+                    File.Delete(stagedArchive);
+                }
+                else
+                {
+                    File.Move(stagedArchive, destinationPath, overwrite: true);
+                }
+                output.AppendLine($"Dependency saved to {destinationPath}");
+            }
+
+            foreach (var existingArchive in Directory.EnumerateFiles(chartsDir, "*.tgz", SearchOption.TopDirectoryOnly))
+            {
+                if (!desiredArchiveNames.Contains(Path.GetFileName(existingArchive)))
+                {
+                    File.Delete(existingArchive);
+                    output.AppendLine($"Deleted outdated dependency: {existingArchive}");
+                }
+            }
+
+            var lockChanged = await HelmDependencyLockFile.WriteIfChangedAsync(
+                chartPath,
+                resolvedDependencies,
+                digest,
+                cancellationToken);
+            output.AppendLine(lockChanged ? "Chart.lock updated." : "Chart.lock is already up to date.");
+            return Ok(output.ToString());
         }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return Fail($"Dependency update failed: {ex.Message}{Environment.NewLine}{output}");
+        }
+        finally
+        {
+            if (Directory.Exists(stagingDirectory))
+                Directory.Delete(stagingDirectory, recursive: true);
+        }
+    }
 
-        return Ok(output.ToString());
+    private static async Task<bool> FilesHaveSameDigestAsync(
+        string leftPath,
+        string rightPath,
+        CancellationToken cancellationToken)
+    {
+        if (new FileInfo(leftPath).Length != new FileInfo(rightPath).Length)
+            return false;
+
+        await using var left = File.OpenRead(leftPath);
+        await using var right = File.OpenRead(rightPath);
+        var leftDigest = await System.Security.Cryptography.SHA256.HashDataAsync(left, cancellationToken);
+        var rightDigest = await System.Security.Cryptography.SHA256.HashDataAsync(right, cancellationToken);
+        return leftDigest.AsSpan().SequenceEqual(rightDigest);
     }
 
     public async Task<CommandResult> PushAsync(

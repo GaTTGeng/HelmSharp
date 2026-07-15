@@ -878,10 +878,18 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         Assert.Equal("missing", ParseDependencyStatus(sharpMissing.StandardOutput, "child-dep"));
         Assert.Equal("missing", ParseDependencyStatus(helmMissing.Stdout, "child-dep"));
 
-        var sharpUpdate = await client.DependencyUpdateAsync(sharpUpdateChart);
+        var sharpUpdate = await client.DependencyUpdateAsync(new HelmDependencyUpdateRequest
+        {
+            ChartPath = sharpUpdateChart,
+            RepositoryCachePath = Path.Combine(_tempDir, "sharp-update-repository-cache")
+        });
         var helmUpdate = await HelmCliRunner.DependencyUpdateAsync(helmUpdateChart, CancellationToken.None);
         AssertOperationSucceeded("helm dependency update", helmUpdate);
         AssertOperationSucceeded("HelmSharp DependencyUpdateAsync", sharpUpdate);
+        var helmLock = ReadDependencyLockSnapshot(helmUpdateChart);
+        var sharpLock = ReadDependencyLockSnapshot(sharpUpdateChart);
+        Assert.Equal(helmLock.Digest, sharpLock.Digest);
+        Assert.Equal(helmLock.Dependencies, sharpLock.Dependencies);
         await AssertDependencyPackageMatchesAsync(helmUpdateChart, sharpUpdateChart, "0.2.5");
 
         var sharpOk = await client.DependencyListAsync(sharpUpdateChart);
@@ -895,7 +903,11 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         CopyDirectory(sharpUpdateChart, sharpBuildChart);
         CopyDirectory(helmUpdateChart, helmBuildChart);
 
-        var sharpBuild = await client.DependencyBuildAsync(sharpBuildChart);
+        var sharpBuild = await client.DependencyBuildAsync(new HelmDependencyBuildRequest
+        {
+            ChartPath = sharpBuildChart,
+            RepositoryCachePath = Path.Combine(_tempDir, "sharp-build-repository-cache")
+        });
         using var helmBuildHome = HelmCliRunner.CreateHome();
         var helmRepoAdd = await HelmCliRunner.RepoAddAsync("local", server.BaseUrl, helmBuildHome, CancellationToken.None);
         AssertOperationSucceeded("helm repo add for dependency build", helmRepoAdd);
@@ -903,6 +915,81 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         AssertOperationSucceeded("helm dependency build", helmBuild);
         AssertOperationSucceeded("HelmSharp DependencyBuildAsync", sharpBuild);
         await AssertDependencyPackageMatchesAsync(helmBuildChart, sharpBuildChart, "0.2.5");
+    }
+
+    [Fact]
+    public async Task DependencyUpdateAsync_IsIdempotentAndReplacesStaleConstraintResult()
+    {
+        var repoDir = Path.Combine(_tempDir, "dependency-update-repository");
+        Directory.CreateDirectory(repoDir);
+        await PackageDependencyChartAsync(repoDir);
+        await using var server = await LocalFileServer.StartAsync(repoDir);
+        await HelmRepoIndexer.GenerateIndexAsync(repoDir, server.BaseUrl, CancellationToken.None);
+        var chartPath = await CreateDependencyParentChartAsync("dependency-update-parent", server.BaseUrl);
+        var request = new HelmDependencyUpdateRequest
+        {
+            ChartPath = chartPath,
+            RepositoryCachePath = Path.Combine(_tempDir, "dependency-update-cache")
+        };
+        var client = CreateClient();
+
+        var first = await client.DependencyUpdateAsync(request);
+        AssertOperationSucceeded("initial HelmSharp dependency update", first);
+        var lockPath = Path.Combine(chartPath, "Chart.lock");
+        var latestArchive = Path.Combine(chartPath, "charts", "child-dep-0.2.5.tgz");
+        var firstLock = await File.ReadAllBytesAsync(lockPath);
+        var firstArchiveWriteTime = File.GetLastWriteTimeUtc(latestArchive);
+
+        var second = await client.DependencyUpdateAsync(request);
+        AssertOperationSucceeded("idempotent HelmSharp dependency update", second);
+        Assert.Equal(firstLock, await File.ReadAllBytesAsync(lockPath));
+        Assert.Equal(firstArchiveWriteTime, File.GetLastWriteTimeUtc(latestArchive));
+        Assert.Contains("already up to date", second.StandardOutput, StringComparison.OrdinalIgnoreCase);
+
+        var chartYamlPath = Path.Combine(chartPath, "Chart.yaml");
+        var chartYaml = await File.ReadAllTextAsync(chartYamlPath);
+        await File.WriteAllTextAsync(
+            chartYamlPath,
+            chartYaml.Replace("~0.2.0", "0.2.0", StringComparison.Ordinal));
+        var changed = await client.DependencyUpdateAsync(request);
+        AssertOperationSucceeded("constraint-changing HelmSharp dependency update", changed);
+
+        var snapshot = ReadDependencyLockSnapshot(chartPath);
+        Assert.Equal("0.2.0", Assert.Single(snapshot.Dependencies).Version);
+        Assert.True(File.Exists(Path.Combine(chartPath, "charts", "child-dep-0.2.0.tgz")));
+        Assert.False(File.Exists(latestArchive));
+    }
+
+    [Fact]
+    public async Task DependencyUpdateAsync_MissingChartFailsWithoutReplacingExistingState()
+    {
+        var repoDir = Path.Combine(_tempDir, "dependency-failure-repository");
+        Directory.CreateDirectory(repoDir);
+        await PackageDependencyChartAsync(repoDir);
+        await using var server = await LocalFileServer.StartAsync(repoDir);
+        await HelmRepoIndexer.GenerateIndexAsync(repoDir, server.BaseUrl, CancellationToken.None);
+        var chartPath = await CreateDependencyParentChartAsync("dependency-failure-parent", server.BaseUrl);
+        var chartsDirectory = Path.Combine(chartPath, "charts");
+        Directory.CreateDirectory(chartsDirectory);
+        var existingArchive = Path.Combine(chartsDirectory, "existing-1.0.0.tgz");
+        File.Copy(Path.Combine(repoDir, "child-dep-0.2.0.tgz"), existingArchive);
+        var chartYamlPath = Path.Combine(chartPath, "Chart.yaml");
+        var chartYaml = await File.ReadAllTextAsync(chartYamlPath);
+        await File.WriteAllTextAsync(
+            chartYamlPath,
+            chartYaml.Replace("child-dep", "missing-dep", StringComparison.Ordinal));
+        var client = CreateClient();
+
+        var result = await client.DependencyUpdateAsync(new HelmDependencyUpdateRequest
+        {
+            ChartPath = chartPath,
+            RepositoryCachePath = Path.Combine(_tempDir, "dependency-failure-cache")
+        });
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("not found", result.StandardError, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(existingArchive));
+        Assert.False(File.Exists(Path.Combine(chartPath, "Chart.lock")));
     }
 
     private async Task<string> CreatePackageGoldenChartAsync(string directoryName, string version)
@@ -1091,6 +1178,21 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         Assert.Equal(
             await ReadArchiveSnapshotAsync(helmPackage),
             await ReadArchiveSnapshotAsync(sharpPackage));
+    }
+
+    private static DependencyLockSnapshot ReadDependencyLockSnapshot(string chartPath)
+    {
+        var lockFile = HelmYaml.DeserializeDictionary(File.ReadAllText(Path.Combine(chartPath, "Chart.lock")));
+        var dependencies = Assert.IsAssignableFrom<IList<object?>>(lockFile["dependencies"])
+            .Select(dependency => Assert.IsAssignableFrom<IDictionary<string, object?>>(dependency))
+            .Select(dependency => new LockedDependencySnapshot(
+                HelmYaml.GetString(dependency, "name") ?? string.Empty,
+                HelmYaml.GetString(dependency, "repository") ?? string.Empty,
+                HelmYaml.GetString(dependency, "version") ?? string.Empty))
+            .ToList();
+        return new DependencyLockSnapshot(
+            HelmYaml.GetString(lockFile, "digest") ?? string.Empty,
+            dependencies);
     }
 
     private static IndexSnapshot ReadIndexSnapshot(string indexPath, string chartName)
@@ -1458,4 +1560,10 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         List<FileSnapshot> Files);
 
     private sealed record FileSnapshot(string Path, string Sha256);
+
+    private sealed record DependencyLockSnapshot(
+        string Digest,
+        List<LockedDependencySnapshot> Dependencies);
+
+    private sealed record LockedDependencySnapshot(string Name, string Repository, string Version);
 }
