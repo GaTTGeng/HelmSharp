@@ -73,6 +73,52 @@ Read the corresponding package page first, then use this member index to locate 
 ### Usage note
 Read the corresponding package page first, then use this member index to locate the concrete type.
 
+## HelmDependencyBuildRequest
+
+| Field | Value |
+| --- | --- |
+| Kind | `class` |
+| Source | `src/HelmSharp.Action/HelmDependencyRequests.cs` |
+
+### Properties
+- `ChartPath`
+- `RepositoryCachePath`
+- `RepositoryConfigPath`
+- `VerifyDigests`
+
+### Usage note
+Read the corresponding package page first, then use this member index to locate the concrete type.
+
+## HelmDependencyListRequest
+
+| Field | Value |
+| --- | --- |
+| Kind | `class` |
+| Source | `src/HelmSharp.Action/HelmDependencyRequests.cs` |
+
+### Properties
+- `ChartPath`
+- `IncludeDiagnostics`
+
+### Usage note
+Read the corresponding package page first, then use this member index to locate the concrete type.
+
+## HelmDependencyUpdateRequest
+
+| Field | Value |
+| --- | --- |
+| Kind | `class` |
+| Source | `src/HelmSharp.Action/HelmDependencyRequests.cs` |
+
+### Properties
+- `ChartPath`
+- `RepositoryCachePath`
+- `RepositoryConfigPath`
+- `SkipRepositoryRefresh`
+
+### Usage note
+Read the corresponding package page first, then use this member index to locate the concrete type.
+
 ## HelmExecutionOptions
 
 | Field | Value |
@@ -126,6 +172,24 @@ Read the corresponding package page first, then use this member index to locate 
 | --- | --- |
 | Kind | `enum` |
 | Source | `src/HelmSharp.Action/HelmHookExecutor.cs` |
+
+### Usage note
+Read the corresponding package page first, then use this member index to locate the concrete type.
+
+## HelmPackageRequest
+
+| Field | Value |
+| --- | --- |
+| Kind | `class` |
+| Source | `src/HelmSharp.Action/HelmPackageRequest.cs` |
+
+### Properties
+- `AppVersion`
+- `ChartPath`
+- `DependencyUpdate`
+- `Destination`
+- `SkipSchemaValidation`
+- `Version`
 
 ### Usage note
 Read the corresponding package page first, then use this member index to locate the concrete type.

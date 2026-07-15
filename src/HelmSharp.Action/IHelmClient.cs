@@ -1,3 +1,5 @@
+using HelmSharp.Repo;
+
 namespace HelmSharp.Action;
 
 /// <summary>
@@ -137,11 +139,21 @@ public interface IHelmClient
         string? destination = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Pulls a chart using an extensible request object.</summary>
+    Task<CommandResult> PullAsync(
+        HelmPullRequest request,
+        CancellationToken cancellationToken = default);
+
     Task<CommandResult> PackageAsync(
         string chartPath,
         string? destination = null,
         string? version = null,
         string? appVersion = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Packages a chart using an extensible request object.</summary>
+    Task<CommandResult> PackageAsync(
+        HelmPackageRequest request,
         CancellationToken cancellationToken = default);
 
     Task<CommandResult> CreateAsync(
@@ -152,6 +164,11 @@ public interface IHelmClient
 
     Task<CommandResult> DependencyUpdateAsync(
         string chartPath,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Updates chart dependencies using an extensible request object.</summary>
+    Task<CommandResult> DependencyUpdateAsync(
+        HelmDependencyUpdateRequest request,
         CancellationToken cancellationToken = default);
 
     Task<CommandResult> PushAsync(
@@ -196,6 +213,11 @@ public interface IHelmClient
         string? url = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Generates a repository index using an extensible request object.</summary>
+    Task<CommandResult> RepoIndexAsync(
+        HelmRepoIndexRequest request,
+        CancellationToken cancellationToken = default);
+
     Task<CommandResult> RepoUpdateAsync(
         CancellationToken cancellationToken = default);
 
@@ -218,7 +240,17 @@ public interface IHelmClient
         string chartPath,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Builds chart dependencies using an extensible request object.</summary>
+    Task<CommandResult> DependencyBuildAsync(
+        HelmDependencyBuildRequest request,
+        CancellationToken cancellationToken = default);
+
     Task<CommandResult> DependencyListAsync(
         string chartPath,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Lists chart dependencies using an extensible request object.</summary>
+    Task<CommandResult> DependencyListAsync(
+        HelmDependencyListRequest request,
         CancellationToken cancellationToken = default);
 }

@@ -961,9 +961,24 @@ public class HelmClient : IHelmClient
         string? version = null,
         string? destination = null,
         CancellationToken cancellationToken = default)
+        => await PullAsync(
+            new HelmPullRequest
+            {
+                ChartReference = chartRef,
+                Version = version,
+                Destination = destination,
+                Untar = true
+            },
+            cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<CommandResult> PullAsync(
+        HelmPullRequest request,
+        CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(request);
         using var repo = _createChartRepository();
-        var path = await repo.PullChartAsync(chartRef, version, cancellationToken);
+        var path = await repo.PullChartAsync(request, cancellationToken);
         return Ok($"Chart pulled to: {path}");
     }
 
@@ -973,10 +988,39 @@ public class HelmClient : IHelmClient
         string? version = null,
         string? appVersion = null,
         CancellationToken cancellationToken = default)
+        => await PackageAsync(
+            new HelmPackageRequest
+            {
+                ChartPath = chartPath,
+                Destination = destination,
+                Version = version,
+                AppVersion = appVersion
+            },
+            cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<CommandResult> PackageAsync(
+        HelmPackageRequest request,
+        CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(request);
         try
         {
-            var path = await HelmChartPackager.PackageAsync(chartPath, destination, version, appVersion, cancellationToken);
+            if (request.DependencyUpdate)
+            {
+                var dependencyResult = await DependencyUpdateAsync(
+                    new HelmDependencyUpdateRequest { ChartPath = request.ChartPath },
+                    cancellationToken);
+                if (!dependencyResult.Succeeded)
+                    return dependencyResult;
+            }
+
+            var path = await HelmChartPackager.PackageAsync(
+                request.ChartPath,
+                request.Destination,
+                request.Version,
+                request.AppVersion,
+                cancellationToken);
             return Ok($"Successfully packaged chart and saved it to: {path}");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -998,16 +1042,31 @@ public class HelmClient : IHelmClient
     public async Task<CommandResult> DependencyUpdateAsync(
         string chartPath,
         CancellationToken cancellationToken = default)
+        => await DependencyUpdateAsync(
+            new HelmDependencyUpdateRequest { ChartPath = chartPath },
+            cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<CommandResult> DependencyUpdateAsync(
+        HelmDependencyUpdateRequest request,
+        CancellationToken cancellationToken = default)
     {
-        var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
+        ArgumentNullException.ThrowIfNull(request);
+        var chart = await HelmChartLoader.LoadAsync(request.ChartPath, cancellationToken);
         if (chart.Dependencies.Count == 0)
             return Ok("No dependencies found in Chart.yaml");
 
-        var chartsDir = Path.Combine(chartPath, "charts");
+        var chartsDir = Path.Combine(request.ChartPath, "charts");
         Directory.CreateDirectory(chartsDir);
 
         var output = new StringBuilder();
-        using var repo = _createChartRepository();
+        using var repo = request.RepositoryConfigPath is null && request.RepositoryCachePath is null
+            ? _createChartRepository()
+            : new HelmChartRepository(new HelmRepositoryOptions
+            {
+                RepositoryConfigPath = request.RepositoryConfigPath,
+                CacheDirectory = request.RepositoryCachePath
+            });
 
         foreach (var dep in chart.Dependencies)
         {
@@ -1229,15 +1288,34 @@ public class HelmClient : IHelmClient
         string dirPath,
         string? url = null,
         CancellationToken cancellationToken = default)
-        => await RepoIndexAsync(dirPath, url, cancellationToken, mergeIndexPath: null);
+        => await RepoIndexAsync(
+            new HelmRepoIndexRequest { DirectoryPath = dirPath, Url = url },
+            cancellationToken);
 
+    /// <summary>
+    /// Generates a repository index and optionally merges an existing index.
+    /// </summary>
     public async Task<CommandResult> RepoIndexAsync(
         string dirPath,
         string? url,
         CancellationToken cancellationToken,
         string? mergeIndexPath)
+        => await RepoIndexAsync(
+            new HelmRepoIndexRequest
+            {
+                DirectoryPath = dirPath,
+                Url = url,
+                MergeIndexPath = mergeIndexPath
+            },
+            cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<CommandResult> RepoIndexAsync(
+        HelmRepoIndexRequest request,
+        CancellationToken cancellationToken = default)
     {
-        var indexPath = await HelmRepoIndexer.GenerateIndexAsync(dirPath, url, cancellationToken, mergeIndexPath);
+        ArgumentNullException.ThrowIfNull(request);
+        var indexPath = await HelmRepoIndexer.GenerateIndexAsync(request, cancellationToken);
         return Ok($"Index generated at: {indexPath}");
     }
 
@@ -1353,18 +1431,43 @@ public class HelmClient : IHelmClient
     public async Task<CommandResult> DependencyBuildAsync(
         string chartPath,
         CancellationToken cancellationToken = default)
+        => await DependencyBuildAsync(
+            new HelmDependencyBuildRequest { ChartPath = chartPath },
+            cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<CommandResult> DependencyBuildAsync(
+        HelmDependencyBuildRequest request,
+        CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(request);
         // Same as DependencyUpdate — build downloads and packages dependencies
-        return await DependencyUpdateAsync(chartPath, cancellationToken);
+        return await DependencyUpdateAsync(
+            new HelmDependencyUpdateRequest
+            {
+                ChartPath = request.ChartPath,
+                RepositoryConfigPath = request.RepositoryConfigPath,
+                RepositoryCachePath = request.RepositoryCachePath
+            },
+            cancellationToken);
     }
 
     public async Task<CommandResult> DependencyListAsync(
         string chartPath,
         CancellationToken cancellationToken = default)
+        => await DependencyListAsync(
+            new HelmDependencyListRequest { ChartPath = chartPath },
+            cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<CommandResult> DependencyListAsync(
+        HelmDependencyListRequest request,
+        CancellationToken cancellationToken = default)
     {
-        var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
+        ArgumentNullException.ThrowIfNull(request);
+        var chart = await HelmChartLoader.LoadAsync(request.ChartPath, cancellationToken);
         if (chart.Dependencies.Count == 0)
-            return Ok($"WARNING: no dependencies at {Path.Combine(chartPath, "charts")}{Environment.NewLine}");
+            return Ok($"WARNING: no dependencies at {Path.Combine(request.ChartPath, "charts")}{Environment.NewLine}");
 
         var output = new StringBuilder();
         output.AppendLine("NAME\tVERSION\tREPOSITORY\tSTATUS");
@@ -1372,7 +1475,7 @@ public class HelmClient : IHelmClient
         foreach (var dep in chart.Dependencies)
         {
             var status = await HelmDependencyStatusInspector.InspectAsync(
-                chartPath,
+                request.ChartPath,
                 chart,
                 dep,
                 cancellationToken);

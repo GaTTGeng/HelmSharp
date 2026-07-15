@@ -59,6 +59,28 @@ Read the corresponding package page first, then use this member index to locate 
 ### Usage note
 Read the corresponding package page first, then use this member index to locate the concrete type.
 
+## HelmPullRequest
+
+| Field | Value |
+| --- | --- |
+| Kind | `class` |
+| Source | `src/HelmSharp.Repo/HelmPullRequest.cs` |
+
+### Properties
+- `ChartReference`
+- `Destination`
+- `PassCredentialsAll`
+- `Password`
+- `RepositoryUrl`
+- `Untar`
+- `UntarDirectory`
+- `Username`
+- `VerifyDigest`
+- `Version`
+
+### Usage note
+Read the corresponding package page first, then use this member index to locate the concrete type.
+
 ## HelmRepoIndex
 
 | Field | Value |
@@ -74,6 +96,16 @@ Read the corresponding package page first, then use this member index to locate 
 ### Usage note
 Read the corresponding package page first, then use this member index to locate the concrete type.
 
+## HelmRepoIndexDiagnostic
+
+| Field | Value |
+| --- | --- |
+| Kind | `record` |
+| Source | `src/HelmSharp.Repo/HelmRepoIndexer.cs` |
+
+### Usage note
+Read the corresponding package page first, then use this member index to locate the concrete type.
+
 ## HelmRepoIndexer
 
 | Field | Value |
@@ -83,6 +115,34 @@ Read the corresponding package page first, then use this member index to locate 
 
 ### Methods
 - `GenerateIndexAsync(...)`
+- `GenerateIndexWithDiagnosticsAsync(...)`
+
+### Usage note
+Read the corresponding package page first, then use this member index to locate the concrete type.
+
+## HelmRepoIndexGenerationResult
+
+| Field | Value |
+| --- | --- |
+| Kind | `record` |
+| Source | `src/HelmSharp.Repo/HelmRepoIndexer.cs` |
+
+### Usage note
+Read the corresponding package page first, then use this member index to locate the concrete type.
+
+## HelmRepoIndexRequest
+
+| Field | Value |
+| --- | --- |
+| Kind | `class` |
+| Source | `src/HelmSharp.Repo/HelmRepoIndexRequest.cs` |
+
+### Properties
+- `DirectoryPath`
+- `FailOnInvalidPackage`
+- `MergeIndexPath`
+- `OutputPath`
+- `Url`
 
 ### Usage note
 Read the corresponding package page first, then use this member index to locate the concrete type.

@@ -36,6 +36,47 @@ flowchart LR
 | `HelmTemplateRenderer` | `HelmSharp.Engine` | 渲染清单和 NOTES。 |
 | `KubernetesManifestApplier` | `HelmSharp.Kube` | 提交/删除渲染后的清单。 |
 
+## 操作请求对象
+
+新代码执行打包、拉取、仓库索引和依赖工作流时，建议使用请求对象重载。现有便捷重载会继续保留，并转发到相同实现。
+
+```csharp
+using HelmSharp.Action;
+using HelmSharp.Repo;
+
+await client.PackageAsync(new HelmPackageRequest
+{
+    ChartPath = "./charts/app",
+    Destination = "./artifacts",
+    Version = "1.2.0"
+});
+
+await client.PullAsync(new HelmPullRequest
+{
+    ChartReference = "app",
+    Version = "~1.2.0",
+    RepositoryUrl = "https://charts.example.com"
+});
+
+await client.RepoIndexAsync(new HelmRepoIndexRequest
+{
+    DirectoryPath = "./artifacts",
+    Url = "https://charts.example.com",
+    MergeIndexPath = "./previous-index.yaml"
+});
+
+await client.DependencyUpdateAsync(new HelmDependencyUpdateRequest
+{
+    ChartPath = "./charts/app",
+    RepositoryConfigPath = "./helm/repositories.yaml",
+    RepositoryCachePath = "./helm/cache"
+});
+```
+
+拉取凭据默认仅发送到仓库同源地址。只有当可信索引确实从另一个需要认证的来源提供 Chart 归档时，才设置 `PassCredentialsAll = true`。
+
+这些请求类型明确表达默认值，也为 M2 行为留出扩展空间，避免继续向 `IHelmClient` 增加可选参数。
+
 ## 生成 API 参考
 
 生成参考按包列出公开类型、属性和方法：

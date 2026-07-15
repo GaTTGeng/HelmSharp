@@ -6,6 +6,10 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+### Added
+
+- Added extensible request objects for package, pull, repository index, and dependency operations while preserving convenience overloads (#140).
+
 ### Changed
 
 - Aligned dependency list status inspection for lock files, packaged and unpacked charts, semantic versions, aliases, and conditional dependencies (#136).

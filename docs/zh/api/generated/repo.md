@@ -59,6 +59,28 @@
 ### 使用提示
 先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
+## HelmPullRequest
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `class` |
+| 源文件 | `src/HelmSharp.Repo/HelmPullRequest.cs` |
+
+### 属性
+- `ChartReference`
+- `Destination`
+- `PassCredentialsAll`
+- `Password`
+- `RepositoryUrl`
+- `Untar`
+- `UntarDirectory`
+- `Username`
+- `VerifyDigest`
+- `Version`
+
+### 使用提示
+先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
+
 ## HelmRepoIndex
 
 | 字段 | 值 |
@@ -74,6 +96,16 @@
 ### 使用提示
 先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
+## HelmRepoIndexDiagnostic
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `record` |
+| 源文件 | `src/HelmSharp.Repo/HelmRepoIndexer.cs` |
+
+### 使用提示
+先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
+
 ## HelmRepoIndexer
 
 | 字段 | 值 |
@@ -83,6 +115,34 @@
 
 ### 方法
 - `GenerateIndexAsync(...)`
+- `GenerateIndexWithDiagnosticsAsync(...)`
+
+### 使用提示
+先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
+
+## HelmRepoIndexGenerationResult
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `record` |
+| 源文件 | `src/HelmSharp.Repo/HelmRepoIndexer.cs` |
+
+### 使用提示
+先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
+
+## HelmRepoIndexRequest
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `class` |
+| 源文件 | `src/HelmSharp.Repo/HelmRepoIndexRequest.cs` |
+
+### 属性
+- `DirectoryPath`
+- `FailOnInvalidPackage`
+- `MergeIndexPath`
+- `OutputPath`
+- `Url`
 
 ### 使用提示
 先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
