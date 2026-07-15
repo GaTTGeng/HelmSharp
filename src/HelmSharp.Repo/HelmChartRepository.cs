@@ -19,6 +19,7 @@ public sealed class HelmChartRepository : IDisposable
         typeof(HelmChartRepository).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
 
     private readonly HttpClient _httpClient;
+    private readonly Func<HelmRepository, HttpMessageHandler> _createRepositoryHandler;
     private readonly string _cacheDir;
     private readonly string _repositoryConfigPath;
 
@@ -36,8 +37,17 @@ public sealed class HelmChartRepository : IDisposable
     /// Creates a repository client with explicit configuration and cache locations.
     /// </summary>
     public HelmChartRepository(HelmRepositoryOptions options)
+        : this(options, new HttpClientHandler(), CreateConfiguredRepositoryHandler)
+    {
+    }
+
+    internal HelmChartRepository(
+        HelmRepositoryOptions options,
+        HttpMessageHandler httpMessageHandler,
+        Func<HelmRepository, HttpMessageHandler>? createRepositoryHandler = null)
     {
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(httpMessageHandler);
 
         _cacheDir = ResolveCacheDirectory(options);
         _repositoryConfigPath = ResolveRepositoryConfigPath(options);
@@ -46,7 +56,8 @@ public sealed class HelmChartRepository : IDisposable
         if (!string.IsNullOrWhiteSpace(configDirectory))
             Directory.CreateDirectory(configDirectory);
 
-        _httpClient = new HttpClient();
+        _httpClient = new HttpClient(httpMessageHandler);
+        _createRepositoryHandler = createRepositoryHandler ?? CreateConfiguredRepositoryHandler;
         _httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("helmsharp", ProductVersion));
     }
 
@@ -134,7 +145,50 @@ public sealed class HelmChartRepository : IDisposable
     public async Task<List<HelmRepository>> ListRepositoriesAsync(CancellationToken cancellationToken = default)
     {
         var repos = await LoadRepositoriesAsync(_repositoryConfigPath, cancellationToken);
-        return repos.Values.OrderBy(repo => repo.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        return repos.Values
+            .OrderBy(repo => repo.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(repo => repo.Name, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Searches cached indexes for all configured repositories. This operation does not access the network.
+    /// Run a repository update first to populate the caches.
+    /// </summary>
+    public async Task<List<HelmChartSearchResult>> SearchRepoAsync(
+        string keyword,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(keyword);
+        var repositories = await ListRepositoriesAsync(cancellationToken);
+        if (repositories.Count == 0)
+            throw new InvalidOperationException("No chart repositories are configured.");
+
+        var results = new List<HelmChartSearchResult>();
+        foreach (var repository in repositories)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var cachePath = Path.Combine(_cacheDir, GetRepositoryIndexCacheFileName(repository.Name));
+            if (!File.Exists(cachePath))
+                continue;
+
+            try
+            {
+                var yaml = await File.ReadAllTextAsync(cachePath, cancellationToken);
+                results.AddRange(SearchIndex(ParseRepoIndex(yaml), keyword, repository.Name));
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                // Match Helm's repository search behavior: one missing or corrupt cache must not
+                // prevent results from other configured repositories from being returned.
+            }
+        }
+
+        return SortSearchResults(results);
     }
 
     /// <summary>
@@ -148,28 +202,64 @@ public sealed class HelmChartRepository : IDisposable
         CancellationToken cancellationToken = default)
     {
         var index = await FetchRepoIndexAsync(repoUrl, username, password, cancellationToken);
-        var results = new List<HelmChartSearchResult>();
+        return SortSearchResults(SearchIndex(index, keyword, repositoryName: null));
+    }
 
-        foreach (var entry in index.Entries)
+    internal async Task<List<HelmRepositoryUpdateResult>> UpdateConfiguredRepositoriesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var repositories = await ListRepositoriesAsync(cancellationToken);
+        var results = new List<HelmRepositoryUpdateResult>(repositories.Count);
+        foreach (var repository in repositories)
         {
-            if (entry.Key.Contains(keyword, StringComparison.OrdinalIgnoreCase))
+            try
             {
-                var latest = HelmChartVersionResolver.Resolve(entry.Value, constraint: null);
-                if (latest is not null)
-                {
-                    results.Add(new HelmChartSearchResult
-                    {
-                        Name = entry.Key,
-                        Version = latest.Version,
-                        Description = latest.Description,
-                        AppVersion = latest.AppVersion
-                    });
-                }
+                await FetchRepoIndexAsync(repository, cancellationToken);
+                results.Add(new HelmRepositoryUpdateResult(repository.Name, true, null));
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                results.Add(new HelmRepositoryUpdateResult(repository.Name, false, ex.Message));
             }
         }
 
         return results;
     }
+
+    private static IEnumerable<HelmChartSearchResult> SearchIndex(
+        HelmRepoIndex index,
+        string keyword,
+        string? repositoryName)
+    {
+        foreach (var entry in index.Entries)
+        {
+            var latest = HelmChartVersionResolver.Resolve(entry.Value, constraint: null);
+            if (latest is null
+                || (!entry.Key.Contains(keyword, StringComparison.OrdinalIgnoreCase)
+                    && !(latest.Description?.Contains(keyword, StringComparison.OrdinalIgnoreCase) ?? false)))
+            {
+                continue;
+            }
+
+            yield return new HelmChartSearchResult
+            {
+                Name = repositoryName is null ? entry.Key : $"{repositoryName}/{entry.Key}",
+                Version = latest.Version,
+                Description = latest.Description,
+                AppVersion = latest.AppVersion
+            };
+        }
+    }
+
+    private static List<HelmChartSearchResult> SortSearchResults(IEnumerable<HelmChartSearchResult> results)
+        => results
+            .OrderBy(result => result.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(result => result.Name, StringComparer.Ordinal)
+            .ToList();
 
     /// <summary>
     /// Fetches and caches a repository index.
@@ -216,7 +306,20 @@ public sealed class HelmChartRepository : IDisposable
 
     private async Task<HelmRepoIndex> FetchConfiguredRepositoryIndexAsync(HelmRepository repository, CancellationToken cancellationToken)
     {
-        using var handler = new HttpClientHandler
+        using var handler = _createRepositoryHandler(repository);
+        using var client = new HttpClient(handler);
+        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("helmsharp", ProductVersion));
+        using var response = await SendRepositoryIndexRequestAsync(client, repository, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var yaml = await response.Content.ReadAsStringAsync(cancellationToken);
+        var index = ParseRepoIndex(yaml);
+        await CacheRepositoryIndexAsync(repository.Url, yaml, repository.Name, cancellationToken);
+        return index;
+    }
+
+    private static HttpMessageHandler CreateConfiguredRepositoryHandler(HelmRepository repository)
+    {
+        var handler = new HttpClientHandler
         {
             AllowAutoRedirect = false,
             PreAuthenticate = repository.PassCredentialsAll
@@ -249,15 +352,7 @@ public sealed class HelmChartRepository : IDisposable
         }
         if (!string.IsNullOrWhiteSpace(repository.CertFile))
             handler.ClientCertificates.Add(LoadClientCertificate(repository.CertFile, repository.KeyFile));
-
-        using var client = new HttpClient(handler);
-        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("helmsharp", ProductVersion));
-        using var response = await SendRepositoryIndexRequestAsync(client, repository, cancellationToken);
-        response.EnsureSuccessStatusCode();
-        var yaml = await response.Content.ReadAsStringAsync(cancellationToken);
-        var index = ParseRepoIndex(yaml);
-        await CacheRepositoryIndexAsync(repository.Url, yaml, repository.Name, cancellationToken);
-        return index;
+        return handler;
     }
 
     internal static async Task<HttpResponseMessage> SendRepositoryIndexRequestAsync(
@@ -1010,3 +1105,5 @@ public class HelmChartSearchResult
     public string? Description { get; set; }
     public string? AppVersion { get; set; }
 }
+
+internal sealed record HelmRepositoryUpdateResult(string Name, bool Succeeded, string? Error);
