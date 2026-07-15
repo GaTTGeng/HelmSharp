@@ -1,0 +1,20 @@
+apiVersion: v2
+name: dependency-list-with-lock
+version: 0.1.0
+dependencies:
+  - name: archive-ok
+    version: ~1.2.0
+    repository: https://example.test/charts
+  - name: archive-wrong
+    version: 2.0.0
+    repository: https://example.test/charts
+  - name: unpacked
+    version: ^3.0.0
+    repository: https://example.test/charts
+  - name: alias-target
+    alias: cache
+    version: 4.0.0
+    repository: https://example.test/charts
+  - name: local-dep
+    version: 5.0.0
+    repository: file://../local-dep

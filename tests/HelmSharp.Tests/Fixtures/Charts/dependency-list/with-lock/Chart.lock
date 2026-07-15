@@ -1,0 +1,18 @@
+dependencies:
+  - name: archive-ok
+    repository: https://example.test/charts
+    version: 1.2.3
+  - name: archive-wrong
+    repository: https://example.test/charts
+    version: 2.0.0
+  - name: unpacked
+    repository: https://example.test/charts
+    version: 3.1.0
+  - name: alias-target
+    repository: https://example.test/charts
+    version: 4.0.0
+  - name: local-dep
+    repository: file://../local-dep
+    version: 5.0.0
+digest: sha256:fixture
+generated: "2026-07-15T00:00:00Z"

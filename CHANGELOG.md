@@ -8,6 +8,7 @@ This project follows semantic versioning once stable releases begin.
 
 ### Changed
 
+- Aligned dependency list status inspection for lock files, packaged and unpacked charts, semantic versions, aliases, and conditional dependencies (#136).
 - Updated English and Simplified Chinese installation guidance for the 1.1.1 release.
 - Aligned chart repository configuration and cache locations with Helm-style durable settings (#133).
 - Added offline chart search across updated repository caches with repository-qualified results and partial update failure handling (#134).
