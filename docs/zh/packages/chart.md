@@ -31,6 +31,8 @@ dotnet add package HelmSharp.Chart --version 1.1.1
 
 用 `HelmChartLoader` 加载，用 `HelmValues` 合并，然后传给 `HelmSharp.Engine` 的 `HelmTemplateRenderer`。
 
+`charts/` 下的已打包依赖会作为子 Chart 加载。`Chart.lock` 选定精确版本时，加载器使用该身份映射同一 Chart 的多个版本或别名。别名作用域的默认值和覆盖值使用别名键。`Chart.yaml` 示例见 [Chart 打包与仓库工作流](../guide/chart-distribution.md)。
+
 ## 当前边界
 
 该包不渲染模板，也不修改 Kubernetes 资源。

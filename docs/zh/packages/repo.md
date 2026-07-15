@@ -47,6 +47,8 @@ dotnet add package HelmSharp.Repo --version 1.1.1
 
 先用仓库辅助方法获取 Chart，再交给 `HelmChartLoader` 或高层 `HelmClient`。
 
+包含隔离配置/缓存路径的添加、列出、更新、搜索、索引生成和拉取完整示例见 [Chart 打包与仓库工作流](../guide/chart-distribution.md)。
+
 ## 当前边界
 
-认证和 OCI 流程在 1.1.1 中仍比完整 Helm CLI 更有限。
+传统 HTTP 仓库配置、缓存搜索、语义版本拉取、摘要校验与安全解压已覆盖。来源证明校验和完整 OCI 注册表工作流仍属于后续里程碑。

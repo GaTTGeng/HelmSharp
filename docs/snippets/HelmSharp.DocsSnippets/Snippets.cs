@@ -190,6 +190,102 @@ public static class Snippets
             cancellationToken: cancellationToken);
     }
     // #endregion repository
+
+    // #region package-chart
+    public static Task<CommandResult> PackageChartAsync(
+        IHelmClient client,
+        string chartPath,
+        string outputDirectory,
+        CancellationToken cancellationToken)
+        => client.PackageAsync(new HelmPackageRequest
+        {
+            ChartPath = chartPath,
+            Destination = outputDirectory,
+            Version = "1.2.0",
+            AppVersion = "2026.07",
+            DependencyUpdate = true
+        }, cancellationToken);
+    // #endregion package-chart
+
+    // #region repository-index
+    public static Task<CommandResult> GenerateRepositoryIndexAsync(
+        IHelmClient client,
+        string packageDirectory,
+        CancellationToken cancellationToken)
+        => client.RepoIndexAsync(new HelmRepoIndexRequest
+        {
+            DirectoryPath = packageDirectory,
+            Url = "https://charts.example.com/stable",
+            MergeIndexPath = Path.Combine(packageDirectory, "previous-index.yaml"),
+            OutputPath = Path.Combine(packageDirectory, "index.yaml"),
+            FailOnInvalidPackage = true
+        }, cancellationToken);
+    // #endregion repository-index
+
+    // #region pull-chart
+    public static async Task<string> PullTraditionalChartAsync(
+        string repositoryConfigPath,
+        string repositoryCacheDirectory,
+        string outputDirectory,
+        CancellationToken cancellationToken)
+    {
+        using var repository = new HelmChartRepository(new HelmRepositoryOptions
+        {
+            RepositoryConfigPath = repositoryConfigPath,
+            CacheDirectory = repositoryCacheDirectory
+        });
+
+        await repository.AddRepositoryAsync(
+            "stable",
+            "https://charts.example.com/stable",
+            cancellationToken: cancellationToken);
+        var configured = (await repository.ListRepositoriesAsync(cancellationToken))
+            .Single(item => item.Name == "stable");
+        await repository.FetchRepoIndexAsync(configured, cancellationToken);
+
+        return await repository.PullChartAsync(new HelmPullRequest
+        {
+            ChartReference = "stable/app",
+            Version = "~1.2.0",
+            Destination = outputDirectory,
+            Untar = true,
+            UntarDirectory = Path.Combine(outputDirectory, "expanded"),
+            VerifyDigest = true
+        }, cancellationToken);
+    }
+    // #endregion pull-chart
+
+    // #region dependency-update
+    public static Task<CommandResult> UpdateDependenciesAsync(
+        IHelmClient client,
+        string chartPath,
+        string repositoryConfigPath,
+        string repositoryCacheDirectory,
+        CancellationToken cancellationToken)
+        => client.DependencyUpdateAsync(new HelmDependencyUpdateRequest
+        {
+            ChartPath = chartPath,
+            RepositoryConfigPath = repositoryConfigPath,
+            RepositoryCachePath = repositoryCacheDirectory,
+            SkipRepositoryRefresh = false
+        }, cancellationToken);
+    // #endregion dependency-update
+
+    // #region dependency-build
+    public static Task<CommandResult> BuildDependenciesAsync(
+        IHelmClient client,
+        string chartPath,
+        string repositoryConfigPath,
+        string repositoryCacheDirectory,
+        CancellationToken cancellationToken)
+        => client.DependencyBuildAsync(new HelmDependencyBuildRequest
+        {
+            ChartPath = chartPath,
+            RepositoryConfigPath = repositoryConfigPath,
+            RepositoryCachePath = repositoryCacheDirectory,
+            VerifyDigests = true
+        }, cancellationToken);
+    // #endregion dependency-build
 }
 
 // #region options-provider

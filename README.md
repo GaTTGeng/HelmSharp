@@ -135,11 +135,14 @@ await foreach (var line in client.UpgradeInstallStreamAsync(new HelmUpgradeInsta
 - Chart loading from directories and `.tgz` archives.
 - `values.yaml`, inline values, `--set`, `--set-string`, `--set-json`, and `--set-file`-style value overrides.
 - Helm-style template rendering for common control flow and functions.
-- Chart package creation.
-- Repository index generation and repository search/pull helpers.
+- Helm-compatible chart packaging with `.helmignore`, version/appVersion overrides, dependencies, and safe archive layout.
+- Traditional HTTP repository config/cache management, index generation/merge, offline search, semantic-version pull, digest verification, and safe extraction.
+- Dependency list/update/build with Helm-compatible `Chart.lock`, repository aliases, chart aliases, and local `file://` dependencies.
 - Managed Kubernetes apply/delete/wait operations for common Kubernetes resources.
 - Release history stored in Kubernetes Secrets.
 - Install, upgrade, uninstall, rollback, status, history, manifest, values, hooks, notes, and test-oriented APIs.
+
+See the [chart packaging and repository workflow guide](docs/guide/chart-distribution.md) for complete examples. OCI/provenance parity remains planned separately.
 
 ## Compatibility Validation
 

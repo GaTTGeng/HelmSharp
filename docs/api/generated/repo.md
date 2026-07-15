@@ -155,10 +155,30 @@ Read the corresponding package page first, then use this member index to locate 
 | Source | `src/HelmSharp.Repo/HelmChartRepository.cs` |
 
 ### Properties
+- `CaFile`
+- `CertFile`
+- `InsecureSkipTlsVerify`
+- `KeyFile`
 - `Name`
+- `PassCredentialsAll`
 - `Password`
 - `Url`
 - `Username`
+
+### Usage note
+Read the corresponding package page first, then use this member index to locate the concrete type.
+
+## HelmRepositoryOptions
+
+| Field | Value |
+| --- | --- |
+| Kind | `class` |
+| Source | `src/HelmSharp.Repo/HelmRepositoryOptions.cs` |
+
+### Properties
+- `CacheDirectory`
+- `ConfigDirectory`
+- `RepositoryConfigPath`
 
 ### Usage note
 Read the corresponding package page first, then use this member index to locate the concrete type.

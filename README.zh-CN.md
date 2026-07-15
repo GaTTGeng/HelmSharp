@@ -135,11 +135,14 @@ await foreach (var line in client.UpgradeInstallStreamAsync(new HelmUpgradeInsta
 - 从目录和 `.tgz` 归档加载 Chart。
 - 支持 `values.yaml`、内联 values、`--set`、`--set-string`、`--set-json`、`--set-file` 风格的值覆盖。
 - 支持常见控制流和函数的 Helm 风格模板渲染。
-- 创建 Chart 包。
-- 生成仓库索引、搜索和拉取 Chart。
+- 兼容 Helm 的 Chart 打包，包括 `.helmignore`、version/appVersion 覆盖、依赖和安全归档布局。
+- 传统 HTTP 仓库配置/缓存管理、索引生成与合并、离线搜索、语义版本拉取、摘要校验和安全解压。
+- 使用兼容 Helm 的 `Chart.lock` 执行依赖 list/update/build，并支持仓库别名、Chart 别名和本地 `file://` 依赖。
 - 对常见 Kubernetes 资源执行托管 apply/delete/wait。
 - 使用 Kubernetes Secret 保存 Release 历史。
 - 提供 install、upgrade、uninstall、rollback、status、history、manifest、values、hooks、notes 和 test 相关 API。
+
+完整示例见 [Chart 打包与仓库工作流指南](docs/zh/guide/chart-distribution.md)。OCI 与来源证明对齐将单独推进。
 
 ## 兼容性验证
 

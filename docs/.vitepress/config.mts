@@ -29,6 +29,7 @@ const englishSidebar = [
       { text: 'First Render', link: '/guide/first-render' },
       { text: 'Values', link: '/guide/values' },
       { text: 'Template Rendering', link: '/guide/template-rendering' },
+      { text: 'Chart Distribution', link: '/guide/chart-distribution' },
       { text: 'Release Workflows', link: '/guide/release-workflows' },
       { text: 'Kubernetes Operations', link: '/guide/kubernetes-operations' },
       { text: 'Error Handling', link: '/guide/error-handling' }
@@ -116,6 +117,7 @@ const chineseSidebar = [
       { text: '第一次渲染', link: '/zh/guide/first-render' },
       { text: '值配置（Values）', link: '/zh/guide/values' },
       { text: '模板渲染', link: '/zh/guide/template-rendering' },
+      { text: 'Chart 分发', link: '/zh/guide/chart-distribution' },
       { text: '发布工作流', link: '/zh/guide/release-workflows' },
       { text: 'Kubernetes 操作', link: '/zh/guide/kubernetes-operations' },
       { text: '错误处理', link: '/zh/guide/error-handling' }
