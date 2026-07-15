@@ -615,7 +615,11 @@ public sealed class HelmChartRepository : IDisposable
                 .Cast<object?>()
                 .ToList()
         };
-        await WriteAllTextAtomicallyAsync(path, HelmYaml.Serialize(document), ct);
+        await WriteAllTextAtomicallyAsync(
+            path,
+            HelmYaml.Serialize(document),
+            ct,
+            ownerOnlyWhenCreating: true);
     }
 
     private async Task<FileStream> AcquireRepositoryConfigurationLockAsync(CancellationToken cancellationToken)
@@ -666,11 +670,22 @@ public sealed class HelmChartRepository : IDisposable
     internal static async Task WriteAllTextAtomicallyAsync(
         string path,
         string contents,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool ownerOnlyWhenCreating = false)
     {
         var directory = Path.GetDirectoryName(path);
         if (!string.IsNullOrWhiteSpace(directory))
             Directory.CreateDirectory(directory);
+
+        UnixFileMode? unixMode = null;
+        if (!OperatingSystem.IsWindows())
+        {
+            unixMode = File.Exists(path)
+                ? File.GetUnixFileMode(path)
+                : ownerOnlyWhenCreating
+                    ? UnixFileMode.UserRead | UnixFileMode.UserWrite
+                    : null;
+        }
 
         var tempPath = Path.Combine(
             string.IsNullOrWhiteSpace(directory) ? "." : directory,
@@ -678,6 +693,8 @@ public sealed class HelmChartRepository : IDisposable
         try
         {
             await File.WriteAllTextAsync(tempPath, contents, cancellationToken);
+            if (!OperatingSystem.IsWindows() && unixMode is { } mode)
+                File.SetUnixFileMode(tempPath, mode);
             File.Move(tempPath, path, overwrite: true);
         }
         catch

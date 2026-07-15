@@ -462,6 +462,41 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
     }
 
     [Fact]
+    public async Task AddRepositoryAsync_PreservesOwnerOnlyUnixConfigurationPermissions()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var options = CreateOptions();
+        Directory.CreateDirectory(options.ConfigDirectory!);
+        var configPath = Path.Combine(options.ConfigDirectory!, "repositories.yaml");
+        await File.WriteAllTextAsync(configPath, "apiVersion: v1\nrepositories: []\n");
+        var ownerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        File.SetUnixFileMode(configPath, ownerOnly);
+        using var repository = new HelmChartRepository(options);
+
+        await repository.AddRepositoryAsync("stable", "https://charts.example.test");
+
+        Assert.Equal(ownerOnly, File.GetUnixFileMode(configPath));
+    }
+
+    [Fact]
+    public async Task AddRepositoryAsync_CreatesOwnerOnlyUnixConfiguration()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var options = CreateOptions();
+        using var repository = new HelmChartRepository(options);
+
+        await repository.AddRepositoryAsync("stable", "https://charts.example.test");
+
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            File.GetUnixFileMode(repository.RepositoryConfigPath));
+    }
+
+    [Fact]
     public void GetRepositoryIndexCacheFileName_UsesEachRepositoryName()
     {
         Assert.Equal("first-index.yaml", HelmChartRepository.GetRepositoryIndexCacheFileName("first"));
