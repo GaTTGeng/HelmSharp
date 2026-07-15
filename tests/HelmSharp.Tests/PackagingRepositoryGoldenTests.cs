@@ -597,13 +597,137 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
                 {
                     ChartReference = "repo-golden",
                     RepositoryUrl = server.BaseUrl,
-                    Version = version
+                    Version = version,
+                    Destination = Path.Combine(_tempDir, $"semver-archives-{Guid.NewGuid():N}"),
+                    Untar = true,
+                    UntarDirectory = Path.Combine(_tempDir, $"semver-charts-{Guid.NewGuid():N}")
                 },
                 CancellationToken.None);
             var chart = await HelmChartLoader.LoadAsync(sharpPath, CancellationToken.None);
 
             Assert.Equal(expectedVersion, chart.Version);
         }
+    }
+
+    [Fact]
+    public async Task PullAsync_ConfiguredRepositoryWritesLatestExactAndRangeArchivesToDestination()
+    {
+        var repoDir = Path.Combine(_tempDir, "configured-pull-repo");
+        Directory.CreateDirectory(repoDir);
+        await PackageRepoChartVersionAsync("1.0.0", repoDir);
+        await PackageRepoChartVersionAsync("1.2.0", repoDir);
+        await using var server = await LocalFileServer.StartAsync(repoDir);
+        await HelmRepoIndexer.GenerateIndexAsync(repoDir, server.BaseUrl, CancellationToken.None);
+
+        using var repository = CreateNoProxyRepository("configured-pull");
+        await repository.AddRepositoryAsync("local", server.BaseUrl);
+
+        await AssertArchiveAsync(version: null, expectedVersion: "1.2.0");
+        await AssertArchiveAsync(version: "1.0.0", expectedVersion: "1.0.0");
+        await AssertArchiveAsync(version: "~1.0.0", expectedVersion: "1.0.0");
+
+        async Task AssertArchiveAsync(string? version, string expectedVersion)
+        {
+            var destination = Path.Combine(_tempDir, $"configured-destination-{Guid.NewGuid():N}");
+            var archivePath = await repository.PullChartAsync(
+                new HelmPullRequest
+                {
+                    ChartReference = "local/repo-golden",
+                    Version = version,
+                    Destination = destination
+                },
+                CancellationToken.None);
+
+            Assert.Equal(Path.Combine(destination, $"repo-golden-{expectedVersion}.tgz"), archivePath);
+            Assert.True(File.Exists(archivePath));
+            var chart = await HelmChartLoader.LoadAsync(archivePath, CancellationToken.None);
+            Assert.Equal(expectedVersion, chart.Version);
+        }
+    }
+
+    [Fact]
+    public async Task PullAsync_DirectArchiveUrlWritesArchiveToDestination()
+    {
+        var repoDir = Path.Combine(_tempDir, "direct-pull-repo");
+        Directory.CreateDirectory(repoDir);
+        await PackageRepoChartVersionAsync("1.2.3", repoDir);
+        await using var server = await LocalFileServer.StartAsync(repoDir);
+        var destination = Path.Combine(_tempDir, "direct-pull-destination");
+        using var repository = CreateNoProxyRepository("direct-pull");
+
+        var archivePath = await repository.PullChartAsync(
+            new HelmPullRequest
+            {
+                ChartReference = $"{server.BaseUrl}/repo-golden-1.2.3.tgz",
+                Destination = destination
+            },
+            CancellationToken.None);
+
+        Assert.Equal(Path.Combine(destination, "repo-golden-1.2.3.tgz"), archivePath);
+        Assert.True(File.Exists(archivePath));
+    }
+
+    [Fact]
+    public async Task PullAsync_UntarExtractsChartUnderRequestedDirectory()
+    {
+        var repoDir = Path.Combine(_tempDir, "untar-pull-repo");
+        Directory.CreateDirectory(repoDir);
+        await PackageRepoChartVersionAsync("1.2.3", repoDir);
+        await using var server = await LocalFileServer.StartAsync(repoDir);
+        await HelmRepoIndexer.GenerateIndexAsync(repoDir, server.BaseUrl, CancellationToken.None);
+        using var repository = CreateNoProxyRepository("untar-pull");
+        await repository.AddRepositoryAsync("local", server.BaseUrl);
+        var destination = Path.Combine(_tempDir, "untar-pull-archives");
+        var extractionDirectory = Path.Combine(_tempDir, "untar-pull-charts");
+
+        var chartPath = await repository.PullChartAsync(
+            new HelmPullRequest
+            {
+                ChartReference = "local/repo-golden",
+                Version = "1.2.3",
+                Destination = destination,
+                Untar = true,
+                UntarDirectory = extractionDirectory
+            },
+            CancellationToken.None);
+
+        Assert.Equal(Path.Combine(extractionDirectory, "repo-golden"), chartPath);
+        Assert.True(File.Exists(Path.Combine(destination, "repo-golden-1.2.3.tgz")));
+        var chart = await HelmChartLoader.LoadAsync(chartPath, CancellationToken.None);
+        Assert.Equal("1.2.3", chart.Version);
+    }
+
+    [Fact]
+    public async Task PullAsync_DigestMismatchFailsBeforeWritingArchive()
+    {
+        var repoDir = Path.Combine(_tempDir, "digest-mismatch-pull-repo");
+        Directory.CreateDirectory(repoDir);
+        var packagePath = await PackageRepoChartVersionAsync("1.2.3", repoDir);
+        await using var server = await LocalFileServer.StartAsync(repoDir);
+        var indexPath = await HelmRepoIndexer.GenerateIndexAsync(repoDir, server.BaseUrl, CancellationToken.None);
+        var actualDigest = await ComputeSha256Async(packagePath);
+        var indexYaml = await File.ReadAllTextAsync(indexPath);
+        await File.WriteAllTextAsync(
+            indexPath,
+            indexYaml.Replace(
+                actualDigest,
+                new string('f', 64),
+                StringComparison.OrdinalIgnoreCase));
+        using var repository = CreateNoProxyRepository("digest-mismatch-pull");
+        await repository.AddRepositoryAsync("local", server.BaseUrl);
+        var destination = Path.Combine(_tempDir, "digest-mismatch-destination");
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() => repository.PullChartAsync(
+            new HelmPullRequest
+            {
+                ChartReference = "local/repo-golden",
+                Version = "1.2.3",
+                Destination = destination
+            },
+            CancellationToken.None));
+
+        Assert.Contains("digest mismatch", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(Directory.Exists(destination));
     }
 
     [Fact]
@@ -651,7 +775,10 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
                 RepositoryUrl = server.BaseUrl,
                 Version = "1.2.3",
                 Username = username,
-                Password = password
+                Password = password,
+                Destination = Path.Combine(_tempDir, "authenticated-pull-archives"),
+                Untar = true,
+                UntarDirectory = Path.Combine(_tempDir, "authenticated-pull-charts")
             },
             CancellationToken.None);
 
@@ -683,7 +810,10 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
                 ChartReference = "repo-golden",
                 RepositoryUrl = indexServer.BaseUrl,
                 Username = username,
-                Password = password
+                Password = password,
+                Destination = Path.Combine(_tempDir, "cross-origin-archives"),
+                Untar = true,
+                UntarDirectory = Path.Combine(_tempDir, "cross-origin-charts")
             },
             CancellationToken.None);
 
@@ -717,7 +847,10 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
                 RepositoryUrl = indexServer.BaseUrl,
                 Username = username,
                 Password = password,
-                PassCredentialsAll = true
+                PassCredentialsAll = true,
+                Destination = Path.Combine(_tempDir, "pass-credentials-archives"),
+                Untar = true,
+                UntarDirectory = Path.Combine(_tempDir, "pass-credentials-charts")
             },
             CancellationToken.None);
 
@@ -807,7 +940,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         return chartDir;
     }
 
-    private async Task PackageRepoChartVersionAsync(
+    private async Task<string> PackageRepoChartVersionAsync(
         string version,
         string destination,
         string description = "Repository golden chart")
@@ -822,7 +955,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
             """);
         await WriteTextAsync(Path.Combine(chartDir, "values.yaml"), $"version: {version}\n");
         await WriteTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), $"version: {version}\n");
-        await HelmChartPackager.PackageAsync(chartDir, destination, cancellationToken: CancellationToken.None);
+        return await HelmChartPackager.PackageAsync(chartDir, destination, cancellationToken: CancellationToken.None);
     }
 
     private async Task PackageFullMetadataRepoChartAsync(string destination)
@@ -1104,6 +1237,19 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
 
     private static HelmClient CreateClient()
         => new(new StaticHelmOptionsProvider());
+
+    private HelmChartRepository CreateNoProxyRepository(string name)
+    {
+        var options = new HelmRepositoryOptions
+        {
+            ConfigDirectory = Path.Combine(_tempDir, name, "config"),
+            CacheDirectory = Path.Combine(_tempDir, name, "cache")
+        };
+        return new HelmChartRepository(
+            options,
+            new HttpClientHandler { UseProxy = false },
+            _ => new HttpClientHandler { UseProxy = false });
+    }
 
     private static void AssertOperationSucceeded(string operation, HelmCliResult result)
         => Assert.True(
