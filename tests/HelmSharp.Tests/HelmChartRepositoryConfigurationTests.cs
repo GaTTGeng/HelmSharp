@@ -57,6 +57,22 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
     }
 
     [Fact]
+    public async Task RemoveRepositoryAsync_RemovesCachedIndexForRepositoryName()
+    {
+        using var repository = new HelmChartRepository(CreateOptions());
+        await repository.AddRepositoryAsync("stable", "https://stable.example.test");
+        Directory.CreateDirectory(repository.CacheDirectory);
+        var cachePath = Path.Combine(
+            repository.CacheDirectory,
+            HelmChartRepository.GetRepositoryIndexCacheFileName("stable"));
+        await File.WriteAllTextAsync(cachePath, "apiVersion: v1\nentries: {}\n");
+
+        await repository.RemoveRepositoryAsync("stable");
+
+        Assert.False(File.Exists(cachePath));
+    }
+
+    [Fact]
     public async Task AddRepositoryAsync_RejectsDuplicateAndInvalidNames()
     {
         using var repository = new HelmChartRepository(CreateOptions());
@@ -66,6 +82,17 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
             () => repository.AddRepositoryAsync("valid-name", "https://other.example.test"));
         await Assert.ThrowsAsync<ArgumentException>(
             () => repository.AddRepositoryAsync("not/a/repository", "https://charts.example.test"));
+    }
+
+    [Fact]
+    public async Task AddRepositoryAsync_IsIdempotentForMatchingConfiguration()
+    {
+        using var repository = new HelmChartRepository(CreateOptions());
+        await repository.AddRepositoryAsync("stable", "https://charts.example.test", "alice", "secret");
+
+        await repository.AddRepositoryAsync("stable", "https://charts.example.test/", "alice", "secret");
+
+        Assert.Single(await repository.ListRepositoriesAsync());
     }
 
     [Fact]

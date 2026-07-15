@@ -1,6 +1,9 @@
 using System.Formats.Tar;
 using System.IO.Compression;
+using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -95,16 +98,18 @@ public sealed class HelmChartRepository : IDisposable
         ValidateRepositoryName(name);
         var normalizedUrl = NormalizeRepositoryUrl(url);
         var repos = await LoadRepositoriesAsync(_repositoryConfigPath, cancellationToken);
-        if (repos.ContainsKey(name))
-            throw new InvalidOperationException($"Repository '{name}' already exists. Remove it before adding it again.");
-
-        repos[name] = new HelmRepository
+        var candidate = new HelmRepository
         {
-            Name = name,
-            Url = normalizedUrl,
-            Username = username,
-            Password = password
+            Name = name, Url = normalizedUrl, Username = username, Password = password
         };
+        if (repos.TryGetValue(name, out var existing))
+        {
+            if (RepositoryConfigurationsMatch(existing, candidate))
+                return;
+            throw new InvalidOperationException($"Repository '{name}' already exists. Remove it before adding it again.");
+        }
+
+        repos[name] = candidate;
         await SaveRepositoriesAsync(_repositoryConfigPath, repos, cancellationToken);
     }
 
@@ -117,6 +122,9 @@ public sealed class HelmChartRepository : IDisposable
         if (!repos.Remove(name))
             throw new InvalidOperationException($"Repository '{name}' does not exist.");
         await SaveRepositoriesAsync(_repositoryConfigPath, repos, cancellationToken);
+        var cachePath = Path.Combine(_cacheDir, GetRepositoryIndexCacheFileName(name));
+        if (File.Exists(cachePath))
+            File.Delete(cachePath);
     }
 
     /// <summary>
@@ -197,6 +205,106 @@ public sealed class HelmChartRepository : IDisposable
         await CacheRepositoryIndexAsync(repoUrl, yaml, repositoryName, cancellationToken);
         return index;
     }
+
+    /// <summary>Fetches an index using the TLS and credential options configured for a repository.</summary>
+    public Task<HelmRepoIndex> FetchRepoIndexAsync(HelmRepository repository, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(repository);
+        return FetchConfiguredRepositoryIndexAsync(repository, cancellationToken);
+    }
+
+    private async Task<HelmRepoIndex> FetchConfiguredRepositoryIndexAsync(HelmRepository repository, CancellationToken cancellationToken)
+    {
+        using var handler = new HttpClientHandler
+        {
+            AllowAutoRedirect = !repository.PassCredentialsAll,
+            PreAuthenticate = repository.PassCredentialsAll
+        };
+        if (!string.IsNullOrWhiteSpace(repository.Username))
+            handler.Credentials = new NetworkCredential(repository.Username, repository.Password);
+        if (repository.InsecureSkipTlsVerify)
+            handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
+        else if (!string.IsNullOrWhiteSpace(repository.CaFile))
+        {
+            var trustedRoots = LoadCertificates(repository.CaFile);
+            handler.ServerCertificateCustomValidationCallback = (_, certificate, _, sslPolicyErrors) =>
+            {
+                if (certificate is null)
+                    return false;
+                if ((sslPolicyErrors & SslPolicyErrors.RemoteCertificateNameMismatch) != 0)
+                    return false;
+                if ((sslPolicyErrors & SslPolicyErrors.RemoteCertificateNotAvailable) != 0)
+                    return false;
+
+                using var chain = new X509Chain();
+                chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+                chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+                foreach (var trustedRoot in trustedRoots)
+                {
+                    chain.ChainPolicy.CustomTrustStore.Add(trustedRoot);
+                }
+
+                using var serverCertificate = new X509Certificate2(certificate);
+                return chain.Build(serverCertificate);
+            };
+        }
+        if (!string.IsNullOrWhiteSpace(repository.CertFile))
+            handler.ClientCertificates.Add(LoadClientCertificate(repository.CertFile, repository.KeyFile));
+
+        using var client = new HttpClient(handler);
+        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("helmsharp", ProductVersion));
+        using var response = await SendRepositoryIndexRequestAsync(client, repository, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var yaml = await response.Content.ReadAsStringAsync(cancellationToken);
+        var index = ParseRepoIndex(yaml);
+        await CacheRepositoryIndexAsync(repository.Url, yaml, repository.Name, cancellationToken);
+        return index;
+    }
+
+    private static async Task<HttpResponseMessage> SendRepositoryIndexRequestAsync(
+        HttpClient client,
+        HelmRepository repository,
+        CancellationToken cancellationToken)
+    {
+        var currentUri = new Uri(repository.Url.TrimEnd('/') + "/index.yaml", UriKind.Absolute);
+        const int maxRedirects = 10;
+        for (var redirectCount = 0; redirectCount <= maxRedirects; redirectCount++)
+        {
+            using var request = CreateRepositoryIndexRequest(currentUri, repository);
+            var response = await client.SendAsync(request, cancellationToken);
+            if (!repository.PassCredentialsAll || !IsRedirect(response.StatusCode))
+                return response;
+
+            var location = response.Headers.Location;
+            if (location is null)
+                return response;
+
+            currentUri = location.IsAbsoluteUri ? location : new Uri(currentUri, location);
+            response.Dispose();
+        }
+
+        throw new HttpRequestException($"Repository index request exceeded {maxRedirects} redirects.");
+    }
+
+    private static HttpRequestMessage CreateRepositoryIndexRequest(Uri indexUri, HelmRepository repository)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, indexUri);
+        if (!string.IsNullOrWhiteSpace(repository.Username))
+        {
+            var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{repository.Username}:{repository.Password}"));
+            request.Headers.Authorization = new AuthenticationHeaderValue("Basic", credentials);
+        }
+
+        return request;
+    }
+
+    private static bool IsRedirect(HttpStatusCode statusCode)
+        => statusCode is HttpStatusCode.Moved
+            or HttpStatusCode.Found
+            or HttpStatusCode.SeeOther
+            or HttpStatusCode.TemporaryRedirect
+            or HttpStatusCode.PermanentRedirect
+            or HttpStatusCode.MultipleChoices;
 
     private async Task<string> PullFromHttpAsync(
         string chartUrl,
@@ -546,6 +654,40 @@ public sealed class HelmChartRepository : IDisposable
 
     private static bool GetBoolean(IDictionary<string, object?> values, string key)
         => values.TryGetValue(key, out var value) && value is not null && Convert.ToBoolean(value);
+
+    private static bool RepositoryConfigurationsMatch(HelmRepository left, HelmRepository right)
+        => string.Equals(left.Url, right.Url, StringComparison.Ordinal)
+           && string.Equals(left.Username, right.Username, StringComparison.Ordinal)
+           && string.Equals(left.Password, right.Password, StringComparison.Ordinal)
+           && string.Equals(left.CertFile, right.CertFile, StringComparison.Ordinal)
+           && string.Equals(left.KeyFile, right.KeyFile, StringComparison.Ordinal)
+           && string.Equals(left.CaFile, right.CaFile, StringComparison.Ordinal)
+           && left.InsecureSkipTlsVerify == right.InsecureSkipTlsVerify
+           && left.PassCredentialsAll == right.PassCredentialsAll;
+
+    private static X509Certificate2 LoadClientCertificate(string certFile, string? keyFile)
+    {
+        if (!string.IsNullOrWhiteSpace(keyFile))
+            return X509Certificate2.CreateFromPemFile(certFile, keyFile);
+#pragma warning disable SYSLIB0057 // X509CertificateLoader is not available on all target frameworks.
+        return File.ReadAllText(certFile).Contains("-----BEGIN CERTIFICATE-----", StringComparison.Ordinal)
+            ? X509Certificate2.CreateFromPemFile(certFile)
+            : new X509Certificate2(certFile);
+#pragma warning restore SYSLIB0057
+    }
+
+    private static X509Certificate2Collection LoadCertificates(string certFile)
+    {
+        var certificates = new X509Certificate2Collection();
+        var content = File.ReadAllText(certFile);
+        if (content.Contains("-----BEGIN CERTIFICATE-----", StringComparison.Ordinal))
+            certificates.ImportFromPem(content);
+        else
+#pragma warning disable SYSLIB0057 // X509CertificateLoader is not available on all target frameworks.
+            certificates.Import(certFile);
+#pragma warning restore SYSLIB0057
+        return certificates;
+    }
 
     private static void ValidateRepositoryName(string name)
     {
