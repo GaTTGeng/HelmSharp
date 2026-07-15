@@ -902,6 +902,13 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         var helmBuildChart = Path.Combine(_tempDir, "helm-build-parent");
         CopyDirectory(sharpUpdateChart, sharpBuildChart);
         CopyDirectory(helmUpdateChart, helmBuildChart);
+        var sharpLockBeforeBuild = await File.ReadAllBytesAsync(Path.Combine(sharpBuildChart, "Chart.lock"));
+        foreach (var archive in Directory.EnumerateFiles(Path.Combine(sharpBuildChart, "charts"), "*.tgz"))
+            File.Delete(archive);
+        foreach (var archive in Directory.EnumerateFiles(Path.Combine(helmBuildChart, "charts"), "*.tgz"))
+            File.Delete(archive);
+        await PackageDependencyChartVersionAsync("0.2.6", repoDir);
+        await HelmRepoIndexer.GenerateIndexAsync(repoDir, server.BaseUrl, CancellationToken.None);
 
         var sharpBuild = await client.DependencyBuildAsync(new HelmDependencyBuildRequest
         {
@@ -914,7 +921,85 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         var helmBuild = await HelmCliRunner.DependencyBuildAsync(helmBuildChart, helmBuildHome, CancellationToken.None);
         AssertOperationSucceeded("helm dependency build", helmBuild);
         AssertOperationSucceeded("HelmSharp DependencyBuildAsync", sharpBuild);
+        Assert.Equal(sharpLockBeforeBuild, await File.ReadAllBytesAsync(Path.Combine(sharpBuildChart, "Chart.lock")));
         await AssertDependencyPackageMatchesAsync(helmBuildChart, sharpBuildChart, "0.2.5");
+    }
+
+    [Fact]
+    public async Task DependencyBuildAsync_RejectsMissingAndStaleLocksWithoutChangingState()
+    {
+        var repoDir = Path.Combine(_tempDir, "dependency-build-lock-repository");
+        Directory.CreateDirectory(repoDir);
+        await PackageDependencyChartAsync(repoDir);
+        await using var server = await LocalFileServer.StartAsync(repoDir);
+        await HelmRepoIndexer.GenerateIndexAsync(repoDir, server.BaseUrl, CancellationToken.None);
+        var chartPath = await CreateDependencyParentChartAsync("dependency-build-lock-parent", server.BaseUrl);
+        var client = CreateClient();
+
+        var missing = await client.DependencyBuildAsync(new HelmDependencyBuildRequest
+        {
+            ChartPath = chartPath,
+            RepositoryCachePath = Path.Combine(_tempDir, "dependency-build-missing-cache")
+        });
+        Assert.False(missing.Succeeded);
+        Assert.Contains("Chart.lock is missing", missing.StandardError, StringComparison.Ordinal);
+
+        var update = await client.DependencyUpdateAsync(new HelmDependencyUpdateRequest
+        {
+            ChartPath = chartPath,
+            RepositoryCachePath = Path.Combine(_tempDir, "dependency-build-update-cache")
+        });
+        AssertOperationSucceeded("dependency update before stale build", update);
+        var lockPath = Path.Combine(chartPath, "Chart.lock");
+        var lockBeforeBuild = await File.ReadAllBytesAsync(lockPath);
+        var chartYamlPath = Path.Combine(chartPath, "Chart.yaml");
+        var chartYaml = await File.ReadAllTextAsync(chartYamlPath);
+        await File.WriteAllTextAsync(
+            chartYamlPath,
+            chartYaml.Replace("~0.2.0", "0.2.0", StringComparison.Ordinal));
+
+        var stale = await client.DependencyBuildAsync(new HelmDependencyBuildRequest
+        {
+            ChartPath = chartPath,
+            RepositoryCachePath = Path.Combine(_tempDir, "dependency-build-stale-cache")
+        });
+
+        Assert.False(stale.Succeeded);
+        Assert.Contains("out of sync", stale.StandardError, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(lockBeforeBuild, await File.ReadAllBytesAsync(lockPath));
+        Assert.True(File.Exists(Path.Combine(chartPath, "charts", "child-dep-0.2.5.tgz")));
+    }
+
+    [Fact]
+    public async Task DependencyBuildAsync_CorruptRepositoryArchiveFailsDigestValidation()
+    {
+        var repoDir = Path.Combine(_tempDir, "dependency-build-digest-repository");
+        Directory.CreateDirectory(repoDir);
+        await PackageDependencyChartAsync(repoDir);
+        await using var server = await LocalFileServer.StartAsync(repoDir);
+        await HelmRepoIndexer.GenerateIndexAsync(repoDir, server.BaseUrl, CancellationToken.None);
+        var chartPath = await CreateDependencyParentChartAsync("dependency-build-digest-parent", server.BaseUrl);
+        var client = CreateClient();
+        var update = await client.DependencyUpdateAsync(new HelmDependencyUpdateRequest
+        {
+            ChartPath = chartPath,
+            RepositoryCachePath = Path.Combine(_tempDir, "dependency-build-digest-update-cache")
+        });
+        AssertOperationSucceeded("dependency update before digest build", update);
+        var chartArchive = Path.Combine(chartPath, "charts", "child-dep-0.2.5.tgz");
+        File.Delete(chartArchive);
+        await File.WriteAllTextAsync(Path.Combine(repoDir, "child-dep-0.2.5.tgz"), "corrupt archive");
+
+        var build = await client.DependencyBuildAsync(new HelmDependencyBuildRequest
+        {
+            ChartPath = chartPath,
+            RepositoryCachePath = Path.Combine(_tempDir, "dependency-build-digest-build-cache")
+        });
+
+        Assert.False(build.Succeeded);
+        Assert.Contains("digest mismatch", build.StandardError, StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(chartArchive));
+        Assert.True(File.Exists(Path.Combine(chartPath, "Chart.lock")));
     }
 
     [Fact]

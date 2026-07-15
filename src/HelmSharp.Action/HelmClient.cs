@@ -1129,35 +1129,11 @@ public class HelmClient : IHelmClient
                 chartPath,
                 cancellationToken);
             var digest = HelmDependencyLockFile.ComputeDigest(requestedDependencies, resolvedDependencies);
-            Directory.CreateDirectory(chartsDir);
-            var desiredArchiveNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var stagedArchive in stagedArchives)
-            {
-                var archiveName = Path.GetFileName(stagedArchive);
-                desiredArchiveNames.Add(archiveName);
-                var destinationPath = Path.Combine(chartsDir, archiveName);
-                if (File.Exists(destinationPath) && await FilesHaveSameDigestAsync(
-                        stagedArchive,
-                        destinationPath,
-                        cancellationToken))
-                {
-                    File.Delete(stagedArchive);
-                }
-                else
-                {
-                    File.Move(stagedArchive, destinationPath, overwrite: true);
-                }
-                output.AppendLine($"Dependency saved to {destinationPath}");
-            }
-
-            foreach (var existingArchive in Directory.EnumerateFiles(chartsDir, "*.tgz", SearchOption.TopDirectoryOnly))
-            {
-                if (!desiredArchiveNames.Contains(Path.GetFileName(existingArchive)))
-                {
-                    File.Delete(existingArchive);
-                    output.AppendLine($"Deleted outdated dependency: {existingArchive}");
-                }
-            }
+            await InstallStagedDependencyArchivesAsync(
+                chartsDir,
+                stagedArchives,
+                output,
+                cancellationToken);
 
             var lockChanged = await HelmDependencyLockFile.WriteIfChangedAsync(
                 chartPath,
@@ -1191,6 +1167,46 @@ public class HelmClient : IHelmClient
         var leftDigest = await System.Security.Cryptography.SHA256.HashDataAsync(left, cancellationToken);
         var rightDigest = await System.Security.Cryptography.SHA256.HashDataAsync(right, cancellationToken);
         return leftDigest.AsSpan().SequenceEqual(rightDigest);
+    }
+
+    private static async Task InstallStagedDependencyArchivesAsync(
+        string chartsDirectory,
+        IReadOnlyList<string> stagedArchives,
+        StringBuilder output,
+        CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(chartsDirectory);
+        var desiredArchiveNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var stagedArchive in stagedArchives)
+        {
+            var archiveName = Path.GetFileName(stagedArchive);
+            desiredArchiveNames.Add(archiveName);
+            var destinationPath = Path.Combine(chartsDirectory, archiveName);
+            if (File.Exists(destinationPath) && await FilesHaveSameDigestAsync(
+                    stagedArchive,
+                    destinationPath,
+                    cancellationToken))
+            {
+                File.Delete(stagedArchive);
+            }
+            else
+            {
+                File.Move(stagedArchive, destinationPath, overwrite: true);
+            }
+            output.AppendLine($"Dependency saved to {destinationPath}");
+        }
+
+        foreach (var existingArchive in Directory.EnumerateFiles(
+                     chartsDirectory,
+                     "*.tgz",
+                     SearchOption.TopDirectoryOnly))
+        {
+            if (!desiredArchiveNames.Contains(Path.GetFileName(existingArchive)))
+            {
+                File.Delete(existingArchive);
+                output.AppendLine($"Deleted outdated dependency: {existingArchive}");
+            }
+        }
     }
 
     public async Task<CommandResult> PushAsync(
@@ -1517,15 +1533,153 @@ public class HelmClient : IHelmClient
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        // Same as DependencyUpdate — build downloads and packages dependencies
-        return await DependencyUpdateAsync(
-            new HelmDependencyUpdateRequest
+        var chartPath = Path.GetFullPath(request.ChartPath);
+        IReadOnlyList<Dictionary<string, object?>> requestedDependencies;
+        HelmDependencyLock? lockFile;
+        try
+        {
+            requestedDependencies = await HelmDependencyLockFile.LoadRequestedDependenciesAsync(
+                chartPath,
+                cancellationToken);
+            if (requestedDependencies.Count == 0)
+                return Ok("No dependencies found in Chart.yaml");
+
+            lockFile = await HelmDependencyLockFile.LoadAsync(chartPath, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return Fail($"Invalid Chart.lock: {ex.Message}");
+        }
+
+        if (lockFile is null)
+            return Fail("Chart.lock is missing. Run dependency update before dependency build.");
+
+        string expectedLockDigest;
+        try
+        {
+            expectedLockDigest = HelmDependencyLockFile.ComputeDigest(
+                requestedDependencies,
+                lockFile.Dependencies);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return Fail($"Chart.lock is inconsistent with Chart.yaml: {ex.Message}");
+        }
+        if (!string.Equals(lockFile.Digest, expectedLockDigest, StringComparison.OrdinalIgnoreCase))
+        {
+            return Fail(
+                "Chart.lock is out of sync with Chart.yaml. Run dependency update before dependency build.");
+        }
+
+        var chartsDirectory = Path.Combine(chartPath, "charts");
+        var stagingDirectory = Path.Combine(chartPath, $".helmsharp-dependency-build-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(stagingDirectory);
+        var output = new StringBuilder();
+        var stagedArchives = new List<string>(lockFile.Dependencies.Count);
+        var errors = new List<string>();
+
+        try
+        {
+            using var repository = request.RepositoryConfigPath is null && request.RepositoryCachePath is null
+                ? _createChartRepository()
+                : new HelmChartRepository(new HelmRepositoryOptions
+                {
+                    RepositoryConfigPath = request.RepositoryConfigPath,
+                    CacheDirectory = request.RepositoryCachePath
+                });
+
+            foreach (var dependency in lockFile.Dependencies)
             {
-                ChartPath = request.ChartPath,
-                RepositoryConfigPath = request.RepositoryConfigPath,
-                RepositoryCachePath = request.RepositoryCachePath
-            },
-            cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (string.IsNullOrWhiteSpace(dependency.Repository))
+                {
+                    errors.Add($"Dependency '{dependency.Name}' has no repository in Chart.lock.");
+                    continue;
+                }
+
+                try
+                {
+                    output.AppendLine(
+                        $"Downloading locked dependency: {dependency.Name} ({dependency.Version}) " +
+                        $"from {dependency.Repository}");
+                    var archivePath = await repository.PullChartAsync(
+                        new HelmPullRequest
+                        {
+                            ChartReference = dependency.Name,
+                            RepositoryUrl = dependency.Repository.TrimEnd('/'),
+                            Version = dependency.Version,
+                            Destination = stagingDirectory,
+                            VerifyDigest = request.VerifyDigests
+                        },
+                        cancellationToken);
+                    if (!File.Exists(archivePath))
+                        throw new InvalidDataException($"Dependency download did not produce an archive: {archivePath}");
+                    if (request.VerifyDigests && !string.IsNullOrWhiteSpace(dependency.ArchiveDigest))
+                    {
+                        await VerifyDependencyArchiveDigestAsync(
+                            archivePath,
+                            dependency.ArchiveDigest,
+                            dependency.Name,
+                            cancellationToken);
+                    }
+
+                    stagedArchives.Add(archivePath);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    errors.Add($"Dependency '{dependency.Name}' failed: {ex.Message}");
+                }
+            }
+
+            if (errors.Count > 0)
+            {
+                foreach (var error in errors)
+                    output.AppendLine($"Error: {error}");
+                return Fail(output.ToString());
+            }
+
+            await InstallStagedDependencyArchivesAsync(
+                chartsDirectory,
+                stagedArchives,
+                output,
+                cancellationToken);
+            output.AppendLine("Dependencies rebuilt from Chart.lock.");
+            return Ok(output.ToString());
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return Fail($"Dependency build failed: {ex.Message}{Environment.NewLine}{output}");
+        }
+        finally
+        {
+            if (Directory.Exists(stagingDirectory))
+                Directory.Delete(stagingDirectory, recursive: true);
+        }
+    }
+
+    private static async Task VerifyDependencyArchiveDigestAsync(
+        string archivePath,
+        string expectedDigest,
+        string dependencyName,
+        CancellationToken cancellationToken)
+    {
+        const string sha256Prefix = "sha256:";
+        var expectedHash = expectedDigest.StartsWith(sha256Prefix, StringComparison.OrdinalIgnoreCase)
+            ? expectedDigest[sha256Prefix.Length..]
+            : expectedDigest;
+        if (expectedHash.Length != 64 || expectedHash.Any(character => !Uri.IsHexDigit(character)))
+            throw new InvalidDataException(
+                $"Dependency '{dependencyName}' has invalid SHA-256 digest '{expectedDigest}' in Chart.lock.");
+
+        await using var archive = File.OpenRead(archivePath);
+        var actualHash = Convert.ToHexString(
+            await System.Security.Cryptography.SHA256.HashDataAsync(archive, cancellationToken));
+        if (!actualHash.Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                $"Dependency '{dependencyName}' digest mismatch: expected {expectedDigest}, " +
+                $"actual sha256:{actualHash.ToLowerInvariant()}.");
+        }
     }
 
     public async Task<CommandResult> DependencyListAsync(
