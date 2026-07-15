@@ -60,6 +60,7 @@ public static class HelmValues
         ProcessImports(effectiveGraph, result);
         MergeInto(result, overrides);
         PropagateGlobals(effectiveGraph, result, GetMap(result, "global"));
+        HelmDependencyProcessor.RegisterProcessedValues(chart, result, effectiveGraph);
 
         return result;
     }

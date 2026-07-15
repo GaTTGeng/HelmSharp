@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace HelmSharp.Chart;
 
 internal sealed record HelmDependencyNode(
@@ -9,6 +11,8 @@ internal sealed record HelmDependencyNode(
 
 internal static class HelmDependencyProcessor
 {
+    private static readonly ConditionalWeakTable<Dictionary<string, object?>, CachedGraph> ProcessedGraphs = new();
+
     internal static HelmDependencyNode BuildAll(HelmChart chart)
         => BuildNode(chart, chart.Name, null, null, string.Empty, includeDisabled: true);
 
@@ -16,6 +20,24 @@ internal static class HelmDependencyProcessor
         HelmChart chart,
         IDictionary<string, object?> values)
         => BuildNode(chart, chart.Name, null, values, string.Empty, includeDisabled: false);
+
+    internal static HelmDependencyNode GetEffectiveForRender(
+        HelmChart chart,
+        Dictionary<string, object?> values)
+    {
+        if (ProcessedGraphs.TryGetValue(values, out var cached) && ReferenceEquals(cached.Chart, chart))
+            return cached.Graph;
+        return BuildEffective(chart, values);
+    }
+
+    internal static void RegisterProcessedValues(
+        HelmChart chart,
+        Dictionary<string, object?> values,
+        HelmDependencyNode graph)
+    {
+        ProcessedGraphs.Remove(values);
+        ProcessedGraphs.Add(values, new CachedGraph(chart, graph));
+    }
 
     private static HelmDependencyNode BuildNode(
         HelmChart chart,
@@ -199,4 +221,6 @@ internal static class HelmDependencyProcessor
         subchart = null!;
         return false;
     }
+
+    private sealed record CachedGraph(HelmChart Chart, HelmDependencyNode Graph);
 }

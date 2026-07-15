@@ -90,7 +90,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         int revision = 1)
     {
         _chart = chart;
-        _dependencyGraph = HelmDependencyProcessor.BuildEffective(chart, values);
+        _dependencyGraph = HelmDependencyProcessor.GetEffectiveForRender(chart, values);
         _root = new TemplateContext(
             chart,
             releaseName,
