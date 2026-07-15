@@ -15,6 +15,7 @@ dependencies:
   - name: tagged
     version: 1.0.0
     repository: file://charts/tagged
+    condition: postImportGates.tagged
     tags:
       - mixedFalse
       - mixedTrue

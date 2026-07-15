@@ -2,6 +2,8 @@ exports:
   defaults:
     importedScalar: child-default
     exportedOnly: child-export
+    postImportGates:
+      tagged: false
 config:
   color: child-blue
   childOnly: child-mapped
