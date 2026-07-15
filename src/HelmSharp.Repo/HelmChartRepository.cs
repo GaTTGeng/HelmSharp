@@ -390,45 +390,48 @@ public sealed class HelmChartRepository : IDisposable
 
     private sealed record ArchiveFileEntry(string Name, byte[] Content);
 
-    private static HelmRepoIndex ParseRepoIndex(string yaml)
+    internal static HelmRepoIndex ParseRepoIndex(string yaml)
     {
         var dict = HelmYaml.DeserializeDictionary(yaml);
+        var apiVersion = HelmYaml.GetString(dict, "apiVersion");
+        if (string.IsNullOrWhiteSpace(apiVersion))
+            throw new InvalidDataException("Repository index is missing the required apiVersion field.");
+        if (!dict.TryGetValue("entries", out var entriesObj)
+            || entriesObj is not IDictionary<string, object?> entries)
+            throw new InvalidDataException("Repository index is missing the required entries mapping.");
+
         var index = new HelmRepoIndex
         {
-            ApiVersion = HelmYaml.GetString(dict, "apiVersion") ?? "v1",
+            ApiVersion = apiVersion,
             Generated = HelmYaml.GetString(dict, "generated") ?? string.Empty
         };
 
-        if (dict.TryGetValue("entries", out var entriesObj) &&
-            entriesObj is IDictionary<string, object?> entries)
+        foreach (var (name, value) in entries)
         {
-            foreach (var (name, value) in entries)
+            if (value is IList<object?> versions)
             {
-                if (value is IList<object?> versions)
+                var chartVersions = new List<HelmChartVersion>();
+                foreach (var v in versions)
                 {
-                    var chartVersions = new List<HelmChartVersion>();
-                    foreach (var v in versions)
+                    if (v is IDictionary<string, object?> verDict)
                     {
-                        if (v is IDictionary<string, object?> verDict)
+                        var cv = new HelmChartVersion
                         {
-                            var cv = new HelmChartVersion
-                            {
-                                Name = HelmYaml.GetString(verDict, "name") ?? name,
-                                Version = HelmYaml.GetString(verDict, "version") ?? string.Empty,
-                                Description = HelmYaml.GetString(verDict, "description"),
-                                AppVersion = HelmYaml.GetString(verDict, "appVersion"),
-                                Digest = HelmYaml.GetString(verDict, "digest"),
-                                Created = HelmYaml.GetString(verDict, "created"),
-                            };
-                            if (verDict.TryGetValue("urls", out var urlsObj) && urlsObj is IList<object?> urls)
-                            {
-                                cv.Urls = urls.Select(u => Convert.ToString(u) ?? string.Empty).ToList();
-                            }
-                            chartVersions.Add(cv);
+                            Name = HelmYaml.GetString(verDict, "name") ?? name,
+                            Version = HelmYaml.GetString(verDict, "version") ?? string.Empty,
+                            Description = HelmYaml.GetString(verDict, "description"),
+                            AppVersion = HelmYaml.GetString(verDict, "appVersion"),
+                            Digest = HelmYaml.GetString(verDict, "digest"),
+                            Created = HelmYaml.GetString(verDict, "created"),
+                        };
+                        if (verDict.TryGetValue("urls", out var urlsObj) && urlsObj is IList<object?> urls)
+                        {
+                            cv.Urls = urls.Select(u => Convert.ToString(u) ?? string.Empty).ToList();
                         }
+                        chartVersions.Add(cv);
                     }
-                    index.Entries[name] = chartVersions;
                 }
+                index.Entries[name] = chartVersions;
             }
         }
 
@@ -438,7 +441,7 @@ public sealed class HelmChartRepository : IDisposable
     private async Task<Dictionary<string, HelmRepository>> LoadRepositoriesAsync(string path, CancellationToken ct)
     {
         if (!File.Exists(path))
-            return new Dictionary<string, HelmRepository>(StringComparer.Ordinal);
+            return await LoadLegacyRepositoriesAsync(ct);
 
         var yaml = await File.ReadAllTextAsync(path, ct);
         var root = HelmYaml.DeserializeDictionary(yaml);
@@ -469,6 +472,18 @@ public sealed class HelmChartRepository : IDisposable
         }
 
         return repos;
+    }
+
+    private async Task<Dictionary<string, HelmRepository>> LoadLegacyRepositoriesAsync(CancellationToken ct)
+    {
+        var legacyPath = Path.Combine(_cacheDir, "repositories.json");
+        if (!File.Exists(legacyPath))
+            return new Dictionary<string, HelmRepository>(StringComparer.Ordinal);
+
+        var json = await File.ReadAllTextAsync(legacyPath, ct);
+        var repositories = JsonSerializer.Deserialize<Dictionary<string, HelmRepository>>(json)
+            ?? new Dictionary<string, HelmRepository>();
+        return new Dictionary<string, HelmRepository>(repositories, StringComparer.Ordinal);
     }
 
     private async Task SaveRepositoriesAsync(string path, Dictionary<string, HelmRepository> repos, CancellationToken ct)

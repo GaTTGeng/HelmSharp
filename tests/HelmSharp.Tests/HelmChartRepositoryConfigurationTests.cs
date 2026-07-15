@@ -87,6 +87,40 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
         Assert.Equal(["Stable", "stable"], (await repository.ListRepositoriesAsync()).Select(entry => entry.Name));
     }
 
+    [Theory]
+    [InlineData("entries: {}\n")]
+    [InlineData("apiVersion: v1\nentries: []\n")]
+    public void ParseRepoIndex_RejectsMissingOrInvalidRequiredFields(string yaml)
+    {
+        Assert.Throws<InvalidDataException>(() => HelmChartRepository.ParseRepoIndex(yaml));
+    }
+
+    [Fact]
+    public async Task ListRepositoriesAsync_LoadsLegacyJsonWhenYamlConfigurationIsAbsent()
+    {
+        var options = CreateOptions();
+        Directory.CreateDirectory(options.CacheDirectory!);
+        var legacyRepositories = new Dictionary<string, HelmRepository>
+        {
+            ["legacy"] = new()
+            {
+                Name = "legacy",
+                Url = "https://legacy.example.test",
+                Username = "alice"
+            }
+        };
+        await File.WriteAllTextAsync(
+            Path.Combine(options.CacheDirectory!, "repositories.json"),
+            System.Text.Json.JsonSerializer.Serialize(legacyRepositories));
+        using var repository = new HelmChartRepository(options);
+
+        var legacy = Assert.Single(await repository.ListRepositoriesAsync());
+
+        Assert.Equal("legacy", legacy.Name);
+        Assert.Equal("https://legacy.example.test", legacy.Url);
+        Assert.Equal("alice", legacy.Username);
+    }
+
     [Fact]
     public async Task RepositoryConfigPath_OverridesConfigDirectory()
     {
