@@ -73,6 +73,52 @@
 ### 使用提示
 先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
+## HelmDependencyBuildRequest
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `class` |
+| 源文件 | `src/HelmSharp.Action/HelmDependencyRequests.cs` |
+
+### 属性
+- `ChartPath`
+- `RepositoryCachePath`
+- `RepositoryConfigPath`
+- `VerifyDigests`
+
+### 使用提示
+先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
+
+## HelmDependencyListRequest
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `class` |
+| 源文件 | `src/HelmSharp.Action/HelmDependencyRequests.cs` |
+
+### 属性
+- `ChartPath`
+- `IncludeDiagnostics`
+
+### 使用提示
+先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
+
+## HelmDependencyUpdateRequest
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `class` |
+| 源文件 | `src/HelmSharp.Action/HelmDependencyRequests.cs` |
+
+### 属性
+- `ChartPath`
+- `RepositoryCachePath`
+- `RepositoryConfigPath`
+- `SkipRepositoryRefresh`
+
+### 使用提示
+先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
+
 ## HelmExecutionOptions
 
 | 字段 | 值 |
@@ -126,6 +172,24 @@
 | --- | --- |
 | 类型类别 | `enum` |
 | 源文件 | `src/HelmSharp.Action/HelmHookExecutor.cs` |
+
+### 使用提示
+先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
+
+## HelmPackageRequest
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `class` |
+| 源文件 | `src/HelmSharp.Action/HelmPackageRequest.cs` |
+
+### 属性
+- `AppVersion`
+- `ChartPath`
+- `DependencyUpdate`
+- `Destination`
+- `SkipSchemaValidation`
+- `Version`
 
 ### 使用提示
 先查看对应包页面的场景示例，再使用此成员索引定位具体类型。

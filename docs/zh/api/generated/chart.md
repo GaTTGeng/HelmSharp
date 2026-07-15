@@ -21,6 +21,7 @@
 - `Description`
 - `Files`
 - `Home`
+- `Icon`
 - `Keywords`
 - `KubeVersion`
 - `LockEntries`

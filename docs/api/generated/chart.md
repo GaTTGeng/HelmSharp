@@ -21,6 +21,7 @@ Use this page as a member index. Start with the package guide for usage recommen
 - `Description`
 - `Files`
 - `Home`
+- `Icon`
 - `Keywords`
 - `KubeVersion`
 - `LockEntries`

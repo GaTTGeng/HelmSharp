@@ -36,6 +36,45 @@ flowchart LR
 | `HelmTemplateRenderer` | `HelmSharp.Engine` | Render manifests and NOTES. |
 | `KubernetesManifestApplier` | `HelmSharp.Kube` | Apply/delete rendered manifests. |
 
+## Operation request objects
+
+For package, pull, repository index, and dependency workflows, prefer request-object overloads in new code. Existing convenience overloads remain available and route through the same implementations.
+
+```csharp
+using HelmSharp.Action;
+using HelmSharp.Repo;
+
+await client.PackageAsync(new HelmPackageRequest
+{
+    ChartPath = "./charts/app",
+    Destination = "./artifacts",
+    Version = "1.2.0"
+});
+
+await client.PullAsync(new HelmPullRequest
+{
+    ChartReference = "app",
+    Version = "~1.2.0",
+    RepositoryUrl = "https://charts.example.com"
+});
+
+await client.RepoIndexAsync(new HelmRepoIndexRequest
+{
+    DirectoryPath = "./artifacts",
+    Url = "https://charts.example.com",
+    MergeIndexPath = "./previous-index.yaml"
+});
+
+await client.DependencyUpdateAsync(new HelmDependencyUpdateRequest
+{
+    ChartPath = "./charts/app",
+    RepositoryConfigPath = "./helm/repositories.yaml",
+    RepositoryCachePath = "./helm/cache"
+});
+```
+
+The request types make defaults explicit and leave room for M2 behavior without adding more optional parameters to `IHelmClient`.
+
 ## Generated API reference
 
 The generated reference lists public types, properties, and methods by package:

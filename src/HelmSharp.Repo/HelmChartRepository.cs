@@ -77,19 +77,49 @@ public sealed class HelmChartRepository : IDisposable
         string chartRef,
         string? version = null,
         CancellationToken cancellationToken = default)
+        => await PullChartAsync(
+            new HelmPullRequest
+            {
+                ChartReference = chartRef,
+                Version = version,
+                Untar = true
+            },
+            cancellationToken);
+
+    /// <summary>
+    /// Downloads a chart using an extensible request object.
+    /// </summary>
+    public async Task<string> PullChartAsync(
+        HelmPullRequest request,
+        CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(request);
+        var chartRef = request.ChartReference;
+        if (!string.IsNullOrWhiteSpace(request.RepositoryUrl) &&
+            !chartRef.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+            !chartRef.StartsWith("https://", StringComparison.OrdinalIgnoreCase) &&
+            !chartRef.StartsWith("oci://", StringComparison.OrdinalIgnoreCase))
+        {
+            chartRef = $"{request.RepositoryUrl.TrimEnd('/')}/{chartRef.TrimStart('/')}";
+        }
+
         // Local path
         if (Directory.Exists(chartRef) || File.Exists(chartRef))
             return chartRef;
 
         // OCI reference
         if (chartRef.StartsWith("oci://", StringComparison.OrdinalIgnoreCase))
-            return await PullFromOciAsync(chartRef, version, cancellationToken);
+            return await PullFromOciAsync(chartRef, request.Version, cancellationToken);
 
         // HTTP/HTTPS URL or repo/name reference
         if (chartRef.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
             chartRef.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-            return await PullFromHttpAsync(chartRef, version, cancellationToken);
+            return await PullFromHttpAsync(
+                chartRef,
+                request.Version,
+                request.Username,
+                request.Password,
+                cancellationToken);
 
         // Assume it's a local path that doesn't exist yet
         return chartRef;
@@ -413,6 +443,8 @@ public sealed class HelmChartRepository : IDisposable
     private async Task<string> PullFromHttpAsync(
         string chartUrl,
         string? version,
+        string? username,
+        string? password,
         CancellationToken cancellationToken)
     {
         var url = chartUrl;
@@ -434,7 +466,13 @@ public sealed class HelmChartRepository : IDisposable
                 Query = null
             };
             var repoUrl = repoUri.Uri.ToString().TrimEnd('/');
-            var entry = await ResolveChartVersionAsync(repoUrl, chartName, version, cancellationToken: cancellationToken);
+            var entry = await ResolveChartVersionAsync(
+                repoUrl,
+                chartName,
+                version,
+                username,
+                password,
+                cancellationToken);
 
             url = entry.Urls.FirstOrDefault()
                   ?? throw new InvalidOperationException($"No download URL for chart '{chartName}' version '{entry.Version}'");

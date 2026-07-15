@@ -10,6 +10,49 @@ namespace HelmSharp.Repo;
 public static class HelmRepoIndexer
 {
     /// <summary>
+    /// Generates an index.yaml using an extensible request object.
+    /// </summary>
+    public static async Task<string> GenerateIndexAsync(
+        HelmRepoIndexRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var result = await GenerateIndexWithDiagnosticsAsync(
+            request.DirectoryPath,
+            request.Url,
+            cancellationToken,
+            request.MergeIndexPath);
+
+        if (request.FailOnInvalidPackage && result.Diagnostics.Count > 0)
+        {
+            File.Delete(result.IndexPath);
+            throw new InvalidDataException(
+                $"Repository index generation failed for {result.Diagnostics.Count} invalid chart package(s): " +
+                result.Diagnostics[0].Message,
+                result.Diagnostics[0].Exception);
+        }
+
+        if (string.IsNullOrWhiteSpace(request.OutputPath))
+            return result.IndexPath;
+
+        var outputPath = Path.GetFullPath(request.OutputPath);
+        var generatedPath = Path.GetFullPath(result.IndexPath);
+        if (string.Equals(
+                generatedPath,
+                outputPath,
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+        {
+            return result.IndexPath;
+        }
+
+        var outputDirectory = Path.GetDirectoryName(outputPath);
+        if (!string.IsNullOrEmpty(outputDirectory))
+            Directory.CreateDirectory(outputDirectory);
+        File.Move(result.IndexPath, outputPath, overwrite: true);
+        return outputPath;
+    }
+
+    /// <summary>
     /// Generates an index.yaml for a directory containing .tgz chart packages.
     /// </summary>
     public static Task<string> GenerateIndexAsync(

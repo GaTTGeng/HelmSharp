@@ -593,8 +593,12 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         {
             using var repository = new HelmChartRepository(Path.Combine(_tempDir, $"sharp-cache-{Guid.NewGuid():N}"));
             var sharpPath = await repository.PullChartAsync(
-                $"{server.BaseUrl}/repo-golden",
-                version,
+                new HelmPullRequest
+                {
+                    ChartReference = "repo-golden",
+                    RepositoryUrl = server.BaseUrl,
+                    Version = version
+                },
                 CancellationToken.None);
             var chart = await HelmChartLoader.LoadAsync(sharpPath, CancellationToken.None);
 
