@@ -22,18 +22,31 @@ public class HelmClient : IHelmClient
 
     private readonly IHelmOptionsProvider _optionsProvider;
     private readonly Func<HelmExecutionOptions, string?, string?, CancellationToken, Task<k8s.Kubernetes>> _createKubernetesClientAsync;
+    private readonly Func<HelmChartRepository> _createChartRepository;
 
     public HelmClient(IHelmOptionsProvider optionsProvider)
-        : this(optionsProvider, CreateKubernetesClientAsync)
+        : this(optionsProvider, CreateKubernetesClientAsync, static () => new HelmChartRepository())
     {
     }
 
     internal HelmClient(
         IHelmOptionsProvider optionsProvider,
         Func<HelmExecutionOptions, string?, string?, CancellationToken, Task<k8s.Kubernetes>> createKubernetesClientAsync)
+        : this(optionsProvider, createKubernetesClientAsync, static () => new HelmChartRepository())
     {
+    }
+
+    internal HelmClient(
+        IHelmOptionsProvider optionsProvider,
+        Func<HelmExecutionOptions, string?, string?, CancellationToken, Task<k8s.Kubernetes>> createKubernetesClientAsync,
+        Func<HelmChartRepository> createChartRepository)
+    {
+        ArgumentNullException.ThrowIfNull(optionsProvider);
+        ArgumentNullException.ThrowIfNull(createKubernetesClientAsync);
+        ArgumentNullException.ThrowIfNull(createChartRepository);
         _optionsProvider = optionsProvider;
         _createKubernetesClientAsync = createKubernetesClientAsync;
+        _createChartRepository = createChartRepository;
     }
 
     public Task<CommandResult> VersionAsync(CancellationToken cancellationToken = default)
@@ -949,7 +962,7 @@ public class HelmClient : IHelmClient
         string? destination = null,
         CancellationToken cancellationToken = default)
     {
-        using var repo = new HelmChartRepository();
+        using var repo = _createChartRepository();
         var path = await repo.PullChartAsync(chartRef, version, cancellationToken);
         return Ok($"Chart pulled to: {path}");
     }
@@ -994,7 +1007,7 @@ public class HelmClient : IHelmClient
         Directory.CreateDirectory(chartsDir);
 
         var output = new StringBuilder();
-        using var repo = new HelmChartRepository();
+        using var repo = _createChartRepository();
 
         foreach (var dep in chart.Dependencies)
         {
@@ -1072,7 +1085,7 @@ public class HelmClient : IHelmClient
         string? password = null,
         CancellationToken cancellationToken = default)
     {
-        using var repo = new HelmChartRepository();
+        using var repo = _createChartRepository();
         await repo.AddRepositoryAsync(name, url, username, password, cancellationToken);
         return Ok($"Repository \"{name}\" added with URL: {url}");
     }
@@ -1081,7 +1094,7 @@ public class HelmClient : IHelmClient
         string name,
         CancellationToken cancellationToken = default)
     {
-        using var repo = new HelmChartRepository();
+        using var repo = _createChartRepository();
         await repo.RemoveRepositoryAsync(name, cancellationToken);
         return Ok($"Repository \"{name}\" removed.");
     }
@@ -1089,8 +1102,8 @@ public class HelmClient : IHelmClient
     public async Task<CommandResult> RepoListAsync(
         CancellationToken cancellationToken = default)
     {
-        using var repo = new HelmChartRepository();
-        var repos = await repo.ListRepositoriesAsync();
+        using var repo = _createChartRepository();
+        var repos = await repo.ListRepositoriesAsync(cancellationToken);
         return Ok(System.Text.Json.JsonSerializer.Serialize(repos, JsonDefaults));
     }
 
@@ -1099,11 +1112,10 @@ public class HelmClient : IHelmClient
         string? repoUrl = null,
         CancellationToken cancellationToken = default)
     {
-        if (repoUrl is null)
-            return Fail("Repository URL is required for search");
-
-        using var repo = new HelmChartRepository();
-        var results = await repo.SearchRepoAsync(repoUrl, keyword, cancellationToken: cancellationToken);
+        using var repo = _createChartRepository();
+        var results = repoUrl is null
+            ? await repo.SearchRepoAsync(keyword, cancellationToken)
+            : await repo.SearchRepoAsync(repoUrl, keyword, cancellationToken: cancellationToken);
         return Ok(System.Text.Json.JsonSerializer.Serialize(results, JsonDefaults));
     }
 
@@ -1232,27 +1244,18 @@ public class HelmClient : IHelmClient
     public async Task<CommandResult> RepoUpdateAsync(
         CancellationToken cancellationToken = default)
     {
-        using var repo = new HelmChartRepository();
-        var repos = await repo.ListRepositoriesAsync();
+        using var repo = _createChartRepository();
+        var results = await repo.UpdateConfiguredRepositoriesAsync(cancellationToken);
         var output = new StringBuilder();
-        var updated = 0;
-        var failed = 0;
-
-        foreach (var r in repos)
+        foreach (var result in results)
         {
-            try
-            {
-                await repo.FetchRepoIndexAsync(r, cancellationToken);
-                updated++;
-                output.AppendLine($"Successfully updated: {r.Name}");
-            }
-            catch (Exception ex)
-            {
-                failed++;
-                output.AppendLine($"Failed to update {r.Name}: {ex.Message}");
-            }
+            output.AppendLine(result.Succeeded
+                ? $"Successfully updated: {result.Name}"
+                : $"Failed to update {result.Name}: {result.Error}");
         }
 
+        var updated = results.Count(result => result.Succeeded);
+        var failed = results.Count - updated;
         output.AppendLine($"Update complete. {updated} updated, {failed} failed.");
         return Ok(output.ToString());
     }
