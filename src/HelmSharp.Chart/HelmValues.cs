@@ -52,10 +52,29 @@ public static class HelmValues
         foreach (var (key, value) in setJsonValues ?? [])
             SetPath(overrides, key, ParseJsonValue(value));
 
+        return ProcessOverrides(chart, overrides, out _);
+    }
+
+    internal static Dictionary<string, object?> PrepareForRender(
+        HelmChart chart,
+        Dictionary<string, object?> values,
+        out HelmDependencyNode effectiveGraph)
+    {
+        if (HelmDependencyProcessor.TryGetProcessedGraph(chart, values, out effectiveGraph))
+            return values;
+
+        return ProcessOverrides(chart, values, out effectiveGraph);
+    }
+
+    private static Dictionary<string, object?> ProcessOverrides(
+        HelmChart chart,
+        Dictionary<string, object?> overrides,
+        out HelmDependencyNode effectiveGraph)
+    {
         // Helm first coalesces all loaded dependencies to evaluate enablement, then
         // removes disabled nodes before importing child values and doing the final merge.
         var evaluationValues = BuildChartValues(chart, overrides, HelmDependencyProcessor.BuildAll(chart));
-        var effectiveGraph = HelmDependencyProcessor.BuildEffective(chart, evaluationValues);
+        effectiveGraph = HelmDependencyProcessor.BuildEffective(chart, evaluationValues);
         var result = BuildChartValues(chart, new Dictionary<string, object?>(), effectiveGraph);
         ProcessImports(effectiveGraph, result);
         MergeInto(result, overrides);

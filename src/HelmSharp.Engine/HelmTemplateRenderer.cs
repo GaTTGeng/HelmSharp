@@ -90,13 +90,13 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         int revision = 1)
     {
         _chart = chart;
-        _dependencyGraph = HelmDependencyProcessor.GetEffectiveForRender(chart, values);
+        var renderValues = HelmValues.PrepareForRender(chart, values, out _dependencyGraph);
         _root = new TemplateContext(
             chart,
             releaseName,
             releaseNamespace,
-            values,
-            values,
+            renderValues,
+            renderValues,
             new Dictionary<string, object?>(StringComparer.Ordinal))
         {
             IsInstall = !isUpgrade,

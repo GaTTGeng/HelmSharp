@@ -1,4 +1,6 @@
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace HelmSharp.Chart;
 
@@ -11,7 +13,7 @@ internal sealed record HelmDependencyNode(
 
 internal static class HelmDependencyProcessor
 {
-    private static readonly ConditionalWeakTable<Dictionary<string, object?>, CachedGraph> ProcessedGraphs = new();
+    private static readonly ConditionalWeakTable<HelmChart, ProcessedChartGraphs> ProcessedGraphs = new();
 
     internal static HelmDependencyNode BuildAll(HelmChart chart)
         => BuildNode(chart, chart.Name, null, null, string.Empty, includeDisabled: true);
@@ -21,13 +23,17 @@ internal static class HelmDependencyProcessor
         IDictionary<string, object?> values)
         => BuildNode(chart, chart.Name, null, values, string.Empty, includeDisabled: false);
 
-    internal static HelmDependencyNode GetEffectiveForRender(
+    internal static bool TryGetProcessedGraph(
         HelmChart chart,
-        Dictionary<string, object?> values)
+        Dictionary<string, object?> values,
+        out HelmDependencyNode graph)
     {
-        if (ProcessedGraphs.TryGetValue(values, out var cached) && ReferenceEquals(cached.Chart, chart))
-            return cached.Graph;
-        return BuildEffective(chart, values);
+        if (ProcessedGraphs.TryGetValue(chart, out var cached) &&
+            cached.TryGet(GetValuesFingerprint(values), out graph))
+            return true;
+
+        graph = null!;
+        return false;
     }
 
     internal static void RegisterProcessedValues(
@@ -35,8 +41,8 @@ internal static class HelmDependencyProcessor
         Dictionary<string, object?> values,
         HelmDependencyNode graph)
     {
-        ProcessedGraphs.Remove(values);
-        ProcessedGraphs.Add(values, new CachedGraph(chart, graph));
+        var cached = ProcessedGraphs.GetValue(chart, _ => new ProcessedChartGraphs());
+        cached.Set(GetValuesFingerprint(values), graph);
     }
 
     private static HelmDependencyNode BuildNode(
@@ -222,5 +228,56 @@ internal static class HelmDependencyProcessor
         return false;
     }
 
-    private sealed record CachedGraph(HelmChart Chart, HelmDependencyNode Graph);
+    private static string GetValuesFingerprint(IDictionary<string, object?> values)
+    {
+        var builder = new StringBuilder();
+        AppendCanonical(builder, values);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString())));
+    }
+
+    private static void AppendCanonical(StringBuilder builder, object? value)
+    {
+        switch (value)
+        {
+            case null:
+                builder.Append('n');
+                return;
+            case IDictionary<string, object?> dictionary:
+                builder.Append('{');
+                foreach (var (key, child) in dictionary.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+                {
+                    builder.Append(key.Length).Append(':').Append(key);
+                    AppendCanonical(builder, child);
+                }
+                builder.Append('}');
+                return;
+            case IEnumerable<object?> sequence:
+                builder.Append('[');
+                foreach (var child in sequence)
+                    AppendCanonical(builder, child);
+                builder.Append(']');
+                return;
+            default:
+                var text = Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
+                builder.Append(value.GetType().FullName).Append(':').Append(text.Length).Append(':').Append(text);
+                return;
+        }
+    }
+
+    private sealed class ProcessedChartGraphs
+    {
+        private readonly Dictionary<string, HelmDependencyNode> _graphs = new(StringComparer.Ordinal);
+
+        internal bool TryGet(string fingerprint, out HelmDependencyNode graph)
+        {
+            lock (_graphs)
+                return _graphs.TryGetValue(fingerprint, out graph!);
+        }
+
+        internal void Set(string fingerprint, HelmDependencyNode graph)
+        {
+            lock (_graphs)
+                _graphs[fingerprint] = graph;
+        }
+    }
 }

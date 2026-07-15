@@ -891,9 +891,47 @@ public class EdgeCaseTests
         var flags = Assert.IsType<Dictionary<string, object?>>(values["flags"]);
         Assert.False(Assert.IsType<bool>(flags["sibling"]));
 
-        var result = new HelmTemplateRenderer(chart, "rel", "default", values).Render();
+        var copiedValues = new Dictionary<string, object?>(values, StringComparer.Ordinal);
+        var result = new HelmTemplateRenderer(chart, "rel", "default", copiedValues).Render();
 
         Assert.Contains("name: sibling", result);
+    }
+
+    [Fact]
+    public void Renderer_DirectValuesCoalesceSubchartDefaultsAndGlobals()
+    {
+        var chart = new HelmChart
+        {
+            Name = "parent",
+            Version = "1.0.0",
+            ValuesYaml = "global:\n  shared: parent-global\n"
+        };
+        chart.Dependencies.Add(new HelmChartDependency { Name = "child", Version = "1.0.0" });
+        var child = new HelmChart
+        {
+            Name = "child",
+            Version = "1.0.0",
+            ValuesYaml = "marker: child-default\n"
+        };
+        child.Templates["templates/child.yaml"] = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: child
+            data:
+              marker: {{ .Values.marker | quote }}
+              global: {{ .Values.global.shared | quote }}
+            """;
+        chart.Subcharts["child"] = child;
+
+        var result = new HelmTemplateRenderer(
+            chart,
+            "rel",
+            "default",
+            new Dictionary<string, object?>()).Render();
+
+        Assert.Contains("marker: \"child-default\"", result);
+        Assert.Contains("global: \"parent-global\"", result);
     }
 
     [Fact]
