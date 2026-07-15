@@ -114,6 +114,41 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
         Assert.Equal(["Stable", "stable"], (await repository.ListRepositoriesAsync()).Select(entry => entry.Name));
     }
 
+    [Fact]
+    public async Task AddRepositoryAsync_WaitsForRepositoryConfigurationLock()
+    {
+        var options = CreateOptions();
+        Directory.CreateDirectory(options.ConfigDirectory!);
+        var lockPath = HelmChartRepository.GetRepositoryConfigLockPath(
+            Path.Combine(options.ConfigDirectory!, "repositories.yaml"));
+        await using var heldLock = new FileStream(
+            lockPath,
+            FileMode.OpenOrCreate,
+            FileAccess.ReadWrite,
+            FileShare.None);
+        using var repository = new HelmChartRepository(options);
+
+        var addTask = repository.AddRepositoryAsync("stable", "https://charts.example.test");
+        var completed = await Task.WhenAny(addTask, Task.Delay(TimeSpan.FromMilliseconds(200)));
+        Assert.NotSame(addTask, completed);
+
+        await heldLock.DisposeAsync();
+        await addTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var added = Assert.Single(await repository.ListRepositoriesAsync());
+        Assert.Equal("stable", added.Name);
+    }
+
+    [Fact]
+    public void GetRepositoryConfigLockPath_UsesHelmCompatibleSiblingLockFile()
+    {
+        var configPath = Path.Combine(_tempDir, "config", "custom-repositories.yaml");
+
+        var lockPath = HelmChartRepository.GetRepositoryConfigLockPath(configPath);
+
+        Assert.Equal(Path.Combine(_tempDir, "config", "repositories.lock"), lockPath);
+    }
+
     [Theory]
     [InlineData("entries: {}\n")]
     [InlineData("apiVersion: v1\nentries: []\n")]

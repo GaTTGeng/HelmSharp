@@ -97,6 +97,7 @@ public sealed class HelmChartRepository : IDisposable
     {
         ValidateRepositoryName(name);
         var normalizedUrl = NormalizeRepositoryUrl(url);
+        await using var repositoryLock = await AcquireRepositoryConfigurationLockAsync(cancellationToken);
         var repos = await LoadRepositoriesAsync(_repositoryConfigPath, cancellationToken);
         var candidate = new HelmRepository
         {
@@ -118,6 +119,7 @@ public sealed class HelmChartRepository : IDisposable
     /// </summary>
     public async Task RemoveRepositoryAsync(string name, CancellationToken cancellationToken = default)
     {
+        await using var repositoryLock = await AcquireRepositoryConfigurationLockAsync(cancellationToken);
         var repos = await LoadRepositoriesAsync(_repositoryConfigPath, cancellationToken);
         if (!repos.Remove(name))
             throw new InvalidOperationException($"Repository '{name}' does not exist.");
@@ -609,6 +611,37 @@ public sealed class HelmChartRepository : IDisposable
         await File.WriteAllTextAsync(path, HelmYaml.Serialize(document), ct);
     }
 
+    private async Task<FileStream> AcquireRepositoryConfigurationLockAsync(CancellationToken cancellationToken)
+    {
+        var lockPath = GetRepositoryConfigLockPath(_repositoryConfigPath);
+        var lockDirectory = Path.GetDirectoryName(lockPath);
+        if (!string.IsNullOrWhiteSpace(lockDirectory))
+            Directory.CreateDirectory(lockDirectory);
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                return new FileStream(
+                    lockPath,
+                    FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite,
+                    FileShare.None,
+                    bufferSize: 1,
+                    FileOptions.Asynchronous);
+            }
+            catch (IOException)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
+            }
+        }
+    }
+
     private async Task CacheRepositoryIndexAsync(
         string repoUrl,
         string yaml,
@@ -633,6 +666,14 @@ public sealed class HelmChartRepository : IDisposable
         if (string.IsNullOrEmpty(safeName))
             safeName = "repository";
         return $"{safeName}-index.yaml";
+    }
+
+    internal static string GetRepositoryConfigLockPath(string repositoryConfigPath)
+    {
+        var directory = Path.GetDirectoryName(repositoryConfigPath);
+        return string.IsNullOrWhiteSpace(directory)
+            ? "repositories.lock"
+            : Path.Combine(directory, "repositories.lock");
     }
 
     private static Dictionary<string, object?> ToRepositoryConfiguration(HelmRepository repository)
