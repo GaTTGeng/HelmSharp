@@ -88,12 +88,25 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
     }
 
     [Fact]
+    public void ResolveRepositoryConfigPath_ConfigDirectoryOverridesEnvironmentPath()
+    {
+        var configDirectory = Path.Combine(_tempDir, "isolated-config");
+        var environmentPath = Path.Combine(_tempDir, "user-config", "repositories.yaml");
+
+        var resolvedPath = HelmChartRepository.ResolveRepositoryConfigPath(
+            new HelmRepositoryOptions { ConfigDirectory = configDirectory },
+            environmentPath);
+
+        Assert.Equal(Path.Combine(configDirectory, "repositories.yaml"), resolvedPath);
+    }
+
+    [Fact]
     public void GetRepositoryIndexCacheFileName_IsDeterministicAndSafe()
     {
-        var cacheFileName = HelmChartRepository.GetRepositoryIndexCacheFileName("../../unsafe", "https://charts.example.test/path");
+        var cacheFileName = HelmChartRepository.GetRepositoryIndexCacheFileName("../../unsafe");
 
-        Assert.Equal(cacheFileName, HelmChartRepository.GetRepositoryIndexCacheFileName("../../unsafe", "https://charts.example.test/path"));
-        Assert.Matches("^unsafe-[a-f0-9]{12}-index\\.yaml$", cacheFileName);
+        Assert.Equal(cacheFileName, HelmChartRepository.GetRepositoryIndexCacheFileName("../../unsafe"));
+        Assert.Equal("unsafe-index.yaml", cacheFileName);
         Assert.DoesNotContain(Path.DirectorySeparatorChar, cacheFileName);
         Assert.DoesNotContain(Path.AltDirectorySeparatorChar, cacheFileName);
     }

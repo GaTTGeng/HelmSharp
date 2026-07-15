@@ -18,7 +18,7 @@ var repository = new HelmChartRepository(new HelmRepositoryOptions
 });
 ```
 
-原有的 `HelmChartRepository(cacheDirectory)` 重载仍可使用，并会以该目录同时隔离配置和缓存。仓库名称仅可包含字母、数字、`.`、`_` 与 `-`；添加同名仓库会抛出错误，与 Helm 未使用 `--force` 时的行为一致。仅在提供凭据时才会保存凭据，保存格式与此前 HelmSharp 的明文方式相同，因此应使用操作系统的常规文件权限保护配置文件。
+原有的 `HelmChartRepository(cacheDirectory)` 重载仍可使用，并会以该目录同时隔离配置和缓存。显式指定的 `HelmRepositoryOptions.ConfigDirectory` 与 `CacheDirectory` 优先于环境中的 Helm 变量。仓库索引缓存使用 Helm 兼容的 `<repository-name>-index.yaml` 文件名。仓库名称仅可包含字母、数字、`.`、`_` 与 `-`；添加同名仓库会抛出错误，与 Helm 未使用 `--force` 时的行为一致。仅在提供凭据时才会保存凭据，保存格式与此前 HelmSharp 的明文方式相同，因此应使用操作系统的常规文件权限保护配置文件。
 
 ## 何时安装
 

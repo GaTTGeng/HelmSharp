@@ -480,18 +480,16 @@ public sealed class HelmChartRepository : IDisposable
         var name = repositories.Values.FirstOrDefault(repository =>
             string.Equals(repository.Url, NormalizeRepositoryUrl(repoUrl), StringComparison.OrdinalIgnoreCase))?.Name
             ?? "repository";
-        var cachePath = Path.Combine(_cacheDir, GetRepositoryIndexCacheFileName(name, repoUrl));
+        var cachePath = Path.Combine(_cacheDir, GetRepositoryIndexCacheFileName(name));
         await File.WriteAllTextAsync(cachePath, yaml, cancellationToken);
     }
 
-    internal static string GetRepositoryIndexCacheFileName(string repositoryName, string repositoryUrl)
+    internal static string GetRepositoryIndexCacheFileName(string repositoryName)
     {
         var safeName = Regex.Replace(repositoryName, "[^A-Za-z0-9._-]", "-").Trim('-', '.');
         if (string.IsNullOrEmpty(safeName))
             safeName = "repository";
-        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(repositoryUrl)))[..12]
-            .ToLowerInvariant();
-        return $"{safeName}-{hash}-index.yaml";
+        return $"{safeName}-index.yaml";
     }
 
     private static Dictionary<string, object?> ToRepositoryConfiguration(HelmRepository repository)
@@ -550,20 +548,22 @@ public sealed class HelmChartRepository : IDisposable
         => Path.Combine(helmCacheHome, "repository");
 
     private static string ResolveRepositoryConfigPath(HelmRepositoryOptions options)
+        => ResolveRepositoryConfigPath(options, Environment.GetEnvironmentVariable("HELM_REPOSITORY_CONFIG"));
+
+    internal static string ResolveRepositoryConfigPath(HelmRepositoryOptions options, string? environmentRepositoryConfigPath)
     {
         if (!string.IsNullOrWhiteSpace(options.RepositoryConfigPath))
             return options.RepositoryConfigPath;
-        var configuredPath = Environment.GetEnvironmentVariable("HELM_REPOSITORY_CONFIG");
-        if (!string.IsNullOrWhiteSpace(configuredPath))
-            return configuredPath;
+        if (!string.IsNullOrWhiteSpace(options.ConfigDirectory))
+            return Path.Combine(options.ConfigDirectory, "repositories.yaml");
+        if (!string.IsNullOrWhiteSpace(environmentRepositoryConfigPath))
+            return environmentRepositoryConfigPath;
 
-        var configDirectory = options.ConfigDirectory
-            ?? Environment.GetEnvironmentVariable("HELM_CONFIG_HOME")
+        var configDirectory = Environment.GetEnvironmentVariable("HELM_CONFIG_HOME")
             ?? Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
         if (string.IsNullOrWhiteSpace(configDirectory))
             configDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "helm");
-        else if (string.IsNullOrWhiteSpace(options.ConfigDirectory)
-                 && string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("HELM_CONFIG_HOME")))
+        else if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("HELM_CONFIG_HOME")))
             configDirectory = Path.Combine(configDirectory, "helm");
         return Path.Combine(configDirectory, "repositories.yaml");
     }

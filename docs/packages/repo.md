@@ -18,7 +18,7 @@ var repository = new HelmChartRepository(new HelmRepositoryOptions
 });
 ```
 
-The existing `HelmChartRepository(cacheDirectory)` overload remains available and uses that directory for both config and cache isolation. Repository names must contain only letters, digits, `.`, `_`, and `-`; adding an existing name throws an error, matching Helm's non-`--force` behavior. Credentials remain stored only when supplied, in the same plaintext form as earlier HelmSharp releases, so protect the configured file with normal OS file permissions.
+The existing `HelmChartRepository(cacheDirectory)` overload remains available and uses that directory for both config and cache isolation. Explicit `HelmRepositoryOptions.ConfigDirectory` and `CacheDirectory` take precedence over ambient Helm environment variables. Repository index caches use Helm's `<repository-name>-index.yaml` filename. Repository names must contain only letters, digits, `.`, `_`, and `-`; adding an existing name throws an error, matching Helm's non-`--force` behavior. Credentials remain stored only when supplied, in the same plaintext form as earlier HelmSharp releases, so protect the configured file with normal OS file permissions.
 
 ## When to install
 
