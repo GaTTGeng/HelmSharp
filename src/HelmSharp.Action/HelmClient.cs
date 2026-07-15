@@ -1292,6 +1292,23 @@ public class HelmClient : IHelmClient
             new HelmRepoIndexRequest { DirectoryPath = dirPath, Url = url },
             cancellationToken);
 
+    /// <summary>
+    /// Generates a repository index and optionally merges an existing index.
+    /// </summary>
+    public async Task<CommandResult> RepoIndexAsync(
+        string dirPath,
+        string? url,
+        CancellationToken cancellationToken,
+        string? mergeIndexPath)
+        => await RepoIndexAsync(
+            new HelmRepoIndexRequest
+            {
+                DirectoryPath = dirPath,
+                Url = url,
+                MergeIndexPath = mergeIndexPath
+            },
+            cancellationToken);
+
     /// <inheritdoc />
     public async Task<CommandResult> RepoIndexAsync(
         HelmRepoIndexRequest request,

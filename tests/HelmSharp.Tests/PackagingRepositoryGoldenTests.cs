@@ -632,6 +632,33 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task PullAsync_RequestAppliesCredentialsToIndexAndArchiveDownloads()
+    {
+        const string username = "chart-user";
+        const string password = "chart-password";
+        var repoDir = Path.Combine(_tempDir, "authenticated-pull-repo");
+        Directory.CreateDirectory(repoDir);
+        await PackageRepoChartVersionAsync("1.2.3", repoDir);
+        await using var server = await LocalFileServer.StartAsync(repoDir, username, password);
+        await HelmRepoIndexer.GenerateIndexAsync(repoDir, server.BaseUrl, CancellationToken.None);
+
+        using var repository = new HelmChartRepository(Path.Combine(_tempDir, "authenticated-pull-cache"));
+        var chartPath = await repository.PullChartAsync(
+            new HelmPullRequest
+            {
+                ChartReference = "repo-golden",
+                RepositoryUrl = server.BaseUrl,
+                Version = "1.2.3",
+                Username = username,
+                Password = password
+            },
+            CancellationToken.None);
+
+        var chart = await HelmChartLoader.LoadAsync(chartPath, CancellationToken.None);
+        Assert.Equal("1.2.3", chart.Version);
+    }
+
     [HelmCliFact]
     public async Task DependencyWorkflows_LocalRepositoryMatchHelmOutputsAndPackages()
     {
@@ -1062,13 +1089,18 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
     {
         private readonly string _rootDirectory;
         private readonly TcpListener _listener;
+        private readonly string? _expectedAuthorization;
         private readonly CancellationTokenSource _cancellation = new();
         private readonly Task _serverTask;
 
-        private LocalFileServer(string rootDirectory, TcpListener listener)
+        private LocalFileServer(
+            string rootDirectory,
+            TcpListener listener,
+            string? expectedAuthorization)
         {
             _rootDirectory = rootDirectory;
             _listener = listener;
+            _expectedAuthorization = expectedAuthorization;
             var endpoint = (IPEndPoint)_listener.LocalEndpoint;
             BaseUrl = $"http://127.0.0.1:{endpoint.Port}";
             _serverTask = Task.Run(AcceptLoopAsync);
@@ -1076,11 +1108,17 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
 
         public string BaseUrl { get; }
 
-        public static Task<LocalFileServer> StartAsync(string rootDirectory)
+        public static Task<LocalFileServer> StartAsync(
+            string rootDirectory,
+            string? username = null,
+            string? password = null)
         {
             var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
-            return Task.FromResult(new LocalFileServer(rootDirectory, listener));
+            var expectedAuthorization = username is null
+                ? null
+                : $"Basic {Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}"))}";
+            return Task.FromResult(new LocalFileServer(rootDirectory, listener, expectedAuthorization));
         }
 
         private async Task AcceptLoopAsync()
@@ -1115,14 +1153,26 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
                 if (requestLine is null)
                     return;
 
-                while (!string.IsNullOrEmpty(await reader.ReadLineAsync()))
+                string? authorization = null;
+                string? headerLine;
+                while (!string.IsNullOrEmpty(headerLine = await reader.ReadLineAsync()))
                 {
+                    const string authorizationPrefix = "Authorization:";
+                    if (headerLine.StartsWith(authorizationPrefix, StringComparison.OrdinalIgnoreCase))
+                        authorization = headerLine[authorizationPrefix.Length..].Trim();
                 }
 
                 var parts = requestLine.Split(' ');
                 if (parts.Length < 2 || !parts[0].Equals("GET", StringComparison.OrdinalIgnoreCase))
                 {
                     await WriteResponseAsync(stream, HttpStatusCode.MethodNotAllowed, []);
+                    return;
+                }
+
+                if (_expectedAuthorization is not null &&
+                    !string.Equals(authorization, _expectedAuthorization, StringComparison.Ordinal))
+                {
+                    await WriteResponseAsync(stream, HttpStatusCode.Unauthorized, []);
                     return;
                 }
 

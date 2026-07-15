@@ -481,7 +481,7 @@ public sealed class HelmChartRepository : IDisposable
                 url = repoUrl.TrimEnd('/') + "/" + url;
         }
 
-        return await DownloadAndExtractChartAsync(url, cancellationToken);
+        return await DownloadAndExtractChartAsync(url, username, password, cancellationToken);
     }
 
     internal async Task<HelmChartVersion> ResolveChartVersionAsync(
@@ -559,12 +559,23 @@ public sealed class HelmChartRepository : IDisposable
                      ?? throw new InvalidOperationException("Layer has no digest");
 
         var blobUrl = $"https://{registry}/v2/{repo}/blobs/{digest}";
-        return await DownloadAndExtractChartAsync(blobUrl, cancellationToken);
+        return await DownloadAndExtractChartAsync(blobUrl, username: null, password: null, cancellationToken);
     }
 
-    private async Task<string> DownloadAndExtractChartAsync(string url, CancellationToken cancellationToken)
+    private async Task<string> DownloadAndExtractChartAsync(
+        string url,
+        string? username,
+        string? password,
+        CancellationToken cancellationToken)
     {
-        var response = await _httpClient.GetAsync(url, cancellationToken);
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        if (!string.IsNullOrWhiteSpace(username))
+        {
+            var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}"));
+            request.Headers.Authorization = new AuthenticationHeaderValue("Basic", credentials);
+        }
+
+        var response = await _httpClient.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
 
         var chartBytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);

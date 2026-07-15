@@ -144,6 +144,9 @@ public sealed class OperationRequestTests : IDisposable
             nameof(IHelmClient.RepoIndexAsync),
             [typeof(string), typeof(string), typeof(CancellationToken)],
             [typeof(HelmRepoIndexRequest), typeof(CancellationToken)]);
+        Assert.NotNull(typeof(HelmClient).GetMethod(
+            nameof(HelmClient.RepoIndexAsync),
+            [typeof(string), typeof(string), typeof(CancellationToken), typeof(string)]));
         AssertOverloads(
             nameof(IHelmClient.DependencyUpdateAsync),
             [typeof(string), typeof(CancellationToken)],
