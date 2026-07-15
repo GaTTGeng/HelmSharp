@@ -132,6 +132,27 @@ public sealed class DependencyListStatusTests : IDisposable
         Assert.Equal("ok", FindStatus(ParseRows(result.StandardOutput), "foo"));
     }
 
+    [Fact]
+    public async Task DependencyListAsync_PrefersDeclaredDirectoryOverUnrelatedMatchingChart()
+    {
+        var chartDirectory = Path.Combine(_tempDirectory, "preferred-directory");
+        await WriteTextAsync(Path.Combine(chartDirectory, "Chart.yaml"), """
+            apiVersion: v2
+            name: preferred-directory
+            version: 0.1.0
+            dependencies:
+              - name: redis
+                version: 1.0.0
+                repository: https://example.test/charts
+            """);
+        await AddUnpackedDependencyAsync(chartDirectory, "redis", "redis", "1.0.0");
+        await AddUnpackedDependencyAsync(chartDirectory, "queue", "redis", "2.0.0");
+
+        var result = await CreateClient().DependencyListAsync(chartDirectory);
+
+        Assert.Equal("unpacked", FindStatus(ParseRows(result.StandardOutput), "redis"));
+    }
+
     private string CopyFixture(string fixtureName)
     {
         var source = Path.Combine(

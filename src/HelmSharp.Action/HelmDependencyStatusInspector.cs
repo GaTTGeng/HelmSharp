@@ -124,9 +124,13 @@ internal static class HelmDependencyStatusInspector
             .ToArray();
         var directories = Directory
             .EnumerateDirectories(chartsDirectory, "*", SearchOption.TopDirectoryOnly)
-            .OrderBy(path => Array.FindIndex(
-                preferredNames,
-                name => string.Equals(Path.GetFileName(path), name, StringComparison.OrdinalIgnoreCase)))
+            .OrderBy(path =>
+            {
+                var preferredIndex = Array.FindIndex(
+                    preferredNames,
+                    name => string.Equals(Path.GetFileName(path), name, StringComparison.OrdinalIgnoreCase));
+                return preferredIndex < 0 ? preferredNames.Length : preferredIndex;
+            })
             .ThenBy(path => path, StringComparer.Ordinal)
             .ToList();
 
