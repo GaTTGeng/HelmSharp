@@ -6,7 +6,7 @@
 
 ## Repository configuration and cache
 
-`HelmChartRepository` persists repository definitions in a Helm-compatible `repositories.yaml` file. By default it follows Helm-style environment settings: `HELM_REPOSITORY_CONFIG` for the file, `HELM_CONFIG_HOME` (or `XDG_CONFIG_HOME`) for the config home, and `HELM_REPOSITORY_CACHE` / `HELM_CACHE_HOME` (or `XDG_CACHE_HOME`) for cached repository indexes and chart downloads. On Windows, the fallback homes are under the current user's application-data folders.
+`HelmChartRepository` persists repository definitions in a Helm-compatible `repositories.yaml` file. By default it follows Helm-style environment settings: `HELM_REPOSITORY_CONFIG` for the file, `HELM_CONFIG_HOME` (or `XDG_CONFIG_HOME`) for the config home, and `HELM_REPOSITORY_CACHE` / `HELM_CACHE_HOME` (or `XDG_CACHE_HOME`) for cached repository indexes and chart downloads. `HELM_CACHE_HOME` is treated as a cache home, with repository files stored in its `repository` subdirectory. On Windows, the fallback homes are under the current user's application-data folders.
 
 Use `HelmRepositoryOptions` to isolate an application or test from the user's Helm state:
 

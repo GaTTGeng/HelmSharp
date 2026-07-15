@@ -6,7 +6,7 @@
 
 ## 仓库配置与缓存
 
-`HelmChartRepository` 会将仓库定义持久化到兼容 Helm 的 `repositories.yaml`。默认情况下，它遵循 Helm 风格的环境变量：`HELM_REPOSITORY_CONFIG` 指定配置文件，`HELM_CONFIG_HOME`（或 `XDG_CONFIG_HOME`）指定配置目录，`HELM_REPOSITORY_CACHE` / `HELM_CACHE_HOME`（或 `XDG_CACHE_HOME`）指定仓库索引和下载 Chart 的缓存目录。在 Windows 上，未配置时会使用当前用户的应用数据目录。
+`HelmChartRepository` 会将仓库定义持久化到兼容 Helm 的 `repositories.yaml`。默认情况下，它遵循 Helm 风格的环境变量：`HELM_REPOSITORY_CONFIG` 指定配置文件，`HELM_CONFIG_HOME`（或 `XDG_CONFIG_HOME`）指定配置目录，`HELM_REPOSITORY_CACHE` / `HELM_CACHE_HOME`（或 `XDG_CACHE_HOME`）指定仓库索引和下载 Chart 的缓存目录。`HELM_CACHE_HOME` 表示缓存根目录，仓库文件会写入其中的 `repository` 子目录。在 Windows 上，未配置时会使用当前用户的应用数据目录。
 
 可使用 `HelmRepositoryOptions` 将应用或测试与用户的 Helm 状态隔离：
 

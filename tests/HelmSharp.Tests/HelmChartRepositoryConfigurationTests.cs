@@ -98,6 +98,14 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
         Assert.DoesNotContain(Path.AltDirectorySeparatorChar, cacheFileName);
     }
 
+    [Fact]
+    public void GetRepositoryCacheDirectory_AppendsRepositoryDirectoryToHelmCacheHome()
+    {
+        var cacheHome = Path.Combine(_tempDir, "helm-cache");
+
+        Assert.Equal(Path.Combine(cacheHome, "repository"), HelmChartRepository.GetRepositoryCacheDirectory(cacheHome));
+    }
+
     private HelmRepositoryOptions CreateOptions()
         => new()
         {

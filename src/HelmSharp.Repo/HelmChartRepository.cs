@@ -532,16 +532,22 @@ public sealed class HelmChartRepository : IDisposable
     private static string ResolveCacheDirectory(HelmRepositoryOptions options)
     {
         var configuredDirectory = options.CacheDirectory
-            ?? Environment.GetEnvironmentVariable("HELM_REPOSITORY_CACHE")
-            ?? Environment.GetEnvironmentVariable("HELM_CACHE_HOME");
+            ?? Environment.GetEnvironmentVariable("HELM_REPOSITORY_CACHE");
         if (!string.IsNullOrWhiteSpace(configuredDirectory))
             return configuredDirectory;
+
+        var helmCacheHome = Environment.GetEnvironmentVariable("HELM_CACHE_HOME");
+        if (!string.IsNullOrWhiteSpace(helmCacheHome))
+            return GetRepositoryCacheDirectory(helmCacheHome);
 
         var xdgCache = Environment.GetEnvironmentVariable("XDG_CACHE_HOME");
         return !string.IsNullOrWhiteSpace(xdgCache)
             ? Path.Combine(xdgCache, "helm", "repository")
             : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "helm", "repository");
     }
+
+    internal static string GetRepositoryCacheDirectory(string helmCacheHome)
+        => Path.Combine(helmCacheHome, "repository");
 
     private static string ResolveRepositoryConfigPath(HelmRepositoryOptions options)
     {

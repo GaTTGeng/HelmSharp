@@ -226,8 +226,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         var versionPairs = new[]
         {
             (Existing: "1.2.0", Local: "1.2"),
-            (Existing: "1.2.0+existing", Local: "1.2.0+local"),
-            (Existing: "1.2", Local: "1.2.5")
+            (Existing: "1.2.0+existing", Local: "1.2.0+local")
         };
 
         for (var index = 0; index < versionPairs.Length; index++)
@@ -273,6 +272,29 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
             Assert.Equal(helmIndex.Versions.Select(version => version.Version), sharpIndex.Versions.Select(version => version.Version));
             Assert.Equal(helmIndex.Versions.Select(version => version.Digest), sharpIndex.Versions.Select(version => version.Digest));
         }
+    }
+
+    [Fact]
+    public async Task RepoIndexAsync_MergePreservesVersionsThatOnlyMatchAsConstraints()
+    {
+        var sharpRepoDir = Path.Combine(_tempDir, "sharp-constraint-version-merge-repo-index");
+        Directory.CreateDirectory(sharpRepoDir);
+        await PackageRepoChartVersionAsync("1.2", sharpRepoDir);
+
+        var sharpExistingIndex = Path.Combine(_tempDir, "sharp-constraint-version-existing-index.yaml");
+        File.Copy(await HelmRepoIndexer.GenerateIndexAsync(sharpRepoDir, ct: CancellationToken.None), sharpExistingIndex);
+
+        File.Delete(Path.Combine(sharpRepoDir, "repo-golden-1.2.tgz"));
+        await PackageRepoChartVersionAsync("1.2.5", sharpRepoDir);
+
+        var sharpIndexPath = await HelmRepoIndexer.GenerateIndexAsync(
+            sharpRepoDir,
+            url: null,
+            ct: CancellationToken.None,
+            mergeIndexPath: sharpExistingIndex);
+
+        var sharpIndex = ReadIndexSnapshot(sharpIndexPath, "repo-golden");
+        Assert.Equal(["1.2.5", "1.2"], sharpIndex.Versions.Select(version => version.Version));
     }
 
     [HelmCliFact]
