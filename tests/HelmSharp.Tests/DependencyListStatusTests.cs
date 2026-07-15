@@ -111,6 +111,27 @@ public sealed class DependencyListStatusTests : IDisposable
         Assert.Equal("disabled", FindStatus(rows, "optional-dep"));
     }
 
+    [Fact]
+    public async Task DependencyListAsync_IgnoresPrefixSharingArchiveWhenCountingVersions()
+    {
+        var chartDirectory = Path.Combine(_tempDirectory, "prefix-sharing");
+        await WriteTextAsync(Path.Combine(chartDirectory, "Chart.yaml"), """
+            apiVersion: v2
+            name: prefix-sharing
+            version: 0.1.0
+            dependencies:
+              - name: foo
+                version: 1.0.0
+                repository: https://example.test/charts
+            """);
+        await AddPackagedDependencyAsync(chartDirectory, "foo", "1.0.0");
+        await AddPackagedDependencyAsync(chartDirectory, "foo-bar", "1.0.0");
+
+        var result = await CreateClient().DependencyListAsync(chartDirectory);
+
+        Assert.Equal("ok", FindStatus(ParseRows(result.StandardOutput), "foo"));
+    }
+
     private string CopyFixture(string fixtureName)
     {
         var source = Path.Combine(

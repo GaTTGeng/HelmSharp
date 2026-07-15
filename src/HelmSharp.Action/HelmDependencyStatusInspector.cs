@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using HelmSharp.Chart;
 using HelmSharp.Repo;
 
@@ -5,6 +6,10 @@ namespace HelmSharp.Action;
 
 internal static class HelmDependencyStatusInspector
 {
+    private static readonly Regex StrictSemanticVersionPattern = new(
+        @"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
     public static async Task<string> InspectAsync(
         string chartPath,
         HelmChart parent,
@@ -52,6 +57,7 @@ internal static class HelmDependencyStatusInspector
 
         var artifactNames = new[] { dependency.Name, dependency.Alias }
             .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Select(name => name!)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var archives = Directory
@@ -64,7 +70,15 @@ internal static class HelmDependencyStatusInspector
         if (archives.Count == 0)
             return null;
         if (archives.Count > 1)
-            return "too many matches";
+        {
+            archives = archives
+                .Where(path => artifactNames.Any(name => HasStrictSemanticVersionSuffix(path, name)))
+                .ToList();
+            if (archives.Count == 0)
+                return null;
+            if (archives.Count > 1)
+                return "too many matches";
+        }
 
         try
         {
@@ -79,6 +93,20 @@ internal static class HelmDependencyStatusInspector
         {
             return "corrupt";
         }
+    }
+
+    private static bool HasStrictSemanticVersionSuffix(string archivePath, string artifactName)
+    {
+        var fileName = Path.GetFileName(archivePath);
+        var prefix = artifactName + "-";
+        if (!fileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
+            !fileName.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var version = fileName[prefix.Length..^".tgz".Length];
+        return StrictSemanticVersionPattern.IsMatch(version);
     }
 
     private static async Task<string?> InspectDirectoriesAsync(
