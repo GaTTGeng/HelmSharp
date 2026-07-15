@@ -85,6 +85,20 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
             () => repository.AddRepositoryAsync("not/a/repository", "https://charts.example.test"));
     }
 
+    [Theory]
+    [InlineData("repo with spaces")]
+    [InlineData("@scope")]
+    [InlineData(".private")]
+    public async Task AddRepositoryAsync_AllowsHelmValidRepositoryNames(string name)
+    {
+        using var repository = new HelmChartRepository(CreateOptions());
+
+        await repository.AddRepositoryAsync(name, "https://charts.example.test");
+
+        var added = Assert.Single(await repository.ListRepositoriesAsync());
+        Assert.Equal(name, added.Name);
+    }
+
     [Fact]
     public async Task AddRepositoryAsync_IsIdempotentForMatchingConfiguration()
     {
@@ -386,6 +400,33 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
     public void GetRepositoryIndexCacheFileName_PreservesHelmValidNames(string repositoryName, string expected)
     {
         Assert.Equal(expected, HelmChartRepository.GetRepositoryIndexCacheFileName(repositoryName));
+    }
+
+    [Fact]
+    public async Task WriteAllTextAtomicallyAsync_PreservesExistingFileWhenCanceled()
+    {
+        var path = Path.Combine(_tempDir, "cache", "stable-index.yaml");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, "old-index");
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => HelmChartRepository.WriteAllTextAtomicallyAsync(path, "new-index", cts.Token));
+
+        Assert.Equal("old-index", await File.ReadAllTextAsync(path));
+    }
+
+    [Fact]
+    public async Task WriteAllTextAtomicallyAsync_ReplacesExistingFile()
+    {
+        var path = Path.Combine(_tempDir, "cache", "stable-index.yaml");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, "old-index");
+
+        await HelmChartRepository.WriteAllTextAtomicallyAsync(path, "new-index", CancellationToken.None);
+
+        Assert.Equal("new-index", await File.ReadAllTextAsync(path));
     }
 
     [Fact]

@@ -665,7 +665,32 @@ public sealed class HelmChartRepository : IDisposable
                 ?? "repository";
         }
         var cachePath = Path.Combine(_cacheDir, GetRepositoryIndexCacheFileName(name));
-        await File.WriteAllTextAsync(cachePath, yaml, cancellationToken);
+        await WriteAllTextAtomicallyAsync(cachePath, yaml, cancellationToken);
+    }
+
+    internal static async Task WriteAllTextAtomicallyAsync(
+        string path,
+        string contents,
+        CancellationToken cancellationToken)
+    {
+        var directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+
+        var tempPath = Path.Combine(
+            string.IsNullOrWhiteSpace(directory) ? "." : directory,
+            $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            await File.WriteAllTextAsync(tempPath, contents, cancellationToken);
+            File.Move(tempPath, path, overwrite: true);
+        }
+        catch
+        {
+            if (File.Exists(tempPath))
+                File.Delete(tempPath);
+            throw;
+        }
     }
 
     internal static string GetRepositoryIndexCacheFileName(string repositoryName)
@@ -741,8 +766,8 @@ public sealed class HelmChartRepository : IDisposable
 
     private static void ValidateRepositoryName(string name)
     {
-        if (string.IsNullOrWhiteSpace(name) || !Regex.IsMatch(name, "^[A-Za-z0-9][A-Za-z0-9._-]*$"))
-            throw new ArgumentException("Repository names must start with a letter or digit and contain only letters, digits, '.', '_' or '-'.", nameof(name));
+        if (string.IsNullOrWhiteSpace(name) || name.Contains('/', StringComparison.Ordinal))
+            throw new ArgumentException("Repository names must not be empty or contain '/'.", nameof(name));
     }
 
     private static string NormalizeRepositoryUrl(string url)
