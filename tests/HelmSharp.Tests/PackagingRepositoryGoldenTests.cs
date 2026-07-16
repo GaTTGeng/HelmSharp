@@ -1226,6 +1226,191 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
             await ReadArchiveSnapshotAsync(sharpArchive));
     }
 
+    [HelmCliFact]
+    public async Task DependencyUpdateAndBuild_VendoredDependencyWithoutRepositoryMatchesHelm()
+    {
+        var sharpChart = await CreateVendoredDependencyParentChartAsync("sharp-vendored-parent");
+        var helmChart = await CreateVendoredDependencyParentChartAsync("helm-vendored-parent");
+        var client = CreateNoProxyClient("vendored-dependency");
+
+        var sharpUpdate = await client.DependencyUpdateAsync(sharpChart);
+        var helmUpdate = await HelmCliRunner.DependencyUpdateAsync(helmChart, CancellationToken.None);
+
+        AssertOperationSucceeded("vendored dependency HelmSharp update", sharpUpdate);
+        AssertOperationSucceeded("vendored dependency Helm update", helmUpdate);
+        var helmLock = ReadDependencyLockSnapshot(helmChart);
+        var sharpLock = ReadDependencyLockSnapshot(sharpChart);
+        Assert.Equal(helmLock.Digest, sharpLock.Digest);
+        Assert.Equal(helmLock.Dependencies, sharpLock.Dependencies);
+        Assert.True(Directory.Exists(Path.Combine(sharpChart, "charts", "local-child")));
+        Assert.Empty(Directory.EnumerateFiles(Path.Combine(sharpChart, "charts"), "*.tgz"));
+
+        var sharpLockBeforeBuild = await File.ReadAllBytesAsync(Path.Combine(sharpChart, "Chart.lock"));
+        var helmLockBeforeBuild = await File.ReadAllBytesAsync(Path.Combine(helmChart, "Chart.lock"));
+        var sharpBuild = await client.DependencyBuildAsync(sharpChart);
+        var helmBuild = await HelmCliRunner.DependencyBuildAsync(helmChart, CancellationToken.None);
+
+        AssertOperationSucceeded("vendored dependency HelmSharp build", sharpBuild);
+        AssertOperationSucceeded("vendored dependency Helm build", helmBuild);
+        Assert.Equal(sharpLockBeforeBuild, await File.ReadAllBytesAsync(Path.Combine(sharpChart, "Chart.lock")));
+        Assert.Equal(helmLockBeforeBuild, await File.ReadAllBytesAsync(Path.Combine(helmChart, "Chart.lock")));
+        Assert.True(Directory.Exists(Path.Combine(sharpChart, "charts", "local-child")));
+    }
+
+    [HelmCliFact]
+    public async Task DependencyBuildAsync_VendoredPartialLockRemainsAConstraintLikeHelm()
+    {
+        var sharpChart = await CreateVendoredDependencyParentChartAsync(
+            "sharp-vendored-partial-lock",
+            "1.0",
+            "1.0");
+        var helmChart = await CreateVendoredDependencyParentChartAsync(
+            "helm-vendored-partial-lock",
+            "1.0",
+            "1.0");
+        var client = CreateNoProxyClient("vendored-partial-lock");
+
+        var sharpUpdate = await client.DependencyUpdateAsync(sharpChart);
+        var helmUpdate = await HelmCliRunner.DependencyUpdateAsync(helmChart, CancellationToken.None);
+        AssertOperationSucceeded("vendored partial lock HelmSharp update", sharpUpdate);
+        AssertOperationSucceeded("vendored partial lock Helm update", helmUpdate);
+        Assert.Equal("1.0", Assert.Single(ReadDependencyLockSnapshot(sharpChart).Dependencies).Version);
+        Assert.Equal("1.0", Assert.Single(ReadDependencyLockSnapshot(helmChart).Dependencies).Version);
+
+        await RewriteVendoredDependencyVersionAsync(sharpChart, "1.0.1");
+        await RewriteVendoredDependencyVersionAsync(helmChart, "1.0.1");
+        var sharpBuild = await client.DependencyBuildAsync(sharpChart);
+        var helmBuild = await HelmCliRunner.DependencyBuildAsync(helmChart, CancellationToken.None);
+
+        AssertOperationSucceeded("vendored partial lock HelmSharp build", sharpBuild);
+        AssertOperationSucceeded("vendored partial lock Helm build", helmBuild);
+    }
+
+    [HelmCliFact]
+    public async Task DependencyUpdateAndBuild_PreserveLocalArchivesAndDeleteStaleArchivesLikeHelm()
+    {
+        var sharpChart = await CreateVendoredDependencyParentChartAsync("sharp-vendored-archive-cleanup");
+        var helmChart = await CreateVendoredDependencyParentChartAsync("helm-vendored-archive-cleanup");
+        var sharpChartsDirectory = Path.Combine(sharpChart, "charts");
+        var helmChartsDirectory = Path.Combine(helmChart, "charts");
+        var sharpLocalArchive = await HelmChartPackager.PackageAsync(
+            Path.Combine(sharpChartsDirectory, "local-child"),
+            sharpChartsDirectory,
+            cancellationToken: CancellationToken.None);
+        var helmLocalArchive = await HelmChartPackager.PackageAsync(
+            Path.Combine(helmChartsDirectory, "local-child"),
+            helmChartsDirectory,
+            cancellationToken: CancellationToken.None);
+        await PackageDependencyChartVersionAsync("9.9.9", sharpChartsDirectory);
+        await PackageDependencyChartVersionAsync("9.9.9", helmChartsDirectory);
+        var sharpStaleArchive = Path.Combine(sharpChartsDirectory, "child-dep-9.9.9.tgz");
+        var helmStaleArchive = Path.Combine(helmChartsDirectory, "child-dep-9.9.9.tgz");
+        var client = CreateNoProxyClient("vendored-archive-cleanup");
+
+        var sharpUpdate = await client.DependencyUpdateAsync(sharpChart);
+        var helmUpdate = await HelmCliRunner.DependencyUpdateAsync(helmChart, CancellationToken.None);
+
+        AssertOperationSucceeded("vendored archive cleanup HelmSharp update", sharpUpdate);
+        AssertOperationSucceeded("vendored archive cleanup Helm update", helmUpdate);
+        Assert.True(File.Exists(sharpLocalArchive));
+        Assert.True(File.Exists(helmLocalArchive));
+        Assert.False(File.Exists(sharpStaleArchive));
+        Assert.False(File.Exists(helmStaleArchive));
+
+        await PackageDependencyChartVersionAsync("9.9.9", sharpChartsDirectory);
+        await PackageDependencyChartVersionAsync("9.9.9", helmChartsDirectory);
+
+        var sharpBuild = await client.DependencyBuildAsync(sharpChart);
+        var helmBuild = await HelmCliRunner.DependencyBuildAsync(helmChart, CancellationToken.None);
+
+        AssertOperationSucceeded("vendored archive cleanup HelmSharp build", sharpBuild);
+        AssertOperationSucceeded("vendored archive cleanup Helm build", helmBuild);
+        Assert.True(File.Exists(sharpLocalArchive));
+        Assert.True(File.Exists(helmLocalArchive));
+        Assert.False(File.Exists(sharpStaleArchive));
+        Assert.False(File.Exists(helmStaleArchive));
+    }
+
+    [HelmCliFact]
+    public async Task DependencyUpdateAndBuild_DuplicateRepositoryAliasesShareArchiveLikeHelm()
+    {
+        var repoDir = Path.Combine(_tempDir, "duplicate-alias-repository");
+        Directory.CreateDirectory(repoDir);
+        await PackageDependencyChartVersionAsync("1.2.3", repoDir);
+        await using var server = await LocalFileServer.StartAsync(repoDir);
+        await HelmRepoIndexer.GenerateIndexAsync(repoDir, server.BaseUrl, CancellationToken.None);
+        var sharpChart = await CreateDuplicateRepositoryAliasParentChartAsync(
+            "sharp-duplicate-alias-parent",
+            server.BaseUrl);
+        var helmChart = await CreateDuplicateRepositoryAliasParentChartAsync(
+            "helm-duplicate-alias-parent",
+            server.BaseUrl);
+        var client = CreateNoProxyClient("duplicate-alias-dependency");
+
+        var sharpUpdate = await client.DependencyUpdateAsync(sharpChart);
+        var helmUpdate = await HelmCliRunner.DependencyUpdateAsync(helmChart, CancellationToken.None);
+
+        AssertOperationSucceeded("duplicate alias HelmSharp update", sharpUpdate);
+        AssertOperationSucceeded("duplicate alias Helm update", helmUpdate);
+        var helmLock = ReadDependencyLockSnapshot(helmChart);
+        var sharpLock = ReadDependencyLockSnapshot(sharpChart);
+        Assert.Equal(helmLock.Digest, sharpLock.Digest);
+        Assert.Equal(helmLock.Dependencies, sharpLock.Dependencies);
+        Assert.Single(Directory.EnumerateFiles(Path.Combine(sharpChart, "charts"), "*.tgz"));
+
+        File.Delete(Assert.Single(Directory.EnumerateFiles(Path.Combine(sharpChart, "charts"), "*.tgz")));
+        File.Delete(Assert.Single(Directory.EnumerateFiles(Path.Combine(helmChart, "charts"), "*.tgz")));
+        var sharpBuild = await client.DependencyBuildAsync(sharpChart);
+        using var helmHome = HelmCliRunner.CreateHome();
+        var repoAdd = await HelmCliRunner.RepoAddAsync("local", server.BaseUrl, helmHome, CancellationToken.None);
+        AssertOperationSucceeded("helm repo add for duplicate alias build", repoAdd);
+        var helmBuild = await HelmCliRunner.DependencyBuildAsync(helmChart, helmHome, CancellationToken.None);
+
+        AssertOperationSucceeded("duplicate alias HelmSharp build", sharpBuild);
+        AssertOperationSucceeded("duplicate alias Helm build", helmBuild);
+        Assert.Single(Directory.EnumerateFiles(Path.Combine(sharpChart, "charts"), "*.tgz"));
+    }
+
+    [HelmCliFact]
+    public async Task DependencyBuildAsync_UsesExactPartialVersionFromLock()
+    {
+        var repoDir = Path.Combine(_tempDir, "exact-lock-repository");
+        Directory.CreateDirectory(repoDir);
+        await PackageDependencyChartVersionAsync("1.0", repoDir);
+        await using var server = await LocalFileServer.StartAsync(repoDir);
+        await HelmRepoIndexer.GenerateIndexAsync(repoDir, server.BaseUrl, CancellationToken.None);
+        var sharpChart = await CreateExactLockParentChartAsync("sharp-exact-lock-parent", server.BaseUrl);
+        var helmChart = await CreateExactLockParentChartAsync("helm-exact-lock-parent", server.BaseUrl);
+        var client = CreateNoProxyClient("exact-lock-dependency");
+
+        var sharpUpdate = await client.DependencyUpdateAsync(sharpChart);
+        var helmUpdate = await HelmCliRunner.DependencyUpdateAsync(helmChart, CancellationToken.None);
+        AssertOperationSucceeded("exact lock HelmSharp update", sharpUpdate);
+        AssertOperationSucceeded("exact lock Helm update", helmUpdate);
+        var sharpLock = ReadDependencyLockSnapshot(sharpChart);
+        var helmLock = ReadDependencyLockSnapshot(helmChart);
+        Assert.Equal("1.0", Assert.Single(sharpLock.Dependencies).Version);
+        Assert.Equal(helmLock.Dependencies, sharpLock.Dependencies);
+        Assert.Equal(helmLock.Digest, sharpLock.Digest);
+
+        File.Delete(Path.Combine(sharpChart, "charts", "child-dep-1.0.tgz"));
+        File.Delete(Path.Combine(helmChart, "charts", "child-dep-1.0.tgz"));
+        await PackageDependencyChartVersionAsync("1.0.1", repoDir);
+        await HelmRepoIndexer.GenerateIndexAsync(repoDir, server.BaseUrl, CancellationToken.None);
+
+        var sharpBuild = await client.DependencyBuildAsync(sharpChart);
+        using var helmHome = HelmCliRunner.CreateHome();
+        var repoAdd = await HelmCliRunner.RepoAddAsync("local", server.BaseUrl, helmHome, CancellationToken.None);
+        AssertOperationSucceeded("helm repo add for exact lock build", repoAdd);
+        var helmBuild = await HelmCliRunner.DependencyBuildAsync(helmChart, helmHome, CancellationToken.None);
+
+        AssertOperationSucceeded("exact lock HelmSharp build", sharpBuild);
+        AssertOperationSucceeded("exact lock Helm build", helmBuild);
+        Assert.True(File.Exists(Path.Combine(sharpChart, "charts", "child-dep-1.0.tgz")));
+        Assert.False(File.Exists(Path.Combine(sharpChart, "charts", "child-dep-1.0.1.tgz")));
+        await AssertDependencyPackageMatchesAsync(helmChart, sharpChart, "1.0");
+    }
+
     [Fact]
     public async Task DependencyUpdateAsync_IsIdempotentAndReplacesStaleConstraintResult()
     {
@@ -1441,7 +1626,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         var chartDir = await CreateChartAsync($"child-dep-source-{version}", $"""
             apiVersion: v2
             name: child-dep
-            version: {version}
+            version: "{version}"
             appVersion: v2
             description: Local dependency chart
             type: application
@@ -1482,6 +1667,78 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
                 alias: session
                 version: ^1.0.0
                 repository: file://../file-local-child
+            """);
+        await WriteTextAsync(Path.Combine(chartDir, "values.yaml"), "parent: true\n");
+        return chartDir;
+    }
+
+    private async Task<string> CreateVendoredDependencyParentChartAsync(
+        string directoryName,
+        string versionConstraint = "~1.2.0",
+        string vendoredVersion = "1.2.3")
+    {
+        var chartDir = await CreateChartAsync(directoryName, $"""
+            apiVersion: v2
+            name: vendored-parent
+            version: 0.1.0
+            dependencies:
+              - name: local-child
+                alias: vendored
+                version: "{versionConstraint}"
+            """);
+        await WriteTextAsync(Path.Combine(chartDir, "values.yaml"), "parent: true\n");
+        await WriteTextAsync(Path.Combine(chartDir, "charts", "local-child", "Chart.yaml"), $"""
+            apiVersion: v2
+            name: local-child
+            version: "{vendoredVersion}"
+            """);
+        await WriteTextAsync(
+            Path.Combine(chartDir, "charts", "local-child", "values.yaml"),
+            "marker: vendored\n");
+        return chartDir;
+    }
+
+    private static async Task RewriteVendoredDependencyVersionAsync(string chartPath, string version)
+    {
+        await WriteTextAsync(Path.Combine(chartPath, "charts", "local-child", "Chart.yaml"), $"""
+            apiVersion: v2
+            name: local-child
+            version: "{version}"
+            """);
+    }
+
+    private async Task<string> CreateDuplicateRepositoryAliasParentChartAsync(
+        string directoryName,
+        string repositoryUrl)
+    {
+        var chartDir = await CreateChartAsync(directoryName, $"""
+            apiVersion: v2
+            name: duplicate-alias-parent
+            version: 0.1.0
+            dependencies:
+              - name: child-dep
+                alias: cache
+                version: 1.2.3
+                repository: "{repositoryUrl}"
+              - name: child-dep
+                alias: session
+                version: 1.2.3
+                repository: "{repositoryUrl}"
+            """);
+        await WriteTextAsync(Path.Combine(chartDir, "values.yaml"), "parent: true\n");
+        return chartDir;
+    }
+
+    private async Task<string> CreateExactLockParentChartAsync(string directoryName, string repositoryUrl)
+    {
+        var chartDir = await CreateChartAsync(directoryName, $"""
+            apiVersion: v2
+            name: exact-lock-parent
+            version: 0.1.0
+            dependencies:
+              - name: child-dep
+                version: "1.0"
+                repository: "{repositoryUrl}"
             """);
         await WriteTextAsync(Path.Combine(chartDir, "values.yaml"), "parent: true\n");
         return chartDir;
@@ -1668,6 +1925,12 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
 
     private static HelmClient CreateClient()
         => new(new StaticHelmOptionsProvider());
+
+    private HelmClient CreateNoProxyClient(string name)
+        => new(
+            new StaticHelmOptionsProvider(),
+            (_, _, _, _) => throw new NotSupportedException(),
+            () => CreateNoProxyRepository(name));
 
     private HelmChartRepository CreateNoProxyRepository(string name)
     {

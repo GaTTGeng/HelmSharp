@@ -95,10 +95,11 @@ public static class HelmValues
 
         foreach (var child in node.Children)
         {
-            var childOverrides = GetMap(result, child.Identity)
-                                 ?? new Dictionary<string, object?>(StringComparer.Ordinal);
+            var childOverrides = GetMap(result, child.Identity) is { } configured
+                ? CloneDictionary(configured)
+                : new Dictionary<string, object?>(StringComparer.Ordinal);
+            MergeGlobalValues(childOverrides, GetMap(result, "global"));
             var childValues = BuildChartValues(child.Chart, childOverrides, child);
-            MergeGlobalValues(childValues, GetMap(result, "global"));
             result[child.Identity] = childValues;
         }
 

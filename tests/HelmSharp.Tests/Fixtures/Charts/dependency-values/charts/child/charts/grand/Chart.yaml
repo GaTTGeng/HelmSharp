@@ -1,3 +1,8 @@
 apiVersion: v2
 name: grand
 version: 1.0.0
+dependencies:
+  - name: great
+    version: 1.0.0
+    repository: file://charts/great
+    condition: global.descendantsEnabled

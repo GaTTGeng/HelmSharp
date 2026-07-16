@@ -1,5 +1,6 @@
 global:
   shared: parent-global
+  descendantsEnabled: false
 child:
   nonbool: ignored
   enabled: true

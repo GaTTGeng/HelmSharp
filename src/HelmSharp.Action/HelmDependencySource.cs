@@ -19,6 +19,7 @@ internal static class HelmDependencySource
         bool verifyDigest,
         bool refreshConfiguredRepository,
         bool requireConfiguredCache,
+        bool exactVersion,
         CancellationToken cancellationToken)
     {
         if (repositoryReference.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
@@ -29,6 +30,7 @@ internal static class HelmDependencySource
                 versionConstraint,
                 repositoryReference,
                 destination,
+                exactVersion,
                 cancellationToken);
         }
 
@@ -52,7 +54,8 @@ internal static class HelmDependencySource
                 ChartReference = $"{configured.Name}/{dependencyName}",
                 Version = versionConstraint,
                 Destination = destination,
-                VerifyDigest = verifyDigest
+                VerifyDigest = verifyDigest,
+                ExactVersion = exactVersion
             };
         }
         else
@@ -72,7 +75,8 @@ internal static class HelmDependencySource
                 RepositoryUrl = repositoryReference,
                 Version = versionConstraint,
                 Destination = destination,
-                VerifyDigest = verifyDigest
+                VerifyDigest = verifyDigest,
+                ExactVersion = exactVersion
             };
         }
 
@@ -93,6 +97,7 @@ internal static class HelmDependencySource
         string? versionConstraint,
         string repositoryReference,
         string destination,
+        bool exactVersion,
         CancellationToken cancellationToken)
     {
         var fileReference = Uri.UnescapeDataString(repositoryReference["file://".Length..]);
@@ -110,11 +115,15 @@ internal static class HelmDependencySource
             throw new InvalidDataException(
                 $"File dependency chart '{chart.Name}' does not match dependency '{dependencyName}'.");
         }
-        if (!HelmChartVersionResolver.Satisfies(chart.Version, versionConstraint))
+        if (exactVersion
+                ? !string.Equals(chart.Version, versionConstraint?.Trim(), StringComparison.Ordinal)
+                : !HelmChartVersionResolver.Satisfies(chart.Version, versionConstraint))
         {
+            var expectation = exactVersion
+                ? $"locked version '{versionConstraint}'"
+                : $"constraint '{versionConstraint}'";
             throw new InvalidDataException(
-                $"File dependency '{dependencyName}' version '{chart.Version}' does not satisfy " +
-                $"constraint '{versionConstraint}'.");
+                $"File dependency '{dependencyName}' version '{chart.Version}' does not match {expectation}.");
         }
 
         var archivePath = await HelmChartPackager.PackageAsync(

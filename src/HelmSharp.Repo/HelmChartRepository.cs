@@ -509,7 +509,8 @@ public sealed class HelmChartRepository : IDisposable
                     request.Version,
                     username,
                     password,
-                    cancellationToken);
+                    cancellationToken,
+                    exactVersion: request.ExactVersion);
             }
             else if (chartReference.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
                      chartReference.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
@@ -523,7 +524,8 @@ public sealed class HelmChartRepository : IDisposable
                     request.Version,
                     username,
                     password,
-                    cancellationToken);
+                    cancellationToken,
+                    exactVersion: request.ExactVersion);
             }
             else
             {
@@ -543,7 +545,7 @@ public sealed class HelmChartRepository : IDisposable
                 password ??= configuredRepository.Password;
                 var indexRepository = CopyRepositoryWithCredentials(configuredRepository, username, password);
                 var index = await LoadConfiguredRepositoryIndexAsync(indexRepository, cancellationToken);
-                entry = ResolveChartVersion(index, chartName, request.Version);
+                entry = ResolveChartVersion(index, chartName, request.Version, request.ExactVersion);
             }
 
             var entryUrl = entry.Urls.FirstOrDefault()
@@ -688,18 +690,24 @@ public sealed class HelmChartRepository : IDisposable
     private static HelmChartVersion ResolveChartVersion(
         HelmRepoIndex index,
         string chartName,
-        string? versionConstraint)
+        string? versionConstraint,
+        bool exactVersion = false)
     {
         if (!index.Entries.TryGetValue(chartName, out var versions))
             throw new InvalidOperationException($"Chart '{chartName}' not found in repository.");
 
-        var entry = HelmChartVersionResolver.Resolve(versions, versionConstraint);
+        var entry = exactVersion
+            ? versions.FirstOrDefault(candidate =>
+                string.Equals(candidate.Version, versionConstraint?.Trim(), StringComparison.Ordinal))
+            : HelmChartVersionResolver.Resolve(versions, versionConstraint);
         if (entry is not null)
             return entry;
 
         var requested = string.IsNullOrWhiteSpace(versionConstraint)
             ? "latest stable version"
-            : $"version constraint '{versionConstraint}'";
+            : exactVersion
+                ? $"exact version '{versionConstraint}'"
+                : $"version constraint '{versionConstraint}'";
         throw new InvalidOperationException(
             $"Chart '{chartName}' has no version satisfying {requested}. Available versions: " +
             string.Join(", ", versions.Select(candidate => candidate.Version)));
@@ -749,22 +757,11 @@ public sealed class HelmChartRepository : IDisposable
         string? versionConstraint = null,
         string? username = null,
         string? password = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool exactVersion = false)
     {
         var index = await FetchRepoIndexAsync(repoUrl, username, password, cancellationToken);
-        if (!index.Entries.TryGetValue(chartName, out var versions))
-            throw new InvalidOperationException($"Chart '{chartName}' not found in repository");
-
-        var entry = HelmChartVersionResolver.Resolve(versions, versionConstraint);
-        if (entry is not null)
-            return entry;
-
-        var requested = string.IsNullOrWhiteSpace(versionConstraint)
-            ? "latest stable version"
-            : $"version constraint '{versionConstraint}'";
-        var available = string.Join(", ", versions.Select(version => version.Version));
-        throw new InvalidOperationException(
-            $"Chart '{chartName}' has no version satisfying {requested}. Available versions: {available}");
+        return ResolveChartVersion(index, chartName, versionConstraint, exactVersion);
     }
 
     private async Task<string> PullFromOciAsync(

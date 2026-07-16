@@ -1062,6 +1062,10 @@ public class HelmClient : IHelmClient
         var output = new StringBuilder();
         var resolvedDependencies = new List<HelmResolvedDependency>(chart.Dependencies.Count);
         var stagedArchives = new List<string>(chart.Dependencies.Count);
+        var localDependencyNames = chart.Dependencies
+            .Where(dependency => string.IsNullOrWhiteSpace(dependency.Repository))
+            .Select(dependency => dependency.Name)
+            .ToHashSet(StringComparer.Ordinal);
         var errors = new List<string>();
 
         try
@@ -1079,14 +1083,25 @@ public class HelmClient : IHelmClient
             foreach (var dependency in chart.Dependencies)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (string.IsNullOrWhiteSpace(dependency.Repository))
-                {
-                    errors.Add($"Dependency '{dependency.Name}' does not specify a repository.");
-                    continue;
-                }
-
                 try
                 {
+                    if (string.IsNullOrWhiteSpace(dependency.Repository))
+                    {
+                        var local = await ResolveVendoredDependencyAsync(
+                            chartPath,
+                            dependency.Name,
+                            dependency.Version,
+                            exactVersion: false,
+                            cancellationToken);
+                        output.AppendLine(
+                            $"Resolved local dependency: {dependency.Name} ({local.Version}) from charts/{dependency.Name}");
+                        resolvedDependencies.Add(new HelmResolvedDependency(
+                            dependency.Name,
+                            dependency.Version ?? local.Version,
+                            string.Empty));
+                        continue;
+                    }
+
                     var staged = await HelmDependencySource.StageAsync(
                         repo,
                         configuredRepositories,
@@ -1099,6 +1114,7 @@ public class HelmClient : IHelmClient
                         verifyDigest: true,
                         refreshConfiguredRepository: !request.SkipRepositoryRefresh,
                         requireConfiguredCache: request.SkipRepositoryRefresh,
+                        exactVersion: false,
                         cancellationToken);
                     output.AppendLine(
                         $"Resolved dependency: {dependency.Name} ({staged.Version}) from {dependency.Repository}");
@@ -1129,6 +1145,7 @@ public class HelmClient : IHelmClient
             await InstallStagedDependencyArchivesAsync(
                 chartsDir,
                 stagedArchives,
+                localDependencyNames,
                 output,
                 cancellationToken);
 
@@ -1169,6 +1186,7 @@ public class HelmClient : IHelmClient
     private static async Task InstallStagedDependencyArchivesAsync(
         string chartsDirectory,
         IReadOnlyList<string> stagedArchives,
+        IReadOnlySet<string> localDependencyNames,
         StringBuilder output,
         CancellationToken cancellationToken)
     {
@@ -1202,6 +1220,10 @@ public class HelmClient : IHelmClient
         {
             if (!desiredArchiveNames.Contains(Path.GetFileName(existingArchive)))
             {
+                var existingChart = await HelmChartLoader.LoadAsync(existingArchive, cancellationToken);
+                if (localDependencyNames.Contains(existingChart.Name))
+                    continue;
+
                 File.Delete(existingArchive);
                 output.AppendLine($"Deleted outdated dependency: {existingArchive}");
             }
@@ -1575,6 +1597,10 @@ public class HelmClient : IHelmClient
         Directory.CreateDirectory(stagingDirectory);
         var output = new StringBuilder();
         var stagedArchives = new List<string>(lockFile.Dependencies.Count);
+        var localDependencyNames = lockFile.Dependencies
+            .Where(dependency => string.IsNullOrWhiteSpace(dependency.Repository))
+            .Select(dependency => dependency.Name)
+            .ToHashSet(StringComparer.Ordinal);
         var errors = new List<string>();
 
         try
@@ -1592,14 +1618,22 @@ public class HelmClient : IHelmClient
             foreach (var dependency in lockFile.Dependencies)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (string.IsNullOrWhiteSpace(dependency.Repository))
-                {
-                    errors.Add($"Dependency '{dependency.Name}' has no repository in Chart.lock.");
-                    continue;
-                }
-
                 try
                 {
+                    if (string.IsNullOrWhiteSpace(dependency.Repository))
+                    {
+                        await ResolveVendoredDependencyAsync(
+                            chartPath,
+                            dependency.Name,
+                            dependency.Version,
+                            exactVersion: false,
+                            cancellationToken);
+                        output.AppendLine(
+                            $"Using local locked dependency: {dependency.Name} ({dependency.Version}) " +
+                            $"from charts/{dependency.Name}");
+                        continue;
+                    }
+
                     output.AppendLine(
                         $"Downloading locked dependency: {dependency.Name} ({dependency.Version}) " +
                         $"from {dependency.Repository}");
@@ -1615,6 +1649,7 @@ public class HelmClient : IHelmClient
                         request.VerifyDigests,
                         refreshConfiguredRepository: false,
                         requireConfiguredCache: true,
+                        exactVersion: true,
                         cancellationToken);
                     var archivePath = staged.ArchivePath;
                     if (!File.Exists(archivePath))
@@ -1646,6 +1681,7 @@ public class HelmClient : IHelmClient
             await InstallStagedDependencyArchivesAsync(
                 chartsDirectory,
                 stagedArchives,
+                localDependencyNames,
                 output,
                 cancellationToken);
             output.AppendLine("Dependencies rebuilt from Chart.lock.");
@@ -1685,6 +1721,42 @@ public class HelmClient : IHelmClient
                 $"Dependency '{dependencyName}' digest mismatch: expected {expectedDigest}, " +
                 $"actual sha256:{actualHash.ToLowerInvariant()}.");
         }
+    }
+
+    private static async Task<HelmChart> ResolveVendoredDependencyAsync(
+        string parentChartPath,
+        string dependencyName,
+        string? requestedVersion,
+        bool exactVersion,
+        CancellationToken cancellationToken)
+    {
+        var dependencyPath = Path.Combine(parentChartPath, "charts", dependencyName);
+        if (!Directory.Exists(dependencyPath))
+        {
+            throw new DirectoryNotFoundException(
+                $"Local dependency directory was not found: {dependencyPath}");
+        }
+
+        var chart = await HelmChartLoader.LoadAsync(dependencyPath, cancellationToken);
+        if (!string.Equals(chart.Name, dependencyName, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Local dependency chart '{chart.Name}' does not match dependency '{dependencyName}'.");
+        }
+
+        var versionMatches = exactVersion
+            ? string.Equals(chart.Version, requestedVersion?.Trim(), StringComparison.Ordinal)
+            : HelmChartVersionResolver.Satisfies(chart.Version, requestedVersion);
+        if (!versionMatches)
+        {
+            var expectation = exactVersion
+                ? $"locked version '{requestedVersion}'"
+                : $"constraint '{requestedVersion}'";
+            throw new InvalidDataException(
+                $"Local dependency '{dependencyName}' version '{chart.Version}' does not match {expectation}.");
+        }
+
+        return chart;
     }
 
     public async Task<CommandResult> DependencyListAsync(

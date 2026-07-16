@@ -16,10 +16,7 @@ internal static class HelmDependencyStatusInspector
         HelmChartDependency dependency,
         CancellationToken cancellationToken)
     {
-        if (IsDisabled(parent, dependency))
-            return "disabled";
-
-        var expectedVersion = GetExpectedVersion(parent, dependency);
+        var expectedVersion = dependency.Version;
         if (Directory.Exists(chartPath))
         {
             var chartsDirectory = Path.Combine(chartPath, "charts");
@@ -190,61 +187,4 @@ internal static class HelmDependencyStatusInspector
             : "wrong version";
     }
 
-    private static string? GetExpectedVersion(HelmChart parent, HelmChartDependency dependency)
-    {
-        var lockEntry = parent.LockEntries.FirstOrDefault(entry =>
-            string.Equals(entry.Name, dependency.Name, StringComparison.OrdinalIgnoreCase) &&
-            (string.IsNullOrWhiteSpace(entry.Repository) ||
-             string.IsNullOrWhiteSpace(dependency.Repository) ||
-             string.Equals(entry.Repository, dependency.Repository, StringComparison.Ordinal)));
-        return string.IsNullOrWhiteSpace(lockEntry?.Version)
-            ? dependency.Version
-            : lockEntry.Version;
-    }
-
-    private static bool IsDisabled(HelmChart parent, HelmChartDependency dependency)
-    {
-        if (!dependency.Enabled)
-            return true;
-
-        if (string.IsNullOrWhiteSpace(dependency.Condition))
-            return false;
-
-        var values = HelmYaml.DeserializeDictionary(parent.ValuesYaml);
-        foreach (var condition in dependency.Condition.Split(
-                     ',',
-                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            if (TryGetBoolean(values, condition, out var enabled))
-                return !enabled;
-        }
-
-        return false;
-    }
-
-    private static bool TryGetBoolean(
-        IReadOnlyDictionary<string, object?> values,
-        string path,
-        out bool value)
-    {
-        object? current = values;
-        foreach (var segment in path.Split('.', StringSplitOptions.RemoveEmptyEntries))
-        {
-            if (current is not IReadOnlyDictionary<string, object?> map ||
-                !map.TryGetValue(segment, out current))
-            {
-                value = default;
-                return false;
-            }
-        }
-
-        if (current is bool boolean)
-        {
-            value = boolean;
-            return true;
-        }
-
-        value = default;
-        return false;
-    }
 }
