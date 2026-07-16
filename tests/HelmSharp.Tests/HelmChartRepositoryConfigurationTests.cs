@@ -173,6 +173,21 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
     }
 
     [Fact]
+    public async Task AddRepositoryAsync_SerializesConcurrentConfigurationUpdates()
+    {
+        var options = CreateOptions();
+        using var repository = new HelmChartRepository(options);
+        var additions = Enumerable.Range(0, 12)
+            .Select(index => repository.AddRepositoryAsync(
+                $"repository-{index}",
+                $"https://repository-{index}.example.test"));
+
+        await Task.WhenAll(additions);
+
+        Assert.Equal(12, (await repository.ListRepositoriesAsync()).Count);
+    }
+
+    [Fact]
     public async Task AddRepositoryAsync_RethrowsRepositoryLockPermissionFailure()
     {
         var options = CreateOptions();
@@ -302,6 +317,52 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
         Assert.Null(handler.Requests[1].Headers.Authorization);
     }
 
+    [Fact]
+    public async Task UpdateConfiguredRepositoriesAsync_UsesPersistedTlsAndAuthenticationSettings()
+    {
+        var options = CreateOptions();
+        Directory.CreateDirectory(options.ConfigDirectory!);
+        await File.WriteAllTextAsync(Path.Combine(options.ConfigDirectory!, "repositories.yaml"), """
+            apiVersion: v1
+            repositories:
+              - name: private
+                url: https://repo.example.test/charts
+                username: alice
+                password: secret
+                certFile: client.pem
+                keyFile: client-key.pem
+                caFile: root-ca.pem
+                insecure_skip_tls_verify: false
+                pass_credentials_all: true
+            """);
+        HelmRepository? configuredRepository = null;
+        var configuredHandler = new RecordingHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("apiVersion: v1\nentries: {}\n")
+        });
+        using var repository = new HelmChartRepository(
+            options,
+            new RecordingHandler(),
+            configured =>
+            {
+                configuredRepository = configured;
+                return configuredHandler;
+            });
+
+        var update = Assert.Single(await repository.UpdateConfiguredRepositoriesAsync());
+
+        Assert.True(update.Succeeded, update.Error);
+        Assert.NotNull(configuredRepository);
+        Assert.Equal("alice", configuredRepository.Username);
+        Assert.Equal("secret", configuredRepository.Password);
+        Assert.Equal("client.pem", configuredRepository.CertFile);
+        Assert.Equal("client-key.pem", configuredRepository.KeyFile);
+        Assert.Equal("root-ca.pem", configuredRepository.CaFile);
+        Assert.False(configuredRepository.InsecureSkipTlsVerify);
+        Assert.True(configuredRepository.PassCredentialsAll);
+        Assert.NotNull(Assert.Single(configuredHandler.Requests).Headers.Authorization);
+    }
+
     [Theory]
     [InlineData("entries: {}\n")]
     [InlineData("apiVersion: v1\nentries: []\n")]
@@ -420,9 +481,24 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
         var cacheFileName = HelmChartRepository.GetRepositoryIndexCacheFileName("../../unsafe");
 
         Assert.Equal(cacheFileName, HelmChartRepository.GetRepositoryIndexCacheFileName("../../unsafe"));
-        Assert.Equal("..-..-unsafe-index.yaml", cacheFileName);
+        Assert.Matches("^\\.\\.-\\.\\.-unsafe-[a-f0-9]{12}-index\\.yaml$", cacheFileName);
         Assert.DoesNotContain(Path.DirectorySeparatorChar, cacheFileName);
         Assert.DoesNotContain(Path.AltDirectorySeparatorChar, cacheFileName);
+    }
+
+    [Fact]
+    public void GetRepositoryIndexCacheFileName_DisambiguatesSanitizedPortableNames()
+    {
+        var colon = HelmChartRepository.GetRepositoryIndexCacheFileName(
+            "private:charts",
+            caseInsensitiveFileSystem: false);
+        var questionMark = HelmChartRepository.GetRepositoryIndexCacheFileName(
+            "private?charts",
+            caseInsensitiveFileSystem: false);
+
+        Assert.DoesNotContain(':', colon);
+        Assert.DoesNotContain('?', questionMark);
+        Assert.NotEqual(colon, questionMark);
     }
 
     [Theory]
@@ -459,6 +535,88 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
         await HelmChartRepository.WriteAllTextAtomicallyAsync(path, "new-index", CancellationToken.None);
 
         Assert.Equal("new-index", await File.ReadAllTextAsync(path));
+    }
+
+    [Fact]
+    public async Task FetchRepoIndexAsync_InvalidUpdatePreservesLastKnownGoodCache()
+    {
+        var options = CreateOptions();
+        var handler = new RecordingHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("entries: {}\n")
+        });
+        using var repository = new HelmChartRepository(options, handler);
+        var cachePath = Path.Combine(
+            options.CacheDirectory!,
+            HelmChartRepository.GetRepositoryIndexCacheFileName("stable"));
+        Directory.CreateDirectory(options.CacheDirectory!);
+        const string lastKnownGood = "apiVersion: v1\nentries: {}\n";
+        await File.WriteAllTextAsync(cachePath, lastKnownGood);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => repository.FetchRepoIndexAsync(
+            "https://repo.example.test",
+            username: null,
+            password: null,
+            repositoryName: "stable"));
+
+        Assert.Equal(lastKnownGood, await File.ReadAllTextAsync(cachePath));
+    }
+
+    [Fact]
+    public async Task FetchRepoIndexAsync_CachesEveryConfiguredIdentityForDuplicateUrls()
+    {
+        var options = CreateOptions();
+        var handler = new RecordingHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("apiVersion: v1\nentries: {}\n")
+        });
+        using var repository = new HelmChartRepository(options, handler);
+        await repository.AddRepositoryAsync("first", "https://repo.example.test");
+        await repository.AddRepositoryAsync("second", "https://repo.example.test");
+
+        await repository.FetchRepoIndexAsync("https://repo.example.test");
+
+        Assert.True(File.Exists(Path.Combine(
+            options.CacheDirectory!,
+            HelmChartRepository.GetRepositoryIndexCacheFileName("first"))));
+        Assert.True(File.Exists(Path.Combine(
+            options.CacheDirectory!,
+            HelmChartRepository.GetRepositoryIndexCacheFileName("second"))));
+    }
+
+    [Fact]
+    public async Task FetchRepoIndexAsync_PreservesCaseDistinctCacheIdentities()
+    {
+        var options = CreateOptions();
+        const string uppercaseIndex = "apiVersion: v1\nentries:\n  uppercase: []\n";
+        const string lowercaseIndex = "apiVersion: v1\nentries:\n  lowercase: []\n";
+        var handler = new RecordingHandler(
+            new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(uppercaseIndex) },
+            new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(lowercaseIndex) });
+        using var repository = new HelmChartRepository(options, handler);
+        await repository.AddRepositoryAsync("Stable", "https://uppercase.example.test");
+        await repository.AddRepositoryAsync("stable", "https://lowercase.example.test");
+
+        await repository.FetchRepoIndexAsync(
+            "https://uppercase.example.test",
+            username: null,
+            password: null,
+            repositoryName: "Stable");
+        await repository.FetchRepoIndexAsync(
+            "https://lowercase.example.test",
+            username: null,
+            password: null,
+            repositoryName: "stable");
+
+        var uppercasePath = Path.Combine(
+            options.CacheDirectory!,
+            HelmChartRepository.GetRepositoryIndexCacheFileName("Stable"));
+        var lowercasePath = Path.Combine(
+            options.CacheDirectory!,
+            HelmChartRepository.GetRepositoryIndexCacheFileName("stable"));
+        Assert.NotEqual(uppercasePath, lowercasePath);
+        Assert.Equal(uppercaseIndex, await File.ReadAllTextAsync(uppercasePath));
+        Assert.Equal(lowercaseIndex, await File.ReadAllTextAsync(lowercasePath));
     }
 
     [Fact]
@@ -504,11 +662,127 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
     }
 
     [Fact]
+    public void GetRepositoryIndexCacheFileName_DisambiguatesCaseSensitiveIdentitiesOnInsensitiveFileSystems()
+    {
+        var uppercase = HelmChartRepository.GetRepositoryIndexCacheFileName(
+            "Stable",
+            caseInsensitiveFileSystem: true);
+        var lowercase = HelmChartRepository.GetRepositoryIndexCacheFileName(
+            "stable",
+            caseInsensitiveFileSystem: true);
+
+        Assert.False(string.Equals(uppercase, lowercase, StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(
+            uppercase,
+            HelmChartRepository.GetRepositoryIndexCacheFileName(
+                "Stable",
+                caseInsensitiveFileSystem: true));
+        Assert.Equal(
+            "Stable-index.yaml",
+            HelmChartRepository.GetRepositoryIndexCacheFileName(
+                "Stable",
+                caseInsensitiveFileSystem: false));
+    }
+
+    [Fact]
     public void GetRepositoryCacheDirectory_AppendsRepositoryDirectoryToHelmCacheHome()
     {
         var cacheHome = Path.Combine(_tempDir, "helm-cache");
 
         Assert.Equal(Path.Combine(cacheHome, "repository"), HelmChartRepository.GetRepositoryCacheDirectory(cacheHome));
+    }
+
+    [Fact]
+    public void ResolveCacheDirectory_OptionsOverrideRepositoryAndHomeEnvironmentPaths()
+    {
+        var optionsCache = Path.Combine(_tempDir, "options-cache");
+
+        var cacheDirectory = HelmChartRepository.ResolveCacheDirectory(
+            new HelmRepositoryOptions { CacheDirectory = optionsCache },
+            environmentRepositoryCache: Path.Combine(_tempDir, "repository-cache"),
+            helmCacheHome: Path.Combine(_tempDir, "helm-cache"),
+            xdgCacheHome: Path.Combine(_tempDir, "xdg-cache"),
+            isMacOS: false,
+            isWindows: true,
+            userProfile: Path.Combine(_tempDir, "home"),
+            temporaryDirectory: Path.Combine(_tempDir, "temp"));
+
+        Assert.Equal(optionsCache, cacheDirectory);
+    }
+
+    [Fact]
+    public void ResolveCacheDirectory_RepositoryCacheEnvironmentOverridesCacheHome()
+    {
+        var repositoryCache = Path.Combine(_tempDir, "repository-cache");
+
+        var cacheDirectory = HelmChartRepository.ResolveCacheDirectory(
+            new HelmRepositoryOptions(),
+            environmentRepositoryCache: repositoryCache,
+            helmCacheHome: Path.Combine(_tempDir, "helm-cache"),
+            xdgCacheHome: Path.Combine(_tempDir, "xdg-cache"),
+            isMacOS: false,
+            isWindows: true,
+            userProfile: Path.Combine(_tempDir, "home"),
+            temporaryDirectory: Path.Combine(_tempDir, "temp"));
+
+        Assert.Equal(repositoryCache, cacheDirectory);
+    }
+
+    [Theory]
+    [InlineData(true, false, "home/Library/Caches/helm/repository")]
+    [InlineData(false, true, "temp/helm/repository")]
+    [InlineData(false, false, "home/.cache/helm/repository")]
+    public void ResolveHelmCacheDirectory_UsesPlatformFallbacks(
+        bool isMacOS,
+        bool isWindows,
+        string expectedRelativePath)
+    {
+        var userProfile = Path.Combine(_tempDir, "home");
+        var temporaryDirectory = Path.Combine(_tempDir, "temp");
+
+        var cacheDirectory = HelmChartRepository.ResolveHelmCacheDirectory(
+            helmCacheHome: null,
+            xdgCacheHome: null,
+            isMacOS,
+            isWindows,
+            userProfile,
+            temporaryDirectory);
+
+        Assert.Equal(
+            Path.Combine(_tempDir, expectedRelativePath.Replace('/', Path.DirectorySeparatorChar)),
+            cacheDirectory);
+    }
+
+    [Fact]
+    public void ResolveHelmCacheDirectory_HelmCacheHomeOverridesXdgAndPlatformFallbacks()
+    {
+        var helmCacheHome = Path.Combine(_tempDir, "helm-cache");
+
+        var cacheDirectory = HelmChartRepository.ResolveHelmCacheDirectory(
+            helmCacheHome,
+            xdgCacheHome: Path.Combine(_tempDir, "xdg-cache"),
+            isMacOS: true,
+            isWindows: false,
+            userProfile: Path.Combine(_tempDir, "home"),
+            temporaryDirectory: Path.Combine(_tempDir, "temp"));
+
+        Assert.Equal(Path.Combine(helmCacheHome, "repository"), cacheDirectory);
+    }
+
+    [Fact]
+    public void ResolveHelmCacheDirectory_AppendsHelmToXdgCacheHome()
+    {
+        var xdgCacheHome = Path.Combine(_tempDir, "xdg-cache");
+
+        var cacheDirectory = HelmChartRepository.ResolveHelmCacheDirectory(
+            helmCacheHome: null,
+            xdgCacheHome,
+            isMacOS: false,
+            isWindows: false,
+            userProfile: Path.Combine(_tempDir, "home"),
+            temporaryDirectory: Path.Combine(_tempDir, "temp"));
+
+        Assert.Equal(Path.Combine(xdgCacheHome, "helm", "repository"), cacheDirectory);
     }
 
     private HelmRepositoryOptions CreateOptions()

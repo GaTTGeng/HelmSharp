@@ -6,7 +6,7 @@
 
 ## 仓库配置与缓存
 
-`HelmChartRepository` 会将仓库定义持久化到兼容 Helm 的 `repositories.yaml`。默认情况下，它遵循 Helm 风格的环境变量：`HELM_REPOSITORY_CONFIG` 指定配置文件，`HELM_CONFIG_HOME`（或 `XDG_CONFIG_HOME`）指定配置目录，`HELM_REPOSITORY_CACHE` / `HELM_CACHE_HOME`（或 `XDG_CACHE_HOME`）指定仓库索引和下载 Chart 的缓存目录。`HELM_CACHE_HOME` 表示缓存根目录，仓库文件会写入其中的 `repository` 子目录。在 Windows 上，未配置时会使用当前用户的应用数据目录。
+`HelmChartRepository` 会将仓库定义持久化到兼容 Helm 的 `repositories.yaml`。默认情况下，它遵循 Helm 风格的环境变量：`HELM_REPOSITORY_CONFIG` 指定配置文件，`HELM_CONFIG_HOME`（或 `XDG_CONFIG_HOME`）指定配置目录，`HELM_REPOSITORY_CACHE` / `HELM_CACHE_HOME`（或 `XDG_CACHE_HOME`）指定仓库索引和下载 Chart 的缓存目录。`HELM_CACHE_HOME` 表示缓存根目录，仓库文件会写入其中的 `repository` 子目录。平台默认值与 Helm 一致：Linux 的配置和缓存根目录分别是 `~/.config/helm` 与 `~/.cache/helm`，macOS 分别是 `~/Library/Preferences/helm` 与 `~/Library/Caches/helm`，Windows 分别是 `%APPDATA%\helm` 与 `%TEMP%\helm`。
 
 可使用 `HelmRepositoryOptions` 将应用或测试与用户的 Helm 状态隔离：
 
@@ -18,7 +18,7 @@ var repository = new HelmChartRepository(new HelmRepositoryOptions
 });
 ```
 
-原有的 `HelmChartRepository(cacheDirectory)` 重载仍可使用，并会以该目录同时隔离配置和缓存。显式指定的 `HelmRepositoryOptions.ConfigDirectory` 与 `CacheDirectory` 优先于环境中的 Helm 变量。仓库索引缓存使用 Helm 兼容的 `<repository-name>-index.yaml` 文件名。仓库名称仅可包含字母、数字、`.`、`_` 与 `-`；添加同名仓库会抛出错误，与 Helm 未使用 `--force` 时的行为一致。仅在提供凭据时才会保存凭据，保存格式与此前 HelmSharp 的明文方式相同，因此应使用操作系统的常规文件权限保护配置文件。
+原有的 `HelmChartRepository(cacheDirectory)` 重载仍可使用，并会以该目录同时隔离配置和缓存。显式指定的 `HelmRepositoryOptions.ConfigDirectory` 与 `CacheDirectory` 优先于环境中的 Helm 变量。仓库索引缓存通常使用 Helm 兼容的 `<repository-name>-index.yaml` 文件名；需要进行可移植文件名清理的名称会获得确定性的身份后缀，Windows 与 macOS 上的大写名称也会获得该后缀，从而防止不同仓库身份互相覆盖。兼容 Helm 的名称可以包含空格、`@` 和前导点，但不能为空或包含 `/`。以不同设置添加完全同名仓库会报错；重复 URL 与仅大小写不同的名称仍保留独立身份。仅在提供凭据时才会保存凭据，保存格式与此前 HelmSharp 的明文方式相同；替换配置时会保留现有 Unix 权限，新建的含凭据文件从创建起即仅所有者可访问。
 
 ## 何时安装
 
