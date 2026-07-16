@@ -77,6 +77,7 @@ internal static class HelmChartPackager
         if (version is not null || appVersion is not null)
             chartYamlContent = HelmYaml.Serialize(metadata);
 
+        chartYamlContent = NormalizeChartYamlLineEndings(chartYamlContent);
         if (!chartYamlContent.EndsWith("\n", StringComparison.Ordinal))
             chartYamlContent += "\n";
 
@@ -256,11 +257,15 @@ internal static class HelmChartPackager
             return await File.ReadAllBytesAsync(fullPath, cancellationToken);
 
         var chartYaml = await File.ReadAllTextAsync(fullPath, Encoding.UTF8, cancellationToken);
+        chartYaml = NormalizeChartYamlLineEndings(chartYaml);
         if (!chartYaml.EndsWith("\n", StringComparison.Ordinal))
             chartYaml += "\n";
 
         return Encoding.UTF8.GetBytes(chartYaml);
     }
+
+    private static string NormalizeChartYamlLineEndings(string content)
+        => content.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
 
     private static bool PathsEqual(string left, string right)
     {

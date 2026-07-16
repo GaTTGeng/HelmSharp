@@ -12,6 +12,7 @@ This project follows semantic versioning once stable releases begin.
 
 ### Changed
 
+- Normalized packaged root and nested `Chart.yaml` metadata to Helm-compatible LF payloads on every platform while preserving source chart files (#180).
 - Documented complete packaging, repository, pull, and dependency workflows in English and Simplified Chinese, with compile-checked examples and explicit OCI/provenance boundaries (#141).
 - Added dependency repository aliases, local `file://` packaging, and alias-aware update/build handling while preserving Helm-compatible lock identities (#139).
 - Made dependency builds reproduce exact `Chart.lock` versions, reject missing or stale locks, restore archives, and validate dependency digests without rewriting the lock (#138).
