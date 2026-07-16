@@ -460,12 +460,12 @@ public sealed class PackageMetadataValidationTests : IDisposable
     [HelmCliFact]
     public async Task PackageAsync_VersionAndAppVersionOverrideMatchesHelmPackagedChartYaml()
     {
-        var sourceChartYaml = """
-            apiVersion: v2
-            name: appver-test
-            version: 1.2.3
-            appVersion: 1.16
-            """;
+        var sourceChartYaml = string.Join("\r\n", [
+            "apiVersion: v2",
+            "name: appver-test",
+            "version: 1.2.3",
+            "appVersion: 1.16"
+        ]);
         var sharpChartDir = await CreateChartAsync("sharp-appver-test", sourceChartYaml);
         var helmChartDir = await CreateChartAsync("helm-appver-test", sourceChartYaml);
         var sharpDestination = Path.Combine(_tempDir, "sharp-appver-output");
@@ -553,11 +553,12 @@ public sealed class PackageMetadataValidationTests : IDisposable
 
     private async Task<string> CreateArchiveLayoutChartAsync(string directoryName)
     {
-        var chartDir = await CreateChartAsync(directoryName, """
-            apiVersion: v2
-            name: archive-layout
-            version: 1.2.3
-            """);
+        var chartYaml = string.Join("\r\n", [
+            "apiVersion: v2",
+            "name: archive-layout",
+            "version: 1.2.3"
+        ]);
+        var chartDir = await CreateChartAsync(directoryName, chartYaml);
         await WriteTextAsync(Path.Combine(chartDir, "values.yaml"), "replicaCount: 1\n");
         await WriteTextAsync(Path.Combine(chartDir, "templates", "deployment.yaml"), "kind: Deployment\n");
         await WriteTextAsync(Path.Combine(chartDir, "crds", "widgets.yaml"), """
@@ -566,11 +567,12 @@ public sealed class PackageMetadataValidationTests : IDisposable
             metadata:
               name: widgets.example.com
             """);
-        await WriteTextAsync(Path.Combine(chartDir, "charts", "child", "Chart.yaml"), """
-            apiVersion: v2
-            name: child
-            version: 0.1.0
-            """);
+        var childChartYaml = string.Join("\r\n", [
+            "apiVersion: v2",
+            "name: child",
+            "version: 0.1.0"
+        ]);
+        await WriteTextAsync(Path.Combine(chartDir, "charts", "child", "Chart.yaml"), childChartYaml);
         await WriteTextAsync(Path.Combine(chartDir, "charts", "child", "values.yaml"), "enabled: true\n");
         await WriteTextAsync(Path.Combine(chartDir, "README.md"), "# Archive layout\n");
         await WriteBytesAsync(Path.Combine(chartDir, "files", "payload.bin"), [0, 1, 2, 127, 128, 255]);
@@ -688,15 +690,20 @@ public sealed class PackageMetadataValidationTests : IDisposable
         TarEntry? entry;
         while ((entry = reader.GetNextEntry()) is not null)
         {
-            var size = 0L;
+            byte[] payload = [];
             if (entry.DataStream is not null)
             {
                 using var memory = new MemoryStream();
                 await entry.DataStream.CopyToAsync(memory);
-                size = memory.Length;
+                payload = memory.ToArray();
             }
 
-            entries.Add(new PackageEntrySnapshot(entry.Name, entry.EntryType, entry.Mode, size));
+            entries.Add(new PackageEntrySnapshot(
+                entry.Name,
+                entry.EntryType,
+                entry.Mode,
+                payload.LongLength,
+                Convert.ToHexString(payload)));
         }
 
         return entries.OrderBy(entry => entry.Name, StringComparer.Ordinal).ToList();
@@ -738,5 +745,6 @@ public sealed class PackageMetadataValidationTests : IDisposable
         string Name,
         TarEntryType EntryType,
         UnixFileMode Mode,
-        long Size);
+        long Size,
+        string PayloadHex);
 }
