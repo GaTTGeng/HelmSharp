@@ -1,4 +1,7 @@
 using System.Net;
+using System.Net.Security;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using HelmSharp.Repo;
 
 namespace HelmSharp.Tests;
@@ -318,6 +321,36 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
     }
 
     [Fact]
+    public void ValidateCustomCertificate_PreservesServerProvidedIntermediate()
+    {
+        var certificates = CreateCertificateChain();
+        using var root = certificates.Root;
+        using var intermediate = certificates.Intermediate;
+        using var leaf = certificates.Leaf;
+        using var serverChain = new X509Chain();
+        serverChain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+        serverChain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+        serverChain.ChainPolicy.CustomTrustStore.Add(root);
+        serverChain.ChainPolicy.ExtraStore.Add(intermediate);
+        Assert.True(serverChain.Build(leaf));
+
+        using var validationChain = new X509Chain();
+        HelmChartRepository.AddServerChainCertificates(validationChain, serverChain);
+
+        Assert.Contains(
+            validationChain.ChainPolicy.ExtraStore.Cast<X509Certificate2>(),
+            certificate => string.Equals(
+                certificate.Thumbprint,
+                intermediate.Thumbprint,
+                StringComparison.OrdinalIgnoreCase));
+        Assert.True(HelmChartRepository.ValidateCustomCertificate(
+            leaf,
+            serverChain,
+            SslPolicyErrors.RemoteCertificateChainErrors,
+            new X509Certificate2Collection(root)));
+    }
+
+    [Fact]
     public async Task UpdateConfiguredRepositoriesAsync_UsesPersistedTlsAndAuthenticationSettings()
     {
         var options = CreateOptions();
@@ -585,6 +618,33 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
     }
 
     [Fact]
+    public async Task FetchRepoIndexAsync_NormalizesConfiguredUrlBeforeCacheIdentityLookup()
+    {
+        var options = CreateOptions();
+        Directory.CreateDirectory(options.ConfigDirectory!);
+        await File.WriteAllTextAsync(Path.Combine(options.ConfigDirectory!, "repositories.yaml"), """
+            apiVersion: v1
+            repositories:
+              - name: stable
+                url: https://repo.example.test/charts/
+            """);
+        var handler = new RecordingHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("apiVersion: v1\nentries: {}\n")
+        });
+        using var repository = new HelmChartRepository(options, handler);
+
+        await repository.FetchRepoIndexAsync("https://repo.example.test/charts");
+
+        Assert.True(File.Exists(Path.Combine(
+            options.CacheDirectory!,
+            HelmChartRepository.GetRepositoryIndexCacheFileName("stable"))));
+        Assert.False(File.Exists(Path.Combine(
+            options.CacheDirectory!,
+            HelmChartRepository.GetRepositoryIndexCacheFileName("repository"))));
+    }
+
+    [Fact]
     public async Task FetchRepoIndexAsync_PreservesCaseDistinctCacheIdentities()
     {
         var options = CreateOptions();
@@ -791,6 +851,59 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
             ConfigDirectory = Path.Combine(_tempDir, "config"),
             CacheDirectory = Path.Combine(_tempDir, "cache")
         };
+
+    private static (X509Certificate2 Root, X509Certificate2 Intermediate, X509Certificate2 Leaf)
+        CreateCertificateChain()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var identity = Guid.NewGuid().ToString("N");
+        using var rootKey = RSA.Create(2048);
+        var rootRequest = new CertificateRequest(
+            $"CN=HelmSharp Review Root {identity}",
+            rootKey,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
+        rootRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 1, true));
+        rootRequest.CertificateExtensions.Add(new X509KeyUsageExtension(
+            X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign,
+            true));
+        var root = rootRequest.CreateSelfSigned(now.AddDays(-7), now.AddDays(7));
+
+        using var intermediateKey = RSA.Create(2048);
+        var intermediateRequest = new CertificateRequest(
+            $"CN=HelmSharp Review Intermediate {identity}",
+            intermediateKey,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
+        intermediateRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+        intermediateRequest.CertificateExtensions.Add(new X509KeyUsageExtension(
+            X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign,
+            true));
+        using var intermediatePublic = intermediateRequest.Create(
+            root,
+            now.AddDays(-5),
+            now.AddDays(3),
+            RandomNumberGenerator.GetBytes(16));
+        var intermediate = intermediatePublic.CopyWithPrivateKey(intermediateKey);
+
+        using var leafKey = RSA.Create(2048);
+        var leafRequest = new CertificateRequest(
+            $"CN=repo-{identity}.example.test",
+            leafKey,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
+        leafRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
+        leafRequest.CertificateExtensions.Add(new X509KeyUsageExtension(
+            X509KeyUsageFlags.DigitalSignature,
+            true));
+        using var leafPublic = leafRequest.Create(
+            intermediate,
+            now.AddDays(-3),
+            now.AddDays(1),
+            RandomNumberGenerator.GetBytes(16));
+        var leaf = leafPublic.CopyWithPrivateKey(leafKey);
+        return (root, intermediate, leaf);
+    }
 
     public void Dispose()
     {

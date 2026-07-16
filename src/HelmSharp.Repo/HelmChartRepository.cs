@@ -363,26 +363,8 @@ public sealed class HelmChartRepository : IDisposable
         else if (!string.IsNullOrWhiteSpace(repository.CaFile))
         {
             var trustedRoots = LoadCertificates(repository.CaFile);
-            handler.ServerCertificateCustomValidationCallback = (_, certificate, _, sslPolicyErrors) =>
-            {
-                if (certificate is null)
-                    return false;
-                if ((sslPolicyErrors & SslPolicyErrors.RemoteCertificateNameMismatch) != 0)
-                    return false;
-                if ((sslPolicyErrors & SslPolicyErrors.RemoteCertificateNotAvailable) != 0)
-                    return false;
-
-                using var chain = new X509Chain();
-                chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
-                chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
-                foreach (var trustedRoot in trustedRoots)
-                {
-                    chain.ChainPolicy.CustomTrustStore.Add(trustedRoot);
-                }
-
-                using var serverCertificate = new X509Certificate2(certificate);
-                return chain.Build(serverCertificate);
-            };
+            handler.ServerCertificateCustomValidationCallback = (_, certificate, serverChain, sslPolicyErrors) =>
+                ValidateCustomCertificate(certificate, serverChain, sslPolicyErrors, trustedRoots);
         }
         if (!string.IsNullOrWhiteSpace(repository.CertFile))
             handler.ClientCertificates.Add(LoadClientCertificate(repository.CertFile, repository.KeyFile));
@@ -444,6 +426,42 @@ public sealed class HelmChartRepository : IDisposable
            && string.Equals(left.IdnHost, right.IdnHost, StringComparison.OrdinalIgnoreCase)
            && left.Port == right.Port;
 
+    internal static bool ValidateCustomCertificate(
+        X509Certificate? certificate,
+        X509Chain? serverChain,
+        SslPolicyErrors sslPolicyErrors,
+        X509Certificate2Collection trustedRoots)
+    {
+        if (certificate is null)
+            return false;
+        if ((sslPolicyErrors & SslPolicyErrors.RemoteCertificateNameMismatch) != 0)
+            return false;
+        if ((sslPolicyErrors & SslPolicyErrors.RemoteCertificateNotAvailable) != 0)
+            return false;
+
+        using var validationChain = new X509Chain();
+        validationChain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+        validationChain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+        foreach (var trustedRoot in trustedRoots)
+            validationChain.ChainPolicy.CustomTrustStore.Add(trustedRoot);
+        AddServerChainCertificates(validationChain, serverChain);
+
+        using var serverCertificate = new X509Certificate2(certificate);
+        return validationChain.Build(serverCertificate);
+    }
+
+    internal static void AddServerChainCertificates(X509Chain validationChain, X509Chain? serverChain)
+    {
+        if (serverChain is null)
+            return;
+
+        // The first element is the leaf certificate supplied separately. Preserve every
+        // remaining server-provided element so custom-root validation can build through
+        // intermediates that are not installed locally or available through AIA.
+        for (var index = 1; index < serverChain.ChainElements.Count; index++)
+            validationChain.ChainPolicy.ExtraStore.Add(serverChain.ChainElements[index].Certificate);
+    }
+
     private async Task<string> PullTraditionalChartAsync(
         HelmPullRequest request,
         CancellationToken cancellationToken)
@@ -455,12 +473,23 @@ public sealed class HelmChartRepository : IDisposable
         string? expectedDigest = null;
         var username = request.Username;
         var password = request.Password;
-        var passCredentials = true;
+        var passCredentials = false;
         HelmRepository? configuredRepository = null;
 
         if (IsArchiveUrl(chartReference))
         {
             var archiveUri = ParseAbsoluteHttpUri(chartReference, "chart archive");
+            if (!string.IsNullOrWhiteSpace(request.RepositoryUrl))
+            {
+                var repositoryUri = ParseAbsoluteHttpUri(request.RepositoryUrl, "repository");
+                passCredentials = request.PassCredentialsAll || HaveSameOrigin(repositoryUri, archiveUri);
+            }
+            else
+            {
+                // Without a separate repository origin, request credentials belong to
+                // the direct archive itself and remain valid for private direct URLs.
+                passCredentials = true;
+            }
             archiveUrl = archiveUri.AbsoluteUri;
             archiveFileName = Uri.UnescapeDataString(Path.GetFileName(archiveUri.AbsolutePath));
             chartName = RemoveChartArchiveExtension(archiveFileName);
@@ -512,7 +541,8 @@ public sealed class HelmChartRepository : IDisposable
                 repositoryUri = ParseAbsoluteHttpUri(configuredRepository.Url, "repository");
                 username ??= configuredRepository.Username;
                 password ??= configuredRepository.Password;
-                var index = await LoadConfiguredRepositoryIndexAsync(configuredRepository, cancellationToken);
+                var indexRepository = CopyRepositoryWithCredentials(configuredRepository, username, password);
+                var index = await LoadConfiguredRepositoryIndexAsync(indexRepository, cancellationToken);
                 entry = ResolveChartVersion(index, chartName, request.Version);
             }
 
@@ -637,6 +667,23 @@ public sealed class HelmChartRepository : IDisposable
 
         return await FetchRepoIndexAsync(repository, cancellationToken);
     }
+
+    private static HelmRepository CopyRepositoryWithCredentials(
+        HelmRepository repository,
+        string? username,
+        string? password)
+        => new()
+        {
+            Name = repository.Name,
+            Url = repository.Url,
+            Username = username,
+            Password = password,
+            CertFile = repository.CertFile,
+            KeyFile = repository.KeyFile,
+            CaFile = repository.CaFile,
+            InsecureSkipTlsVerify = repository.InsecureSkipTlsVerify,
+            PassCredentialsAll = repository.PassCredentialsAll
+        };
 
     private static HelmChartVersion ResolveChartVersion(
         HelmRepoIndex index,

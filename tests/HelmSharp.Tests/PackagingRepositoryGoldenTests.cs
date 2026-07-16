@@ -669,6 +669,84 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
     }
 
     [Fact]
+    public async Task PullAsync_DirectArchiveUrlDoesNotForwardRepositoryCredentialsAcrossOrigins()
+    {
+        var archiveDir = Path.Combine(_tempDir, "direct-credential-scope-archive");
+        var repositoryDir = Path.Combine(_tempDir, "direct-credential-scope-repository");
+        Directory.CreateDirectory(archiveDir);
+        Directory.CreateDirectory(repositoryDir);
+        await PackageRepoChartVersionAsync("1.2.3", archiveDir);
+        await using var archiveServer = await LocalFileServer.StartAsync(archiveDir);
+        await using var repositoryServer = await LocalFileServer.StartAsync(repositoryDir);
+        using var repository = CreateNoProxyRepository("direct-credential-scope");
+
+        var archivePath = await repository.PullChartAsync(
+            new HelmPullRequest
+            {
+                ChartReference = $"{archiveServer.BaseUrl}/repo-golden-1.2.3.tgz",
+                RepositoryUrl = repositoryServer.BaseUrl,
+                Username = "chart-user",
+                Password = "chart-password",
+                Destination = Path.Combine(_tempDir, "direct-credential-scope-destination")
+            },
+            CancellationToken.None);
+
+        Assert.True(File.Exists(archivePath));
+        Assert.Null(archiveServer.LastAuthorization);
+    }
+
+    [Fact]
+    public async Task PullAsync_DirectArchiveUrlUsesRequestCredentialsWithoutRepositoryOrigin()
+    {
+        const string username = "direct-user";
+        const string password = "direct-password";
+        var archiveDir = Path.Combine(_tempDir, "authenticated-direct-archive");
+        Directory.CreateDirectory(archiveDir);
+        await PackageRepoChartVersionAsync("1.2.3", archiveDir);
+        await using var archiveServer = await LocalFileServer.StartAsync(archiveDir, username, password);
+        using var repository = CreateNoProxyRepository("authenticated-direct-archive");
+
+        var archivePath = await repository.PullChartAsync(
+            new HelmPullRequest
+            {
+                ChartReference = $"{archiveServer.BaseUrl}/repo-golden-1.2.3.tgz",
+                Username = username,
+                Password = password,
+                Destination = Path.Combine(_tempDir, "authenticated-direct-archive-destination")
+            },
+            CancellationToken.None);
+
+        Assert.True(File.Exists(archivePath));
+        Assert.NotNull(archiveServer.LastAuthorization);
+    }
+
+    [Fact]
+    public async Task PullAsync_DirectArchiveUrlUsesRepositoryCredentialsOnSameOrigin()
+    {
+        const string username = "same-origin-user";
+        const string password = "same-origin-password";
+        var archiveDir = Path.Combine(_tempDir, "same-origin-direct-archive");
+        Directory.CreateDirectory(archiveDir);
+        await PackageRepoChartVersionAsync("1.2.3", archiveDir);
+        await using var archiveServer = await LocalFileServer.StartAsync(archiveDir, username, password);
+        using var repository = CreateNoProxyRepository("same-origin-direct-archive");
+
+        var archivePath = await repository.PullChartAsync(
+            new HelmPullRequest
+            {
+                ChartReference = $"{archiveServer.BaseUrl}/repo-golden-1.2.3.tgz",
+                RepositoryUrl = archiveServer.BaseUrl,
+                Username = username,
+                Password = password,
+                Destination = Path.Combine(_tempDir, "same-origin-direct-archive-destination")
+            },
+            CancellationToken.None);
+
+        Assert.True(File.Exists(archivePath));
+        Assert.NotNull(archiveServer.LastAuthorization);
+    }
+
+    [Fact]
     public async Task PullAsync_UntarExtractsChartUnderRequestedDirectory()
     {
         var repoDir = Path.Combine(_tempDir, "untar-pull-repo");
@@ -785,6 +863,34 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
 
         var chart = await HelmChartLoader.LoadAsync(chartPath, CancellationToken.None);
         Assert.Equal("1.2.3", chart.Version);
+    }
+
+    [Fact]
+    public async Task PullAsync_RequestCredentialsOverrideConfiguredRepositoryForIndexFetch()
+    {
+        const string username = "request-user";
+        const string password = "request-password";
+        var repoDir = Path.Combine(_tempDir, "configured-request-credentials-repo");
+        Directory.CreateDirectory(repoDir);
+        await PackageRepoChartVersionAsync("1.2.3", repoDir);
+        await using var server = await LocalFileServer.StartAsync(repoDir, username, password);
+        await HelmRepoIndexer.GenerateIndexAsync(repoDir, server.BaseUrl, CancellationToken.None);
+        using var repository = CreateNoProxyRepository("configured-request-credentials");
+        await repository.AddRepositoryAsync("private", server.BaseUrl);
+
+        var archivePath = await repository.PullChartAsync(
+            new HelmPullRequest
+            {
+                ChartReference = "private/repo-golden",
+                Version = "1.2.3",
+                Username = username,
+                Password = password,
+                Destination = Path.Combine(_tempDir, "configured-request-credentials-destination")
+            },
+            CancellationToken.None);
+
+        Assert.True(File.Exists(archivePath));
+        Assert.NotNull(server.LastAuthorization);
     }
 
     [Fact]
