@@ -13,6 +13,7 @@ This project follows semantic versioning once stable releases begin.
 ### Changed
 
 - Clarified across English and Simplified Chinese documentation that 1.1.1 is the latest published version while M2 APIs and examples reflect unreleased `master` work planned for 1.2.0 (#186).
+- Closed the M2 repository and pull review gaps around custom-CA chains, credential scoping, and configured-index request credentials (#184).
 - Normalized packaged root and nested `Chart.yaml` metadata to Helm-compatible LF payloads on every platform while preserving source chart files (#180).
 - Hardened repository state with secure atomic writes, Helm-compatible cross-platform cache paths, and collision-safe cache identities (#181).
 - Documented complete packaging, repository, pull, and dependency workflows in English and Simplified Chinese, with compile-checked examples and explicit OCI/provenance boundaries (#141).
