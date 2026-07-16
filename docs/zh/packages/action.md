@@ -12,6 +12,10 @@
 dotnet add package HelmSharp.Action --version 1.1.1
 ```
 
+::: warning 版本可用性
+1.1.1 是最新发布包。下文的 M2 请求类型以及打包、拉取、仓库索引和依赖工作流反映当前 `master` 分支，计划随 1.2.0 发布；上面的 1.1.1 安装命令不会提供这些 API。
+:::
+
 ## 依赖关系
 
 该包引用渲染、Chart、Kubernetes、Release、Repo、Registry、Storage 和 PostRenderer 相关包。

@@ -4,6 +4,10 @@
 
 `HelmSharp.Repo` handles chart repository metadata: add, remove, list, search, pull, push-to-OCI placeholder behavior, and index generation.
 
+::: warning Version availability
+1.1.1 is the latest published package. The complete M2 configuration, cache, search, semantic-version pull, digest, and extraction behavior described below reflects the current `master` branch and is planned for 1.2.0; installing 1.1.1 does not provide that complete surface.
+:::
+
 ## Repository configuration and cache
 
 `HelmChartRepository` persists repository definitions in a Helm-compatible `repositories.yaml` file. By default it follows Helm-style environment settings: `HELM_REPOSITORY_CONFIG` for the file, `HELM_CONFIG_HOME` (or `XDG_CONFIG_HOME`) for the config home, and `HELM_REPOSITORY_CACHE` / `HELM_CACHE_HOME` (or `XDG_CACHE_HOME`) for cached repository indexes and chart downloads. `HELM_CACHE_HOME` is treated as a cache home, with repository files stored in its `repository` subdirectory. Platform fallbacks match Helm: Linux uses `~/.config/helm` and `~/.cache/helm`, macOS uses `~/Library/Preferences/helm` and `~/Library/Caches/helm`, and Windows uses `%APPDATA%\helm` and `%TEMP%\helm` for config and cache homes respectively.

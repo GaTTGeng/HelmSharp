@@ -4,6 +4,8 @@
 
 Use this page as a member index. Start with the package guide for usage recommendations, boundaries, and examples.
 
+> **Version note:** This page reflects the current `master` source tree and may include unreleased APIs. The latest published packages are 1.1.1; M2 APIs are planned for 1.2.0.
+
 ## ActionNode
 
 | Field | Value |

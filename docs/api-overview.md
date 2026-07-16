@@ -2,6 +2,10 @@
 
 Start with the workflow, then choose the smallest package. The detailed member index lives under [API Reference](api/index.md); this page is the decision guide.
 
+::: warning Version availability
+1.1.1 is the latest published version. The M2 request objects and distribution workflows on this page reflect the current `master` branch and are planned for 1.2.0; they are not available in the 1.1.1 NuGet packages.
+:::
+
 ## Package decision table
 
 | You want to... | Start with | Next page |
