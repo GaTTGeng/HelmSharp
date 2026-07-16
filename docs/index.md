@@ -106,8 +106,12 @@ dotnet add package HelmSharp.Chart --version 1.1.1
 dotnet add package HelmSharp.Engine --version 1.1.1
 ```
 
+::: warning Version availability
+1.1.1 is the latest published version. M2 packaging, repository, pull, and dependency APIs documented on this site reflect the current `master` branch and are planned for 1.2.0; installing 1.1.1 does not provide the complete M2 API surface. Build all packages from the same `master` commit to evaluate it before 1.2.0 is published.
+:::
+
 ## Current Scope
 
-HelmSharp already covers chart loading, values merging, managed template rendering, chart packaging, repository helpers, Kubernetes apply/delete/wait helpers, and release history backed by Kubernetes Secrets.
+The current `master` branch covers chart loading, values merging, managed template rendering, chart packaging, repository helpers, Kubernetes apply/delete/wait helpers, and release history backed by Kubernetes Secrets. See the version warning above for capabilities that have not reached NuGet yet.
 
 Compatibility is validated with focused fixtures and selected public-chart golden tests, but HelmSharp is still an SDK with explicit boundaries. Advanced plugin behavior, complete provenance verification, OCI authentication parity, and uncommon readiness cases remain planned or active work. Check [Helm Compatibility](helm-compatibility.md) before depending on a specific Helm edge case.

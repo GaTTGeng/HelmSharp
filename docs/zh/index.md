@@ -106,8 +106,12 @@ dotnet add package HelmSharp.Chart --version 1.1.1
 dotnet add package HelmSharp.Engine --version 1.1.1
 ```
 
+::: warning 版本可用性
+1.1.1 是最新发布版本。本站记录的 M2 打包、仓库、拉取和依赖 API 反映当前 `master` 分支，计划随 1.2.0 发布；安装 1.1.1 并不会获得完整的 M2 API 功能面。如需在 1.2.0 发布前评估，请从同一个 `master` 提交构建所有包。
+:::
+
 ## 当前范围
 
-目前已覆盖 Chart 加载、values 合并、托管模板渲染、Chart 打包、仓库辅助方法、Kubernetes 提交/删除/等待辅助方法，以及基于 Kubernetes Secrets 的发布历史。
+当前 `master` 分支已覆盖 Chart 加载、values 合并、托管模板渲染、Chart 打包、仓库辅助方法、Kubernetes 提交/删除/等待辅助方法，以及基于 Kubernetes Secrets 的发布历史。尚未进入 NuGet 的能力请以上面的版本说明为准。
 
 兼容性通过聚焦测试用 Chart 和选定公开 Chart 的基准输出测试持续验证，但 HelmSharp 仍然是边界清晰的 SDK。高级插件行为、完整来源校验、OCI 认证对齐和少见就绪场景仍在计划或推进中。如果你的 Chart 依赖某个 Helm 边缘行为，先看 [Helm 兼容性](helm-compatibility.md)。

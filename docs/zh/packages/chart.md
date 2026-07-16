@@ -12,6 +12,10 @@
 dotnet add package HelmSharp.Chart --version 1.1.1
 ```
 
+::: warning 版本可用性
+1.1.1 是最新发布包。下文的 M2 锁文件、依赖别名和本地依赖行为反映当前 `master` 分支，计划随 1.2.0 发布。
+:::
+
 ## 依赖关系
 
 该包依赖 `YamlDotNet`，不依赖 Kubernetes。

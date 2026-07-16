@@ -12,6 +12,10 @@ Install this package for any render-only integration:
 dotnet add package HelmSharp.Chart --version 1.1.1
 ```
 
+::: warning Version availability
+1.1.1 is the latest published package. The M2 lock-file, dependency-alias, and local-dependency behavior described below reflects the current `master` branch and is planned for 1.2.0.
+:::
+
 ## Dependencies
 
 This package depends on `YamlDotNet` and has no Kubernetes dependency.

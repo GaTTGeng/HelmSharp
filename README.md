@@ -11,7 +11,9 @@
 
 HelmSharp is a managed .NET library for rendering Helm-style charts and driving Kubernetes release workflows without invoking the `helm` executable. It is intended for applications that need Helm-like behavior inside a .NET process: template rendering, values merging, chart packaging, repository operations, and release lifecycle operations against Kubernetes.
 
-The project is under active development. M1 (Helm template parity) is complete, with the renderer continuously checked against focused fixtures and selected public Helm charts. M2+ features expand into release lifecycle and Kubernetes operations.
+The project is under active development. M1 (Helm template parity) is complete, with the renderer continuously checked against focused fixtures and selected public Helm charts. M2 chart packaging and repository parity is in final review for the planned 1.2.0 release; later milestones expand release lifecycle and Kubernetes operations.
+
+The latest published version is **1.1.1**. The M2 packaging, repository, pull, and dependency capabilities described below and in the linked distribution guide reflect the current `master` branch and are planned for **1.2.0**; the complete M2 API surface is not available in the 1.1.1 NuGet packages. To evaluate it before 1.2.0 is published, build all HelmSharp packages from the same `master` commit.
 
 Documentation site: [https://gattgeng.github.io/HelmSharp/](https://gattgeng.github.io/HelmSharp/)
 
@@ -131,6 +133,8 @@ await foreach (var line in client.UpgradeInstallStreamAsync(new HelmUpgradeInsta
 ```
 
 ## Supported Capabilities
+
+The list below describes the current `master` branch. See the version note above before using M2 APIs from NuGet.
 
 - Chart loading from directories and `.tgz` archives.
 - `values.yaml`, inline values, `--set`, `--set-string`, `--set-json`, and `--set-file`-style value overrides.

@@ -4,6 +4,10 @@
 
 `HelmSharp.Repo` 处理 Chart 仓库元数据：添加、移除、列出、搜索、拉取、生成索引，以及有限的 OCI 相关占位能力。
 
+::: warning 版本可用性
+1.1.1 是最新发布包。下文完整的 M2 配置、缓存、搜索、语义版本拉取、摘要和解压行为反映当前 `master` 分支，计划随 1.2.0 发布；安装 1.1.1 不会获得这里描述的完整功能面。
+:::
+
 ## 仓库配置与缓存
 
 `HelmChartRepository` 会将仓库定义持久化到兼容 Helm 的 `repositories.yaml`。默认情况下，它遵循 Helm 风格的环境变量：`HELM_REPOSITORY_CONFIG` 指定配置文件，`HELM_CONFIG_HOME`（或 `XDG_CONFIG_HOME`）指定配置目录，`HELM_REPOSITORY_CACHE` / `HELM_CACHE_HOME`（或 `XDG_CACHE_HOME`）指定仓库索引和下载 Chart 的缓存目录。`HELM_CACHE_HOME` 表示缓存根目录，仓库文件会写入其中的 `repository` 子目录。平台默认值与 Helm 一致：Linux 的配置和缓存根目录分别是 `~/.config/helm` 与 `~/.cache/helm`，macOS 分别是 `~/Library/Preferences/helm` 与 `~/Library/Caches/helm`，Windows 分别是 `%APPDATA%\helm` 与 `%TEMP%\helm`。

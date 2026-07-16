@@ -11,7 +11,9 @@
 
 HelmSharp 是一个面向 .NET 的托管 Helm 风格库，用于在不调用 `helm` 可执行文件的情况下渲染 Helm 风格 Chart 并驱动 Kubernetes Release 工作流。它适合需要在 .NET 进程内完成模板渲染、values 合并、Chart 打包、仓库操作和 Kubernetes 发布生命周期管理的应用。
 
-项目仍在积极开发中。M1（Helm 模板对齐）已完成，渲染器会持续通过聚焦测试用 Chart 和选定公开 Helm Chart 校验。M2+ 将扩展至发布生命周期和 Kubernetes 操作。
+项目仍在积极开发中。M1（Helm 模板对齐）已完成，渲染器会持续通过聚焦测试用 Chart 和选定公开 Helm Chart 校验。M2 的 Chart 打包和仓库对齐正在为计划中的 1.2.0 版本做最终审查；后续里程碑将扩展发布生命周期和 Kubernetes 操作。
+
+最新发布版本是 **1.1.1**。下文以及所链接分发指南中的 M2 打包、仓库、拉取和依赖能力反映当前 `master` 分支，计划随 **1.2.0** 发布；1.1.1 NuGet 包不包含完整的 M2 API 功能面。如需在 1.2.0 发布前评估，请从同一个 `master` 提交构建所有 HelmSharp 包。
 
 文档站点：[https://gattgeng.github.io/HelmSharp/](https://gattgeng.github.io/HelmSharp/)
 
@@ -131,6 +133,8 @@ await foreach (var line in client.UpgradeInstallStreamAsync(new HelmUpgradeInsta
 ```
 
 ## 已支持能力
+
+以下列表描述当前 `master` 分支。通过 NuGet 使用 M2 API 前，请先阅读上面的版本说明。
 
 - 从目录和 `.tgz` 归档加载 Chart。
 - 支持 `values.yaml`、内联 values、`--set`、`--set-string`、`--set-json`、`--set-file` 风格的值覆盖。

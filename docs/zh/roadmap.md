@@ -6,7 +6,9 @@
 
 ## 当前重点
 
-**M1：Helm 模板对齐** 已在 1.1.0 完成，**M2：Chart 打包和仓库对齐** 已为计划中的 1.2.0 版本完成。当前重点转向发布工作流、Kubernetes 操作、OCI/来源证明，以及来自真实用户 Chart 的兼容性扩展。
+**M1：Helm 模板对齐** 已在 1.1.0 完成，**M2：Chart 打包和仓库对齐** 正在为计划中的 1.2.0 版本做最终审查。发布工作流、Kubernetes 操作、OCI/来源证明，以及来自真实用户 Chart 的兼容性扩展也在继续推进。
+
+最新发布版本是 1.1.1。在 1.2.0 发布前，M2 API 文档和示例描述的是当前 `master` 分支，而不是 1.1.1 NuGet 包中可用的 API。
 
 当前渲染覆盖范围见 [兼容性页面](helm-compatibility.md)，M2 工作流见 [Chart 分发指南](guide/chart-distribution.md)；发布生命周期、Kubernetes 语义、OCI 和公共 SDK 加固可继续跟踪 GitHub 上的后续 milestones。
 
@@ -23,7 +25,7 @@
 | 阶段 | 状态 | 用户结果 |
 | --- | --- | --- |
 | [M1：Helm 模板对齐](https://github.com/GaTTGeng/HelmSharp/milestone/1) | 1.1.0 已完成 | 从 .NET 渲染常见 Chart，输出具备可预期的 Helm 兼容性。 |
-| [M2：Chart 打包和仓库对齐](https://github.com/GaTTGeng/HelmSharp/milestone/2) | 1.2.0 已完成 | 不交给 CLI 也能打包、生成索引、拉取和处理依赖。 |
+| [M2：Chart 打包和仓库对齐](https://github.com/GaTTGeng/HelmSharp/milestone/2) | 1.2.0 最终审查中 | 不交给 CLI 也能打包、生成索引、拉取和处理依赖。 |
 | [M3：发布生命周期对齐](https://github.com/GaTTGeng/HelmSharp/milestone/6) | 计划中 | 安装、升级、回滚、卸载、状态、历史和 hooks 行为可解释。 |
 | [M4：Kubernetes 提交和等待语义](https://github.com/GaTTGeng/HelmSharp/milestone/5) | 计划中 | 资源身份、命名空间、就绪、Jobs、删除和 hook 清理更完整。 |
 | [M5：OCI 和来源证明](https://github.com/GaTTGeng/HelmSharp/milestone/4) | 计划中 | 注册表认证、Chart 拉取/推送、签名和校验。 |
