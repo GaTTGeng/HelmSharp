@@ -1120,16 +1120,31 @@ public sealed class HelmChartRepository : IDisposable
         string? repositoryName,
         CancellationToken cancellationToken)
     {
-        var name = repositoryName;
-        if (string.IsNullOrWhiteSpace(name))
+        var names = new List<string>();
+        if (!string.IsNullOrWhiteSpace(repositoryName))
         {
-            var repositories = await LoadRepositoriesAsync(_repositoryConfigPath, cancellationToken);
-            name = repositories.Values.FirstOrDefault(repository =>
-                string.Equals(repository.Url, NormalizeRepositoryUrl(repoUrl), StringComparison.OrdinalIgnoreCase))?.Name
-                ?? "repository";
+            names.Add(repositoryName);
         }
-        var cachePath = Path.Combine(_cacheDir, GetRepositoryIndexCacheFileName(name));
-        await WriteAllTextAtomicallyAsync(cachePath, yaml, cancellationToken);
+        else
+        {
+            var normalizedUrl = NormalizeRepositoryUrl(repoUrl);
+            var repositories = await LoadRepositoriesAsync(_repositoryConfigPath, cancellationToken);
+            names.AddRange(repositories.Values
+                .Where(repository => string.Equals(
+                    NormalizeRepositoryUrl(repository.Url),
+                    normalizedUrl,
+                    StringComparison.OrdinalIgnoreCase))
+                .Select(repository => repository.Name));
+        }
+
+        if (names.Count == 0)
+            names.Add("repository");
+
+        foreach (var name in names.Distinct(StringComparer.Ordinal))
+        {
+            var cachePath = Path.Combine(_cacheDir, GetRepositoryIndexCacheFileName(name));
+            await WriteAllTextAtomicallyAsync(cachePath, yaml, cancellationToken);
+        }
     }
 
     internal static async Task WriteAllTextAtomicallyAsync(
@@ -1157,9 +1172,24 @@ public sealed class HelmChartRepository : IDisposable
             $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
         try
         {
-            await File.WriteAllTextAsync(tempPath, contents, cancellationToken);
+            var streamOptions = new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+                BufferSize = 4096,
+                Options = FileOptions.Asynchronous
+            };
             if (!OperatingSystem.IsWindows() && unixMode is { } mode)
-                File.SetUnixFileMode(tempPath, mode);
+                streamOptions.UnixCreateMode = mode;
+
+            await using (var stream = new FileStream(tempPath, streamOptions))
+            {
+                var bytes = Encoding.UTF8.GetBytes(contents);
+                await stream.WriteAsync(bytes, cancellationToken);
+                await stream.FlushAsync(cancellationToken);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
             File.Move(tempPath, path, overwrite: true);
         }
         catch
@@ -1171,15 +1201,34 @@ public sealed class HelmChartRepository : IDisposable
     }
 
     internal static string GetRepositoryIndexCacheFileName(string repositoryName)
+        => GetRepositoryIndexCacheFileName(
+            repositoryName,
+            caseInsensitiveFileSystem: OperatingSystem.IsWindows() || OperatingSystem.IsMacOS());
+
+    internal static string GetRepositoryIndexCacheFileName(
+        string repositoryName,
+        bool caseInsensitiveFileSystem)
     {
-        var safeName = repositoryName
-            .Replace(Path.DirectorySeparatorChar, '-')
-            .Replace(Path.AltDirectorySeparatorChar, '-')
-            .Trim(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var safeName = string.Concat(repositoryName.Select(character =>
+            IsPortableFileNameCharacter(character) ? character : '-')).TrimEnd(' ', '.');
         if (string.IsNullOrEmpty(safeName))
             safeName = "repository";
-        return $"{safeName}-index.yaml";
+
+        // Helm repository names are case-sensitive, while the default Windows and macOS
+        // file systems are not. Always disambiguate uppercase identities on those platforms
+        // so the filename remains derivable from the name alone and stays stable when a
+        // case-distinct peer is later added or removed.
+        var identitySuffix = (!string.Equals(safeName, repositoryName, StringComparison.Ordinal)
+                              || caseInsensitiveFileSystem && repositoryName.Any(char.IsUpper))
+            ? $"-{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(repositoryName)))[..12].ToLowerInvariant()}"
+            : string.Empty;
+        return $"{safeName}{identitySuffix}-index.yaml";
     }
+
+    private static bool IsPortableFileNameCharacter(char character)
+        => character >= ' '
+           && character is not '<' and not '>' and not ':' and not '"'
+           && character is not '/' and not '\\' and not '|' and not '?' and not '*';
 
     internal static string GetRepositoryConfigLockPath(string repositoryConfigPath)
     {
@@ -1260,24 +1309,61 @@ public sealed class HelmChartRepository : IDisposable
     }
 
     private static string ResolveCacheDirectory(HelmRepositoryOptions options)
+        => ResolveCacheDirectory(
+            options,
+            Environment.GetEnvironmentVariable("HELM_REPOSITORY_CACHE"),
+            Environment.GetEnvironmentVariable("HELM_CACHE_HOME"),
+            Environment.GetEnvironmentVariable("XDG_CACHE_HOME"),
+            OperatingSystem.IsMacOS(),
+            OperatingSystem.IsWindows(),
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            Path.GetTempPath());
+
+    internal static string ResolveCacheDirectory(
+        HelmRepositoryOptions options,
+        string? environmentRepositoryCache,
+        string? helmCacheHome,
+        string? xdgCacheHome,
+        bool isMacOS,
+        bool isWindows,
+        string userProfile,
+        string temporaryDirectory)
     {
         var configuredDirectory = options.CacheDirectory
-            ?? Environment.GetEnvironmentVariable("HELM_REPOSITORY_CACHE");
+            ?? environmentRepositoryCache;
         if (!string.IsNullOrWhiteSpace(configuredDirectory))
             return configuredDirectory;
 
-        var helmCacheHome = Environment.GetEnvironmentVariable("HELM_CACHE_HOME");
-        if (!string.IsNullOrWhiteSpace(helmCacheHome))
-            return GetRepositoryCacheDirectory(helmCacheHome);
-
-        var xdgCache = Environment.GetEnvironmentVariable("XDG_CACHE_HOME");
-        return !string.IsNullOrWhiteSpace(xdgCache)
-            ? Path.Combine(xdgCache, "helm", "repository")
-            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "helm", "repository");
+        return ResolveHelmCacheDirectory(
+            helmCacheHome,
+            xdgCacheHome,
+            isMacOS,
+            isWindows,
+            userProfile,
+            temporaryDirectory);
     }
 
     internal static string GetRepositoryCacheDirectory(string helmCacheHome)
         => Path.Combine(helmCacheHome, "repository");
+
+    internal static string ResolveHelmCacheDirectory(
+        string? helmCacheHome,
+        string? xdgCacheHome,
+        bool isMacOS,
+        bool isWindows,
+        string userProfile,
+        string temporaryDirectory)
+    {
+        if (!string.IsNullOrWhiteSpace(helmCacheHome))
+            return GetRepositoryCacheDirectory(helmCacheHome);
+        if (!string.IsNullOrWhiteSpace(xdgCacheHome))
+            return Path.Combine(xdgCacheHome, "helm", "repository");
+        if (isMacOS)
+            return Path.Combine(userProfile, "Library", "Caches", "helm", "repository");
+        if (isWindows)
+            return Path.Combine(temporaryDirectory, "helm", "repository");
+        return Path.Combine(userProfile, ".cache", "helm", "repository");
+    }
 
     private static string ResolveRepositoryConfigPath(HelmRepositoryOptions options)
         => ResolveRepositoryConfigPath(options, Environment.GetEnvironmentVariable("HELM_REPOSITORY_CONFIG"));
