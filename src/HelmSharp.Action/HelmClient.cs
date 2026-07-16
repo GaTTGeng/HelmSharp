@@ -1062,6 +1062,10 @@ public class HelmClient : IHelmClient
         var output = new StringBuilder();
         var resolvedDependencies = new List<HelmResolvedDependency>(chart.Dependencies.Count);
         var stagedArchives = new List<string>(chart.Dependencies.Count);
+        var localDependencyNames = chart.Dependencies
+            .Where(dependency => string.IsNullOrWhiteSpace(dependency.Repository))
+            .Select(dependency => dependency.Name)
+            .ToHashSet(StringComparer.Ordinal);
         var errors = new List<string>();
 
         try
@@ -1141,6 +1145,7 @@ public class HelmClient : IHelmClient
             await InstallStagedDependencyArchivesAsync(
                 chartsDir,
                 stagedArchives,
+                localDependencyNames,
                 output,
                 cancellationToken);
 
@@ -1181,6 +1186,7 @@ public class HelmClient : IHelmClient
     private static async Task InstallStagedDependencyArchivesAsync(
         string chartsDirectory,
         IReadOnlyList<string> stagedArchives,
+        IReadOnlySet<string> localDependencyNames,
         StringBuilder output,
         CancellationToken cancellationToken)
     {
@@ -1214,6 +1220,10 @@ public class HelmClient : IHelmClient
         {
             if (!desiredArchiveNames.Contains(Path.GetFileName(existingArchive)))
             {
+                var existingChart = await HelmChartLoader.LoadAsync(existingArchive, cancellationToken);
+                if (localDependencyNames.Contains(existingChart.Name))
+                    continue;
+
                 File.Delete(existingArchive);
                 output.AppendLine($"Deleted outdated dependency: {existingArchive}");
             }
@@ -1587,6 +1597,10 @@ public class HelmClient : IHelmClient
         Directory.CreateDirectory(stagingDirectory);
         var output = new StringBuilder();
         var stagedArchives = new List<string>(lockFile.Dependencies.Count);
+        var localDependencyNames = lockFile.Dependencies
+            .Where(dependency => string.IsNullOrWhiteSpace(dependency.Repository))
+            .Select(dependency => dependency.Name)
+            .ToHashSet(StringComparer.Ordinal);
         var errors = new List<string>();
 
         try
@@ -1667,6 +1681,7 @@ public class HelmClient : IHelmClient
             await InstallStagedDependencyArchivesAsync(
                 chartsDirectory,
                 stagedArchives,
+                localDependencyNames,
                 output,
                 cancellationToken);
             output.AppendLine("Dependencies rebuilt from Chart.lock.");

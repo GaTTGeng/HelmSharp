@@ -1287,6 +1287,51 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
     }
 
     [HelmCliFact]
+    public async Task DependencyUpdateAndBuild_PreserveLocalArchivesAndDeleteStaleArchivesLikeHelm()
+    {
+        var sharpChart = await CreateVendoredDependencyParentChartAsync("sharp-vendored-archive-cleanup");
+        var helmChart = await CreateVendoredDependencyParentChartAsync("helm-vendored-archive-cleanup");
+        var sharpChartsDirectory = Path.Combine(sharpChart, "charts");
+        var helmChartsDirectory = Path.Combine(helmChart, "charts");
+        var sharpLocalArchive = await HelmChartPackager.PackageAsync(
+            Path.Combine(sharpChartsDirectory, "local-child"),
+            sharpChartsDirectory,
+            cancellationToken: CancellationToken.None);
+        var helmLocalArchive = await HelmChartPackager.PackageAsync(
+            Path.Combine(helmChartsDirectory, "local-child"),
+            helmChartsDirectory,
+            cancellationToken: CancellationToken.None);
+        await PackageDependencyChartVersionAsync("9.9.9", sharpChartsDirectory);
+        await PackageDependencyChartVersionAsync("9.9.9", helmChartsDirectory);
+        var sharpStaleArchive = Path.Combine(sharpChartsDirectory, "child-dep-9.9.9.tgz");
+        var helmStaleArchive = Path.Combine(helmChartsDirectory, "child-dep-9.9.9.tgz");
+        var client = CreateNoProxyClient("vendored-archive-cleanup");
+
+        var sharpUpdate = await client.DependencyUpdateAsync(sharpChart);
+        var helmUpdate = await HelmCliRunner.DependencyUpdateAsync(helmChart, CancellationToken.None);
+
+        AssertOperationSucceeded("vendored archive cleanup HelmSharp update", sharpUpdate);
+        AssertOperationSucceeded("vendored archive cleanup Helm update", helmUpdate);
+        Assert.True(File.Exists(sharpLocalArchive));
+        Assert.True(File.Exists(helmLocalArchive));
+        Assert.False(File.Exists(sharpStaleArchive));
+        Assert.False(File.Exists(helmStaleArchive));
+
+        await PackageDependencyChartVersionAsync("9.9.9", sharpChartsDirectory);
+        await PackageDependencyChartVersionAsync("9.9.9", helmChartsDirectory);
+
+        var sharpBuild = await client.DependencyBuildAsync(sharpChart);
+        var helmBuild = await HelmCliRunner.DependencyBuildAsync(helmChart, CancellationToken.None);
+
+        AssertOperationSucceeded("vendored archive cleanup HelmSharp build", sharpBuild);
+        AssertOperationSucceeded("vendored archive cleanup Helm build", helmBuild);
+        Assert.True(File.Exists(sharpLocalArchive));
+        Assert.True(File.Exists(helmLocalArchive));
+        Assert.False(File.Exists(sharpStaleArchive));
+        Assert.False(File.Exists(helmStaleArchive));
+    }
+
+    [HelmCliFact]
     public async Task DependencyUpdateAndBuild_DuplicateRepositoryAliasesShareArchiveLikeHelm()
     {
         var repoDir = Path.Combine(_tempDir, "duplicate-alias-repository");
