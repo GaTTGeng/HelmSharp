@@ -37,4 +37,6 @@ public sealed class HelmPullRequest
 
     /// <summary>Gets or sets whether repository-provided archive digest validation is requested. The default is <see langword="true"/>.</summary>
     public bool VerifyDigest { get; set; } = true;
+
+    internal bool ExactVersion { get; set; }
 }

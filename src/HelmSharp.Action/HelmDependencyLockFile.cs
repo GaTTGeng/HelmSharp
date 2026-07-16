@@ -182,5 +182,7 @@ internal static class HelmDependencyLockFile
         };
 
     private static string SerializeScalar(string value)
-        => HelmYaml.Serialize(value).TrimEnd('\r', '\n');
+        => value.Length == 0
+            ? "\"\""
+            : HelmYaml.Serialize(value).TrimEnd('\r', '\n');
 }

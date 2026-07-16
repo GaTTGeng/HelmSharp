@@ -69,19 +69,23 @@ public sealed class DependencyListStatusTests : IDisposable
         Assert.Equal(NormalizeNewlines(helmResult.Stdout), NormalizeNewlines(sharpResult.StandardOutput));
     }
 
-    [Fact]
-    public async Task DependencyListAsync_LockVersionOverridesPermissiveDeclaration()
+    [HelmCliFact]
+    public async Task DependencyListAsync_UsesDeclaredConstraintInsteadOfLockedVersion()
     {
         var chartDirectory = CopyFixture("with-lock");
         await AddPackagedDependencyAsync(chartDirectory, "archive-ok", "1.2.7");
 
-        var result = await CreateClient().DependencyListAsync(chartDirectory);
+        var sharpResult = await CreateClient().DependencyListAsync(chartDirectory);
+        var helmResult = await HelmCliRunner.DependencyListAsync(chartDirectory, CancellationToken.None);
 
-        Assert.Equal("wrong version", FindStatus(ParseRows(result.StandardOutput), "archive-ok"));
+        AssertSuccess("HelmSharp dependency list", sharpResult.ExitCode, sharpResult.StandardError);
+        AssertSuccess("helm dependency list", helmResult.ExitCode, helmResult.Stderr);
+        Assert.Equal(ParseRows(helmResult.Stdout), ParseRows(sharpResult.StandardOutput));
+        Assert.Equal("ok", FindStatus(ParseRows(sharpResult.StandardOutput), "archive-ok"));
     }
 
-    [Fact]
-    public async Task DependencyListAsync_RecognizesAliasDirectoryAndDisabledCondition()
+    [HelmCliFact]
+    public async Task DependencyListAsync_RecognizesAliasDirectoryAndIgnoresDisabledCondition()
     {
         var chartDirectory = Path.Combine(_tempDirectory, "alias-and-condition");
         await WriteTextAsync(Path.Combine(chartDirectory, "Chart.yaml"), """
@@ -104,11 +108,15 @@ public sealed class DependencyListStatusTests : IDisposable
             """);
         await AddUnpackedDependencyAsync(chartDirectory, "cache", "alias-target", "4.0.0");
 
-        var result = await CreateClient().DependencyListAsync(chartDirectory);
-        var rows = ParseRows(result.StandardOutput);
+        var sharpResult = await CreateClient().DependencyListAsync(chartDirectory);
+        var helmResult = await HelmCliRunner.DependencyListAsync(chartDirectory, CancellationToken.None);
+        var rows = ParseRows(sharpResult.StandardOutput);
 
+        AssertSuccess("HelmSharp dependency list", sharpResult.ExitCode, sharpResult.StandardError);
+        AssertSuccess("helm dependency list", helmResult.ExitCode, helmResult.Stderr);
+        Assert.Equal(ParseRows(helmResult.Stdout), rows);
         Assert.Equal("unpacked", FindStatus(rows, "alias-target"));
-        Assert.Equal("disabled", FindStatus(rows, "optional-dep"));
+        Assert.Equal("missing", FindStatus(rows, "optional-dep"));
     }
 
     [HelmCliFact]

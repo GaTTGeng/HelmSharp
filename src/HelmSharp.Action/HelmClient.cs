@@ -1079,14 +1079,25 @@ public class HelmClient : IHelmClient
             foreach (var dependency in chart.Dependencies)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (string.IsNullOrWhiteSpace(dependency.Repository))
-                {
-                    errors.Add($"Dependency '{dependency.Name}' does not specify a repository.");
-                    continue;
-                }
-
                 try
                 {
+                    if (string.IsNullOrWhiteSpace(dependency.Repository))
+                    {
+                        var local = await ResolveVendoredDependencyAsync(
+                            chartPath,
+                            dependency.Name,
+                            dependency.Version,
+                            exactVersion: false,
+                            cancellationToken);
+                        output.AppendLine(
+                            $"Resolved local dependency: {dependency.Name} ({local.Version}) from charts/{dependency.Name}");
+                        resolvedDependencies.Add(new HelmResolvedDependency(
+                            dependency.Name,
+                            dependency.Version ?? local.Version,
+                            string.Empty));
+                        continue;
+                    }
+
                     var staged = await HelmDependencySource.StageAsync(
                         repo,
                         configuredRepositories,
@@ -1099,6 +1110,7 @@ public class HelmClient : IHelmClient
                         verifyDigest: true,
                         refreshConfiguredRepository: !request.SkipRepositoryRefresh,
                         requireConfiguredCache: request.SkipRepositoryRefresh,
+                        exactVersion: false,
                         cancellationToken);
                     output.AppendLine(
                         $"Resolved dependency: {dependency.Name} ({staged.Version}) from {dependency.Repository}");
@@ -1592,14 +1604,22 @@ public class HelmClient : IHelmClient
             foreach (var dependency in lockFile.Dependencies)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (string.IsNullOrWhiteSpace(dependency.Repository))
-                {
-                    errors.Add($"Dependency '{dependency.Name}' has no repository in Chart.lock.");
-                    continue;
-                }
-
                 try
                 {
+                    if (string.IsNullOrWhiteSpace(dependency.Repository))
+                    {
+                        await ResolveVendoredDependencyAsync(
+                            chartPath,
+                            dependency.Name,
+                            dependency.Version,
+                            exactVersion: false,
+                            cancellationToken);
+                        output.AppendLine(
+                            $"Using local locked dependency: {dependency.Name} ({dependency.Version}) " +
+                            $"from charts/{dependency.Name}");
+                        continue;
+                    }
+
                     output.AppendLine(
                         $"Downloading locked dependency: {dependency.Name} ({dependency.Version}) " +
                         $"from {dependency.Repository}");
@@ -1615,6 +1635,7 @@ public class HelmClient : IHelmClient
                         request.VerifyDigests,
                         refreshConfiguredRepository: false,
                         requireConfiguredCache: true,
+                        exactVersion: true,
                         cancellationToken);
                     var archivePath = staged.ArchivePath;
                     if (!File.Exists(archivePath))
@@ -1685,6 +1706,42 @@ public class HelmClient : IHelmClient
                 $"Dependency '{dependencyName}' digest mismatch: expected {expectedDigest}, " +
                 $"actual sha256:{actualHash.ToLowerInvariant()}.");
         }
+    }
+
+    private static async Task<HelmChart> ResolveVendoredDependencyAsync(
+        string parentChartPath,
+        string dependencyName,
+        string? requestedVersion,
+        bool exactVersion,
+        CancellationToken cancellationToken)
+    {
+        var dependencyPath = Path.Combine(parentChartPath, "charts", dependencyName);
+        if (!Directory.Exists(dependencyPath))
+        {
+            throw new DirectoryNotFoundException(
+                $"Local dependency directory was not found: {dependencyPath}");
+        }
+
+        var chart = await HelmChartLoader.LoadAsync(dependencyPath, cancellationToken);
+        if (!string.Equals(chart.Name, dependencyName, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Local dependency chart '{chart.Name}' does not match dependency '{dependencyName}'.");
+        }
+
+        var versionMatches = exactVersion
+            ? string.Equals(chart.Version, requestedVersion?.Trim(), StringComparison.Ordinal)
+            : HelmChartVersionResolver.Satisfies(chart.Version, requestedVersion);
+        if (!versionMatches)
+        {
+            var expectation = exactVersion
+                ? $"locked version '{requestedVersion}'"
+                : $"constraint '{requestedVersion}'";
+            throw new InvalidDataException(
+                $"Local dependency '{dependencyName}' version '{chart.Version}' does not match {expectation}.");
+        }
+
+        return chart;
     }
 
     public async Task<CommandResult> DependencyListAsync(
