@@ -9,7 +9,7 @@
 Most applications get this package through `HelmSharp.Action`. Install it directly only when building custom release storage workflows.
 
 ```powershell
-dotnet add package HelmSharp.Release --version 1.1.1
+dotnet add package HelmSharp.Release --version 1.2.0
 ```
 
 ## Dependencies

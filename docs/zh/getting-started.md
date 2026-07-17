@@ -7,14 +7,14 @@
 只渲染预览：
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.1.1
-dotnet add package HelmSharp.Engine --version 1.1.1
+dotnet add package HelmSharp.Chart --version 1.2.0
+dotnet add package HelmSharp.Engine --version 1.2.0
 ```
 
 发布工作流：
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.1.1
+dotnet add package HelmSharp.Action --version 1.2.0
 ```
 
 ## 2. 不通过 Helm CLI 渲染

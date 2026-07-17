@@ -7,14 +7,14 @@ This 10-minute path helps you decide whether your application only needs rendere
 Render-only preview tools:
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.1.1
-dotnet add package HelmSharp.Engine --version 1.1.1
+dotnet add package HelmSharp.Chart --version 1.2.0
+dotnet add package HelmSharp.Engine --version 1.2.0
 ```
 
 Release workflows:
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.1.1
+dotnet add package HelmSharp.Action --version 1.2.0
 ```
 
 ## 2. Render without Helm CLI

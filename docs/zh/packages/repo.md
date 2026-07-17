@@ -5,7 +5,7 @@
 `HelmSharp.Repo` 处理 Chart 仓库元数据：添加、移除、列出、搜索、拉取、生成索引，以及有限的 OCI 相关占位能力。
 
 ::: warning 版本可用性
-1.1.1 是最新发布包。下文完整的 M2 配置、缓存、搜索、语义版本拉取、摘要和解压行为反映当前 `master` 分支，计划随 1.2.0 发布；安装 1.1.1 不会获得这里描述的完整功能面。
+1.2.0 是最新发布包。下文完整的 M2 配置、缓存、搜索、语义版本拉取、摘要和解压行为已包含在 1.2.0 中。
 :::
 
 ## 仓库配置与缓存
@@ -29,7 +29,7 @@ var repository = new HelmChartRepository(new HelmRepositoryOptions
 构建仓库管理工具时直接安装：
 
 ```powershell
-dotnet add package HelmSharp.Repo --version 1.1.1
+dotnet add package HelmSharp.Repo --version 1.2.0
 ```
 
 ## 依赖关系

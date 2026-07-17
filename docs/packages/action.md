@@ -9,11 +9,11 @@
 Install this package when your product thinks in release workflows or command-style results:
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.1.1
+dotnet add package HelmSharp.Action --version 1.2.0
 ```
 
 ::: warning Version availability
-1.1.1 is the latest published package. The M2 request types and package, pull, repository-index, and dependency workflows below reflect the current `master` branch and are planned for 1.2.0; they are not available from this 1.1.1 install command.
+1.2.0 is the latest published package. The M2 request types and package, pull, repository-index, and dependency workflows below are available from this 1.2.0 install command.
 :::
 
 ## Dependencies

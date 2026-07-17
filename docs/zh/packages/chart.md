@@ -9,11 +9,11 @@
 任何只渲染集成都会用到：
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.1.1
+dotnet add package HelmSharp.Chart --version 1.2.0
 ```
 
 ::: warning 版本可用性
-1.1.1 是最新发布包。下文的 M2 锁文件、依赖别名和本地依赖行为反映当前 `master` 分支，计划随 1.2.0 发布。
+1.2.0 是最新发布包。下文的 M2 锁文件、依赖别名和本地依赖行为已包含在 1.2.0 中。
 :::
 
 ## 依赖关系

@@ -11,14 +11,14 @@ HelmSharp does not require the `helm` executable at runtime. Kubernetes release 
 For most applications, start with the high-level client:
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.1.1
+dotnet add package HelmSharp.Action --version 1.2.0
 ```
 
 For render-only tools, install the lower layers:
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.1.1
-dotnet add package HelmSharp.Engine --version 1.1.1
+dotnet add package HelmSharp.Chart --version 1.2.0
+dotnet add package HelmSharp.Engine --version 1.2.0
 ```
 
 ## Minimal complete code

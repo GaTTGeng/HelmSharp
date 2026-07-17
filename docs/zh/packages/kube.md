@@ -9,7 +9,7 @@
 已有清单、只需要低层 Kubernetes 操作时安装：
 
 ```powershell
-dotnet add package HelmSharp.Kube --version 1.1.1
+dotnet add package HelmSharp.Kube --version 1.2.0
 ```
 
 ## 依赖关系

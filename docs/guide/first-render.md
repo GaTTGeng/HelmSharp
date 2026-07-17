@@ -7,8 +7,8 @@ Use the render-only path when your application needs Kubernetes YAML for preview
 ## Packages to install
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.1.1
-dotnet add package HelmSharp.Engine --version 1.1.1
+dotnet add package HelmSharp.Chart --version 1.2.0
+dotnet add package HelmSharp.Engine --version 1.2.0
 ```
 
 ## Minimal complete code

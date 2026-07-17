@@ -3,7 +3,7 @@
 Use the API reference after you have chosen a package and workflow. The generated pages list public types, properties, and methods from source so the reference can be refreshed as the SDK changes.
 
 ::: warning Source and release versions
-Generated pages reflect the current `master` source tree and may include unreleased APIs. The latest published packages are 1.1.1; M2 request and distribution APIs are planned for 1.2.0 and must not be assumed available from a 1.1.1 install command.
+Generated pages reflect the current `master` source tree. M2 request and distribution APIs are available in the latest published 1.2.0 packages.
 :::
 
 ## Start with the package guide

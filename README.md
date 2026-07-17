@@ -11,9 +11,9 @@
 
 HelmSharp is a managed .NET library for rendering Helm-style charts and driving Kubernetes release workflows without invoking the `helm` executable. It is intended for applications that need Helm-like behavior inside a .NET process: template rendering, values merging, chart packaging, repository operations, and release lifecycle operations against Kubernetes.
 
-The project is under active development. M1 (Helm template parity) is complete, with the renderer continuously checked against focused fixtures and selected public Helm charts. M2 chart packaging and repository parity is in final review for the planned 1.2.0 release; later milestones expand release lifecycle and Kubernetes operations.
+The project is under active development. M1 (Helm template parity) and M2 (chart packaging and repository parity) are complete, with the renderer continuously checked against focused fixtures and selected public Helm charts. Later milestones expand release lifecycle and Kubernetes operations.
 
-The latest published version is **1.1.1**. The M2 packaging, repository, pull, and dependency capabilities described below and in the linked distribution guide reflect the current `master` branch and are planned for **1.2.0**; the complete M2 API surface is not available in the 1.1.1 NuGet packages. To evaluate it before 1.2.0 is published, build all HelmSharp packages from the same `master` commit.
+The latest published version is **1.2.0**. The M2 packaging, repository, pull, and dependency capabilities described below and in the linked distribution guide are available in the 1.2.0 NuGet packages.
 
 Documentation site: [https://gattgeng.github.io/HelmSharp/](https://gattgeng.github.io/HelmSharp/)
 
@@ -154,7 +154,7 @@ HelmSharp's template engine is continuously validated with golden tests. The sui
 
 These results are a compatibility signal for the pinned chart versions in the table, not a blanket certification for every chart in the Helm ecosystem. Validate your own chart when it relies on uncommon Helm behavior.
 
-> **Last updated:** 2026-07-13 · **HelmSharp version:** 1.1.1 · **Helm version:** v4.2.2 · **Test framework:** net10.0
+> **Last updated:** 2026-07-16 · **HelmSharp version:** 1.2.0 · **Helm version:** v4.2.2 · **Test framework:** net10.0
 
 ### Summary
 

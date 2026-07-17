@@ -7,8 +7,8 @@ Many platforms need a preview endpoint: users choose a chart and values, then th
 ## Packages to install
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.1.1
-dotnet add package HelmSharp.Engine --version 1.1.1
+dotnet add package HelmSharp.Chart --version 1.2.0
+dotnet add package HelmSharp.Engine --version 1.2.0
 ```
 
 ## Minimal complete code

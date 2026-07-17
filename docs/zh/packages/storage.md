@@ -9,7 +9,7 @@
 大多数应用使用 `HelmSharp.Action`。只有实现自定义 storage 集成时才直接安装。
 
 ```powershell
-dotnet add package HelmSharp.Storage --version 1.1.1
+dotnet add package HelmSharp.Storage --version 1.2.0
 ```
 
 ## 依赖关系

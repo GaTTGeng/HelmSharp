@@ -7,7 +7,7 @@ SaaS and internal platforms often need per-tenant namespace, kubeconfig, API ver
 ## Packages to install
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.1.1
+dotnet add package HelmSharp.Action --version 1.2.0
 ```
 
 ## Minimal complete code

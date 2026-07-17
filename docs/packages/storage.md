@@ -9,7 +9,7 @@
 Most applications use `HelmSharp.Action` instead. Install directly only when implementing custom storage integration.
 
 ```powershell
-dotnet add package HelmSharp.Storage --version 1.1.1
+dotnet add package HelmSharp.Storage --version 1.2.0
 ```
 
 ## Dependencies

@@ -6,13 +6,15 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-16
+
 ### Added
 
 - Added extensible request objects for package, pull, repository index, and dependency operations while preserving convenience overloads (#140).
 
 ### Changed
 
-- Clarified across English and Simplified Chinese documentation that 1.1.1 is the latest published version while M2 APIs and examples reflect unreleased `master` work planned for 1.2.0 (#186).
+- Released M2 chart packaging and repository parity, with synchronized English and Simplified Chinese workflow guidance and generated API references.
 - Closed the M2 repository and pull review gaps around custom-CA chains, credential scoping, and configured-index request credentials (#184).
 - Completed dependency parity follow-ups for list status, descendant globals, vendored charts, alias staging, and exact lock-file builds (#185).
 - Normalized packaged root and nested `Chart.yaml` metadata to Helm-compatible LF payloads on every platform while preserving source chart files (#180).
@@ -23,7 +25,7 @@ This project follows semantic versioning once stable releases begin.
 - Aligned dependency updates with exact version resolution, original repository archives, Helm-compatible `Chart.lock` generation, stale archive cleanup, and failing diagnostics (#137).
 - Aligned traditional chart pulls with configured repository references, archive destinations, optional extraction, semantic version selection, and digest verification (#135).
 - Aligned dependency list status inspection for lock files, packaged and unpacked charts, semantic versions, aliases, and conditional dependencies (#136).
-- Updated English and Simplified Chinese installation guidance for the 1.1.1 release.
+- Updated English and Simplified Chinese installation guidance for the 1.2.0 release.
 - Aligned chart repository configuration and cache locations with Helm-style durable settings (#133).
 - Added offline chart search across updated repository caches with repository-qualified results and partial update failure handling (#134).
 - Aligned dependency tags, ordered conditions, recursive enablement, and `import-values` processing with Helm chartutil semantics (#147).
@@ -209,7 +211,8 @@ This was achieved by fixing two parser bugs that blocked full-chart rendering (#
 - Open source project documentation.
 - GitHub Actions workflows for CI and NuGet release publishing.
 
-[Unreleased]: https://github.com/GaTTGeng/HelmSharp/compare/1.1.1...HEAD
+[Unreleased]: https://github.com/GaTTGeng/HelmSharp/compare/1.2.0...HEAD
+[1.2.0]: https://github.com/GaTTGeng/HelmSharp/compare/1.1.1...1.2.0
 [1.1.1]: https://github.com/GaTTGeng/HelmSharp/compare/1.1.0...1.1.1
 [1.1.0]: https://github.com/GaTTGeng/HelmSharp/compare/1.0.4...1.1.0
 [1.0.4]: https://github.com/GaTTGeng/HelmSharp/compare/1.0.3...1.0.4

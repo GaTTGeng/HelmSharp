@@ -96,18 +96,18 @@ Console.WriteLine(result.StandardOutput);
 多数应用从高层包开始：
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.1.1
+dotnet add package HelmSharp.Action --version 1.2.0
 ```
 
 如果只需要渲染，可以依赖更小的层：
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.1.1
-dotnet add package HelmSharp.Engine --version 1.1.1
+dotnet add package HelmSharp.Chart --version 1.2.0
+dotnet add package HelmSharp.Engine --version 1.2.0
 ```
 
 ::: warning 版本可用性
-1.1.1 是最新发布版本。本站记录的 M2 打包、仓库、拉取和依赖 API 反映当前 `master` 分支，计划随 1.2.0 发布；安装 1.1.1 并不会获得完整的 M2 API 功能面。如需在 1.2.0 发布前评估，请从同一个 `master` 提交构建所有包。
+1.2.0 是最新发布版本。本站记录的 M2 打包、仓库、拉取和依赖 API 已包含在 1.2.0 NuGet 包中。
 :::
 
 ## 当前范围

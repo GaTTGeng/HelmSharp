@@ -7,7 +7,7 @@ Products that deploy to Kubernetes should separate preview from apply. HelmSharp
 ## Packages to install
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.1.1
+dotnet add package HelmSharp.Action --version 1.2.0
 ```
 
 ## Minimal complete code

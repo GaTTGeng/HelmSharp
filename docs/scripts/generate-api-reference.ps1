@@ -71,7 +71,7 @@ function Write-PackageReference(
         [void]$builder.AppendLine()
         [void]$builder.AppendLine("此页列出公开类型和成员，便于查找。使用建议、边界和示例请先阅读对应包文档。")
         [void]$builder.AppendLine()
-        [void]$builder.AppendLine("> **版本说明：** 本页反映当前 ``master`` 源码树，可能包含尚未发布的 API。最新发布包是 1.1.1；M2 API 计划随 1.2.0 发布。")
+        [void]$builder.AppendLine("> **版本说明：** 本页反映当前 ``master`` 源码树。M2 API 已包含在最新发布的 1.2.0 包中。")
     }
     else {
         [void]$builder.AppendLine("# $packageName API")
@@ -80,7 +80,7 @@ function Write-PackageReference(
         [void]$builder.AppendLine()
         [void]$builder.AppendLine("Use this page as a member index. Start with the package guide for usage recommendations, boundaries, and examples.")
         [void]$builder.AppendLine()
-        [void]$builder.AppendLine("> **Version note:** This page reflects the current ``master`` source tree and may include unreleased APIs. The latest published packages are 1.1.1; M2 APIs are planned for 1.2.0.")
+        [void]$builder.AppendLine("> **Version note:** This page reflects the current ``master`` source tree. M2 APIs are available in the latest published 1.2.0 packages.")
     }
 
     foreach ($type in $types) {
