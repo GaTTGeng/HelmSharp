@@ -651,7 +651,7 @@ public class HelmClient : IHelmClient
         var latest = await store.GetLatestAsync(releaseName, @namespace ?? options.DefaultNamespace ?? "default", cancellationToken);
         return latest is null
             ? Fail($"release: not found: {releaseName}")
-            : Ok(latest.ValuesYaml);
+            : Ok(GetStoredValuesYaml(latest, allValues));
     }
 
     public async Task<CommandResult> GetManifestAsync(
@@ -712,7 +712,26 @@ public class HelmClient : IHelmClient
             }
         }
 
-        return Ok("No notes found for this release.");
+        return Ok(GetStoredNotes(record));
+    }
+
+    internal static string GetStoredValuesYaml(HelmReleaseRecord record, bool allValues)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        if (!allValues)
+            return record.ValuesYaml;
+
+        var values = HelmYaml.DeserializeDictionary(record.ChartValuesYaml);
+        HelmValues.MergeInto(values, HelmYaml.DeserializeDictionary(record.ValuesYaml));
+        return HelmValues.ToYaml(values);
+    }
+
+    internal static string GetStoredNotes(HelmReleaseRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        return string.IsNullOrWhiteSpace(record.Notes)
+            ? "No notes found for this release."
+            : record.Notes;
     }
 
     public async Task<CommandResult> GetHooksAsync(
