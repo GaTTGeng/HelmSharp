@@ -13,7 +13,7 @@ function Assert-NuGetCompatibleMarkdown {
     )
 
     $inCodeFence = $false
-    $unsupportedHtmlPattern = '^\s*</?(?:address|article|aside|blockquote|caption|center|col|colgroup|details|dialog|dir|div|dl|dt|dd|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|img|input|legend|li|link|main|menu|nav|ol|p|pre|script|section|style|summary|table|tbody|td|tfoot|th|thead|title|tr|ul)\b[^>]*>\s*$'
+    $unsupportedHtmlPattern = '</?(?:address|article|aside|blockquote|caption|center|col|colgroup|details|dialog|dir|div|dl|dt|dd|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|img|input|legend|li|link|main|menu|nav|ol|p|pre|script|section|style|summary|table|tbody|td|tfoot|th|thead|title|tr|ul)\b[^>]*>'
 
     foreach ($line in $Content -split "`r?`n") {
         if ($line -match '^\s*(```|~~~)') {
@@ -21,7 +21,8 @@ function Assert-NuGetCompatibleMarkdown {
             continue
         }
 
-        if (-not $inCodeFence -and $line -match $unsupportedHtmlPattern) {
+        $contentWithoutInlineCode = $line -replace '`[^`]*`', ''
+        if (-not $inCodeFence -and $contentWithoutInlineCode -match $unsupportedHtmlPattern) {
             throw "$SourceName contains raw HTML that NuGet.org may display as text: $line"
         }
     }
