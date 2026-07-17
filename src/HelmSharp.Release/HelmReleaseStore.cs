@@ -24,38 +24,15 @@ public sealed class HelmReleaseStore
     public async Task SaveAsync(HelmReleaseRecord record, CancellationToken cancellationToken)
     {
         var secretName = SecretName(record.Name, record.Revision);
-        var json = JsonSerializer.Serialize(record, JsonDefaults);
-        var secret = new V1Secret
-        {
-            Metadata = new V1ObjectMeta
-            {
-                Name = secretName,
-                NamespaceProperty = record.Namespace,
-                Labels = new Dictionary<string, string>
-                {
-                    ["owner"] = "helm",
-                    ["name"] = record.Name,
-                    ["status"] = record.Status,
-                    ["version"] = record.Revision.ToString()
-                }
-            },
-            Type = "helm.sh/release.v1",
-            StringData = new Dictionary<string, string>
-            {
-                ["release.json"] = json,
-                ["manifest"] = record.Manifest,
-                ["values.yaml"] = record.ValuesYaml
-            }
-        };
-
         try
         {
             var existing = await _client.CoreV1.ReadNamespacedSecretAsync(secretName, record.Namespace, cancellationToken: cancellationToken);
-            secret.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
+            var secret = BuildSecret(record, existing, DateTimeOffset.UtcNow);
             await _client.CoreV1.ReplaceNamespacedSecretAsync(secret, secretName, record.Namespace, cancellationToken: cancellationToken);
         }
         catch (HttpOperationException ex) when ((int)ex.Response.StatusCode == 404)
         {
+            var secret = BuildSecret(record, existing: null, DateTimeOffset.UtcNow);
             await _client.CoreV1.CreateNamespacedSecretAsync(secret, record.Namespace, cancellationToken: cancellationToken);
         }
     }
@@ -67,9 +44,7 @@ public sealed class HelmReleaseStore
             : await _client.CoreV1.ListNamespacedSecretAsync(ns ?? "default", labelSelector: "owner=helm", cancellationToken: cancellationToken);
 
         return secrets.Items
-            .Select(TryReadRecord)
-            .Where(x => x is not null)
-            .Select(x => x!)
+            .Select(ReadRecord)
             .Where(IsActiveRelease)
             .GroupBy(x => new { x.Namespace, x.Name })
             .Select(g => g.OrderByDescending(x => x.Revision).First())
@@ -86,9 +61,7 @@ public sealed class HelmReleaseStore
             cancellationToken: cancellationToken);
 
         return secrets.Items
-            .Select(TryReadRecord)
-            .Where(x => x is not null)
-            .Select(x => x!)
+            .Select(ReadRecord)
             .OrderBy(x => x.Revision)
             .ToList();
     }
@@ -128,28 +101,123 @@ public sealed class HelmReleaseStore
         await SaveAsync(record, cancellationToken);
     }
 
-    private static HelmReleaseRecord? TryReadRecord(V1Secret secret)
+    internal static HelmReleaseRecord ReadRecord(V1Secret secret)
     {
-        try
-        {
-            string? json = null;
-            if (secret.StringData is not null && secret.StringData.TryGetValue("release.json", out var stringData))
-                json = stringData;
-            else if (secret.Data is not null && secret.Data.TryGetValue("release.json", out var data))
-                json = Encoding.UTF8.GetString(data);
+        ArgumentNullException.ThrowIfNull(secret);
+        var secretName = secret.Metadata?.Name ?? "<unknown>";
+        var namespaceName = secret.Metadata?.NamespaceProperty ?? "default";
 
-            return string.IsNullOrWhiteSpace(json)
-                ? null
-                : JsonSerializer.Deserialize<HelmReleaseRecord>(json, JsonDefaults);
-        }
-        catch
+        if (TryGetPayload(secret, "release", out var helmPayload))
         {
-            return null;
+            try
+            {
+                return ApplySecretMetadata(
+                    HelmV3ReleaseCodec.Decode(Encoding.UTF8.GetString(helmPayload)),
+                    secret);
+            }
+            catch (Exception ex) when (ex is InvalidDataException or JsonException)
+            {
+                throw new HelmReleaseStoreException(secretName, namespaceName, "Helm v3 release", ex.Message, ex);
+            }
+        }
+
+        if (TryGetPayload(secret, "release.json", out var legacyPayload))
+        {
+            try
+            {
+                var record = JsonSerializer.Deserialize<HelmReleaseRecord>(legacyPayload, JsonDefaults)
+                    ?? throw new InvalidDataException("The legacy release JSON was empty.");
+                return ApplySecretMetadata(record, secret);
+            }
+            catch (Exception ex) when (ex is InvalidDataException or JsonException)
+            {
+                throw new HelmReleaseStoreException(secretName, namespaceName, "legacy release.json", ex.Message, ex);
+            }
+        }
+
+        throw new HelmReleaseStoreException(
+            secretName,
+            namespaceName,
+            "release",
+            "Neither data.release nor the legacy release.json key was present.");
+    }
+
+    internal static V1Secret BuildSecret(
+        HelmReleaseRecord record,
+        V1Secret? existing,
+        DateTimeOffset timestamp)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        var labels = new Dictionary<string, string>(StringComparer.Ordinal);
+        MergeCustomLabels(labels, existing?.Metadata?.Labels);
+        MergeCustomLabels(labels, record.Labels);
+        labels[existing is null ? "createdAt" : "modifiedAt"] = timestamp.ToUnixTimeSeconds().ToString();
+        labels["name"] = record.Name;
+        labels["owner"] = "helm";
+        labels["status"] = record.Status;
+        labels["version"] = record.Revision.ToString();
+
+        return new V1Secret
+        {
+            Metadata = new V1ObjectMeta
+            {
+                Name = SecretName(record.Name, record.Revision),
+                NamespaceProperty = record.Namespace,
+                ResourceVersion = existing?.Metadata?.ResourceVersion,
+                Labels = labels
+            },
+            Type = "helm.sh/release.v1",
+            Data = new Dictionary<string, byte[]>
+            {
+                ["release"] = Encoding.UTF8.GetBytes(HelmV3ReleaseCodec.Encode(record))
+            }
+        };
+    }
+
+    private static bool TryGetPayload(V1Secret secret, string key, out byte[] payload)
+    {
+        if (secret.Data is not null && secret.Data.TryGetValue(key, out payload!))
+            return true;
+        if (secret.StringData is not null && secret.StringData.TryGetValue(key, out var text))
+        {
+            payload = Encoding.UTF8.GetBytes(text);
+            return true;
+        }
+        payload = [];
+        return false;
+    }
+
+    private static HelmReleaseRecord ApplySecretMetadata(HelmReleaseRecord record, V1Secret secret)
+    {
+        var labels = new Dictionary<string, string>(StringComparer.Ordinal);
+        MergeCustomLabels(labels, secret.Metadata?.Labels);
+        return record with
+        {
+            Namespace = string.IsNullOrWhiteSpace(record.Namespace)
+                ? secret.Metadata?.NamespaceProperty ?? "default"
+                : record.Namespace,
+            Labels = labels.Count == 0 ? null : labels
+        };
+    }
+
+    private static void MergeCustomLabels(
+        Dictionary<string, string> target,
+        IDictionary<string, string>? source)
+    {
+        if (source is null)
+            return;
+        foreach (var (key, value) in source)
+        {
+            if (!SystemLabels.Contains(key))
+                target[key] = value;
         }
     }
 
-    private static string SecretName(string releaseName, int revision)
+    internal static string SecretName(string releaseName, int revision)
         => $"sh.helm.release.v1.{releaseName}.v{revision}";
+
+    private static readonly HashSet<string> SystemLabels =
+        ["name", "owner", "status", "version", "createdAt", "modifiedAt"];
 
     private static bool IsActiveRelease(HelmReleaseRecord record)
         => string.Equals(record.Status, "deployed", StringComparison.OrdinalIgnoreCase);
@@ -158,19 +226,4 @@ public sealed class HelmReleaseStore
     {
         WriteIndented = true
     };
-}
-
-public sealed record HelmReleaseRecord
-{
-    public string Name { get; init; } = string.Empty;
-    public string Namespace { get; init; } = "default";
-    public int Revision { get; init; }
-    public string Status { get; set; } = "deployed";
-    public string ChartName { get; init; } = string.Empty;
-    public string ChartVersion { get; init; } = string.Empty;
-    public string? AppVersion { get; init; }
-    public string Manifest { get; init; } = string.Empty;
-    public string ValuesYaml { get; init; } = string.Empty;
-    public DateTimeOffset UpdatedAt { get; set; }
-    public Dictionary<string, string>? Labels { get; init; }
 }

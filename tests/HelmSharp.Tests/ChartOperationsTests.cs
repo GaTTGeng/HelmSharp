@@ -391,6 +391,43 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public void ResolveReleaseLabels_InheritsLatestAndAppliesRequestedOverrides()
+    {
+        var history = new List<HelmReleaseRecord>
+        {
+            new()
+            {
+                Revision = 1,
+                Labels = new Dictionary<string, string> { ["old"] = "ignored" }
+            },
+            new()
+            {
+                Revision = 2,
+                Labels = new Dictionary<string, string>
+                {
+                    ["team"] = "platform",
+                    ["environment"] = "staging"
+                }
+            }
+        };
+
+        var labels = HelmClient.ResolveReleaseLabels(
+            history,
+            isUpgrade: true,
+            new Dictionary<string, string>
+            {
+                ["environment"] = "production",
+                ["requested"] = "true"
+            });
+
+        Assert.Equal("platform", labels!["team"]);
+        Assert.Equal("production", labels["environment"]);
+        Assert.Equal("true", labels["requested"]);
+        Assert.False(labels.ContainsKey("old"));
+        Assert.Null(HelmClient.ResolveReleaseLabels(history, isUpgrade: false, requestedLabels: null));
+    }
+
+    [Fact]
     public void ResolveReleaseRenderState_UninstalledHistoryStartsInstallWithNextRevision()
     {
         var history = new List<HelmReleaseRecord>

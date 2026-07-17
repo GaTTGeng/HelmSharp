@@ -25,6 +25,8 @@ public sealed class HelmChart
     public Dictionary<string, object?>? Annotations { get; set; }
     public List<HelmChartDependency> Dependencies { get; } = new();
     public List<HelmChartLockEntry> LockEntries { get; } = new();
+    public string? LockDigest { get; set; }
+    public string? LockGenerated { get; set; }
     public string ValuesYaml { get; init; } = string.Empty;
     public Dictionary<string, string> Templates { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, byte[]> Files { get; } = new(StringComparer.Ordinal);
@@ -80,6 +82,8 @@ public static class HelmChartLoader
         if (lockContent is not null)
         {
             var lockDict = HelmYaml.DeserializeDictionary(DecodeText(lockContent));
+            chart.LockDigest = HelmYaml.GetString(lockDict, "digest");
+            chart.LockGenerated = HelmYaml.GetString(lockDict, "generated");
             if (lockDict.TryGetValue("dependencies", out var lockDeps) && lockDeps is IList<object?> lockDepsList)
             {
                 foreach (var lockDep in lockDepsList)

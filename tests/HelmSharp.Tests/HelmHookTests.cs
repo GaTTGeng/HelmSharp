@@ -216,4 +216,84 @@ public class HelmHookTests
         Assert.Contains("my-deploy", remaining);
         Assert.DoesNotContain("my-hook", remaining);
     }
+
+    [Fact]
+    public void ResolveStoredManifest_UsesSeparatelyStoredHooks()
+    {
+        var mainManifest = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: main-config
+            """;
+        var hookManifest = """
+            apiVersion: batch/v1
+            kind: Job
+            metadata:
+              name: delete-hook
+            """;
+        var record = new HelmSharp.Release.HelmReleaseRecord
+        {
+            Manifest = mainManifest,
+            Hooks =
+            [
+                new HelmSharp.Release.HelmReleaseHookRecord
+                {
+                    Name = "delete-hook",
+                    Kind = "Job",
+                    Path = "templates/delete-hook.yaml",
+                    Manifest = hookManifest,
+                    Events = ["pre-delete", "test"],
+                    Weight = -2,
+                    DeletePolicies = ["hook-succeeded"]
+                }
+            ]
+        };
+
+        var (resolvedManifest, hooks) = HelmClient.ResolveStoredManifest(record, "default");
+
+        Assert.Equal(mainManifest, resolvedManifest);
+        var hook = Assert.Single(hooks);
+        Assert.Equal("delete-hook", hook.Name);
+        Assert.Contains(HelmHookEvent.PreDelete, hook.Events);
+        Assert.Contains(HelmHookEvent.Test, hook.Events);
+        Assert.Equal(-2, hook.Weight);
+        Assert.Contains(HelmHookDeletePolicy.HookSucceeded, hook.DeletePolicies);
+    }
+
+    [Fact]
+    public void ResolveStoredManifest_FallsBackToLegacyCombinedManifest()
+    {
+        var record = new HelmSharp.Release.HelmReleaseRecord
+        {
+            Manifest = """
+                apiVersion: v1
+                kind: ConfigMap
+                metadata:
+                  name: main-config
+                ---
+                apiVersion: batch/v1
+                kind: Job
+                metadata:
+                  name: legacy-test-hook
+                  annotations:
+                    helm.sh/hook: test
+                spec:
+                  template:
+                    spec:
+                      containers:
+                      - name: test
+                        image: test:latest
+                      restartPolicy: Never
+                """
+        };
+
+        var (mainManifest, hooks) = HelmClient.ResolveStoredManifest(record, "default");
+
+        Assert.Contains("main-config", mainManifest);
+        Assert.DoesNotContain("legacy-test-hook", mainManifest);
+        var hook = Assert.Single(hooks);
+        Assert.Equal("legacy-test-hook", hook.Name);
+        Assert.Contains(HelmHookEvent.Test, hook.Events);
+    }
 }

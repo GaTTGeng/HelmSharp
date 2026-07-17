@@ -18,6 +18,26 @@ public static class HelmValues
         Dictionary<string, string>? setJsonValues,
         CancellationToken cancellationToken)
     {
+        var overrides = await BuildOverridesAsync(
+            valuesFiles,
+            valuesContent,
+            setValues,
+            setFileValues,
+            setStringValues,
+            setJsonValues,
+            cancellationToken);
+        return BuildFromOverrides(chart, overrides);
+    }
+
+    internal static async Task<Dictionary<string, object?>> BuildOverridesAsync(
+        IEnumerable<string>? valuesFiles,
+        string? valuesContent,
+        Dictionary<string, string>? setValues,
+        Dictionary<string, string>? setFileValues,
+        Dictionary<string, string>? setStringValues,
+        Dictionary<string, string>? setJsonValues,
+        CancellationToken cancellationToken)
+    {
         var overrides = new Dictionary<string, object?>(StringComparer.Ordinal);
 
         // Multiple values files (equivalent to helm -f / --values, applied in order)
@@ -52,8 +72,13 @@ public static class HelmValues
         foreach (var (key, value) in setJsonValues ?? [])
             SetPath(overrides, key, ParseJsonValue(value));
 
-        return ProcessOverrides(chart, overrides, out _);
+        return overrides;
     }
+
+    internal static Dictionary<string, object?> BuildFromOverrides(
+        HelmChart chart,
+        Dictionary<string, object?> overrides)
+        => ProcessOverrides(chart, overrides, out _);
 
     internal static Dictionary<string, object?> PrepareForRender(
         HelmChart chart,
