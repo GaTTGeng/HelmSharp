@@ -225,9 +225,9 @@ public class HelmClient : IHelmClient
 
         // Extract hooks from manifest
         var (mainManifest, hooks) = HelmHookExecutor.ExtractHooks(manifest, ns);
-        var deployedAt = DateTimeOffset.UtcNow;
+        var attemptedAt = DateTimeOffset.UtcNow;
         var firstDeployedAt = existingHistory.Count == 0
-            ? deployedAt
+            ? attemptedAt
             : existingHistory.Min(record => record.FirstDeployedAt ?? record.UpdatedAt);
         var releaseRecord = new HelmReleaseRecord
         {
@@ -248,7 +248,7 @@ public class HelmClient : IHelmClient
             ValuesYaml = HelmValues.ToYaml(overrides),
             ComputedValuesYaml = HelmValues.ToYaml(values),
             FirstDeployedAt = firstDeployedAt,
-            UpdatedAt = deployedAt,
+            UpdatedAt = attemptedAt,
             Description = request.Description ?? (isUpgrade ? "Upgrade complete" : "Install complete"),
             Notes = renderer.RenderNotes(),
             Hooks = hooks.Select(ToReleaseHook).ToList(),
@@ -351,6 +351,12 @@ public class HelmClient : IHelmClient
         Exception? saveError = null;
         try
         {
+            var completedAt = DateTimeOffset.UtcNow;
+            releaseRecord = releaseRecord with
+            {
+                UpdatedAt = completedAt,
+                FirstDeployedAt = existingHistory.Count == 0 ? completedAt : firstDeployedAt
+            };
             await store.SaveAsync(releaseRecord, cancellationToken);
         }
         catch (Exception ex)
