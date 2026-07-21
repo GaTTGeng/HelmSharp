@@ -616,11 +616,19 @@ public class HelmClient : IHelmClient
         if (string.IsNullOrWhiteSpace(request.ReleaseName))
             return Fail("release name is required");
 
-        var options = await _optionsProvider.GetHelmAsync(cancellationToken);
+        using var timeoutSource = request.TimeoutSeconds is > 0
+            ? new CancellationTokenSource(TimeSpan.FromSeconds(request.TimeoutSeconds.Value))
+            : null;
+        using var operationSource = timeoutSource is null
+            ? null
+            : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
+        var operationToken = operationSource?.Token ?? cancellationToken;
+
+        var options = await _optionsProvider.GetHelmAsync(operationToken);
         var ns = request.Namespace ?? options.DefaultNamespace ?? "default";
-        using var client = await _createKubernetesClientAsync(options, request.KubeConfigPath, request.KubeConfigContent, cancellationToken);
+        using var client = await _createKubernetesClientAsync(options, request.KubeConfigPath, request.KubeConfigContent, operationToken);
         var store = new HelmReleaseStore(client);
-        var latest = await store.GetLatestAsync(request.ReleaseName, ns, cancellationToken);
+        var latest = await store.GetLatestAsync(request.ReleaseName, ns, operationToken);
         if (latest is null)
             return Fail($"release: not found: {request.ReleaseName}");
 
@@ -628,9 +636,9 @@ public class HelmClient : IHelmClient
         var hookExecutor = new HelmHookExecutor(client, options.FieldManager);
 
         // Execute pre-delete hooks
-        if (hooks.Any(h => h.Events.Contains(HelmHookEvent.PreDelete)))
+        if (!request.DisableHooks && hooks.Any(h => h.Events.Contains(HelmHookEvent.PreDelete)))
         {
-            await foreach (var _ in hookExecutor.ExecuteHooksAsync(hooks, HelmHookEvent.PreDelete, ns, cancellationToken))
+            await foreach (var _ in hookExecutor.ExecuteHooksAsync(hooks, HelmHookEvent.PreDelete, ns, operationToken))
             {
                 // drain
             }
@@ -638,21 +646,24 @@ public class HelmClient : IHelmClient
 
         var applier = new KubernetesManifestApplier(client, options.FieldManager);
         var output = new StringBuilder();
-        await foreach (var resource in applier.DeleteAsync(mainManifest, ns, cancellationToken))
+        await foreach (var resource in applier.DeleteAsync(mainManifest, ns, operationToken))
         {
             output.AppendLine($"Deleted {resource}");
         }
 
         // Execute post-delete hooks
-        if (hooks.Any(h => h.Events.Contains(HelmHookEvent.PostDelete)))
+        if (!request.DisableHooks && hooks.Any(h => h.Events.Contains(HelmHookEvent.PostDelete)))
         {
-            await foreach (var _ in hookExecutor.ExecuteHooksAsync(hooks, HelmHookEvent.PostDelete, ns, cancellationToken))
+            await foreach (var _ in hookExecutor.ExecuteHooksAsync(hooks, HelmHookEvent.PostDelete, ns, operationToken))
             {
                 // drain
             }
         }
 
-        await store.MarkUninstalledAsync(latest, cancellationToken);
+        if (request.KeepHistory)
+            await store.MarkUninstalledAsync(latest, operationToken);
+        else
+            await store.PurgeAsync(request.ReleaseName, ns, operationToken);
         output.AppendLine($"release \"{request.ReleaseName}\" uninstalled");
         return Ok(output.ToString());
     }

@@ -532,6 +532,60 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task ReleaseLifecycle_UninstallDefaultsToRetainedHistory()
+    {
+        var chartDir = await CreateMinimalChartAsync("retained-uninstall-chart");
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "retained-uninstall",
+            Chart = chartDir
+        }));
+
+        var uninstall = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "retained-uninstall",
+            Namespace = "test-ns"
+        });
+
+        Assert.Equal(0, uninstall.ExitCode);
+        Assert.Collection(
+            releaseState.Records("retained-uninstall"),
+            record => Assert.Equal((1, "superseded"), (record.Revision, record.Status)),
+            record => Assert.Equal((2, "uninstalled"), (record.Revision, record.Status)));
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_PurgeRemovesOnlyTheRequestedReleaseHistory()
+    {
+        var chartDir = await CreateMinimalChartAsync("purge-uninstall-chart");
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "purged-release",
+            Chart = chartDir
+        }));
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "unrelated-release",
+            Chart = chartDir
+        }));
+
+        var uninstall = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "purged-release",
+            Namespace = "test-ns",
+            KeepHistory = false
+        });
+
+        Assert.Equal(0, uninstall.ExitCode);
+        Assert.Empty(releaseState.Records("purged-release"));
+        Assert.Single(releaseState.Records("unrelated-release"));
+    }
+
+    [Fact]
     public async Task ReleaseLifecycle_FailedNewRevisionSavePersistsFailedRevisionAndKeepsPreviousRevisionDeployed()
     {
         var chartDir = await CreateMinimalChartAsync("save-failure-chart");
@@ -804,8 +858,20 @@ public class ChartOperationsTests : IDisposable
             var path = request.RequestUri?.AbsolutePath ?? string.Empty;
             if (request.Method == HttpMethod.Get && path.EndsWith("/secrets", StringComparison.Ordinal))
             {
+                var selector = Uri.UnescapeDataString(request.RequestUri?.Query ?? string.Empty);
+                IEnumerable<string> secrets = _releaseState.Secrets.Values;
+                if (selector.Contains("name=", StringComparison.Ordinal))
+                {
+                    var releaseName = selector[(selector.IndexOf("name=", StringComparison.Ordinal) + "name=".Length)..]
+                        .Split('&', StringSplitOptions.RemoveEmptyEntries)[0];
+                    secrets = secrets.Where(secret =>
+                        string.Equals(
+                            JsonSerializer.Deserialize<ReleaseLifecycleState.SecretEnvelope>(secret, ReleaseLifecycleState.JsonDefaults)!.Metadata.Labels["name"],
+                            releaseName,
+                            StringComparison.Ordinal));
+                }
                 return JsonResponse(request, HttpStatusCode.OK, $$"""
-                    { "kind": "SecretList", "apiVersion": "v1", "metadata": {}, "items": [{{string.Join(',', _releaseState.Secrets.Values)}}] }
+                    { "kind": "SecretList", "apiVersion": "v1", "metadata": {}, "items": [{{string.Join(',', secrets)}}] }
                     """);
             }
 
@@ -829,6 +895,13 @@ public class ChartOperationsTests : IDisposable
                 return _releaseState.Secrets.TryGetValue(name, out var secret)
                     ? JsonResponse(request, HttpStatusCode.OK, secret)
                     : JsonResponse(request, HttpStatusCode.NotFound, "{ \"code\": 404 }");
+            }
+
+            if (request.Method == HttpMethod.Delete && path.Contains("/secrets/", StringComparison.Ordinal))
+            {
+                var name = path[(path.LastIndexOf('/') + 1)..];
+                _releaseState.Secrets.Remove(name);
+                return JsonResponse(request, HttpStatusCode.OK, "{}");
             }
 
             return JsonResponse(request, HttpStatusCode.OK, "{}");

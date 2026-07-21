@@ -9,6 +9,7 @@ public interface IHelmReleaseStore
     Task<IReadOnlyList<HelmReleaseRecord>> HistoryAsync(string name, string namespaceName, CancellationToken cancellationToken = default);
     Task<HelmReleaseRecord?> GetLatestAsync(string name, string namespaceName, CancellationToken cancellationToken = default);
     Task MarkUninstalledAsync(HelmReleaseRecord record, CancellationToken cancellationToken = default);
+    Task PurgeAsync(string name, string namespaceName, CancellationToken cancellationToken = default);
     Task MarkStatusAsync(HelmReleaseRecord record, string status, CancellationToken cancellationToken = default);
     Task<int> NextRevisionAsync(string name, string namespaceName, CancellationToken cancellationToken = default);
 }
