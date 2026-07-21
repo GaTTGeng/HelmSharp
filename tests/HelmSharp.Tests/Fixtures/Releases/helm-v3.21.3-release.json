@@ -1,0 +1,81 @@
+{
+  "name": "fixture-release",
+  "info": {
+    "first_deployed": "2026-07-17T01:02:03Z",
+    "last_deployed": "2026-07-17T01:03:04Z",
+    "deleted": "",
+    "description": "Install complete",
+    "status": "deployed",
+    "notes": "Fixture notes\n"
+  },
+  "chart": {
+    "metadata": {
+      "name": "fixture-chart",
+      "version": "1.2.3",
+      "description": "Fixture chart",
+      "apiVersion": "v2",
+      "appVersion": "4.5.6",
+      "kubeVersion": ">=1.25.0",
+      "type": "application",
+      "home": "https://example.test/fixture-chart",
+      "annotations": {
+        "example.test/preserved": "true"
+      }
+    },
+    "lock": {
+      "generated": "2026-07-17T00:00:00Z",
+      "digest": "sha256:fixture",
+      "dependencies": []
+    },
+    "templates": [
+      {
+        "name": "templates/configmap.yaml",
+        "data": "YXBpVmVyc2lvbjogdjEKa2luZDogQ29uZmlnTWFwCg=="
+      }
+    ],
+    "values": {
+      "message": "default",
+      "replicaCount": 1
+    },
+    "schema": "eyJ0eXBlIjoib2JqZWN0In0=",
+    "files": [
+      {
+        "name": "README.md",
+        "data": "IyBGaXh0dXJlIENoYXJ0Cg=="
+      }
+    ]
+  },
+  "config": {
+    "message": "hello",
+    "nested": {
+      "enabled": true
+    },
+    "replicaCount": 2
+  },
+  "manifest": "---\n# Source: fixture-chart/templates/configmap.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: fixture-release\n",
+  "hooks": [
+    {
+      "name": "fixture-hook",
+      "kind": "Job",
+      "path": "templates/hook.yaml",
+      "manifest": "apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: fixture-hook\n",
+      "events": [
+        "pre-install"
+      ],
+      "last_run": {
+        "started_at": "2026-07-17T01:02:04Z",
+        "completed_at": "2026-07-17T01:02:05Z",
+        "phase": "Succeeded"
+      },
+      "weight": -1,
+      "delete_policies": [
+        "before-hook-creation"
+      ],
+      "output_log_policies": [
+        "hook-succeeded"
+      ]
+    }
+  ],
+  "version": 3,
+  "namespace": "fixture-ns"
+}

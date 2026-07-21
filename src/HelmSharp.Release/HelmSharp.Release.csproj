@@ -7,6 +7,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="HelmSharp.Action" />
+    <InternalsVisibleTo Include="HelmSharp.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="KubernetesClient" Version="19.0.2" />
   </ItemGroup>
 

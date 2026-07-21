@@ -150,7 +150,8 @@ public class HelmClient : IHelmClient
         }
 
         var valuesFiles = CombineValuesFiles(request.ValuesFile, request.ValuesFiles);
-        var values = await HelmValues.BuildAsync(chart, valuesFiles, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
+        var overrides = await HelmValues.BuildOverridesAsync(valuesFiles, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
+        var values = HelmValues.BuildFromOverrides(chart, overrides);
 
         if (request.DryRun)
         {
@@ -289,6 +290,10 @@ public class HelmClient : IHelmClient
                 yield return waitLine;
             }
         }
+        var deployedAt = DateTimeOffset.UtcNow;
+        var firstDeployedAt = existingHistory.Count == 0
+            ? deployedAt
+            : existingHistory.Min(record => record.FirstDeployedAt ?? record.UpdatedAt);
         await store.SaveAsync(new HelmReleaseRecord
         {
             Name = request.ReleaseName,
@@ -298,9 +303,21 @@ public class HelmClient : IHelmClient
             ChartName = chart.Name,
             ChartVersion = chart.Version,
             AppVersion = chart.AppVersion,
-            Manifest = manifest,
-            ValuesYaml = HelmValues.ToYaml(values),
-            UpdatedAt = DateTimeOffset.UtcNow
+            ChartApiVersion = chart.ApiVersion,
+            ChartDescription = chart.Description,
+            ChartType = chart.Type,
+            ChartKubeVersion = chart.KubeVersion,
+            ChartValuesYaml = chart.ValuesYaml,
+            RawChartJson = HelmV3ReleaseCodec.CreateChartSnapshot(chart),
+            Manifest = mainManifest,
+            ValuesYaml = HelmValues.ToYaml(overrides),
+            ComputedValuesYaml = HelmValues.ToYaml(values),
+            FirstDeployedAt = firstDeployedAt,
+            UpdatedAt = deployedAt,
+            Description = request.Description ?? (isUpgrade ? "Upgrade complete" : "Install complete"),
+            Notes = renderer.RenderNotes(),
+            Hooks = hooks.Select(ToReleaseHook).ToList(),
+            Labels = ResolveReleaseLabels(existingHistory, isUpgrade, request.Labels)
         }, cancellationToken);
 
         // Enforce max history
@@ -311,6 +328,31 @@ public class HelmClient : IHelmClient
         }
 
         yield return $"Release {request.ReleaseName} revision {revision} deployed ({applied} resources)";
+    }
+
+    internal static Dictionary<string, string>? ResolveReleaseLabels(
+        IReadOnlyCollection<HelmReleaseRecord> history,
+        bool isUpgrade,
+        IDictionary<string, string>? requestedLabels)
+    {
+        var labels = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (isUpgrade)
+        {
+            var inherited = history.MaxBy(record => record.Revision)?.Labels;
+            if (inherited is not null)
+            {
+                foreach (var (key, value) in inherited)
+                    labels[key] = value;
+            }
+        }
+
+        if (requestedLabels is not null)
+        {
+            foreach (var (key, value) in requestedLabels)
+                labels[key] = value;
+        }
+
+        return labels.Count == 0 ? null : labels;
     }
 
     internal static (bool IsUpgrade, int Revision) ResolveReleaseRenderState(
@@ -372,7 +414,7 @@ public class HelmClient : IHelmClient
         if (latest is null)
             return Fail($"release: not found: {request.ReleaseName}");
 
-        var (mainManifest, hooks) = HelmHookExecutor.ExtractHooks(latest.Manifest, ns);
+        var (mainManifest, hooks) = ResolveStoredManifest(latest, ns);
         var hookExecutor = new HelmHookExecutor(client, options.FieldManager);
 
         // Execute pre-delete hooks
@@ -456,8 +498,7 @@ public class HelmClient : IHelmClient
         if (targetRecord is null)
             return Fail($"release has no revision {revision}");
 
-        var targetManifest = targetRecord.Manifest;
-        var (mainManifest, hooks) = HelmHookExecutor.ExtractHooks(targetManifest, ns);
+        var (mainManifest, hooks) = ResolveStoredManifest(targetRecord, ns);
         var hookExecutor = new HelmHookExecutor(client, options.FieldManager);
 
         var output = new StringBuilder();
@@ -488,6 +529,7 @@ public class HelmClient : IHelmClient
         }
 
         var newRevision = await store.NextRevisionAsync(releaseName, ns, cancellationToken);
+        var deployedAt = DateTimeOffset.UtcNow;
         await store.SaveAsync(new HelmReleaseRecord
         {
             Name = releaseName,
@@ -497,9 +539,21 @@ public class HelmClient : IHelmClient
             ChartName = targetRecord.ChartName,
             ChartVersion = targetRecord.ChartVersion,
             AppVersion = targetRecord.AppVersion,
-            Manifest = targetManifest,
+            ChartApiVersion = targetRecord.ChartApiVersion,
+            ChartDescription = targetRecord.ChartDescription,
+            ChartType = targetRecord.ChartType,
+            ChartKubeVersion = targetRecord.ChartKubeVersion,
+            ChartValuesYaml = targetRecord.ChartValuesYaml,
+            RawChartJson = targetRecord.RawChartJson,
+            Manifest = mainManifest,
             ValuesYaml = targetRecord.ValuesYaml,
-            UpdatedAt = DateTimeOffset.UtcNow
+            ComputedValuesYaml = targetRecord.ComputedValuesYaml,
+            FirstDeployedAt = targetRecord.FirstDeployedAt,
+            UpdatedAt = deployedAt,
+            Description = "Rollback complete",
+            Notes = targetRecord.Notes,
+            Hooks = hooks.Select(ToReleaseHook).ToList(),
+            Labels = targetRecord.Labels
         }, cancellationToken);
 
         await store.MarkStatusAsync(current, "superseded", cancellationToken);
@@ -600,7 +654,7 @@ public class HelmClient : IHelmClient
         var latest = await store.GetLatestAsync(releaseName, @namespace ?? options.DefaultNamespace ?? "default", cancellationToken);
         return latest is null
             ? Fail($"release: not found: {releaseName}")
-            : Ok(latest.ValuesYaml);
+            : Ok(GetStoredValuesYaml(latest, allValues));
     }
 
     public async Task<CommandResult> GetManifestAsync(
@@ -649,7 +703,7 @@ public class HelmClient : IHelmClient
                 var chart = await HelmChartLoader.LoadAsync(
                     await ResolveChartPathAsync(record.ChartName, record.ChartVersion, options, cancellationToken),
                     cancellationToken);
-                var values = HelmYaml.DeserializeDictionary(record.ValuesYaml);
+                var values = HelmYaml.DeserializeDictionary(GetStoredValuesYaml(record, allValues: true));
                 var renderer = new HelmTemplateRenderer(chart, releaseName, ns, values);
                 var notes = renderer.RenderNotes();
                 if (!string.IsNullOrWhiteSpace(notes))
@@ -661,7 +715,29 @@ public class HelmClient : IHelmClient
             }
         }
 
-        return Ok("No notes found for this release.");
+        return Ok(GetStoredNotes(record));
+    }
+
+    internal static string GetStoredValuesYaml(HelmReleaseRecord record, bool allValues)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        if (!allValues)
+            return record.ValuesYaml;
+
+        if (!string.IsNullOrWhiteSpace(record.ComputedValuesYaml))
+            return record.ComputedValuesYaml;
+
+        var values = HelmYaml.DeserializeDictionary(record.ChartValuesYaml);
+        HelmValues.MergeInto(values, HelmYaml.DeserializeDictionary(record.ValuesYaml));
+        return HelmValues.ToYaml(values);
+    }
+
+    internal static string GetStoredNotes(HelmReleaseRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        return string.IsNullOrWhiteSpace(record.Notes)
+            ? "No notes found for this release."
+            : record.Notes;
     }
 
     public async Task<CommandResult> GetHooksAsync(
@@ -682,7 +758,7 @@ public class HelmClient : IHelmClient
         if (record is null)
             return Fail($"release: not found: {releaseName}");
 
-        var (mainManifest, hooks) = HelmHookExecutor.ExtractHooks(record.Manifest, ns);
+        var (_, hooks) = ResolveStoredManifest(record, ns);
         if (hooks.Count == 0)
             return Ok("No hooks found for this release.");
 
@@ -752,7 +828,7 @@ public class HelmClient : IHelmClient
         if (latest is null)
             return Fail($"release: not found: {releaseName}");
 
-        var (_, hooks) = HelmHookExecutor.ExtractHooks(latest.Manifest, ns);
+        var (_, hooks) = ResolveStoredManifest(latest, ns);
         var testHooks = hooks.Where(h => h.Events.Contains(HelmHookEvent.Test)).ToList();
 
         if (testHooks.Count == 0)
@@ -1824,6 +1900,107 @@ public class HelmClient : IHelmClient
             throw new ArgumentException("ReleaseName is required.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.Chart))
             throw new ArgumentException("Chart is required.", nameof(request));
+    }
+
+    internal static (string MainManifest, List<HelmHook> Hooks) ResolveStoredManifest(
+        HelmReleaseRecord record,
+        string defaultNamespace)
+    {
+        if (record.Hooks.Count > 0)
+            return (record.Manifest, record.Hooks.Select(FromReleaseHook).ToList());
+
+        return HelmHookExecutor.ExtractHooks(record.Manifest, defaultNamespace);
+    }
+
+    private static HelmReleaseHookRecord ToReleaseHook(HelmHook hook)
+        => new()
+        {
+            Name = hook.Name,
+            Kind = hook.Kind,
+            Path = hook.Path,
+            Manifest = hook.Manifest,
+            Events = hook.Events.Select(ToReleaseHookEvent).ToList(),
+            LastRunPhase = "Unknown",
+            Weight = hook.Weight,
+            DeletePolicies = hook.DeletePolicies.Select(ToReleaseHookDeletePolicy).ToList()
+        };
+
+    private static HelmHook FromReleaseHook(HelmReleaseHookRecord record)
+    {
+        var hook = new HelmHook
+        {
+            Name = record.Name,
+            Kind = record.Kind,
+            Path = record.Path,
+            Manifest = record.Manifest,
+            Weight = record.Weight
+        };
+        foreach (var value in record.Events)
+        {
+            if (TryParseReleaseHookEvent(value, out var hookEvent))
+                hook.Events.Add(hookEvent);
+        }
+        foreach (var value in record.DeletePolicies)
+        {
+            if (TryParseReleaseHookDeletePolicy(value, out var deletePolicy))
+                hook.DeletePolicies.Add(deletePolicy);
+        }
+        return hook;
+    }
+
+    private static string ToReleaseHookEvent(HelmHookEvent value)
+        => value switch
+        {
+            HelmHookEvent.PreInstall => "pre-install",
+            HelmHookEvent.PostInstall => "post-install",
+            HelmHookEvent.PreUpgrade => "pre-upgrade",
+            HelmHookEvent.PostUpgrade => "post-upgrade",
+            HelmHookEvent.PreDelete => "pre-delete",
+            HelmHookEvent.PostDelete => "post-delete",
+            HelmHookEvent.PreRollback => "pre-rollback",
+            HelmHookEvent.PostRollback => "post-rollback",
+            HelmHookEvent.Test => "test",
+            _ => throw new ArgumentOutOfRangeException(nameof(value), value, null)
+        };
+
+    private static string ToReleaseHookDeletePolicy(HelmHookDeletePolicy value)
+        => value switch
+        {
+            HelmHookDeletePolicy.BeforeHookCreation => "before-hook-creation",
+            HelmHookDeletePolicy.HookSucceeded => "hook-succeeded",
+            HelmHookDeletePolicy.HookFailed => "hook-failed",
+            _ => throw new ArgumentOutOfRangeException(nameof(value), value, null)
+        };
+
+    private static bool TryParseReleaseHookEvent(string value, out HelmHookEvent result)
+    {
+        result = value switch
+        {
+            "pre-install" => HelmHookEvent.PreInstall,
+            "post-install" => HelmHookEvent.PostInstall,
+            "pre-upgrade" => HelmHookEvent.PreUpgrade,
+            "post-upgrade" => HelmHookEvent.PostUpgrade,
+            "pre-delete" => HelmHookEvent.PreDelete,
+            "post-delete" => HelmHookEvent.PostDelete,
+            "pre-rollback" => HelmHookEvent.PreRollback,
+            "post-rollback" => HelmHookEvent.PostRollback,
+            "test" => HelmHookEvent.Test,
+            _ => default
+        };
+        return value is "pre-install" or "post-install" or "pre-upgrade" or "post-upgrade"
+            or "pre-delete" or "post-delete" or "pre-rollback" or "post-rollback" or "test";
+    }
+
+    private static bool TryParseReleaseHookDeletePolicy(string value, out HelmHookDeletePolicy result)
+    {
+        result = value switch
+        {
+            "before-hook-creation" => HelmHookDeletePolicy.BeforeHookCreation,
+            "hook-succeeded" => HelmHookDeletePolicy.HookSucceeded,
+            "hook-failed" => HelmHookDeletePolicy.HookFailed,
+            _ => default
+        };
+        return value is "before-hook-creation" or "hook-succeeded" or "hook-failed";
     }
 
     private static async Task<k8s.Kubernetes> CreateKubernetesClientAsync(

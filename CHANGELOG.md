@@ -6,10 +6,13 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+### Added
+
+- Added Helm v3 release Secret interoperability, legacy HelmSharp payload compatibility, and actionable storage diagnostics (#190).
+
 ### Changed
 
 - Validate packaged NuGet README files and require the Markdown HelmSharp wordmark before artifacts are uploaded or published.
-
 ## [1.2.0] - 2026-07-16
 
 ### Added
