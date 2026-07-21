@@ -657,6 +657,7 @@ public class HelmClient : IHelmClient
 
         var applier = new KubernetesManifestApplier(client, options.FieldManager);
         var output = new StringBuilder();
+        var deletedManifests = new StringBuilder();
         if (!request.KeepHistory && history is not null)
         {
             foreach (var failedRevision in history.Where(record =>
@@ -672,6 +673,7 @@ public class HelmClient : IHelmClient
                 {
                     output.AppendLine($"Deleted {resource}");
                 }
+                deletedManifests.AppendLine(failedOnlyManifest);
             }
         }
         await foreach (var resource in applier.DeleteAsync(
@@ -682,12 +684,13 @@ public class HelmClient : IHelmClient
         {
             output.AppendLine($"Deleted {resource}");
         }
+        deletedManifests.AppendLine(mainManifest);
 
         if (request.Wait)
         {
             var timeout = request.TimeoutSeconds ?? options.TimeoutSeconds;
             var waiter = new KubernetesResourceWaiter(client, timeout);
-            await foreach (var line in waiter.WaitForDeletedAsync(mainManifest, ns, operationToken))
+            await foreach (var line in waiter.WaitForDeletedAsync(deletedManifests.ToString(), ns, operationToken))
                 output.AppendLine(line);
         }
 
