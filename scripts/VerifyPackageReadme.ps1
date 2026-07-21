@@ -7,36 +7,44 @@ param(
 $ErrorActionPreference = "Stop"
 
 function Remove-InlineCodeSpans {
-    param([string]$Line)
+    param([string]$Content)
 
     $result = [System.Text.StringBuilder]::new()
     $index = 0
-    while ($index -lt $Line.Length) {
-        if ($Line[$index] -ne [char]96) {
-            [void]$result.Append($Line[$index])
+    while ($index -lt $Content.Length) {
+        if ($Content[$index] -ne [char]96 -or (Test-EscapedMarkdownCharacter -Content $Content -Index $index)) {
+            [void]$result.Append($Content[$index])
             $index++
             continue
         }
 
+        $lineStart = if ($index -eq 0) { 0 } else { $Content.LastIndexOf("`n", $index - 1) + 1 }
+        $indentLength = $index - $lineStart
         $delimiterLength = 1
-        while ($index + $delimiterLength -lt $Line.Length -and $Line[$index + $delimiterLength] -eq [char]96) {
+        while ($index + $delimiterLength -lt $Content.Length -and $Content[$index + $delimiterLength] -eq [char]96) {
             $delimiterLength++
+        }
+
+        if ($indentLength -le 3 -and $delimiterLength -ge 3 -and $Content.Substring($lineStart, $indentLength) -match '^ *$') {
+            [void]$result.Append([string]::new([char]96, $delimiterLength))
+            $index += $delimiterLength
+            continue
         }
 
         $closingIndex = -1
         $searchIndex = $index + $delimiterLength
-        while ($searchIndex -lt $Line.Length) {
-            $candidateIndex = $Line.IndexOf([char]96, $searchIndex)
+        while ($searchIndex -lt $Content.Length) {
+            $candidateIndex = $Content.IndexOf([char]96, $searchIndex)
             if ($candidateIndex -lt 0) {
                 break
             }
 
             $candidateLength = 1
-            while ($candidateIndex + $candidateLength -lt $Line.Length -and $Line[$candidateIndex + $candidateLength] -eq [char]96) {
+            while ($candidateIndex + $candidateLength -lt $Content.Length -and $Content[$candidateIndex + $candidateLength] -eq [char]96) {
                 $candidateLength++
             }
 
-            if ($candidateLength -eq $delimiterLength) {
+            if ($candidateLength -eq $delimiterLength -and -not (Test-EscapedMarkdownCharacter -Content $Content -Index $candidateIndex)) {
                 $closingIndex = $candidateIndex
                 break
             }
@@ -50,10 +58,34 @@ function Remove-InlineCodeSpans {
             continue
         }
 
+        for ($spanIndex = $index; $spanIndex -lt $closingIndex + $delimiterLength; $spanIndex++) {
+            $maskedCharacter = if ($Content[$spanIndex] -eq "`r" -or $Content[$spanIndex] -eq "`n") {
+                $Content[$spanIndex]
+            }
+            else {
+                ' '
+            }
+
+            [void]$result.Append($maskedCharacter)
+        }
         $index = $closingIndex + $delimiterLength
     }
 
     return $result.ToString()
+}
+
+function Test-EscapedMarkdownCharacter {
+    param(
+        [string]$Content,
+        [int]$Index
+    )
+
+    $backslashCount = 0
+    for ($previousIndex = $Index - 1; $previousIndex -ge 0 -and $Content[$previousIndex] -eq [char]92; $previousIndex--) {
+        $backslashCount++
+    }
+
+    return $backslashCount % 2 -eq 1
 }
 
 function Assert-NuGetCompatibleMarkdown {
@@ -70,7 +102,8 @@ function Assert-NuGetCompatibleMarkdown {
     $unfinishedHtmlTagPattern = '</?[A-Za-z][A-Za-z0-9-]*(?:\s[^>]*)?$'
     $pendingHtmlTag = $null
 
-    foreach ($line in $Content -split "`r?`n") {
+    $contentWithoutInlineCode = Remove-InlineCodeSpans -Content $Content
+    foreach ($line in $contentWithoutInlineCode -split "`r?`n") {
         if ($null -eq $fenceMarker) {
             $openingFence = [regex]::Match($line, $openingFencePattern)
             if ($openingFence.Success) {
@@ -96,17 +129,16 @@ function Assert-NuGetCompatibleMarkdown {
             continue
         }
 
-        $contentWithoutInlineCode = Remove-InlineCodeSpans -Line $line
         if ($null -ne $pendingHtmlTag) {
-            $contentWithoutInlineCode = "$pendingHtmlTag`n$contentWithoutInlineCode"
+            $line = "$pendingHtmlTag`n$line"
             $pendingHtmlTag = $null
         }
 
-        if ($contentWithoutInlineCode -match $unsupportedHtmlPattern) {
+        if ($line -match $unsupportedHtmlPattern) {
             throw "$SourceName contains raw HTML that NuGet.org may display as text: $line"
         }
 
-        $unfinishedHtmlTag = [regex]::Match($contentWithoutInlineCode, $unfinishedHtmlTagPattern)
+        $unfinishedHtmlTag = [regex]::Match($line, $unfinishedHtmlTagPattern)
         if ($unfinishedHtmlTag.Success) {
             $pendingHtmlTag = $unfinishedHtmlTag.Value
         }
