@@ -1051,6 +1051,28 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task ResourceWaiter_WaitsForDiscoveredResourceDeletion()
+    {
+        var handler = new RecordingKubernetesHandler();
+        var client = new Kubernetes(new KubernetesClientConfiguration
+        {
+            Host = "https://helmsharp.test",
+            SkipTlsVerify = true
+        }, handler);
+        var waiter = new KubernetesResourceWaiter(client, timeoutSeconds: 1);
+
+        await DrainAsync(waiter.WaitForDeletedAsync("""
+            apiVersion: example.com/v1
+            kind: Widget
+            metadata:
+              name: sample
+            """, "test-ns"));
+
+        Assert.Contains(handler.Requests, request =>
+            request.Method == HttpMethod.Get && request.PathAndQuery == "/apis/example.com/v1/namespaces/test-ns/widgets/sample");
+    }
+
+    [Fact]
     public async Task ReleaseLifecycle_PurgeDeletesResourcesIntroducedByAFailedRevision()
     {
         var chartDir = await CreateMinimalChartAsync("failed-revision-purge-chart");
