@@ -4,20 +4,9 @@ HelmSharp is not trying to be a command-line emulator. It is trying to give .NET
 
 The Helm CLI is used as a test oracle. It is not required at runtime by consumers.
 
-## Current test signal
+## Validation scope
 
-Compatibility data is a test signal, not a universal guarantee for every chart. The current public-chart golden suite covers five pinned charts and is validated by CI against a real `helm` binary:
-
-| Chart | Version | Templates | Result |
-| --- | --- | --- | --- |
-| podinfo | 6.14.0 | 21/21 | Pass |
-| metrics-server | 3.13.1 | 18/18 | Pass |
-| external-dns | 1.21.1 | 7/7 | Pass |
-| ingress-nginx | 4.12.1 | 42/42 | Pass |
-| cert-manager | 1.17.1 | 41/41 | Pass |
-| **Total** | - | **129/129** | **Pass** |
-
-These charts are useful because they expose helper templates, nested values, `.Files`, capabilities, and formatting patterns that small examples miss. Treat the table as evidence for the covered cases, then validate your own chart when it relies on uncommon Helm behavior. See the [Compatibility Validation](https://github.com/GaTTGeng/HelmSharp#compatibility-validation) section in the README for the detailed breakdown and verdict definitions.
+Focused fixture charts and selected public charts are compared with `helm template` in CI. They exercise helpers, nested values, `.Files`, capabilities, and formatting patterns that small examples miss. This is regression coverage for those behaviors, not a universal compatibility certification. Validate your own chart when it relies on an uncommon Helm behavior.
 
 ## Compatibility contract
 
@@ -36,13 +25,13 @@ Exact CLI colors, progress text, terminal formatting, and plugin execution are n
 | --- | --- | --- |
 | Chart loading from directories and `.tgz` archives | Supported | Safe starting point for render and packaging tools. Covered by fixture and public-chart tests. |
 | Values files and `--set`-style overrides | Partial | Common flows work; edge-case coercion and list syntax still tracked by golden tests. |
-| Helm-style template rendering | Supported | Common parsing, control-flow, named templates, built-in objects, whitespace/trim markers, and Sprig functions are covered by focused tests and the current public-chart suite. |
+| Helm-style template rendering | Supported | Common parsing, control flow, named templates, built-in objects, whitespace/trim markers, and selected Sprig functions have focused coverage. An unimplemented function fails with a path-aware rendering diagnostic. |
 | Template control flow (`if`/`else if`/`else`/`range`/`with`) | Supported | All control-flow constructs render correctly against `helm template` output, validated by dedicated fixture charts and real-chart golden tests. |
 | Named templates and helpers | Supported | Cross-template `define`/`template`/`include` calls are covered by dedicated fixtures and public charts with extensive helper usage. |
 | Built-in objects (`.Release`, `.Chart`, `.Values`, `.Files`, `.Capabilities`, `.Template`) | Supported | All built-in objects are populated and render consistently with Helm CLI output. |
 | Chart packaging and repositories | Partial | Useful APIs exist; archive and repository edge cases remain. |
 | Install, upgrade, rollback, uninstall | Partial | Dry-run and managed workflows exist; full lifecycle parity is still expanding. |
-| Kubernetes apply, delete, wait | Partial | Common resource operations exist; less common readiness behavior needs coverage. |
+| Kubernetes apply, delete, wait | Partial | Typed operations cover common resources. Other API resources are discovered from the target cluster for apply/delete; readiness behavior remains selective. |
 | Release history in Kubernetes Secrets | Supported | Release records can be persisted without Helm CLI. |
 | OCI registry and provenance | Planned | API surface exists or is planned; production parity is not complete. |
 
@@ -53,10 +42,11 @@ These are the areas to check before betting a production workflow on exact Helm 
 - obscure values coercion and edge-case list syntax;
 - OCI authentication and registry flows;
 - provenance verification;
+- Sprig functions or Go-template behaviors outside the implemented surface;
 - readiness for uncommon Kubernetes resource kinds;
 - safe replacement for Helm plugin execution.
 
-The current golden tests do not show known gaps in Sprig function coverage or manifest formatting for the covered charts. New public charts can still surface edge cases, so compatibility reports should include a minimal chart and the equivalent Helm CLI command.
+Golden tests demonstrate only the behavior they exercise. New charts can surface unimplemented functions, parsing edge cases, or manifest differences, so compatibility reports should include a minimal chart and the equivalent Helm CLI command.
 
 ## How to report a gap
 

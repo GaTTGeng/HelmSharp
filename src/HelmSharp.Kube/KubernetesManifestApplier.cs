@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using HelmSharp.Chart;
 using k8s;
 using k8s.Autorest;
@@ -10,6 +11,7 @@ public sealed class KubernetesManifestApplier
 {
     private readonly k8s.Kubernetes _client;
     private readonly string _fieldManager;
+    private readonly Dictionary<(string ApiVersion, string Kind), DiscoveredResource> _discoveredResources = new();
 
     public KubernetesManifestApplier(k8s.Kubernetes client, string fieldManager)
     {
@@ -598,8 +600,81 @@ public sealed class KubernetesManifestApplier
                 break;
 
             default:
-                throw new NotSupportedException($"Kubernetes resource {identity.ApiVersion}/{identity.Kind} is not supported by the managed Helm applier.");
+                await ApplyDiscoveredResourceAsync(identity, yaml, ct);
+                break;
         }
+    }
+
+    private async Task ApplyDiscoveredResourceAsync(ManifestIdentity identity, string yaml, CancellationToken ct)
+    {
+        var resource = await DiscoverResourceAsync(identity, ct);
+        var item = HelmYaml.DeserializeDictionary(yaml);
+
+        if (resource.Namespaced)
+        {
+            await UpsertNamespacedAsync(
+                () => _client.CustomObjects.GetNamespacedCustomObjectAsync(resource.Group, resource.Version, identity.Namespace, resource.Plural, identity.Name, ct),
+                () => _client.CustomObjects.CreateNamespacedCustomObjectAsync(item, resource.Group, resource.Version, identity.Namespace, resource.Plural, null, _fieldManager, null, null, ct),
+                existing =>
+                {
+                    SetResourceVersion(item, existing);
+                    return _client.CustomObjects.ReplaceNamespacedCustomObjectAsync(item, resource.Group, resource.Version, identity.Namespace, resource.Plural, identity.Name, null, _fieldManager, null, ct);
+                });
+            return;
+        }
+
+        await UpsertClusterAsync(
+            () => _client.CustomObjects.GetClusterCustomObjectAsync(resource.Group, resource.Version, resource.Plural, identity.Name, ct),
+            () => _client.CustomObjects.CreateClusterCustomObjectAsync(item, resource.Group, resource.Version, resource.Plural, null, _fieldManager, null, null, ct),
+            existing =>
+            {
+                SetResourceVersion(item, existing);
+                return _client.CustomObjects.ReplaceClusterCustomObjectAsync(item, resource.Group, resource.Version, resource.Plural, identity.Name, null, _fieldManager, null, ct);
+            });
+    }
+
+    private async Task<DiscoveredResource> DiscoverResourceAsync(ManifestIdentity identity, CancellationToken ct)
+    {
+        var cacheKey = (identity.ApiVersion, identity.Kind);
+        if (_discoveredResources.TryGetValue(cacheKey, out var cached))
+            return cached;
+
+        var (group, version) = SplitApiVersion(identity.ApiVersion);
+        var resources = string.IsNullOrEmpty(group)
+            ? await _client.CoreV1.GetAPIResourcesAsync(ct)
+            : await _client.CustomObjects.GetAPIResourcesAsync(group, version, ct);
+        var match = resources.Resources?.SingleOrDefault(resource =>
+            string.Equals(resource.Kind, identity.Kind, StringComparison.Ordinal) &&
+            !resource.Name.Contains('/', StringComparison.Ordinal));
+
+        if (match is null || string.IsNullOrWhiteSpace(match.Name))
+            throw new InvalidOperationException($"Kubernetes API discovery did not find resource {identity.ApiVersion}/{identity.Kind}.");
+
+        var discovered = new DiscoveredResource(group, version, match.Name, match.Namespaced == true);
+        _discoveredResources.Add(cacheKey, discovered);
+        return discovered;
+    }
+
+    private static (string Group, string Version) SplitApiVersion(string apiVersion)
+    {
+        var separator = apiVersion.IndexOf('/');
+        return separator < 0
+            ? (string.Empty, apiVersion)
+            : (apiVersion[..separator], apiVersion[(separator + 1)..]);
+    }
+
+    private static void SetResourceVersion(Dictionary<string, object?> item, object existing)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(existing));
+        if (!document.RootElement.TryGetProperty("metadata", out var metadata) ||
+            !metadata.TryGetProperty("resourceVersion", out var resourceVersion))
+            return;
+
+        if (!item.TryGetValue("metadata", out var metadataObject) ||
+            metadataObject is not Dictionary<string, object?> itemMetadata)
+            return;
+
+        itemMetadata["resourceVersion"] = resourceVersion.GetString();
     }
 
     private async Task DeleteOneAsync(ManifestIdentity identity, string? propagationPolicy, CancellationToken ct)
@@ -751,12 +826,31 @@ public sealed class KubernetesManifestApplier
                 case ("flowcontrol.apiserver.k8s.io/v1", "PriorityLevelConfiguration"):
                     await _client.FlowcontrolApiserverV1.DeletePriorityLevelConfigurationAsync(identity.Name, body: deleteOptions, cancellationToken: ct);
                     break;
+                default:
+                    await DeleteDiscoveredResourceAsync(identity, deleteOptions, ct);
+                    break;
             }
         }
         catch (HttpOperationException ex) when ((int)ex.Response.StatusCode == 404)
         {
             // Already gone.
         }
+    }
+
+    private async Task DeleteDiscoveredResourceAsync(ManifestIdentity identity, V1DeleteOptions? deleteOptions, CancellationToken ct)
+    {
+        var resource = await DiscoverResourceAsync(identity, ct);
+        if (resource.Namespaced)
+        {
+            await _client.CustomObjects.DeleteNamespacedCustomObjectAsync(
+                resource.Group, resource.Version, identity.Namespace, resource.Plural, identity.Name,
+                deleteOptions, null, null, null, null, ct);
+            return;
+        }
+
+        await _client.CustomObjects.DeleteClusterCustomObjectAsync(
+            resource.Group, resource.Version, resource.Plural, identity.Name,
+            deleteOptions, null, null, null, null, ct);
     }
 
     private static async Task UpsertNamespacedAsync<T>(
@@ -806,6 +900,8 @@ public sealed class KubernetesManifestApplier
     public static IEnumerable<string> SplitDocumentsPublic(string manifest)
         => SplitDocuments(manifest);
 }
+
+internal sealed record DiscoveredResource(string Group, string Version, string Plural, bool Namespaced);
 
 public sealed record ManifestIdentity(string ApiVersion, string Kind, string Name, string Namespace)
 {

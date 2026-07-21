@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using HelmSharp.Action;
 using HelmSharp.Chart;
+using HelmSharp.Kube;
 using HelmSharp.Release;
 using k8s;
 using k8s.Autorest;
@@ -1018,6 +1019,34 @@ public class ChartOperationsTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task ManifestApplier_UnknownResource_UsesApiDiscoveryAndDynamicEndpoint()
+    {
+        var handler = new RecordingKubernetesHandler();
+        var client = new Kubernetes(new KubernetesClientConfiguration
+        {
+            Host = "https://helmsharp.test",
+            SkipTlsVerify = true
+        }, handler);
+        var applier = new KubernetesManifestApplier(client, "helmsharp-test");
+
+        await foreach (var _ in applier.ApplyAsync("""
+            apiVersion: example.com/v1
+            kind: Widget
+            metadata:
+              name: sample
+            spec:
+              enabled: true
+            """, "test-ns"))
+        {
+        }
+
+        Assert.Contains(handler.Requests, request =>
+            request.Method == HttpMethod.Get && request.PathAndQuery == "/apis/example.com/v1");
+        Assert.Contains(handler.Requests, request =>
+            request.Method == HttpMethod.Post && request.PathAndQuery.StartsWith("/apis/example.com/v1/namespaces/test-ns/widgets", StringComparison.Ordinal));
+    }
+
     private sealed class StaticHelmOptionsProvider : IHelmOptionsProvider
     {
         private readonly HelmExecutionOptions _options;
@@ -1051,6 +1080,32 @@ public class ChartOperationsTests : IDisposable
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             _requests.Add((request.Method, request.RequestUri?.PathAndQuery ?? string.Empty));
+
+            if (request.Method == HttpMethod.Get &&
+                string.Equals(request.RequestUri?.AbsolutePath, "/apis/example.com/v1", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse(request, HttpStatusCode.OK, """
+                    {
+                      "kind": "APIResourceList",
+                      "apiVersion": "v1",
+                      "groupVersion": "example.com/v1",
+                      "resources": [{ "name": "widgets", "kind": "Widget", "namespaced": true }]
+                    }
+                    """));
+            }
+
+            if (request.Method == HttpMethod.Get &&
+                string.Equals(request.RequestUri?.AbsolutePath, "/apis/example.com/v1/namespaces/test-ns/widgets/sample", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse(request, HttpStatusCode.NotFound, """
+                    {
+                      "kind": "Status",
+                      "apiVersion": "v1",
+                      "status": "Failure",
+                      "code": 404
+                    }
+                    """));
+            }
 
             if (request.Method == HttpMethod.Get &&
                 request.RequestUri?.AbsolutePath.EndsWith("/secrets", StringComparison.Ordinal) == true)

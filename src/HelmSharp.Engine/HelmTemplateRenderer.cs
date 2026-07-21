@@ -113,14 +113,14 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
     /// Renders all non-helper templates in the chart.
     /// </summary>
     /// <remarks>
-    /// <para>Exceptions of type <see cref="NotSupportedException"/> (missing template function,
+    /// <para>Exceptions of type <see cref="UnsupportedTemplateFeatureException"/> (missing template function,
     /// parser limitations) and <see cref="TemplateParseException"/> (malformed template syntax)
     /// are accumulated per-template rather than failing immediately.
     /// This allows the engine to render as many templates as possible before throwing.
     /// Other exceptions (e.g. <c>fail</c> calls, arity errors) propagate immediately.</para>
     /// </remarks>
     /// <exception cref="InvalidOperationException">
-    /// Thrown when one or more templates fail with <see cref="NotSupportedException"/>
+    /// Thrown when one or more templates fail with <see cref="UnsupportedTemplateFeatureException"/>
     /// or <see cref="TemplateParseException"/>.
     /// The message lists each failing template and its exception type.
     /// </exception>
@@ -168,10 +168,10 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
 
                 AddManifestDocuments(manifests, $"{_chart.Name}/{path}", rendered);
             }
-            catch (NotSupportedException ex)
+            catch (UnsupportedTemplateFeatureException ex)
             {
-                // Engine-level gaps (missing function, parser limitation) — collect and continue
-                errors.Add((path, new NotSupportedException($"{Path.GetFileName(path)}: {ex.Message}")));
+                // Unsupported renderer features — collect and continue.
+                errors.Add((path, new UnsupportedTemplateFeatureException($"{Path.GetFileName(path)}: {ex.Message}")));
             }
             catch (TemplateParseException ex)
             {
@@ -408,9 +408,9 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                     if (!string.IsNullOrWhiteSpace(rendered))
                         AddManifestDocuments(manifests, $"{chartPath}/{path}", rendered);
                 }
-                catch (NotSupportedException ex)
+                catch (UnsupportedTemplateFeatureException ex)
                 {
-                    errors.Add((path, new NotSupportedException(
+                    errors.Add((path, new UnsupportedTemplateFeatureException(
                         $"{Path.GetFileName(path)} (subchart: {child.Identity}): {ex.Message}")));
                 }
                 catch (TemplateParseException ex)
@@ -1298,10 +1298,10 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             _ => pipelineValue is not null && tokens.Count == 1
                 ? ApplySimpleFunction(head, pipelineValue, context)
                 : tokens.Count > 1
-                    ? throw new NotSupportedException($"Helm template function '{head}' is not supported by the managed renderer.")
+                    ? throw new UnsupportedTemplateFeatureException($"Helm template function '{head}' is not supported by the managed renderer.")
                     : IsResolvableTokenExpression(expression)
                         ? EvaluateToken(expression, context)
-                        : throw new NotSupportedException($"Helm template function '{head}' is not supported by the managed renderer.")
+                        : throw new UnsupportedTemplateFeatureException($"Helm template function '{head}' is not supported by the managed renderer.")
         };
     }
 
@@ -1333,7 +1333,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
     {
         var name = TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
         if (!_definedTemplates.TryGetValue(name, out var body))
-            throw new NotSupportedException($"Included template '{name}' was not found.");
+            throw new UnsupportedTemplateFeatureException($"Included template '{name}' was not found.");
 
         try
         {
@@ -1348,9 +1348,9 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             // entire chart render. See #63.
             throw;
         }
-        catch (NotSupportedException)
+        catch (UnsupportedTemplateFeatureException)
         {
-            // Likewise: NotSupportedException is also collected per-template
+            // Likewise: unsupported renderer features are collected per-template
             // in Render() for engine-level gaps.
             throw;
         }
@@ -1428,7 +1428,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "kebabcase" => StringFunctions.Kebabcase(TypeConverters.ToTemplateString(value)),
             "print" => TypeConverters.ToTemplateString(value),
             "tuple" => value,
-            _ => throw new NotSupportedException($"Helm template function '{function}' is not supported by the managed renderer.")
+            _ => throw new UnsupportedTemplateFeatureException($"Helm template function '{function}' is not supported by the managed renderer.")
         };
     }
 
@@ -1659,7 +1659,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             ".Files.Glob" => new TemplateFiles(context.Chart.Files).Glob(path),
             ".Files.AsConfig" => new TemplateFiles(context.Chart.Files).AsConfig(),
             ".Files.AsSecrets" => new TemplateFiles(context.Chart.Files).AsSecrets(),
-            _ => throw new NotSupportedException($"Helm files method '{head}' is not supported by the managed renderer.")
+            _ => throw new UnsupportedTemplateFeatureException($"Helm files method '{head}' is not supported by the managed renderer.")
         };
     }
 

@@ -148,58 +148,13 @@ await foreach (var line in client.UpgradeInstallStreamAsync(new HelmUpgradeInsta
 
 ## 兼容性验证
 
-HelmSharp 的模板引擎持续通过基准输出测试（golden tests）验证。测试套件包含聚焦测试用 Chart 和选定公开 Helm Chart。下表中的每个公开 Chart 都会分别由 `helm template`（参照）和 HelmSharp 托管渲染器渲染，输出经规范化后逐文档比对。
+HelmSharp 使用聚焦测试用 Chart 和选定公开 Chart，将托管渲染结果与 `helm template` 比对。这些测试可防止已覆盖行为回归，但不代表所有 Helm Chart 或所有 Sprig 函数都已认证兼容。
 
-这些结果是表格中固定 Chart 版本的兼容性信号，不是对整个 Helm 生态所有 Chart 的认证。如果你的 Chart 依赖少见 Helm 行为，仍应单独验证。
-
-> **更新日期：** 2026-07-16 · **HelmSharp 版本：** 1.2.0 · **Helm 版本：** v4.2.2 · **测试框架：** net10.0
-
-### 汇总
-
-| Chart | 版本 | Helm 文档数 | 模板数 | 通过 | 失败 | 逐模板通过率 | 完整渲染 | 判定 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| **podinfo** | 6.14.0 | 5 | 21 | 21 | 0 | 100% | ✅ 成功 | **Pass** |
-| **metrics-server** | 3.13.1 | 9 | 18 | 18 | 0 | 100% | ✅ 成功 | **Pass** |
-| **external-dns** | 1.21.1 | 5 | 7 | 7 | 0 | 100% | ✅ 成功 | **Pass** |
-| **ingress-nginx** | 4.12.1 | 19 | 42 | 42 | 0 | 100% | ✅ 成功 | **Pass** |
-| **cert-manager** | 1.17.1 | 52 | 41 | 41 | 0 | 100% | ✅ 成功 | **Pass** |
-| **总计** | — | **90** | **129** | **129** | **0** | **100%** | — | — |
-
-### 逐 Chart 明细
-
-```
-podinfo          █████████████████████  100%  (21/21 模板)
-metrics-server   █████████████████████  100%  (18/18 模板)
-external-dns     █████████████████████  100%  ( 7/ 7 模板)
-ingress-nginx    █████████████████████  100%  (42/42 模板)
-cert-manager     █████████████████████  100%  (41/41 模板)
-                 ─────────────────────
-                 █████████████████████  100%  (129/129 模板总计)
-```
-
-### 错误分析
-
-对于上表列出的固定版本公开 Chart，全部 129 个模板都能在无解析器异常的情况下渲染，并在规范化后与 `helm template` 匹配。这是已覆盖 Chart 的当前兼容性信号，不代表所有 Helm Chart 都只使用已覆盖行为。
-
-自 1.0.3 版本以来关闭的关键对齐里程碑：
-
-- **#109 / #111 / #113** — Block 右 trim 现已保留 action 行缩进，匹配 Go `text/template` 行为；cert-manager 基准输出测试从 45/52 恢复至 52/52 完全一致。
-- **#112** — `ParseDefine` 现已对 define body 应用右 trim，匹配 `ParseBlock` 行为。
-- **#97** — 完成 Sprig 函数对齐（`empty`、`keys`、`mergeOverwrite`、`mustRegexMatch`、`mustRegexReplaceAll` 等）。
-- **#102** — 解决 cert-manager 剩余内容差异（YAML tag、八进制值、merge key、block scalar、注释裁剪）。
-- **#96 / #99 / #108** — 解决选定公开 Chart 基准输出测试的内容差异，全部五个 Chart 达到 Pass 判定。
-
-### 判定图例
-
-| 判定 | 含义 |
-| --- | --- |
-| **Pass** | 被测 Chart 输出在规范化后逐字节一致（换行符、源注释）。 |
-| **Partial** | 结构兼容——文档数量相同，或大多数独立模板渲染正确，少数存在已知解析器缺口。 |
-| **Fail** | 渲染器无法为该 Chart 中任何模板生成输出。 |
+支持范围、已知边界以及生产 Chart 的验证建议，请见 [Helm 兼容性](docs/helm-compatibility.md)。
 
 ## 当前边界
 
-HelmSharp 不是完整的 Helm CLI 克隆。一些高级 Helm 行为、模板函数边界情况、插件、完整 provenance 校验流程、OCI 认证流程以及不常见 Kubernetes 资源类型仍可能需要补充实现。欢迎用聚焦的测试补齐兼容性。
+HelmSharp 不是完整的 Helm CLI 克隆。尚未实现的模板函数会产生包含模板路径的渲染诊断，而不会被静默替代。对于静态客户端未包含的 Kubernetes 资源，apply/delete 会从目标集群发现资源类型；就绪判断仍只覆盖选定的资源类型。高级 Helm 行为、插件、provenance 校验和 OCI 认证流程仍可能需要补充实现。
 
 ## 文档
 
