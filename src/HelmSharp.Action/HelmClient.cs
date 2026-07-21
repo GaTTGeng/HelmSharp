@@ -510,7 +510,7 @@ public class HelmClient : IHelmClient
                     var attemptedOnlyManifest = GetAttemptedOnlyManifest(previous.Manifest, mainManifest, ns);
                     if (!string.IsNullOrWhiteSpace(attemptedOnlyManifest))
                     {
-                        await foreach (var resource in applier.DeleteAsync(attemptedOnlyManifest, ns, CancellationToken.None))
+                        await foreach (var resource in applier.DeleteAsync(attemptedOnlyManifest, ns, cancellationToken: CancellationToken.None))
                             output.Add($"Removed failed-upgrade resource {resource}");
                     }
                     if (request.Atomic)
@@ -530,7 +530,7 @@ public class HelmClient : IHelmClient
                 // deployed predecessor. Its resources belong solely to failed attempts.
                 try
                 {
-                    await foreach (var resource in applier.DeleteAsync(mainManifest, ns, CancellationToken.None))
+                    await foreach (var resource in applier.DeleteAsync(mainManifest, ns, cancellationToken: CancellationToken.None))
                         output.Add($"Cleaned up {resource}");
                 }
                 catch
@@ -547,7 +547,7 @@ public class HelmClient : IHelmClient
         {
             try
             {
-                await foreach (var resource in applier.DeleteAsync(mainManifest, ns, CancellationToken.None))
+                await foreach (var resource in applier.DeleteAsync(mainManifest, ns, cancellationToken: CancellationToken.None))
                     output.Add($"Cleaned up {resource}");
             }
             catch
