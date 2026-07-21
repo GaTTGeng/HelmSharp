@@ -629,10 +629,12 @@ public class HelmClient : IHelmClient
         using var client = await _createKubernetesClientAsync(options, request.KubeConfigPath, request.KubeConfigContent, operationToken);
         var store = new HelmReleaseStore(client);
         var latest = await store.GetLatestAsync(request.ReleaseName, ns, operationToken);
+        var history = latest is null || !request.KeepHistory
+            ? await store.HistoryAsync(request.ReleaseName, ns, operationToken)
+            : null;
         if (latest is null && !request.KeepHistory)
         {
-            var history = await store.HistoryAsync(request.ReleaseName, ns, operationToken);
-            if (history.Count > 0 && string.Equals(history[^1].Status, "uninstalled", StringComparison.OrdinalIgnoreCase))
+            if (history is { Count: > 0 } && string.Equals(history[^1].Status, "uninstalled", StringComparison.OrdinalIgnoreCase))
             {
                 await store.PurgeAsync(request.ReleaseName, ns, operationToken);
                 return Ok($"release \"{request.ReleaseName}\" uninstalled{Environment.NewLine}");
@@ -655,6 +657,23 @@ public class HelmClient : IHelmClient
 
         var applier = new KubernetesManifestApplier(client, options.FieldManager);
         var output = new StringBuilder();
+        if (!request.KeepHistory && history is not null)
+        {
+            foreach (var failedRevision in history.Where(record =>
+                         record.Revision > latest.Revision &&
+                         string.Equals(record.Status, "failed", StringComparison.OrdinalIgnoreCase)))
+            {
+                var failedOnlyManifest = GetAttemptedOnlyManifest(mainManifest, failedRevision.Manifest, ns);
+                await foreach (var resource in applier.DeleteAsync(
+                                   failedOnlyManifest,
+                                   ns,
+                                   propagationPolicy: request.DeletionPropagation.ToString(),
+                                   cancellationToken: operationToken))
+                {
+                    output.AppendLine($"Deleted {resource}");
+                }
+            }
+        }
         await foreach (var resource in applier.DeleteAsync(
                            mainManifest,
                            ns,

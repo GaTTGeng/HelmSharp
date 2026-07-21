@@ -919,6 +919,8 @@ public class ChartOperationsTests : IDisposable
             var path = request.RequestUri?.AbsolutePath ?? string.Empty;
             if (request.Method == HttpMethod.Delete && request.Content is not null)
                 _releaseState.DeleteRequestBodies.Add(await request.Content.ReadAsStringAsync(cancellationToken));
+            if (request.Method == HttpMethod.Delete)
+                _releaseState.DeletedPaths.Add(path);
             if (request.Method == HttpMethod.Get && path.EndsWith("/secrets", StringComparison.Ordinal))
             {
                 var selector = Uri.UnescapeDataString(request.RequestUri?.Query ?? string.Empty);
@@ -993,6 +995,7 @@ public class ChartOperationsTests : IDisposable
     {
         internal Dictionary<string, string> Secrets { get; } = new(StringComparer.Ordinal);
         internal List<string> DeleteRequestBodies { get; } = [];
+        internal List<string> DeletedPaths { get; } = [];
         public bool FailNextSecretCreate { get; set; }
 
         public IReadOnlyList<HelmReleaseRecord> Records(string releaseName)
@@ -1045,6 +1048,51 @@ public class ChartOperationsTests : IDisposable
             request.Method == HttpMethod.Get && request.PathAndQuery == "/apis/example.com/v1");
         Assert.Contains(handler.Requests, request =>
             request.Method == HttpMethod.Post && request.PathAndQuery.StartsWith("/apis/example.com/v1/namespaces/test-ns/widgets", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_PurgeDeletesResourcesIntroducedByAFailedRevision()
+    {
+        var chartDir = await CreateMinimalChartAsync("failed-revision-purge-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: retained
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "failed-revision-purge",
+            Chart = chartDir
+        }));
+
+        await File.AppendAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: introduced-by-failed-revision
+            """);
+        releaseState.FailNextSecretCreate = true;
+        await Assert.ThrowsAsync<HttpOperationException>(async () =>
+            await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+            {
+                ReleaseName = "failed-revision-purge",
+                Chart = chartDir
+            })));
+
+        var uninstall = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "failed-revision-purge",
+            Namespace = "test-ns"
+        });
+
+        Assert.Equal(0, uninstall.ExitCode);
+        Assert.Contains(releaseState.DeletedPaths, path =>
+            path.EndsWith("/configmaps/introduced-by-failed-revision", StringComparison.Ordinal));
     }
 
     private sealed class StaticHelmOptionsProvider : IHelmOptionsProvider
