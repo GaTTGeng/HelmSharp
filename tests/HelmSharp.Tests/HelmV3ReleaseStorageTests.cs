@@ -70,6 +70,7 @@ public class HelmV3ReleaseStorageTests
         Assert.False(root.TryGetProperty("labels", out _));
         Assert.Equal("", root.GetProperty("info").GetProperty("deleted").GetString());
         Assert.Equal("override", root.GetProperty("config").GetProperty("message").GetString());
+        Assert.Equal("computed", root.GetProperty("helmsharp_computed_values").GetProperty("message").GetString());
         Assert.Equal("default", root.GetProperty("chart").GetProperty("values").GetProperty("message").GetString());
         Assert.Equal("v2", root.GetProperty("chart").GetProperty("metadata").GetProperty("apiVersion").GetString());
         Assert.Equal("Succeeded", root.GetProperty("hooks")[0].GetProperty("last_run").GetProperty("phase").GetString());
@@ -439,6 +440,7 @@ public class HelmV3ReleaseStorageTests
             ChartKubeVersion = ">=1.25.0",
             ChartValuesYaml = "message: default\nreplicaCount: 1\n",
             ValuesYaml = "message: override\nreplicaCount: 2\n",
+            ComputedValuesYaml = "message: computed\nreplicaCount: 2\n",
             Manifest = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: fixture-release\n",
             FirstDeployedAt = DateTimeOffset.Parse("2026-07-17T01:02:03Z"),
             UpdatedAt = DateTimeOffset.Parse("2026-07-17T01:03:04Z"),

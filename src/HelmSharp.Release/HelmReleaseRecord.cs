@@ -17,6 +17,8 @@ public sealed record HelmReleaseRecord
     public string? RawChartJson { get; init; }
     public string Manifest { get; init; } = string.Empty;
     public string ValuesYaml { get; init; } = string.Empty;
+    /// <summary>Fully computed values retained by HelmSharp for <c>--all</c> queries.</summary>
+    public string ComputedValuesYaml { get; init; } = string.Empty;
     public DateTimeOffset? FirstDeployedAt { get; init; }
     public DateTimeOffset UpdatedAt { get; set; }
     public DateTimeOffset? DeletedAt { get; init; }

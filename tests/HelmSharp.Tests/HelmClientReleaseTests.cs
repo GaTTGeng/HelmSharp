@@ -32,6 +32,27 @@ public class HelmClientReleaseTests
     }
 
     [Fact]
+    public void GetStoredValuesYaml_AllValues_UsesPersistedComputedValues()
+    {
+        var record = new HelmReleaseRecord
+        {
+            ChartValuesYaml = "root: default\n",
+            ValuesYaml = "root: override\n",
+            ComputedValuesYaml = """
+                root: override
+                child:
+                  imported: true
+                  global: propagated
+                """
+        };
+
+        var valuesYaml = HelmClient.GetStoredValuesYaml(record, allValues: true);
+
+        Assert.Contains("imported: true", valuesYaml);
+        Assert.Contains("global: propagated", valuesYaml);
+    }
+
+    [Fact]
     public void GetStoredNotes_ReturnsReleaseNotesWhenPresent()
     {
         var record = new HelmReleaseRecord { Notes = "Installed successfully.\n" };

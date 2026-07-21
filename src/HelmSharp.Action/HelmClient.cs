@@ -311,6 +311,7 @@ public class HelmClient : IHelmClient
             RawChartJson = HelmV3ReleaseCodec.CreateChartSnapshot(chart),
             Manifest = mainManifest,
             ValuesYaml = HelmValues.ToYaml(overrides),
+            ComputedValuesYaml = HelmValues.ToYaml(values),
             FirstDeployedAt = firstDeployedAt,
             UpdatedAt = deployedAt,
             Description = request.Description ?? (isUpgrade ? "Upgrade complete" : "Install complete"),
@@ -546,6 +547,7 @@ public class HelmClient : IHelmClient
             RawChartJson = targetRecord.RawChartJson,
             Manifest = mainManifest,
             ValuesYaml = targetRecord.ValuesYaml,
+            ComputedValuesYaml = targetRecord.ComputedValuesYaml,
             FirstDeployedAt = targetRecord.FirstDeployedAt,
             UpdatedAt = deployedAt,
             Description = "Rollback complete",
@@ -720,6 +722,9 @@ public class HelmClient : IHelmClient
         ArgumentNullException.ThrowIfNull(record);
         if (!allValues)
             return record.ValuesYaml;
+
+        if (!string.IsNullOrWhiteSpace(record.ComputedValuesYaml))
+            return record.ComputedValuesYaml;
 
         var values = HelmYaml.DeserializeDictionary(record.ChartValuesYaml);
         HelmValues.MergeInto(values, HelmYaml.DeserializeDictionary(record.ValuesYaml));
