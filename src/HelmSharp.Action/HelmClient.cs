@@ -655,6 +655,14 @@ public class HelmClient : IHelmClient
             output.AppendLine($"Deleted {resource}");
         }
 
+        if (request.Wait)
+        {
+            var timeout = request.TimeoutSeconds ?? options.TimeoutSeconds;
+            var waiter = new KubernetesResourceWaiter(client, timeout);
+            await foreach (var line in waiter.WaitForDeletedAsync(mainManifest, ns, operationToken))
+                output.AppendLine(line);
+        }
+
         // Execute post-delete hooks
         if (!request.DisableHooks && hooks.Any(h => h.Events.Contains(HelmHookEvent.PostDelete)))
         {

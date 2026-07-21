@@ -136,6 +136,68 @@ public sealed class KubernetesResourceWaiter
         yield return $"All {waitable.Count} resources are ready";
     }
 
+    /// <summary>Waits for resources in a manifest to disappear after deletion.</summary>
+    public async IAsyncEnumerable<string> WaitForDeletedAsync(
+        string manifest,
+        string defaultNamespace,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var identities = KubernetesManifestApplier.SplitDocumentsPublic(manifest)
+            .Select(doc => ManifestIdentity.Parse(doc, defaultNamespace))
+            .Where(identity => identity is not null && IsDeletionWaitable(identity))
+            .Cast<ManifestIdentity>()
+            .ToList();
+        if (identities.Count == 0)
+            yield break;
+
+        var deadline = DateTime.UtcNow.AddSeconds(_timeoutSeconds);
+        var pending = new HashSet<string>(identities.Select(identity => identity.DisplayName));
+        yield return $"Waiting for {pending.Count} resources to be deleted...";
+        while (pending.Count > 0 && DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var deleted = new List<string>();
+            foreach (var identity in identities.Where(identity => pending.Contains(identity.DisplayName)))
+            {
+                try
+                {
+                    await ReadForDeletionAsync(identity, cancellationToken);
+                }
+                catch (HttpOperationException ex) when ((int)ex.Response.StatusCode == 404)
+                {
+                    pending.Remove(identity.DisplayName);
+                    deleted.Add(identity.DisplayName);
+                }
+            }
+            foreach (var displayName in deleted)
+                yield return $"  {displayName} deleted";
+            if (pending.Count > 0)
+                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+        }
+        if (pending.Count > 0)
+            throw new TimeoutException($"Timed out after {_timeoutSeconds}s waiting for deletion of: {string.Join(", ", pending)}");
+    }
+
+    private async Task ReadForDeletionAsync(ManifestIdentity identity, CancellationToken ct)
+    {
+        switch (identity.ApiVersion, identity.Kind)
+        {
+            case ("v1", "ConfigMap"): _ = await _client.CoreV1.ReadNamespacedConfigMapAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("v1", "Secret"): _ = await _client.CoreV1.ReadNamespacedSecretAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("v1", "Service"): _ = await _client.CoreV1.ReadNamespacedServiceAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("v1", "ServiceAccount"): _ = await _client.CoreV1.ReadNamespacedServiceAccountAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("v1", "PersistentVolumeClaim"): _ = await _client.CoreV1.ReadNamespacedPersistentVolumeClaimAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("v1", "Pod"): _ = await _client.CoreV1.ReadNamespacedPodAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("apps/v1", "Deployment"): _ = await _client.AppsV1.ReadNamespacedDeploymentAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("apps/v1", "StatefulSet"): _ = await _client.AppsV1.ReadNamespacedStatefulSetAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("apps/v1", "DaemonSet"): _ = await _client.AppsV1.ReadNamespacedDaemonSetAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("apps/v1", "ReplicaSet"): _ = await _client.AppsV1.ReadNamespacedReplicaSetAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("batch/v1", "Job"): _ = await _client.BatchV1.ReadNamespacedJobAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("batch/v1", "CronJob"): _ = await _client.BatchV1.ReadNamespacedCronJobAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            default: throw new NotSupportedException();
+        }
+    }
+
     private async Task<(bool Ready, bool Failed, string Status)> CheckResourceStatusAsync(
         ManifestIdentity identity,
         string ns,
@@ -336,4 +398,11 @@ public sealed class KubernetesResourceWaiter
         => kind is "Deployment" or "StatefulSet" or "DaemonSet" or "ReplicaSet"
             or "Job" or "Pod" or "PersistentVolumeClaim" or "Endpoints"
             or "HorizontalPodAutoscaler";
+
+    private static bool IsDeletionWaitable(ManifestIdentity identity)
+        => (identity.ApiVersion, identity.Kind) is
+            ("v1", "ConfigMap") or ("v1", "Secret") or ("v1", "Service") or ("v1", "ServiceAccount")
+            or ("v1", "PersistentVolumeClaim") or ("v1", "Pod")
+            or ("apps/v1", "Deployment") or ("apps/v1", "StatefulSet") or ("apps/v1", "DaemonSet") or ("apps/v1", "ReplicaSet")
+            or ("batch/v1", "Job") or ("batch/v1", "CronJob");
 }

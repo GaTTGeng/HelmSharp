@@ -607,6 +607,7 @@ public class ChartOperationsTests : IDisposable
         {
             ReleaseName = "propagation-uninstall",
             Namespace = "test-ns",
+            Wait = true,
             DeletionPropagation = HelmDeletionPropagation.Foreground
         });
 
