@@ -136,17 +136,22 @@ public sealed class KubernetesResourceWaiter
         yield return $"All {waitable.Count} resources are ready";
     }
 
-    /// <summary>Waits for resources in a manifest to disappear after deletion.</summary>
+    /// <summary>Waits for supported resources in a manifest to disappear after deletion.</summary>
     public async IAsyncEnumerable<string> WaitForDeletedAsync(
         string manifest,
         string defaultNamespace,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var identities = KubernetesManifestApplier.SplitDocumentsPublic(manifest)
+        var allIdentities = KubernetesManifestApplier.SplitDocumentsPublic(manifest)
             .Select(doc => ManifestIdentity.Parse(doc, defaultNamespace))
-            .Where(identity => identity is not null && IsDeletionWaitable(identity))
+            .Where(identity => identity is not null)
             .Cast<ManifestIdentity>()
             .ToList();
+        var unsupported = allIdentities.Where(identity => !IsDeletionWaitable(identity)).ToList();
+        if (unsupported.Count > 0)
+            throw new NotSupportedException(
+                $"Waiting for deletion is not supported for: {string.Join(", ", unsupported.Select(identity => identity.DisplayName))}");
+        var identities = allIdentities;
         if (identities.Count == 0)
             yield break;
 
