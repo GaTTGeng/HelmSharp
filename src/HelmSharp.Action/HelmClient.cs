@@ -489,7 +489,7 @@ public class HelmClient : IHelmClient
         if (applier is null)
             return output;
 
-        if (isUpgrade && request.Atomic)
+        if (isUpgrade && (request.Atomic || request.CleanupOnFail))
         {
             var previous = history
                 .Where(record => string.Equals(record.Status, "deployed", StringComparison.OrdinalIgnoreCase))
@@ -504,8 +504,11 @@ public class HelmClient : IHelmClient
                         await foreach (var resource in applier.DeleteAsync(attemptedOnlyManifest, ns, CancellationToken.None))
                             output.Add($"Removed failed-upgrade resource {resource}");
                     }
-                    await foreach (var resource in applier.ApplyAsync(previous.Manifest, ns, CancellationToken.None))
-                        output.Add($"Restored {resource}");
+                    if (request.Atomic)
+                    {
+                        await foreach (var resource in applier.ApplyAsync(previous.Manifest, ns, CancellationToken.None))
+                            output.Add($"Restored {resource}");
+                    }
                 }
                 catch
                 {
