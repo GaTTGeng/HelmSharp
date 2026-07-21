@@ -225,13 +225,52 @@ public class HelmClient : IHelmClient
 
         // Extract hooks from manifest
         var (mainManifest, hooks) = HelmHookExecutor.ExtractHooks(manifest, ns);
+        var deployedAt = DateTimeOffset.UtcNow;
+        var firstDeployedAt = existingHistory.Count == 0
+            ? deployedAt
+            : existingHistory.Min(record => record.FirstDeployedAt ?? record.UpdatedAt);
+        var releaseRecord = new HelmReleaseRecord
+        {
+            Name = request.ReleaseName,
+            Namespace = ns,
+            Revision = revision,
+            Status = "deployed",
+            ChartName = chart.Name,
+            ChartVersion = chart.Version,
+            AppVersion = chart.AppVersion,
+            ChartApiVersion = chart.ApiVersion,
+            ChartDescription = chart.Description,
+            ChartType = chart.Type,
+            ChartKubeVersion = chart.KubeVersion,
+            ChartValuesYaml = chart.ValuesYaml,
+            RawChartJson = HelmV3ReleaseCodec.CreateChartSnapshot(chart),
+            Manifest = mainManifest,
+            ValuesYaml = HelmValues.ToYaml(overrides),
+            ComputedValuesYaml = HelmValues.ToYaml(values),
+            FirstDeployedAt = firstDeployedAt,
+            UpdatedAt = deployedAt,
+            Description = request.Description ?? (isUpgrade ? "Upgrade complete" : "Install complete"),
+            Notes = renderer.RenderNotes(),
+            Hooks = hooks.Select(ToReleaseHook).ToList(),
+            Labels = ResolveReleaseLabels(existingHistory, isUpgrade, request.Labels)
+        };
 
         // Execute pre-hooks
         if (!request.DisableHooks && hooks.Count > 0)
         {
             var hookExecutor = new HelmHookExecutor(client, options.FieldManager);
             var preEvent = isUpgrade ? HelmHookEvent.PreUpgrade : HelmHookEvent.PreInstall;
-            await foreach (var hookLine in hookExecutor.ExecuteHooksAsync(hooks, preEvent, ns, cancellationToken))
+            List<string> hookLines;
+            try
+            {
+                hookLines = await CollectLinesAsync(hookExecutor.ExecuteHooksWithFailureHandlingAsync(hooks, preEvent, ns, cancellationToken));
+            }
+            catch (Exception ex)
+            {
+                await PersistFailedLifecycleAsync(store, releaseRecord, ex, null, mainManifest, existingHistory, isUpgrade, request, ns);
+                throw;
+            }
+            foreach (var hookLine in hookLines)
             {
                 yield return hookLine;
             }
@@ -257,26 +296,41 @@ public class HelmClient : IHelmClient
         foreach (var line in appliedResources)
             yield return line;
 
-        if (applyError is not null && (request.Atomic || request.CleanupOnFail))
+        if (applyError is not null)
         {
-            yield return $"Error: {applyError.Message}. Cleaning up...";
-            await foreach (var resource in applier.DeleteAsync(mainManifest, ns, cancellationToken))
-            {
-                yield return $"Cleaned up {resource}";
-            }
+            var recovery = await PersistFailedLifecycleAsync(store, releaseRecord, applyError, applier, mainManifest, existingHistory, isUpgrade, request, ns);
+            foreach (var line in recovery)
+                yield return line;
             throw applyError;
         }
-        if (applyError is not null) throw applyError;
 
         // Execute post-hooks
         if (!request.DisableHooks && hooks.Count > 0)
         {
             var hookExecutor = new HelmHookExecutor(client, options.FieldManager);
             var postEvent = isUpgrade ? HelmHookEvent.PostUpgrade : HelmHookEvent.PostInstall;
-            await foreach (var hookLine in hookExecutor.ExecuteHooksAsync(hooks, postEvent, ns, cancellationToken))
+            List<string> hookLines;
+            List<string>? recovery = null;
+            Exception? hookError = null;
+            try
+            {
+                hookLines = await CollectLinesAsync(hookExecutor.ExecuteHooksWithFailureHandlingAsync(hooks, postEvent, ns, cancellationToken));
+            }
+            catch (Exception ex)
+            {
+                hookLines = [];
+                recovery = await PersistFailedLifecycleAsync(store, releaseRecord, ex, applier, mainManifest, existingHistory, isUpgrade, request, ns);
+                hookError = ex;
+            }
+            foreach (var hookLine in hookLines)
             {
                 yield return hookLine;
             }
+            if (recovery is not null)
+                foreach (var line in recovery)
+                    yield return line;
+            if (hookError is not null)
+                throw hookError;
         }
 
         // Wait for resources to be ready
@@ -285,40 +339,45 @@ public class HelmClient : IHelmClient
             var timeout = request.TimeoutSeconds ?? options.TimeoutSeconds;
             yield return $"Waiting for resources to be ready (timeout: {timeout}s)...";
             var waiter = new KubernetesResourceWaiter(client, timeout);
-            await foreach (var waitLine in waiter.WaitForReadyAsync(mainManifest, ns, waitForJobs: request.WaitForJobs, cancellationToken: cancellationToken))
+            List<string> waitLines;
+            List<string>? recovery = null;
+            Exception? waitError = null;
+            try
+            {
+                waitLines = await CollectLinesAsync(waiter.WaitForReadyAsync(mainManifest, ns, waitForJobs: request.WaitForJobs, cancellationToken: cancellationToken));
+            }
+            catch (Exception ex)
+            {
+                waitLines = [];
+                recovery = await PersistFailedLifecycleAsync(store, releaseRecord, ex, applier, mainManifest, existingHistory, isUpgrade, request, ns);
+                waitError = ex;
+            }
+            foreach (var waitLine in waitLines)
             {
                 yield return waitLine;
             }
+            if (recovery is not null)
+                foreach (var line in recovery)
+                    yield return line;
+            if (waitError is not null)
+                throw waitError;
         }
-        var deployedAt = DateTimeOffset.UtcNow;
-        var firstDeployedAt = existingHistory.Count == 0
-            ? deployedAt
-            : existingHistory.Min(record => record.FirstDeployedAt ?? record.UpdatedAt);
-        await store.SaveAsync(new HelmReleaseRecord
+        List<string>? saveRecovery = null;
+        Exception? saveError = null;
+        try
         {
-            Name = request.ReleaseName,
-            Namespace = ns,
-            Revision = revision,
-            Status = "deployed",
-            ChartName = chart.Name,
-            ChartVersion = chart.Version,
-            AppVersion = chart.AppVersion,
-            ChartApiVersion = chart.ApiVersion,
-            ChartDescription = chart.Description,
-            ChartType = chart.Type,
-            ChartKubeVersion = chart.KubeVersion,
-            ChartValuesYaml = chart.ValuesYaml,
-            RawChartJson = HelmV3ReleaseCodec.CreateChartSnapshot(chart),
-            Manifest = mainManifest,
-            ValuesYaml = HelmValues.ToYaml(overrides),
-            ComputedValuesYaml = HelmValues.ToYaml(values),
-            FirstDeployedAt = firstDeployedAt,
-            UpdatedAt = deployedAt,
-            Description = request.Description ?? (isUpgrade ? "Upgrade complete" : "Install complete"),
-            Notes = renderer.RenderNotes(),
-            Hooks = hooks.Select(ToReleaseHook).ToList(),
-            Labels = ResolveReleaseLabels(existingHistory, isUpgrade, request.Labels)
-        }, cancellationToken);
+            await store.SaveAsync(releaseRecord, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            saveRecovery = await PersistFailedLifecycleAsync(store, releaseRecord, ex, applier, mainManifest, existingHistory, isUpgrade, request, ns);
+            saveError = ex;
+        }
+        if (saveRecovery is not null)
+            foreach (var line in saveRecovery)
+                yield return line;
+        if (saveError is not null)
+            throw saveError;
         await SupersedeDeployedReleasesAsync(store, existingHistory, cancellationToken);
 
         // Enforce max history
@@ -378,6 +437,85 @@ public class HelmClient : IHelmClient
         {
             await store.MarkStatusAsync(record, "superseded", cancellationToken);
         }
+    }
+
+    private static async Task<List<string>> CollectLinesAsync(IAsyncEnumerable<string> lines)
+    {
+        var collected = new List<string>();
+        await foreach (var line in lines)
+            collected.Add(line);
+        return collected;
+    }
+
+    private static async Task<List<string>> PersistFailedLifecycleAsync(
+        HelmReleaseStore store,
+        HelmReleaseRecord attemptedRecord,
+        Exception error,
+        KubernetesManifestApplier? applier,
+        string mainManifest,
+        IReadOnlyCollection<HelmReleaseRecord> history,
+        bool isUpgrade,
+        HelmUpgradeInstallRequest request,
+        string ns)
+    {
+        var output = new List<string>();
+        var failedRecord = attemptedRecord with
+        {
+            Status = "failed",
+            UpdatedAt = DateTimeOffset.UtcNow,
+            Description = $"{(isUpgrade ? "Upgrade" : "Install")} failed: {error.Message}"
+        };
+
+        try
+        {
+            // Do not use the caller's cancellation token here: a cancellation is itself
+            // lifecycle evidence that must remain inspectable.
+            await store.SaveAsync(failedRecord, CancellationToken.None);
+        }
+        catch
+        {
+            // Preserve the operation error; storage failures cannot safely replace it.
+        }
+
+        if (applier is null)
+            return output;
+
+        if (isUpgrade && request.Atomic)
+        {
+            var previous = history
+                .Where(record => string.Equals(record.Status, "deployed", StringComparison.OrdinalIgnoreCase))
+                .MaxBy(record => record.Revision);
+            if (previous is not null)
+            {
+                try
+                {
+                    await foreach (var resource in applier.ApplyAsync(previous.Manifest, ns, CancellationToken.None))
+                        output.Add($"Restored {resource}");
+                }
+                catch
+                {
+                    output.Add("Unable to fully restore the previous deployed revision.");
+                }
+            }
+            return output;
+        }
+
+        // A full-manifest delete is safe only for a new installation. During an upgrade,
+        // it could remove resources owned by the previously deployed revision.
+        if (!isUpgrade && (request.Atomic || request.CleanupOnFail))
+        {
+            try
+            {
+                await foreach (var resource in applier.DeleteAsync(mainManifest, ns, CancellationToken.None))
+                    output.Add($"Cleaned up {resource}");
+            }
+            catch
+            {
+                output.Add("Unable to fully clean up resources from the failed installation.");
+            }
+        }
+
+        return output;
     }
 
     private static async Task<List<HelmReleaseRecord>> LoadReleaseHistoryForUpgradeInstallAsync(

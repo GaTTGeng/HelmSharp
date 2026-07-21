@@ -505,7 +505,7 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
-    public async Task ReleaseLifecycle_FailedNewRevisionSaveKeepsPreviousRevisionDeployed()
+    public async Task ReleaseLifecycle_FailedNewRevisionSavePersistsFailedRevisionAndKeepsPreviousRevisionDeployed()
     {
         var chartDir = await CreateMinimalChartAsync("save-failure-chart");
         var releaseState = new ReleaseLifecycleState();
@@ -527,7 +527,12 @@ public class ChartOperationsTests : IDisposable
 
         Assert.Collection(
             releaseState.Records("save-failure"),
-            record => Assert.Equal((1, "deployed"), (record.Revision, record.Status)));
+            record => Assert.Equal((1, "deployed"), (record.Revision, record.Status)),
+            record =>
+            {
+                Assert.Equal((2, "failed"), (record.Revision, record.Status));
+                Assert.StartsWith("Upgrade failed:", record.Description);
+            });
     }
 
     [Fact]
