@@ -646,7 +646,11 @@ public class HelmClient : IHelmClient
 
         var applier = new KubernetesManifestApplier(client, options.FieldManager);
         var output = new StringBuilder();
-        await foreach (var resource in applier.DeleteAsync(mainManifest, ns, operationToken))
+        await foreach (var resource in applier.DeleteAsync(
+                           mainManifest,
+                           ns,
+                           propagationPolicy: request.DeletionPropagation.ToString(),
+                           cancellationToken: operationToken))
         {
             output.AppendLine($"Deleted {resource}");
         }

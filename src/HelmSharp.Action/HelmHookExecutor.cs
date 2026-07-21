@@ -259,7 +259,7 @@ internal sealed class HelmHookExecutor
         try
         {
             var applier = new KubernetesManifestApplier(_client, _fieldManager);
-            await foreach (var _ in applier.DeleteAsync(hook.Manifest, ns, ct))
+            await foreach (var _ in applier.DeleteAsync(hook.Manifest, ns, cancellationToken: ct))
             {
                 // drain the async enumerable
             }

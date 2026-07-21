@@ -38,7 +38,7 @@ public sealed class KubernetesManifestApplier
     public async IAsyncEnumerable<string> ApplyAsync(
         string manifest,
         string defaultNamespace,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         foreach (var doc in SplitDocuments(manifest))
         {
@@ -55,7 +55,8 @@ public sealed class KubernetesManifestApplier
     public async IAsyncEnumerable<string> DeleteAsync(
         string manifest,
         string defaultNamespace,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+        string? propagationPolicy = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         foreach (var doc in SplitDocuments(manifest).Reverse())
         {
@@ -64,7 +65,7 @@ public sealed class KubernetesManifestApplier
             if (identity is null)
                 continue;
 
-            await DeleteOneAsync(identity, cancellationToken);
+            await DeleteOneAsync(identity, propagationPolicy, cancellationToken);
             yield return identity.DisplayName;
         }
     }
@@ -601,151 +602,154 @@ public sealed class KubernetesManifestApplier
         }
     }
 
-    private async Task DeleteOneAsync(ManifestIdentity identity, CancellationToken ct)
+    private async Task DeleteOneAsync(ManifestIdentity identity, string? propagationPolicy, CancellationToken ct)
     {
         try
         {
+            var deleteOptions = string.IsNullOrWhiteSpace(propagationPolicy)
+                ? null
+                : new V1DeleteOptions { PropagationPolicy = propagationPolicy };
             switch (identity.ApiVersion, identity.Kind)
             {
                 // Core v1
                 case ("v1", "ConfigMap"):
-                    await _client.CoreV1.DeleteNamespacedConfigMapAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.CoreV1.DeleteNamespacedConfigMapAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("v1", "Secret"):
-                    await _client.CoreV1.DeleteNamespacedSecretAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.CoreV1.DeleteNamespacedSecretAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("v1", "Service"):
-                    await _client.CoreV1.DeleteNamespacedServiceAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.CoreV1.DeleteNamespacedServiceAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("v1", "ServiceAccount"):
-                    await _client.CoreV1.DeleteNamespacedServiceAccountAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.CoreV1.DeleteNamespacedServiceAccountAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("v1", "PersistentVolumeClaim"):
-                    await _client.CoreV1.DeleteNamespacedPersistentVolumeClaimAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.CoreV1.DeleteNamespacedPersistentVolumeClaimAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("v1", "PersistentVolume"):
-                    await _client.CoreV1.DeletePersistentVolumeAsync(identity.Name, cancellationToken: ct);
+                    await _client.CoreV1.DeletePersistentVolumeAsync(identity.Name, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("v1", "LimitRange"):
-                    await _client.CoreV1.DeleteNamespacedLimitRangeAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.CoreV1.DeleteNamespacedLimitRangeAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("v1", "ResourceQuota"):
-                    await _client.CoreV1.DeleteNamespacedResourceQuotaAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.CoreV1.DeleteNamespacedResourceQuotaAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("v1", "Pod"):
-                    await _client.CoreV1.DeleteNamespacedPodAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.CoreV1.DeleteNamespacedPodAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("v1", "Endpoints"):
-                    await _client.CoreV1.DeleteNamespacedEndpointsAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.CoreV1.DeleteNamespacedEndpointsAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("v1", "ReplicationController"):
-                    await _client.CoreV1.DeleteNamespacedReplicationControllerAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.CoreV1.DeleteNamespacedReplicationControllerAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 // apps/v1
                 case ("apps/v1", "Deployment"):
-                    await _client.AppsV1.DeleteNamespacedDeploymentAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.AppsV1.DeleteNamespacedDeploymentAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("apps/v1", "StatefulSet"):
-                    await _client.AppsV1.DeleteNamespacedStatefulSetAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.AppsV1.DeleteNamespacedStatefulSetAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("apps/v1", "DaemonSet"):
-                    await _client.AppsV1.DeleteNamespacedDaemonSetAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.AppsV1.DeleteNamespacedDaemonSetAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("apps/v1", "ReplicaSet"):
-                    await _client.AppsV1.DeleteNamespacedReplicaSetAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.AppsV1.DeleteNamespacedReplicaSetAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 // batch/v1
                 case ("batch/v1", "Job"):
-                    await _client.BatchV1.DeleteNamespacedJobAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.BatchV1.DeleteNamespacedJobAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("batch/v1", "CronJob"):
-                    await _client.BatchV1.DeleteNamespacedCronJobAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.BatchV1.DeleteNamespacedCronJobAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 // networking
                 case ("networking.k8s.io/v1", "Ingress"):
-                    await _client.NetworkingV1.DeleteNamespacedIngressAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.NetworkingV1.DeleteNamespacedIngressAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("networking.k8s.io/v1", "NetworkPolicy"):
-                    await _client.NetworkingV1.DeleteNamespacedNetworkPolicyAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.NetworkingV1.DeleteNamespacedNetworkPolicyAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("networking.k8s.io/v1", "IngressClass"):
-                    await _client.NetworkingV1.DeleteIngressClassAsync(identity.Name, cancellationToken: ct);
+                    await _client.NetworkingV1.DeleteIngressClassAsync(identity.Name, body: deleteOptions, cancellationToken: ct);
                     break;
                 // rbac
                 case ("rbac.authorization.k8s.io/v1", "Role"):
-                    await _client.RbacAuthorizationV1.DeleteNamespacedRoleAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.RbacAuthorizationV1.DeleteNamespacedRoleAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("rbac.authorization.k8s.io/v1", "RoleBinding"):
-                    await _client.RbacAuthorizationV1.DeleteNamespacedRoleBindingAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.RbacAuthorizationV1.DeleteNamespacedRoleBindingAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("rbac.authorization.k8s.io/v1", "ClusterRole"):
-                    await _client.RbacAuthorizationV1.DeleteClusterRoleAsync(identity.Name, cancellationToken: ct);
+                    await _client.RbacAuthorizationV1.DeleteClusterRoleAsync(identity.Name, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("rbac.authorization.k8s.io/v1", "ClusterRoleBinding"):
-                    await _client.RbacAuthorizationV1.DeleteClusterRoleBindingAsync(identity.Name, cancellationToken: ct);
+                    await _client.RbacAuthorizationV1.DeleteClusterRoleBindingAsync(identity.Name, body: deleteOptions, cancellationToken: ct);
                     break;
                 // autoscaling
                 case ("autoscaling/v2", "HorizontalPodAutoscaler"):
                 case ("autoscaling/v2beta2", "HorizontalPodAutoscaler"):
-                    await _client.AutoscalingV2.DeleteNamespacedHorizontalPodAutoscalerAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.AutoscalingV2.DeleteNamespacedHorizontalPodAutoscalerAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("autoscaling/v1", "HorizontalPodAutoscaler"):
-                    await _client.AutoscalingV1.DeleteNamespacedHorizontalPodAutoscalerAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.AutoscalingV1.DeleteNamespacedHorizontalPodAutoscalerAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 // policy
                 case ("policy/v1", "PodDisruptionBudget"):
-                    await _client.PolicyV1.DeleteNamespacedPodDisruptionBudgetAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.PolicyV1.DeleteNamespacedPodDisruptionBudgetAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 // storage
                 case ("storage.k8s.io/v1", "StorageClass"):
-                    await _client.StorageV1.DeleteStorageClassAsync(identity.Name, cancellationToken: ct);
+                    await _client.StorageV1.DeleteStorageClassAsync(identity.Name, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("storage.k8s.io/v1", "CSIDriver"):
-                    await _client.StorageV1.DeleteCSIDriverAsync(identity.Name, cancellationToken: ct);
+                    await _client.StorageV1.DeleteCSIDriverAsync(identity.Name, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("storage.k8s.io/v1", "CSINode"):
-                    await _client.StorageV1.DeleteCSINodeAsync(identity.Name, cancellationToken: ct);
+                    await _client.StorageV1.DeleteCSINodeAsync(identity.Name, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("storage.k8s.io/v1", "VolumeAttachment"):
-                    await _client.StorageV1.DeleteVolumeAttachmentAsync(identity.Name, cancellationToken: ct);
+                    await _client.StorageV1.DeleteVolumeAttachmentAsync(identity.Name, body: deleteOptions, cancellationToken: ct);
                     break;
                 // scheduling
                 case ("scheduling.k8s.io/v1", "PriorityClass"):
-                    await _client.SchedulingV1.DeletePriorityClassAsync(identity.Name, cancellationToken: ct);
+                    await _client.SchedulingV1.DeletePriorityClassAsync(identity.Name, body: deleteOptions, cancellationToken: ct);
                     break;
                 // apiextensions
                 case ("apiextensions.k8s.io/v1", "CustomResourceDefinition"):
-                    await _client.ApiextensionsV1.DeleteCustomResourceDefinitionAsync(identity.Name, cancellationToken: ct);
+                    await _client.ApiextensionsV1.DeleteCustomResourceDefinitionAsync(identity.Name, body: deleteOptions, cancellationToken: ct);
                     break;
                 // admissionregistration
                 case ("admissionregistration.k8s.io/v1", "MutatingWebhookConfiguration"):
-                    await _client.AdmissionregistrationV1.DeleteMutatingWebhookConfigurationAsync(identity.Name, cancellationToken: ct);
+                    await _client.AdmissionregistrationV1.DeleteMutatingWebhookConfigurationAsync(identity.Name, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("admissionregistration.k8s.io/v1", "ValidatingWebhookConfiguration"):
-                    await _client.AdmissionregistrationV1.DeleteValidatingWebhookConfigurationAsync(identity.Name, cancellationToken: ct);
+                    await _client.AdmissionregistrationV1.DeleteValidatingWebhookConfigurationAsync(identity.Name, body: deleteOptions, cancellationToken: ct);
                     break;
                 // apiregistration
                 case ("apiregistration.k8s.io/v1", "APIService"):
-                    await _client.ApiregistrationV1.DeleteAPIServiceAsync(identity.Name, cancellationToken: ct);
+                    await _client.ApiregistrationV1.DeleteAPIServiceAsync(identity.Name, body: deleteOptions, cancellationToken: ct);
                     break;
                 // coordination
                 case ("coordination.k8s.io/v1", "Lease"):
-                    await _client.CoordinationV1.DeleteNamespacedLeaseAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.CoordinationV1.DeleteNamespacedLeaseAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 // node
                 case ("node.k8s.io/v1", "RuntimeClass"):
-                    await _client.NodeV1.DeleteRuntimeClassAsync(identity.Name, cancellationToken: ct);
+                    await _client.NodeV1.DeleteRuntimeClassAsync(identity.Name, body: deleteOptions, cancellationToken: ct);
                     break;
                 // discovery
                 case ("discovery.k8s.io/v1", "EndpointSlice"):
-                    await _client.DiscoveryV1.DeleteNamespacedEndpointSliceAsync(identity.Name, identity.Namespace, cancellationToken: ct);
+                    await _client.DiscoveryV1.DeleteNamespacedEndpointSliceAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 // flowcontrol
                 case ("flowcontrol.apiserver.k8s.io/v1", "FlowSchema"):
-                    await _client.FlowcontrolApiserverV1.DeleteFlowSchemaAsync(identity.Name, cancellationToken: ct);
+                    await _client.FlowcontrolApiserverV1.DeleteFlowSchemaAsync(identity.Name, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("flowcontrol.apiserver.k8s.io/v1", "PriorityLevelConfiguration"):
-                    await _client.FlowcontrolApiserverV1.DeletePriorityLevelConfigurationAsync(identity.Name, cancellationToken: ct);
+                    await _client.FlowcontrolApiserverV1.DeletePriorityLevelConfigurationAsync(identity.Name, body: deleteOptions, cancellationToken: ct);
                     break;
             }
         }
@@ -836,3 +840,4 @@ public sealed record ManifestIdentity(string ApiVersion, string Kind, string Nam
         return new ManifestIdentity(apiVersion, kind, name, ns);
     }
 }
+

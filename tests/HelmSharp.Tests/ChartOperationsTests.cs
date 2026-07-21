@@ -586,6 +586,35 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task ReleaseLifecycle_UninstallForwardsDeletionPropagation()
+    {
+        var chartDir = await CreateMinimalChartAsync("propagation-uninstall-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: propagation-config
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "propagation-uninstall",
+            Chart = chartDir
+        }));
+
+        var uninstall = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "propagation-uninstall",
+            Namespace = "test-ns",
+            DeletionPropagation = HelmDeletionPropagation.Foreground
+        });
+
+        Assert.Equal(0, uninstall.ExitCode);
+        Assert.Contains(releaseState.DeleteRequestBodies, body => body.Contains("Foreground", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ReleaseLifecycle_FailedNewRevisionSavePersistsFailedRevisionAndKeepsPreviousRevisionDeployed()
     {
         var chartDir = await CreateMinimalChartAsync("save-failure-chart");
@@ -856,6 +885,8 @@ public class ChartOperationsTests : IDisposable
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+            if (request.Method == HttpMethod.Delete && request.Content is not null)
+                _releaseState.DeleteRequestBodies.Add(await request.Content.ReadAsStringAsync(cancellationToken));
             if (request.Method == HttpMethod.Get && path.EndsWith("/secrets", StringComparison.Ordinal))
             {
                 var selector = Uri.UnescapeDataString(request.RequestUri?.Query ?? string.Empty);
@@ -904,6 +935,16 @@ public class ChartOperationsTests : IDisposable
                 return JsonResponse(request, HttpStatusCode.OK, "{}");
             }
 
+            if ((request.Method == HttpMethod.Post || request.Method == HttpMethod.Put) &&
+                path.Contains("/configmaps", StringComparison.Ordinal))
+            {
+                var configMap = await request.Content!.ReadAsStringAsync(cancellationToken);
+                return JsonResponse(request, request.Method == HttpMethod.Post ? HttpStatusCode.Created : HttpStatusCode.OK, configMap);
+            }
+
+            if (request.Method == HttpMethod.Get && path.Contains("/configmaps/", StringComparison.Ordinal))
+                return JsonResponse(request, HttpStatusCode.NotFound, "{ \"code\": 404 }");
+
             return JsonResponse(request, HttpStatusCode.OK, "{}");
         }
 
@@ -919,6 +960,7 @@ public class ChartOperationsTests : IDisposable
     private sealed class ReleaseLifecycleState
     {
         internal Dictionary<string, string> Secrets { get; } = new(StringComparer.Ordinal);
+        internal List<string> DeleteRequestBodies { get; } = [];
         public bool FailNextSecretCreate { get; set; }
 
         public IReadOnlyList<HelmReleaseRecord> Records(string releaseName)
