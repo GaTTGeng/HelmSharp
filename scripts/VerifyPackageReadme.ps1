@@ -12,17 +12,35 @@ function Assert-NuGetCompatibleMarkdown {
         [string]$SourceName
     )
 
-    $inCodeFence = $false
-    $unsupportedHtmlPattern = '</?(?:address|article|aside|blockquote|caption|center|col|colgroup|details|dialog|dir|div|dl|dt|dd|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|img|input|legend|li|link|main|menu|nav|ol|p|pre|script|section|style|summary|table|tbody|td|tfoot|th|thead|title|tr|ul)\b[^>]*>'
+    $fenceMarker = $null
+    $fenceLength = 0
+    $openingFencePattern = '^(?: {0,3})(?<marker>`{3,}|~{3,}).*$'
+    $closingFencePattern = '^(?: {0,3})(?<marker>`{3,}|~{3,})[ \t]*$'
+    $unsupportedHtmlPattern = '</?[A-Za-z][A-Za-z0-9-]*(?:\s[^>]*)?/?>'
 
     foreach ($line in $Content -split "`r?`n") {
-        if ($line -match '^\s*(```|~~~)') {
-            $inCodeFence = -not $inCodeFence
+        if ($null -eq $fenceMarker) {
+            $openingFence = [regex]::Match($line, $openingFencePattern)
+            if ($openingFence.Success) {
+                $fenceMarker = $openingFence.Groups['marker'].Value[0]
+                $fenceLength = $openingFence.Groups['marker'].Value.Length
+                continue
+            }
+        }
+        else {
+            $closingFence = [regex]::Match($line, $closingFencePattern)
+            if ($closingFence.Success -and
+                $closingFence.Groups['marker'].Value[0] -eq $fenceMarker -and
+                $closingFence.Groups['marker'].Value.Length -ge $fenceLength) {
+                $fenceMarker = $null
+                $fenceLength = 0
+            }
+
             continue
         }
 
         $contentWithoutInlineCode = $line -replace '`[^`]*`', ''
-        if (-not $inCodeFence -and $contentWithoutInlineCode -match $unsupportedHtmlPattern) {
+        if ($contentWithoutInlineCode -match $unsupportedHtmlPattern) {
             throw "$SourceName contains raw HTML that NuGet.org may display as text: $line"
         }
     }
