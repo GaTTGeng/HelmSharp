@@ -260,17 +260,9 @@ public class HelmClient : IHelmClient
         {
             var hookExecutor = new HelmHookExecutor(client, options.FieldManager);
             var preEvent = isUpgrade ? HelmHookEvent.PreUpgrade : HelmHookEvent.PreInstall;
-            List<string> hookLines;
-            try
-            {
-                hookLines = await CollectLinesAsync(hookExecutor.ExecuteHooksWithFailureHandlingAsync(hooks, preEvent, ns, cancellationToken));
-            }
-            catch (Exception ex)
-            {
-                await PersistFailedLifecycleAsync(store, releaseRecord, ex, null, mainManifest, existingHistory, isUpgrade, request, ns);
-                throw;
-            }
-            foreach (var hookLine in hookLines)
+            await foreach (var hookLine in StreamWithFailureHandlingAsync(
+                               hookExecutor.ExecuteHooksWithFailureHandlingAsync(hooks, preEvent, ns, cancellationToken),
+                               error => PersistFailedLifecycleAsync(store, releaseRecord, error, null, mainManifest, existingHistory, isUpgrade, request, ns)))
             {
                 yield return hookLine;
             }
@@ -309,28 +301,12 @@ public class HelmClient : IHelmClient
         {
             var hookExecutor = new HelmHookExecutor(client, options.FieldManager);
             var postEvent = isUpgrade ? HelmHookEvent.PostUpgrade : HelmHookEvent.PostInstall;
-            List<string> hookLines;
-            List<string>? recovery = null;
-            Exception? hookError = null;
-            try
-            {
-                hookLines = await CollectLinesAsync(hookExecutor.ExecuteHooksWithFailureHandlingAsync(hooks, postEvent, ns, cancellationToken));
-            }
-            catch (Exception ex)
-            {
-                hookLines = [];
-                recovery = await PersistFailedLifecycleAsync(store, releaseRecord, ex, applier, mainManifest, existingHistory, isUpgrade, request, ns);
-                hookError = ex;
-            }
-            foreach (var hookLine in hookLines)
+            await foreach (var hookLine in StreamWithFailureHandlingAsync(
+                               hookExecutor.ExecuteHooksWithFailureHandlingAsync(hooks, postEvent, ns, cancellationToken),
+                               error => PersistFailedLifecycleAsync(store, releaseRecord, error, applier, mainManifest, existingHistory, isUpgrade, request, ns)))
             {
                 yield return hookLine;
             }
-            if (recovery is not null)
-                foreach (var line in recovery)
-                    yield return line;
-            if (hookError is not null)
-                throw hookError;
         }
 
         // Wait for resources to be ready
@@ -448,12 +424,39 @@ public class HelmClient : IHelmClient
         }
     }
 
-    private static async Task<List<string>> CollectLinesAsync(IAsyncEnumerable<string> lines)
+    private static async IAsyncEnumerable<string> StreamWithFailureHandlingAsync(
+        IAsyncEnumerable<string> lines,
+        Func<Exception, Task<List<string>>> recover)
     {
-        var collected = new List<string>();
-        await foreach (var line in lines)
-            collected.Add(line);
-        return collected;
+        await using var enumerator = lines.GetAsyncEnumerator();
+        while (true)
+        {
+            string? line = null;
+            Exception? error = null;
+            var hasNext = false;
+            try
+            {
+                hasNext = await enumerator.MoveNextAsync();
+                if (hasNext)
+                    line = enumerator.Current;
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+
+            if (line is not null)
+                yield return line;
+            if (error is not null)
+            {
+                var recovery = await recover(error);
+                foreach (var recoveryLine in recovery)
+                    yield return recoveryLine;
+                throw error;
+            }
+            if (!hasNext)
+                yield break;
+        }
     }
 
     private static async Task<List<string>> PersistFailedLifecycleAsync(
