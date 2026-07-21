@@ -333,6 +333,15 @@ public class HelmV3ReleaseStorageTests
         child.Templates["templates/child.yaml"] = "apiVersion: v1\nkind: ConfigMap\n";
         child.Files["README.md"] = Encoding.UTF8.GetBytes("# Child chart\n");
         chart.Subcharts["child-alias"] = child;
+        chart.Crds.Add(new Dictionary<string, object?>
+        {
+            ["apiVersion"] = "apiextensions.k8s.io/v1",
+            ["kind"] = "CustomResourceDefinition",
+            ["metadata"] = new Dictionary<string, object?>
+            {
+                ["name"] = "widgets.example.test"
+            }
+        });
 
         using var document = JsonDocument.Parse(HelmV3ReleaseCodec.CreateChartSnapshot(chart));
         var root = document.RootElement;
@@ -372,6 +381,9 @@ public class HelmV3ReleaseStorageTests
         Assert.True(childSnapshot.GetProperty("values").GetProperty("childDefault").GetBoolean());
         Assert.Single(childSnapshot.GetProperty("templates").EnumerateArray());
         Assert.Single(childSnapshot.GetProperty("files").EnumerateArray());
+        var crd = Assert.Single(root.GetProperty("crds").EnumerateArray());
+        Assert.Equal("crds/widgets.example.test.yaml", crd.GetProperty("name").GetString());
+        Assert.Contains("CustomResourceDefinition", Encoding.UTF8.GetString(Convert.FromBase64String(crd.GetProperty("data").GetString()!)));
 
         var files = root.GetProperty("files").EnumerateArray().ToList();
         Assert.Equal(2, files.Count);

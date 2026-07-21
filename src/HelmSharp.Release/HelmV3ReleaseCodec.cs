@@ -206,6 +206,9 @@ internal static class HelmV3ReleaseCodec
             ["values"] = JsonSerializer.SerializeToNode(HelmYaml.DeserializeDictionary(chart.ValuesYaml)),
             ["schema"] = schema.Value is null ? null : Convert.ToBase64String(schema.Value),
             ["files"] = files,
+            ["crds"] = new JsonArray(chart.Crds
+                .Select((crd, index) => ToJsonCrd(crd, index))
+                .ToArray()),
             ["dependencies"] = new JsonArray(chart.Subcharts
                 .OrderBy(pair => pair.Key, StringComparer.Ordinal)
                 .Select(pair => CreateChartSnapshotNode(pair.Value))
@@ -241,6 +244,19 @@ internal static class HelmV3ReleaseCodec
             ["name"] = name,
             ["data"] = Convert.ToBase64String(data)
         };
+
+    private static JsonNode ToJsonCrd(Dictionary<string, object?> crd, int index)
+    {
+        var resourceName = crd.TryGetValue("metadata", out var metadataValue) &&
+                           metadataValue is IDictionary<string, object?> metadata &&
+                           metadata.TryGetValue("name", out var nameValue)
+            ? Convert.ToString(nameValue)
+            : null;
+        var name = string.IsNullOrWhiteSpace(resourceName)
+            ? $"crds/crd-{index + 1}.yaml"
+            : $"crds/{resourceName}.yaml";
+        return ToJsonFile(name, Encoding.UTF8.GetBytes(HelmYaml.Serialize(crd)));
+    }
 
     private static JsonObject BuildChart(HelmReleaseRecord record)
     {
