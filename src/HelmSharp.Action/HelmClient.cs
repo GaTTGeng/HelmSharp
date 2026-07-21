@@ -552,7 +552,8 @@ public class HelmClient : IHelmClient
             UpdatedAt = deployedAt,
             Description = "Rollback complete",
             Notes = targetRecord.Notes,
-            Hooks = hooks.Select(ToReleaseHook).ToList()
+            Hooks = hooks.Select(ToReleaseHook).ToList(),
+            Labels = targetRecord.Labels
         }, cancellationToken);
 
         await store.MarkStatusAsync(current, "superseded", cancellationToken);

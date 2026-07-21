@@ -312,6 +312,16 @@ public class HelmV3ReleaseStorageTests
         chart.Files["README.md"] = Encoding.UTF8.GetBytes("# Fresh chart\n");
         chart.Files["assets/blob.bin"] = [0x00, 0x7f, 0xff];
         chart.Files["Chart.lock"] = Encoding.UTF8.GetBytes("digest: sha256:lock\n");
+        var child = new HelmSharp.Chart.HelmChart
+        {
+            ApiVersion = "v2",
+            Name = "child",
+            Version = "1.2.0",
+            ValuesYaml = "childDefault: true\n"
+        };
+        child.Templates["templates/child.yaml"] = "apiVersion: v1\nkind: ConfigMap\n";
+        child.Files["README.md"] = Encoding.UTF8.GetBytes("# Child chart\n");
+        chart.Subcharts["child-alias"] = child;
 
         using var document = JsonDocument.Parse(HelmV3ReleaseCodec.CreateChartSnapshot(chart));
         var root = document.RootElement;
@@ -346,6 +356,11 @@ public class HelmV3ReleaseStorageTests
             Convert.ToBase64String(chart.Files["values.schema.json"]),
             root.GetProperty("schema").GetString());
         Assert.Equal("default", root.GetProperty("values").GetProperty("message").GetString());
+        var childSnapshot = Assert.Single(root.GetProperty("dependencies").EnumerateArray());
+        Assert.Equal("child", childSnapshot.GetProperty("metadata").GetProperty("name").GetString());
+        Assert.True(childSnapshot.GetProperty("values").GetProperty("childDefault").GetBoolean());
+        Assert.Single(childSnapshot.GetProperty("templates").EnumerateArray());
+        Assert.Single(childSnapshot.GetProperty("files").EnumerateArray());
 
         var files = root.GetProperty("files").EnumerateArray().ToList();
         Assert.Equal(2, files.Count);

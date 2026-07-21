@@ -147,7 +147,11 @@ internal static class HelmV3ReleaseCodec
     internal static string CreateChartSnapshot(HelmChart chart)
     {
         ArgumentNullException.ThrowIfNull(chart);
+        return CreateChartSnapshotNode(chart).ToJsonString();
+    }
 
+    private static JsonObject CreateChartSnapshotNode(HelmChart chart)
+    {
         var metadata = new JsonObject
         {
             ["name"] = chart.Name,
@@ -201,8 +205,12 @@ internal static class HelmV3ReleaseCodec
             ["templates"] = templates,
             ["values"] = JsonSerializer.SerializeToNode(HelmYaml.DeserializeDictionary(chart.ValuesYaml)),
             ["schema"] = schema.Value is null ? null : Convert.ToBase64String(schema.Value),
-            ["files"] = files
-        }.ToJsonString();
+            ["files"] = files,
+            ["dependencies"] = new JsonArray(chart.Subcharts
+                .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                .Select(pair => CreateChartSnapshotNode(pair.Value))
+                .ToArray())
+        };
     }
 
     private static JsonNode ToJsonDependency(HelmChartDependency dependency)
