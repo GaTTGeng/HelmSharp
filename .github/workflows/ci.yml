@@ -81,6 +81,10 @@ jobs:
           -p:RepositoryBranch=${{ github.ref_name }}
           -p:RepositoryCommit=${{ github.sha }}
 
+      - name: Validate packaged README
+        shell: pwsh
+        run: ./scripts/VerifyPackageReadme.ps1
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v7

@@ -6,6 +6,10 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+### Changed
+
+- Validate packaged NuGet README files and require the Markdown HelmSharp wordmark before artifacts are uploaded or published.
+
 ## [1.2.0] - 2026-07-16
 
 ### Added
