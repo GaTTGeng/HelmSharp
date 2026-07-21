@@ -559,6 +559,34 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task ReleaseLifecycle_UninstallPurgesPreviouslyRetainedHistory()
+    {
+        var chartDir = await CreateMinimalChartAsync("purge-retained-history-chart");
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "retained-history",
+            Chart = chartDir
+        }));
+        await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "retained-history",
+            Namespace = "test-ns",
+            KeepHistory = true
+        });
+
+        var purge = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "retained-history",
+            Namespace = "test-ns"
+        });
+
+        Assert.Equal(0, purge.ExitCode);
+        Assert.Empty(releaseState.Records("retained-history"));
+    }
+
+    [Fact]
     public async Task ReleaseLifecycle_PurgeRemovesOnlyTheRequestedReleaseHistory()
     {
         var chartDir = await CreateMinimalChartAsync("purge-uninstall-chart");

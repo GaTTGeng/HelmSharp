@@ -629,6 +629,15 @@ public class HelmClient : IHelmClient
         using var client = await _createKubernetesClientAsync(options, request.KubeConfigPath, request.KubeConfigContent, operationToken);
         var store = new HelmReleaseStore(client);
         var latest = await store.GetLatestAsync(request.ReleaseName, ns, operationToken);
+        if (latest is null && !request.KeepHistory)
+        {
+            var history = await store.HistoryAsync(request.ReleaseName, ns, operationToken);
+            if (history.Count > 0 && string.Equals(history[^1].Status, "uninstalled", StringComparison.OrdinalIgnoreCase))
+            {
+                await store.PurgeAsync(request.ReleaseName, ns, operationToken);
+                return Ok($"release \"{request.ReleaseName}\" uninstalled{Environment.NewLine}");
+            }
+        }
         if (latest is null)
             return Fail($"release: not found: {request.ReleaseName}");
 

@@ -13,6 +13,7 @@ public sealed class KubernetesResourceWaiter
 {
     private readonly k8s.Kubernetes _client;
     private readonly int _timeoutSeconds;
+    private readonly Dictionary<(string ApiVersion, string Kind), DeletionResource> _deletionResources = new();
 
     public KubernetesResourceWaiter(k8s.Kubernetes client, int timeoutSeconds = 300)
     {
@@ -136,7 +137,7 @@ public sealed class KubernetesResourceWaiter
         yield return $"All {waitable.Count} resources are ready";
     }
 
-    /// <summary>Waits for supported resources in a manifest to disappear after deletion.</summary>
+    /// <summary>Waits for all resources in a manifest to disappear after deletion.</summary>
     public async IAsyncEnumerable<string> WaitForDeletedAsync(
         string manifest,
         string defaultNamespace,
@@ -147,10 +148,6 @@ public sealed class KubernetesResourceWaiter
             .Where(identity => identity is not null)
             .Cast<ManifestIdentity>()
             .ToList();
-        var unsupported = allIdentities.Where(identity => !IsDeletionWaitable(identity)).ToList();
-        if (unsupported.Count > 0)
-            throw new NotSupportedException(
-                $"Waiting for deletion is not supported for: {string.Join(", ", unsupported.Select(identity => identity.DisplayName))}");
         var identities = allIdentities;
         if (identities.Count == 0)
             yield break;
@@ -199,8 +196,45 @@ public sealed class KubernetesResourceWaiter
             case ("apps/v1", "ReplicaSet"): _ = await _client.AppsV1.ReadNamespacedReplicaSetAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
             case ("batch/v1", "Job"): _ = await _client.BatchV1.ReadNamespacedJobAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
             case ("batch/v1", "CronJob"): _ = await _client.BatchV1.ReadNamespacedCronJobAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
-            default: throw new NotSupportedException();
+            default: await ReadDiscoveredResourceAsync(identity, ct); break;
         }
+    }
+
+    private async Task ReadDiscoveredResourceAsync(ManifestIdentity identity, CancellationToken ct)
+    {
+        var resource = await DiscoverDeletionResourceAsync(identity, ct);
+        if (resource.Namespaced)
+        {
+            _ = await _client.CustomObjects.GetNamespacedCustomObjectAsync(
+                resource.Group, resource.Version, identity.Namespace, resource.Plural, identity.Name, ct);
+            return;
+        }
+
+        _ = await _client.CustomObjects.GetClusterCustomObjectAsync(
+            resource.Group, resource.Version, resource.Plural, identity.Name, ct);
+    }
+
+    private async Task<DeletionResource> DiscoverDeletionResourceAsync(ManifestIdentity identity, CancellationToken ct)
+    {
+        var key = (identity.ApiVersion, identity.Kind);
+        if (_deletionResources.TryGetValue(key, out var cached))
+            return cached;
+
+        var separator = identity.ApiVersion.IndexOf('/');
+        var group = separator < 0 ? string.Empty : identity.ApiVersion[..separator];
+        var version = separator < 0 ? identity.ApiVersion : identity.ApiVersion[(separator + 1)..];
+        var resources = string.IsNullOrEmpty(group)
+            ? await _client.CoreV1.GetAPIResourcesAsync(ct)
+            : await _client.CustomObjects.GetAPIResourcesAsync(group, version, ct);
+        var match = resources.Resources?.SingleOrDefault(resource =>
+            string.Equals(resource.Kind, identity.Kind, StringComparison.Ordinal) &&
+            !resource.Name.Contains('/', StringComparison.Ordinal));
+        if (match is null || string.IsNullOrWhiteSpace(match.Name))
+            throw new InvalidOperationException($"Kubernetes API discovery did not find resource {identity.ApiVersion}/{identity.Kind}.");
+
+        var discovered = new DeletionResource(group, version, match.Name, match.Namespaced == true);
+        _deletionResources.Add(key, discovered);
+        return discovered;
     }
 
     private async Task<(bool Ready, bool Failed, string Status)> CheckResourceStatusAsync(
@@ -404,10 +438,6 @@ public sealed class KubernetesResourceWaiter
             or "Job" or "Pod" or "PersistentVolumeClaim" or "Endpoints"
             or "HorizontalPodAutoscaler";
 
-    private static bool IsDeletionWaitable(ManifestIdentity identity)
-        => (identity.ApiVersion, identity.Kind) is
-            ("v1", "ConfigMap") or ("v1", "Secret") or ("v1", "Service") or ("v1", "ServiceAccount")
-            or ("v1", "PersistentVolumeClaim") or ("v1", "Pod")
-            or ("apps/v1", "Deployment") or ("apps/v1", "StatefulSet") or ("apps/v1", "DaemonSet") or ("apps/v1", "ReplicaSet")
-            or ("batch/v1", "Job") or ("batch/v1", "CronJob");
 }
+
+internal sealed record DeletionResource(string Group, string Version, string Plural, bool Namespaced);
