@@ -17,6 +17,8 @@ function Assert-NuGetCompatibleMarkdown {
     $openingFencePattern = '^(?: {0,3})(?<marker>`{3,}|~{3,}).*$'
     $closingFencePattern = '^(?: {0,3})(?<marker>`{3,}|~{3,})[ \t]*$'
     $unsupportedHtmlPattern = '</?[A-Za-z][A-Za-z0-9-]*(?:\s[^>]*)?/?>'
+    $unfinishedHtmlTagPattern = '</?[A-Za-z][A-Za-z0-9-]*(?:\s[^>]*)?$'
+    $pendingHtmlTag = $null
 
     foreach ($line in $Content -split "`r?`n") {
         if ($null -eq $fenceMarker) {
@@ -24,6 +26,7 @@ function Assert-NuGetCompatibleMarkdown {
             if ($openingFence.Success) {
                 $fenceMarker = $openingFence.Groups['marker'].Value[0]
                 $fenceLength = $openingFence.Groups['marker'].Value.Length
+                $pendingHtmlTag = $null
                 continue
             }
         }
@@ -40,8 +43,18 @@ function Assert-NuGetCompatibleMarkdown {
         }
 
         $contentWithoutInlineCode = $line -replace '`[^`]*`', ''
+        if ($null -ne $pendingHtmlTag) {
+            $contentWithoutInlineCode = "$pendingHtmlTag`n$contentWithoutInlineCode"
+            $pendingHtmlTag = $null
+        }
+
         if ($contentWithoutInlineCode -match $unsupportedHtmlPattern) {
             throw "$SourceName contains raw HTML that NuGet.org may display as text: $line"
+        }
+
+        $unfinishedHtmlTag = [regex]::Match($contentWithoutInlineCode, $unfinishedHtmlTagPattern)
+        if ($unfinishedHtmlTag.Success) {
+            $pendingHtmlTag = $unfinishedHtmlTag.Value
         }
     }
 }
