@@ -9,10 +9,10 @@ public class HelmUninstallRequest
     public string? Namespace { get; set; }
 
     /// <summary>
-    /// Gets or sets whether the release history is retained. Defaults to <see langword="true"/>,
-    /// matching Helm's non-purge uninstall behavior.
+    /// Gets or sets whether the release history is retained. Defaults to <see langword="false"/>,
+    /// matching Helm's purge-by-default uninstall behavior.
     /// </summary>
-    public bool KeepHistory { get; set; } = true;
+    public bool KeepHistory { get; set; }
 
     /// <summary>
     /// Gets or sets whether Helm hooks are skipped during uninstall.

@@ -505,7 +505,7 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
-    public async Task ReleaseLifecycle_ReinstallAfterUninstallStartsAnInstallAtTheNextRevision()
+    public async Task ReleaseLifecycle_ReinstallAfterRetainedUninstallStartsAnInstallAtTheNextRevision()
     {
         var chartDir = await CreateMinimalChartAsync("reinstall-chart");
         var releaseState = new ReleaseLifecycleState();
@@ -516,7 +516,12 @@ public class ChartOperationsTests : IDisposable
             ReleaseName = "reinstall",
             Chart = chartDir
         }));
-        var uninstall = await client.UninstallAsync("reinstall", "test-ns");
+        var uninstall = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "reinstall",
+            Namespace = "test-ns",
+            KeepHistory = true
+        });
         await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
         {
             ReleaseName = "reinstall",
@@ -532,7 +537,7 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
-    public async Task ReleaseLifecycle_UninstallDefaultsToRetainedHistory()
+    public async Task ReleaseLifecycle_UninstallDefaultsToPurge()
     {
         var chartDir = await CreateMinimalChartAsync("retained-uninstall-chart");
         var releaseState = new ReleaseLifecycleState();
@@ -550,10 +555,7 @@ public class ChartOperationsTests : IDisposable
         });
 
         Assert.Equal(0, uninstall.ExitCode);
-        Assert.Collection(
-            releaseState.Records("retained-uninstall"),
-            record => Assert.Equal((1, "superseded"), (record.Revision, record.Status)),
-            record => Assert.Equal((2, "uninstalled"), (record.Revision, record.Status)));
+        Assert.Empty(releaseState.Records("retained-uninstall"));
     }
 
     [Fact]
