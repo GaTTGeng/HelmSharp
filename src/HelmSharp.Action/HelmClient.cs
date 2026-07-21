@@ -524,6 +524,20 @@ public class HelmClient : IHelmClient
                     output.Add("Unable to fully restore the previous deployed revision.");
                 }
             }
+            else
+            {
+                // A retry after a failed initial install has a revision history but no
+                // deployed predecessor. Its resources belong solely to failed attempts.
+                try
+                {
+                    await foreach (var resource in applier.DeleteAsync(mainManifest, ns, CancellationToken.None))
+                        output.Add($"Cleaned up {resource}");
+                }
+                catch
+                {
+                    output.Add("Unable to fully clean up resources from the failed installation.");
+                }
+            }
             return output;
         }
 
