@@ -703,7 +703,7 @@ public class HelmClient : IHelmClient
                 var chart = await HelmChartLoader.LoadAsync(
                     await ResolveChartPathAsync(record.ChartName, record.ChartVersion, options, cancellationToken),
                     cancellationToken);
-                var values = HelmYaml.DeserializeDictionary(record.ValuesYaml);
+                var values = HelmYaml.DeserializeDictionary(GetStoredValuesYaml(record, allValues: true));
                 var renderer = new HelmTemplateRenderer(chart, releaseName, ns, values);
                 var notes = renderer.RenderNotes();
                 if (!string.IsNullOrWhiteSpace(notes))

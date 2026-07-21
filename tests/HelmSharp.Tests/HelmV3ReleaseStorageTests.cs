@@ -77,6 +77,17 @@ public class HelmV3ReleaseStorageTests
         Assert.DoesNotContain("fixture-hook", root.GetProperty("manifest").GetString());
     }
 
+    [Fact]
+    public void EncodeThenDecode_PreservesDeletionTimestamp()
+    {
+        var deletedAt = DateTimeOffset.Parse("2026-07-21T06:00:00Z");
+        var record = CreateRecord() with { Status = "uninstalled", DeletedAt = deletedAt };
+
+        var decoded = HelmV3ReleaseCodec.Decode(HelmV3ReleaseCodec.Encode(record));
+
+        Assert.Equal(deletedAt, decoded.DeletedAt);
+    }
+
 
     [Fact]
     public void DecodeThenEncode_PreservesOpaqueHelmChartPayload()

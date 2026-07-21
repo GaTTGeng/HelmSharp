@@ -82,7 +82,8 @@ public sealed class HelmReleaseStore
         {
             Revision = record.Revision + 1,
             Status = "uninstalled",
-            UpdatedAt = updatedAt
+            UpdatedAt = updatedAt,
+            DeletedAt = updatedAt
         };
 
         record.Status = "superseded";
