@@ -1,8 +1,11 @@
 using System.Net;
+using System.Text;
+using System.Text.Json;
 using HelmSharp.Action;
 using HelmSharp.Chart;
 using HelmSharp.Release;
 using k8s;
+using k8s.Autorest;
 
 namespace HelmSharp.Tests;
 
@@ -442,6 +445,92 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task ReleaseLifecycle_SuccessfulUpgradeAndRollbackKeepOneDeployedRevision()
+    {
+        var chartDir = await CreateMinimalChartAsync("lifecycle-chart");
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "lifecycle",
+            Chart = chartDir
+        }));
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "lifecycle",
+            Chart = chartDir
+        }));
+
+        Assert.Collection(
+            releaseState.Records("lifecycle"),
+            record => Assert.Equal((1, "superseded"), (record.Revision, record.Status)),
+            record => Assert.Equal((2, "deployed"), (record.Revision, record.Status)));
+
+        var rollback = await client.RollbackAsync("lifecycle", 1, "test-ns");
+
+        Assert.Equal(0, rollback.ExitCode);
+        Assert.Collection(
+            releaseState.Records("lifecycle"),
+            record => Assert.Equal((1, "superseded"), (record.Revision, record.Status)),
+            record => Assert.Equal((2, "superseded"), (record.Revision, record.Status)),
+            record => Assert.Equal((3, "deployed"), (record.Revision, record.Status)));
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_ReinstallAfterUninstallStartsAnInstallAtTheNextRevision()
+    {
+        var chartDir = await CreateMinimalChartAsync("reinstall-chart");
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "reinstall",
+            Chart = chartDir
+        }));
+        var uninstall = await client.UninstallAsync("reinstall", "test-ns");
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "reinstall",
+            Chart = chartDir
+        }));
+
+        Assert.Equal(0, uninstall.ExitCode);
+        Assert.Collection(
+            releaseState.Records("reinstall"),
+            record => Assert.Equal((1, "superseded"), (record.Revision, record.Status)),
+            record => Assert.Equal((2, "uninstalled"), (record.Revision, record.Status)),
+            record => Assert.Equal((3, "deployed"), (record.Revision, record.Status)));
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_FailedNewRevisionSaveKeepsPreviousRevisionDeployed()
+    {
+        var chartDir = await CreateMinimalChartAsync("save-failure-chart");
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "save-failure",
+            Chart = chartDir
+        }));
+        releaseState.FailNextSecretCreate = true;
+
+        await Assert.ThrowsAsync<HttpOperationException>(async () =>
+            await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+            {
+                ReleaseName = "save-failure",
+                Chart = chartDir
+            })));
+
+        Assert.Collection(
+            releaseState.Records("save-failure"),
+            record => Assert.Equal((1, "deployed"), (record.Revision, record.Status)));
+    }
+
+    [Fact]
     public async Task RenderDiffManifest_UsesUpgradeReleaseStateAndCapabilities()
     {
         var chartDir = Path.Combine(_tempDir, "diff-chart");
@@ -636,6 +725,119 @@ public class ChartOperationsTests : IDisposable
     {
         var name = HelmClient.GenerateReleaseName("very-long-chart-name-that-exceeds-limits");
         Assert.True(name.Length <= 35);
+    }
+
+    private async Task<string> CreateMinimalChartAsync(string chartName)
+    {
+        var chartDir = Path.Combine(_tempDir, chartName);
+        Directory.CreateDirectory(Path.Combine(chartDir, "templates"));
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "Chart.yaml"), $"""
+            apiVersion: v2
+            name: {chartName}
+            version: 0.1.0
+            """);
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "values.yaml"), string.Empty);
+        return chartDir;
+    }
+
+    private static HelmClient CreateLifecycleClient(ReleaseLifecycleState releaseState)
+        => new(
+            new StaticHelmOptionsProvider(new HelmExecutionOptions { DefaultNamespace = "test-ns" }),
+            (_, _, _, _) => Task.FromResult(new Kubernetes(
+                new KubernetesClientConfiguration
+                {
+                    Host = "https://helmsharp.test",
+                    SkipTlsVerify = true
+                },
+                new ReleaseLifecycleHandler(releaseState))));
+
+    private static async Task DrainAsync(IAsyncEnumerable<string> lines)
+    {
+        await foreach (var _ in lines)
+        {
+        }
+    }
+
+    private sealed class ReleaseLifecycleHandler : DelegatingHandler
+    {
+        private readonly ReleaseLifecycleState _releaseState;
+
+        public ReleaseLifecycleHandler(ReleaseLifecycleState releaseState)
+        {
+            _releaseState = releaseState;
+        }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+            if (request.Method == HttpMethod.Get && path.EndsWith("/secrets", StringComparison.Ordinal))
+            {
+                return JsonResponse(request, HttpStatusCode.OK, $$"""
+                    { "kind": "SecretList", "apiVersion": "v1", "metadata": {}, "items": [{{string.Join(',', _releaseState.Secrets.Values)}}] }
+                    """);
+            }
+
+            if ((request.Method == HttpMethod.Post && path.EndsWith("/secrets", StringComparison.Ordinal)) ||
+                request.Method == HttpMethod.Put && path.Contains("/secrets/", StringComparison.Ordinal))
+            {
+                var secret = await request.Content!.ReadAsStringAsync(cancellationToken);
+                var envelope = JsonSerializer.Deserialize<ReleaseLifecycleState.SecretEnvelope>(secret, ReleaseLifecycleState.JsonDefaults)!;
+                if (request.Method == HttpMethod.Post && _releaseState.FailNextSecretCreate)
+                {
+                    _releaseState.FailNextSecretCreate = false;
+                    return JsonResponse(request, HttpStatusCode.InternalServerError, "{ \"code\": 500 }");
+                }
+                _releaseState.Secrets[envelope.Metadata.Name] = secret;
+                return JsonResponse(request, request.Method == HttpMethod.Post ? HttpStatusCode.Created : HttpStatusCode.OK, secret);
+            }
+
+            if (request.Method == HttpMethod.Get && path.Contains("/secrets/", StringComparison.Ordinal))
+            {
+                var name = path[(path.LastIndexOf('/') + 1)..];
+                return _releaseState.Secrets.TryGetValue(name, out var secret)
+                    ? JsonResponse(request, HttpStatusCode.OK, secret)
+                    : JsonResponse(request, HttpStatusCode.NotFound, "{ \"code\": 404 }");
+            }
+
+            return JsonResponse(request, HttpStatusCode.OK, "{}");
+        }
+
+        private static HttpResponseMessage JsonResponse(HttpRequestMessage request, HttpStatusCode statusCode, string content)
+            => new(statusCode)
+            {
+                RequestMessage = request,
+                Content = new StringContent(content, Encoding.UTF8, "application/json")
+            };
+
+    }
+
+    private sealed class ReleaseLifecycleState
+    {
+        internal Dictionary<string, string> Secrets { get; } = new(StringComparer.Ordinal);
+        public bool FailNextSecretCreate { get; set; }
+
+        public IReadOnlyList<HelmReleaseRecord> Records(string releaseName)
+            => Secrets.Values
+                .Select(secret => JsonSerializer.Deserialize<SecretEnvelope>(secret, JsonDefaults)!)
+                .Where(secret => string.Equals(secret.Metadata.Labels["name"], releaseName, StringComparison.Ordinal))
+                .Select(secret => HelmV3ReleaseCodec.Decode(
+                    Encoding.UTF8.GetString(Convert.FromBase64String(secret.Data["release"]))))
+                .OrderBy(record => record.Revision)
+                .ToList();
+
+        internal static readonly JsonSerializerOptions JsonDefaults = new(JsonSerializerDefaults.Web);
+
+        internal sealed class SecretEnvelope
+        {
+            public required SecretMetadata Metadata { get; init; }
+            public required Dictionary<string, string> Data { get; init; }
+        }
+
+        internal sealed class SecretMetadata
+        {
+            public required string Name { get; init; }
+            public required Dictionary<string, string> Labels { get; init; }
+        }
     }
 
     private sealed class StaticHelmOptionsProvider : IHelmOptionsProvider

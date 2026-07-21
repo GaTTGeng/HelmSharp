@@ -319,6 +319,7 @@ public class HelmClient : IHelmClient
             Hooks = hooks.Select(ToReleaseHook).ToList(),
             Labels = ResolveReleaseLabels(existingHistory, isUpgrade, request.Labels)
         }, cancellationToken);
+        await SupersedeDeployedReleasesAsync(store, existingHistory, cancellationToken);
 
         // Enforce max history
         var maxHistory = request.MaxHistory ?? options.MaxHistory;
@@ -365,6 +366,18 @@ public class HelmClient : IHelmClient
         var isUpgrade = !string.Equals(latest.Status, "uninstalled", StringComparison.OrdinalIgnoreCase);
         var revision = latest.Revision + 1;
         return (isUpgrade, revision);
+    }
+
+    private static async Task SupersedeDeployedReleasesAsync(
+        HelmReleaseStore store,
+        IEnumerable<HelmReleaseRecord> history,
+        CancellationToken cancellationToken)
+    {
+        foreach (var record in history.Where(record =>
+                     string.Equals(record.Status, "deployed", StringComparison.OrdinalIgnoreCase)))
+        {
+            await store.MarkStatusAsync(record, "superseded", cancellationToken);
+        }
     }
 
     private static async Task<List<HelmReleaseRecord>> LoadReleaseHistoryForUpgradeInstallAsync(
@@ -555,8 +568,8 @@ public class HelmClient : IHelmClient
             Hooks = hooks.Select(ToReleaseHook).ToList(),
             Labels = targetRecord.Labels
         }, cancellationToken);
-
-        await store.MarkStatusAsync(current, "superseded", cancellationToken);
+        var history = await store.HistoryAsync(releaseName, ns, cancellationToken);
+        await SupersedeDeployedReleasesAsync(store, history.Where(record => record.Revision != newRevision), cancellationToken);
 
         output.AppendLine($"Rollback to revision {targetRecord.Revision} was successful.");
         return Ok(output.ToString());
