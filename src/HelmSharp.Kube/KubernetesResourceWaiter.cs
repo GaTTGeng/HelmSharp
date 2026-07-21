@@ -170,6 +170,11 @@ public sealed class KubernetesResourceWaiter
                     pending.Remove(identity.DisplayName);
                     deleted.Add(identity.DisplayName);
                 }
+                catch (DeletedApiResourceException)
+                {
+                    pending.Remove(identity.DisplayName);
+                    deleted.Add(identity.DisplayName);
+                }
             }
             foreach (var displayName in deleted)
                 yield return $"  {displayName} deleted";
@@ -260,7 +265,7 @@ public sealed class KubernetesResourceWaiter
             string.Equals(resource.Kind, identity.Kind, StringComparison.Ordinal) &&
             !resource.Name.Contains('/', StringComparison.Ordinal));
         if (match is null || string.IsNullOrWhiteSpace(match.Name))
-            throw new InvalidOperationException($"Kubernetes API discovery did not find resource {identity.ApiVersion}/{identity.Kind}.");
+            throw new DeletedApiResourceException(identity.ApiVersion, identity.Kind);
 
         var discovered = new DeletionResource(group, version, match.Name, match.Namespaced == true);
         _deletionResources.Add(key, discovered);
@@ -471,3 +476,11 @@ public sealed class KubernetesResourceWaiter
 }
 
 internal sealed record DeletionResource(string Group, string Version, string Plural, bool Namespaced);
+
+internal sealed class DeletedApiResourceException : Exception
+{
+    public DeletedApiResourceException(string apiVersion, string kind)
+        : base($"Kubernetes API discovery did not find resource {apiVersion}/{kind}.")
+    {
+    }
+}

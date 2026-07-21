@@ -1073,6 +1073,25 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task ResourceWaiter_TreatsRemovedDiscoveredApiAsDeleted()
+    {
+        var handler = new RecordingKubernetesHandler(includeWidget: false);
+        var client = new Kubernetes(new KubernetesClientConfiguration
+        {
+            Host = "https://helmsharp.test",
+            SkipTlsVerify = true
+        }, handler);
+        var waiter = new KubernetesResourceWaiter(client, timeoutSeconds: 1);
+
+        await DrainAsync(waiter.WaitForDeletedAsync("""
+            apiVersion: example.com/v1
+            kind: Widget
+            metadata:
+              name: sample
+            """, "test-ns"));
+    }
+
+    [Fact]
     public async Task ReleaseLifecycle_PurgeDeletesResourcesIntroducedByAFailedRevision()
     {
         var chartDir = await CreateMinimalChartAsync("failed-revision-purge-chart");
@@ -1138,11 +1157,13 @@ public class ChartOperationsTests : IDisposable
     private sealed class RecordingKubernetesHandler : DelegatingHandler
     {
         private readonly HttpStatusCode _secretListStatus;
+        private readonly bool _includeWidget;
         private readonly List<(HttpMethod Method, string PathAndQuery)> _requests = [];
 
-        public RecordingKubernetesHandler(HttpStatusCode secretListStatus = HttpStatusCode.OK)
+        public RecordingKubernetesHandler(HttpStatusCode secretListStatus = HttpStatusCode.OK, bool includeWidget = true)
         {
             _secretListStatus = secretListStatus;
+            _includeWidget = includeWidget;
         }
 
         public IReadOnlyList<(HttpMethod Method, string PathAndQuery)> Requests => _requests;
@@ -1154,12 +1175,15 @@ public class ChartOperationsTests : IDisposable
             if (request.Method == HttpMethod.Get &&
                 string.Equals(request.RequestUri?.AbsolutePath, "/apis/example.com/v1", StringComparison.Ordinal))
             {
-                return Task.FromResult(JsonResponse(request, HttpStatusCode.OK, """
+                var resources = _includeWidget
+                    ? "[{ \"name\": \"widgets\", \"kind\": \"Widget\", \"namespaced\": true }]"
+                    : "[]";
+                return Task.FromResult(JsonResponse(request, HttpStatusCode.OK, $$"""
                     {
                       "kind": "APIResourceList",
                       "apiVersion": "v1",
                       "groupVersion": "example.com/v1",
-                      "resources": [{ "name": "widgets", "kind": "Widget", "namespaced": true }]
+                      "resources": {{resources}}
                     }
                     """));
             }
