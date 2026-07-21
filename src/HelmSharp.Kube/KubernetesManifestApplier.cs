@@ -57,7 +57,17 @@ public sealed class KubernetesManifestApplier
     public async IAsyncEnumerable<string> DeleteAsync(
         string manifest,
         string defaultNamespace,
-        string? propagationPolicy = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        await foreach (var resource in DeleteAsync(manifest, defaultNamespace, propagationPolicy: null, cancellationToken))
+            yield return resource;
+    }
+
+    /// <summary>Deletes resources in reverse manifest order with the requested dependent-resource propagation policy.</summary>
+    public async IAsyncEnumerable<string> DeleteAsync(
+        string manifest,
+        string defaultNamespace,
+        string? propagationPolicy,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         foreach (var doc in SplitDocuments(manifest).Reverse())

@@ -661,7 +661,6 @@ public class HelmClient : IHelmClient
         if (!request.KeepHistory && history is not null)
         {
             foreach (var failedRevision in history.Where(record =>
-                         record.Revision > latest.Revision &&
                          string.Equals(record.Status, "failed", StringComparison.OrdinalIgnoreCase)))
             {
                 var failedOnlyManifest = GetAttemptedOnlyManifest(mainManifest, failedRevision.Manifest, ns);
