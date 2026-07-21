@@ -33,12 +33,13 @@ internal static class HelmV3ReleaseCodec
             ["info"] = info,
             ["chart"] = chart,
             ["config"] = JsonSerializer.SerializeToNode(HelmYaml.DeserializeDictionary(record.ValuesYaml)),
-            ["helmsharp_computed_values"] = JsonSerializer.SerializeToNode(HelmYaml.DeserializeDictionary(record.ComputedValuesYaml)),
             ["manifest"] = record.Manifest,
             ["hooks"] = hooks,
             ["version"] = record.Revision,
             ["namespace"] = record.Namespace
         };
+        if (!string.IsNullOrWhiteSpace(record.ComputedValuesYaml))
+            release["helmsharp_computed_values"] = JsonSerializer.SerializeToNode(HelmYaml.DeserializeDictionary(record.ComputedValuesYaml));
 
         var json = Encoding.UTF8.GetBytes(release.ToJsonString());
         using var output = new MemoryStream();
@@ -101,9 +102,9 @@ internal static class HelmV3ReleaseCodec
             var values = root.TryGetProperty("config", out var config) && config.ValueKind == JsonValueKind.Object
                 ? (Dictionary<string, object?>)JsonElementToObject(config)!
                 : new Dictionary<string, object?>(StringComparer.Ordinal);
-            var computedValues = root.TryGetProperty("helmsharp_computed_values", out var computed) && computed.ValueKind == JsonValueKind.Object
-                ? (Dictionary<string, object?>)JsonElementToObject(computed)!
-                : new Dictionary<string, object?>(StringComparer.Ordinal);
+            var computedValuesYaml = root.TryGetProperty("helmsharp_computed_values", out var computed) && computed.ValueKind == JsonValueKind.Object
+                ? HelmYaml.Serialize((Dictionary<string, object?>)JsonElementToObject(computed)!)
+                : string.Empty;
             var chartValues = chart is { } chartValue && chartValue.TryGetProperty("values", out var defaults) && defaults.ValueKind == JsonValueKind.Object
                 ? (Dictionary<string, object?>)JsonElementToObject(defaults)!
                 : new Dictionary<string, object?>(StringComparer.Ordinal);
@@ -128,7 +129,7 @@ internal static class HelmV3ReleaseCodec
                 RawChartJson = chart?.GetRawText(),
                 Manifest = GetString(root, "manifest") ?? string.Empty,
                 ValuesYaml = HelmYaml.Serialize(values),
-                ComputedValuesYaml = HelmYaml.Serialize(computedValues),
+                ComputedValuesYaml = computedValuesYaml,
                 FirstDeployedAt = firstDeployed,
                 UpdatedAt = updatedAt,
                 DeletedAt = deletedAt,

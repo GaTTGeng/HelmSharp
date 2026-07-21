@@ -35,6 +35,7 @@ public class HelmV3ReleaseStorageTests
         Assert.Contains("replicaCount: 2", record.ValuesYaml);
         Assert.Contains("message: default", record.ChartValuesYaml);
         Assert.Contains("replicaCount: 1", record.ChartValuesYaml);
+        Assert.Equal(string.Empty, record.ComputedValuesYaml);
         Assert.DoesNotContain("fixture-hook", record.Manifest);
 
         var hook = Assert.Single(record.Hooks);
