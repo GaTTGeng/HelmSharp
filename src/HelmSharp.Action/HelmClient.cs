@@ -294,7 +294,6 @@ public class HelmClient : IHelmClient
         var firstDeployedAt = existingHistory.Count == 0
             ? deployedAt
             : existingHistory.Min(record => record.FirstDeployedAt ?? record.UpdatedAt);
-        await SupersedeDeployedReleasesAsync(store, existingHistory, cancellationToken);
         await store.SaveAsync(new HelmReleaseRecord
         {
             Name = request.ReleaseName,
@@ -320,6 +319,7 @@ public class HelmClient : IHelmClient
             Hooks = hooks.Select(ToReleaseHook).ToList(),
             Labels = ResolveReleaseLabels(existingHistory, isUpgrade, request.Labels)
         }, cancellationToken);
+        await SupersedeDeployedReleasesAsync(store, existingHistory, cancellationToken);
 
         // Enforce max history
         var maxHistory = request.MaxHistory ?? options.MaxHistory;
@@ -543,9 +543,6 @@ public class HelmClient : IHelmClient
 
         var newRevision = await store.NextRevisionAsync(releaseName, ns, cancellationToken);
         var deployedAt = DateTimeOffset.UtcNow;
-        var history = await store.HistoryAsync(releaseName, ns, cancellationToken);
-        await SupersedeDeployedReleasesAsync(store, history, cancellationToken);
-
         await store.SaveAsync(new HelmReleaseRecord
         {
             Name = releaseName,
@@ -571,6 +568,8 @@ public class HelmClient : IHelmClient
             Hooks = hooks.Select(ToReleaseHook).ToList(),
             Labels = targetRecord.Labels
         }, cancellationToken);
+        var history = await store.HistoryAsync(releaseName, ns, cancellationToken);
+        await SupersedeDeployedReleasesAsync(store, history.Where(record => record.Revision != newRevision), cancellationToken);
 
         output.AppendLine($"Rollback to revision {targetRecord.Revision} was successful.");
         return Ok(output.ToString());

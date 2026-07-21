@@ -5,6 +5,7 @@ using HelmSharp.Action;
 using HelmSharp.Chart;
 using HelmSharp.Release;
 using k8s;
+using k8s.Autorest;
 
 namespace HelmSharp.Tests;
 
@@ -504,6 +505,32 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task ReleaseLifecycle_FailedNewRevisionSaveKeepsPreviousRevisionDeployed()
+    {
+        var chartDir = await CreateMinimalChartAsync("save-failure-chart");
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "save-failure",
+            Chart = chartDir
+        }));
+        releaseState.FailNextSecretCreate = true;
+
+        await Assert.ThrowsAsync<HttpOperationException>(async () =>
+            await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+            {
+                ReleaseName = "save-failure",
+                Chart = chartDir
+            })));
+
+        Assert.Collection(
+            releaseState.Records("save-failure"),
+            record => Assert.Equal((1, "deployed"), (record.Revision, record.Status)));
+    }
+
+    [Fact]
     public async Task RenderDiffManifest_UsesUpgradeReleaseStateAndCapabilities()
     {
         var chartDir = Path.Combine(_tempDir, "diff-chart");
@@ -755,6 +782,11 @@ public class ChartOperationsTests : IDisposable
             {
                 var secret = await request.Content!.ReadAsStringAsync(cancellationToken);
                 var envelope = JsonSerializer.Deserialize<ReleaseLifecycleState.SecretEnvelope>(secret, ReleaseLifecycleState.JsonDefaults)!;
+                if (request.Method == HttpMethod.Post && _releaseState.FailNextSecretCreate)
+                {
+                    _releaseState.FailNextSecretCreate = false;
+                    return JsonResponse(request, HttpStatusCode.InternalServerError, "{ \"code\": 500 }");
+                }
                 _releaseState.Secrets[envelope.Metadata.Name] = secret;
                 return JsonResponse(request, request.Method == HttpMethod.Post ? HttpStatusCode.Created : HttpStatusCode.OK, secret);
             }
@@ -782,6 +814,7 @@ public class ChartOperationsTests : IDisposable
     private sealed class ReleaseLifecycleState
     {
         internal Dictionary<string, string> Secrets { get; } = new(StringComparer.Ordinal);
+        public bool FailNextSecretCreate { get; set; }
 
         public IReadOnlyList<HelmReleaseRecord> Records(string releaseName)
             => Secrets.Values
