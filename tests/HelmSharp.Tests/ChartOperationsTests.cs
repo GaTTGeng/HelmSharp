@@ -445,6 +445,33 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public void GetAttemptedOnlyManifest_ReturnsResourcesAbsentFromPreviousRevision()
+    {
+        const string previous = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: retained
+            """;
+        const string attempted = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: retained
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: introduced
+            """;
+
+        var attemptedOnly = HelmClient.GetAttemptedOnlyManifest(previous, attempted, "test-ns");
+
+        Assert.DoesNotContain("name: retained", attemptedOnly);
+        Assert.Contains("name: introduced", attemptedOnly);
+    }
+
+    [Fact]
     public async Task ReleaseLifecycle_SuccessfulUpgradeAndRollbackKeepOneDeployedRevision()
     {
         var chartDir = await CreateMinimalChartAsync("lifecycle-chart");

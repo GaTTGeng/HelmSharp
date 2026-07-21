@@ -339,28 +339,37 @@ public class HelmClient : IHelmClient
             var timeout = request.TimeoutSeconds ?? options.TimeoutSeconds;
             yield return $"Waiting for resources to be ready (timeout: {timeout}s)...";
             var waiter = new KubernetesResourceWaiter(client, timeout);
-            List<string> waitLines;
-            List<string>? recovery = null;
-            Exception? waitError = null;
-            try
+            await using var waitEnumerator = waiter
+                .WaitForReadyAsync(mainManifest, ns, waitForJobs: request.WaitForJobs, cancellationToken: cancellationToken)
+                .GetAsyncEnumerator(cancellationToken);
+            while (true)
             {
-                waitLines = await CollectLinesAsync(waiter.WaitForReadyAsync(mainManifest, ns, waitForJobs: request.WaitForJobs, cancellationToken: cancellationToken));
+                string? waitLine = null;
+                Exception? waitError = null;
+                var hasNext = false;
+                try
+                {
+                    hasNext = await waitEnumerator.MoveNextAsync();
+                    if (hasNext)
+                        waitLine = waitEnumerator.Current;
+                }
+                catch (Exception ex)
+                {
+                    waitError = ex;
+                }
+
+                if (waitLine is not null)
+                    yield return waitLine;
+                if (waitError is not null)
+                {
+                    var recovery = await PersistFailedLifecycleAsync(store, releaseRecord, waitError, applier, mainManifest, existingHistory, isUpgrade, request, ns);
+                    foreach (var line in recovery)
+                        yield return line;
+                    throw waitError;
+                }
+                if (!hasNext)
+                    break;
             }
-            catch (Exception ex)
-            {
-                waitLines = [];
-                recovery = await PersistFailedLifecycleAsync(store, releaseRecord, ex, applier, mainManifest, existingHistory, isUpgrade, request, ns);
-                waitError = ex;
-            }
-            foreach (var waitLine in waitLines)
-            {
-                yield return waitLine;
-            }
-            if (recovery is not null)
-                foreach (var line in recovery)
-                    yield return line;
-            if (waitError is not null)
-                throw waitError;
         }
         List<string>? saveRecovery = null;
         Exception? saveError = null;
@@ -489,6 +498,12 @@ public class HelmClient : IHelmClient
             {
                 try
                 {
+                    var attemptedOnlyManifest = GetAttemptedOnlyManifest(previous.Manifest, mainManifest, ns);
+                    if (!string.IsNullOrWhiteSpace(attemptedOnlyManifest))
+                    {
+                        await foreach (var resource in applier.DeleteAsync(attemptedOnlyManifest, ns, CancellationToken.None))
+                            output.Add($"Removed failed-upgrade resource {resource}");
+                    }
                     await foreach (var resource in applier.ApplyAsync(previous.Manifest, ns, CancellationToken.None))
                         output.Add($"Restored {resource}");
                 }
@@ -516,6 +531,24 @@ public class HelmClient : IHelmClient
         }
 
         return output;
+    }
+
+    internal static string GetAttemptedOnlyManifest(string previousManifest, string attemptedManifest, string defaultNamespace)
+    {
+        var previousIdentities = KubernetesManifestApplier.SplitDocumentsPublic(previousManifest)
+            .Select(document => ManifestIdentity.Parse(document, defaultNamespace))
+            .Where(identity => identity is not null)
+            .Select(identity => $"{identity!.Namespace}/{identity.Kind}/{identity.Name}")
+            .ToHashSet(StringComparer.Ordinal);
+
+        var attemptedOnly = KubernetesManifestApplier.SplitDocumentsPublic(attemptedManifest)
+            .Where(document =>
+            {
+                var identity = ManifestIdentity.Parse(document, defaultNamespace);
+                return identity is not null && !previousIdentities.Contains($"{identity.Namespace}/{identity.Kind}/{identity.Name}");
+            });
+
+        return string.Join(Environment.NewLine + "---" + Environment.NewLine, attemptedOnly);
     }
 
     private static async Task<List<HelmReleaseRecord>> LoadReleaseHistoryForUpgradeInstallAsync(
