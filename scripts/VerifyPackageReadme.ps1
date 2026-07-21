@@ -6,6 +6,56 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Remove-InlineCodeSpans {
+    param([string]$Line)
+
+    $result = [System.Text.StringBuilder]::new()
+    $index = 0
+    while ($index -lt $Line.Length) {
+        if ($Line[$index] -ne [char]96) {
+            [void]$result.Append($Line[$index])
+            $index++
+            continue
+        }
+
+        $delimiterLength = 1
+        while ($index + $delimiterLength -lt $Line.Length -and $Line[$index + $delimiterLength] -eq [char]96) {
+            $delimiterLength++
+        }
+
+        $closingIndex = -1
+        $searchIndex = $index + $delimiterLength
+        while ($searchIndex -lt $Line.Length) {
+            $candidateIndex = $Line.IndexOf([char]96, $searchIndex)
+            if ($candidateIndex -lt 0) {
+                break
+            }
+
+            $candidateLength = 1
+            while ($candidateIndex + $candidateLength -lt $Line.Length -and $Line[$candidateIndex + $candidateLength] -eq [char]96) {
+                $candidateLength++
+            }
+
+            if ($candidateLength -eq $delimiterLength) {
+                $closingIndex = $candidateIndex
+                break
+            }
+
+            $searchIndex = $candidateIndex + $candidateLength
+        }
+
+        if ($closingIndex -lt 0) {
+            [void]$result.Append([string]::new([char]96, $delimiterLength))
+            $index += $delimiterLength
+            continue
+        }
+
+        $index = $closingIndex + $delimiterLength
+    }
+
+    return $result.ToString()
+}
+
 function Assert-NuGetCompatibleMarkdown {
     param(
         [string]$Content,
@@ -24,10 +74,14 @@ function Assert-NuGetCompatibleMarkdown {
         if ($null -eq $fenceMarker) {
             $openingFence = [regex]::Match($line, $openingFencePattern)
             if ($openingFence.Success) {
-                $fenceMarker = $openingFence.Groups['marker'].Value[0]
-                $fenceLength = $openingFence.Groups['marker'].Value.Length
-                $pendingHtmlTag = $null
-                continue
+                $marker = $openingFence.Groups['marker'].Value
+                $info = $line.Substring($openingFence.Groups['marker'].Index + $marker.Length)
+                if ($marker[0] -ne [char]96 -or -not $info.Contains([string][char]96)) {
+                    $fenceMarker = $marker[0]
+                    $fenceLength = $marker.Length
+                    $pendingHtmlTag = $null
+                    continue
+                }
             }
         }
         else {
@@ -42,7 +96,7 @@ function Assert-NuGetCompatibleMarkdown {
             continue
         }
 
-        $contentWithoutInlineCode = $line -replace '`[^`]*`', ''
+        $contentWithoutInlineCode = Remove-InlineCodeSpans -Line $line
         if ($null -ne $pendingHtmlTag) {
             $contentWithoutInlineCode = "$pendingHtmlTag`n$contentWithoutInlineCode"
             $pendingHtmlTag = $null
