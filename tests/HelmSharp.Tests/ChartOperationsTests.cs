@@ -1051,6 +1051,31 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task ManifestApplier_UnsupportedCoreResource_DoesNotUseCustomObjectEndpoint()
+    {
+        var handler = new RecordingKubernetesHandler();
+        var client = new Kubernetes(new KubernetesClientConfiguration
+        {
+            Host = "https://helmsharp.test",
+            SkipTlsVerify = true
+        }, handler);
+        var applier = new KubernetesManifestApplier(client, "helmsharp-test");
+
+        var ex = await Assert.ThrowsAnyAsync<InvalidOperationException>(async () =>
+            await DrainAsync(applier.ApplyAsync("""
+                apiVersion: v1
+                kind: Event
+                metadata:
+                  name: sample
+                """, "test-ns")));
+
+        Assert.Contains("v1/Event", ex.Message);
+        Assert.DoesNotContain(handler.Requests, request =>
+            request.PathAndQuery.Contains("/apis/", StringComparison.Ordinal) ||
+            request.PathAndQuery.Contains("/events/", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ResourceWaiter_WaitsForDiscoveredResourceDeletion()
     {
         var handler = new RecordingKubernetesHandler();
@@ -1092,6 +1117,29 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task ResourceWaiter_UnsupportedCoreResourceDeletion_DoesNotUseCustomObjectEndpoint()
+    {
+        var handler = new RecordingKubernetesHandler();
+        var client = new Kubernetes(new KubernetesClientConfiguration
+        {
+            Host = "https://helmsharp.test",
+            SkipTlsVerify = true
+        }, handler);
+        var waiter = new KubernetesResourceWaiter(client, timeoutSeconds: 1);
+
+        await DrainAsync(waiter.WaitForDeletedAsync("""
+            apiVersion: v1
+            kind: Event
+            metadata:
+              name: sample
+            """, "test-ns"));
+
+        Assert.DoesNotContain(handler.Requests, request =>
+            request.PathAndQuery.Contains("/apis/", StringComparison.Ordinal) ||
+            request.PathAndQuery.Contains("/events/", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ManifestApplier_DeleteTreatsRemovedDiscoveredKindAsAlreadyGone()
     {
         var handler = new RecordingKubernetesHandler(includeWidget: false);
@@ -1113,6 +1161,29 @@ public class ChartOperationsTests : IDisposable
             request.Method == HttpMethod.Get && request.PathAndQuery == "/apis/example.com/v1");
         Assert.DoesNotContain(handler.Requests, request =>
             request.Method == HttpMethod.Delete && request.PathAndQuery.Contains("/widgets/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ManifestApplier_DeleteUnsupportedCoreResource_DoesNotUseCustomObjectEndpoint()
+    {
+        var handler = new RecordingKubernetesHandler();
+        var client = new Kubernetes(new KubernetesClientConfiguration
+        {
+            Host = "https://helmsharp.test",
+            SkipTlsVerify = true
+        }, handler);
+        var applier = new KubernetesManifestApplier(client, "helmsharp-test");
+
+        await DrainAsync(applier.DeleteAsync("""
+            apiVersion: v1
+            kind: Event
+            metadata:
+              name: sample
+            """, "test-ns"));
+
+        Assert.DoesNotContain(handler.Requests, request =>
+            request.PathAndQuery.Contains("/apis/", StringComparison.Ordinal) ||
+            request.PathAndQuery.Contains("/events/", StringComparison.Ordinal));
     }
 
     [Theory]

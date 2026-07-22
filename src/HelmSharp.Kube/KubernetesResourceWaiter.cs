@@ -258,9 +258,10 @@ public sealed class KubernetesResourceWaiter
         var separator = identity.ApiVersion.IndexOf('/');
         var group = separator < 0 ? string.Empty : identity.ApiVersion[..separator];
         var version = separator < 0 ? identity.ApiVersion : identity.ApiVersion[(separator + 1)..];
-        var resources = string.IsNullOrEmpty(group)
-            ? await _client.CoreV1.GetAPIResourcesAsync(ct)
-            : await _client.CustomObjects.GetAPIResourcesAsync(group, version, ct);
+        if (string.IsNullOrEmpty(group))
+            throw new DeletedApiResourceException(identity.ApiVersion, identity.Kind);
+
+        var resources = await _client.CustomObjects.GetAPIResourcesAsync(group, version, ct);
         var match = resources.Resources?.SingleOrDefault(resource =>
             string.Equals(resource.Kind, identity.Kind, StringComparison.Ordinal) &&
             !resource.Name.Contains('/', StringComparison.Ordinal));

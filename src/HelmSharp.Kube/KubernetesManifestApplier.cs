@@ -650,9 +650,10 @@ public sealed class KubernetesManifestApplier
             return cached;
 
         var (group, version) = SplitApiVersion(identity.ApiVersion);
-        var resources = string.IsNullOrEmpty(group)
-            ? await _client.CoreV1.GetAPIResourcesAsync(ct)
-            : await _client.CustomObjects.GetAPIResourcesAsync(group, version, ct);
+        if (string.IsNullOrEmpty(group))
+            throw new KubernetesApiResourceUnsupportedException(identity.ApiVersion, identity.Kind);
+
+        var resources = await _client.CustomObjects.GetAPIResourcesAsync(group, version, ct);
         var match = resources.Resources?.SingleOrDefault(resource =>
             string.Equals(resource.Kind, identity.Kind, StringComparison.Ordinal) &&
             !resource.Name.Contains('/', StringComparison.Ordinal));
@@ -860,6 +861,13 @@ public sealed class KubernetesManifestApplier
             // an older stored manifest. The object is no longer addressable.
             return;
         }
+        catch (KubernetesApiResourceUnsupportedException)
+        {
+            // Core API resources need typed client methods. If this kind is not in
+            // the typed switch above, the applier did not target it for deletion.
+            return;
+        }
+
         if (resource.Namespaced)
         {
             await _client.CustomObjects.DeleteNamespacedCustomObjectAsync(
@@ -927,6 +935,14 @@ internal sealed class KubernetesApiResourceNotFoundException : Exception
 {
     public KubernetesApiResourceNotFoundException(string apiVersion, string kind)
         : base($"Kubernetes API discovery did not find resource {apiVersion}/{kind}.")
+    {
+    }
+}
+
+internal sealed class KubernetesApiResourceUnsupportedException : InvalidOperationException
+{
+    public KubernetesApiResourceUnsupportedException(string apiVersion, string kind)
+        : base($"Kubernetes core resource {apiVersion}/{kind} is not supported by the typed manifest applier.")
     {
     }
 }
