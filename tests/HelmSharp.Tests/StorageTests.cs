@@ -1,10 +1,27 @@
 using HelmSharp.Chart;
 using HelmSharp.Release;
+using HelmSharp.Storage;
 
 namespace HelmSharp.Tests;
 
 public class StorageTests
 {
+    [Fact]
+    public void IHelmReleaseStore_AllowsLegacyImplementationsWithoutPurge()
+    {
+        IHelmReleaseStore store = new LegacyReleaseStore();
+
+        Assert.False(store is IHelmReleasePurgeStore);
+    }
+
+    [Fact]
+    public void IHelmReleasePurgeStore_AdvertisesOptionalPurgeCapability()
+    {
+        IHelmReleaseStore store = new PurgeCapableReleaseStore();
+
+        Assert.True(store is IHelmReleasePurgeStore);
+    }
+
     [Fact]
     public void HelmReleaseRecord_DefaultValues()
     {
@@ -223,5 +240,31 @@ public class StorageTests
         Assert.Equal(2, chart.Dependencies.Count);
         Assert.Equal("redis", chart.Dependencies[0].Name);
         Assert.Equal("postgres", chart.Dependencies[1].Name);
+    }
+
+    private class LegacyReleaseStore : IHelmReleaseStore
+    {
+        public Task SaveAsync(HelmReleaseRecord record, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task<IReadOnlyList<HelmReleaseRecord>> ListAsync(string? namespaceName, bool allNamespaces, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<HelmReleaseRecord>>([]);
+
+        public Task<IReadOnlyList<HelmReleaseRecord>> HistoryAsync(string name, string namespaceName, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<HelmReleaseRecord>>([]);
+
+        public Task<HelmReleaseRecord?> GetLatestAsync(string name, string namespaceName, CancellationToken cancellationToken = default)
+            => Task.FromResult<HelmReleaseRecord?>(null);
+
+        public Task MarkUninstalledAsync(HelmReleaseRecord record, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task MarkStatusAsync(HelmReleaseRecord record, string status, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task<int> NextRevisionAsync(string name, string namespaceName, CancellationToken cancellationToken = default)
+            => Task.FromResult(1);
+    }
+
+    private sealed class PurgeCapableReleaseStore : LegacyReleaseStore, IHelmReleasePurgeStore
+    {
+        public Task PurgeAsync(string name, string namespaceName, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 }
