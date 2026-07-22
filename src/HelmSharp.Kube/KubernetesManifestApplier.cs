@@ -658,7 +658,7 @@ public sealed class KubernetesManifestApplier
             !resource.Name.Contains('/', StringComparison.Ordinal));
 
         if (match is null || string.IsNullOrWhiteSpace(match.Name))
-            throw new InvalidOperationException($"Kubernetes API discovery did not find resource {identity.ApiVersion}/{identity.Kind}.");
+            throw new KubernetesApiResourceNotFoundException(identity.ApiVersion, identity.Kind);
 
         var discovered = new DiscoveredResource(group, version, match.Name, match.Namespaced == true);
         _discoveredResources.Add(cacheKey, discovered);
@@ -849,7 +849,17 @@ public sealed class KubernetesManifestApplier
 
     private async Task DeleteDiscoveredResourceAsync(ManifestIdentity identity, V1DeleteOptions? deleteOptions, CancellationToken ct)
     {
-        var resource = await DiscoverResourceAsync(identity, ct);
+        DiscoveredResource resource;
+        try
+        {
+            resource = await DiscoverResourceAsync(identity, ct);
+        }
+        catch (KubernetesApiResourceNotFoundException)
+        {
+            // A removed CRD can remove its resource kind before uninstall reaches
+            // an older stored manifest. The object is no longer addressable.
+            return;
+        }
         if (resource.Namespaced)
         {
             await _client.CustomObjects.DeleteNamespacedCustomObjectAsync(
@@ -912,6 +922,14 @@ public sealed class KubernetesManifestApplier
 }
 
 internal sealed record DiscoveredResource(string Group, string Version, string Plural, bool Namespaced);
+
+internal sealed class KubernetesApiResourceNotFoundException : Exception
+{
+    public KubernetesApiResourceNotFoundException(string apiVersion, string kind)
+        : base($"Kubernetes API discovery did not find resource {apiVersion}/{kind}.")
+    {
+    }
+}
 
 public sealed record ManifestIdentity(string ApiVersion, string Kind, string Name, string Namespace)
 {

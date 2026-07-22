@@ -629,9 +629,7 @@ public class HelmClient : IHelmClient
         using var client = await _createKubernetesClientAsync(options, request.KubeConfigPath, request.KubeConfigContent, operationToken);
         var store = new HelmReleaseStore(client);
         var latest = await store.GetLatestAsync(request.ReleaseName, ns, operationToken);
-        var history = latest is null || !request.KeepHistory
-            ? await store.HistoryAsync(request.ReleaseName, ns, operationToken)
-            : null;
+        var history = await store.HistoryAsync(request.ReleaseName, ns, operationToken);
         if (latest is null && !request.KeepHistory)
         {
             if (history is { Count: > 0 } && string.Equals(history[^1].Status, "uninstalled", StringComparison.OrdinalIgnoreCase))
@@ -658,22 +656,19 @@ public class HelmClient : IHelmClient
         var applier = new KubernetesManifestApplier(client, options.FieldManager);
         var output = new StringBuilder();
         var deletedManifests = new StringBuilder();
-        if (!request.KeepHistory && history is not null)
+        foreach (var failedRevision in history.Where(record =>
+                     string.Equals(record.Status, "failed", StringComparison.OrdinalIgnoreCase)))
         {
-            foreach (var failedRevision in history.Where(record =>
-                         string.Equals(record.Status, "failed", StringComparison.OrdinalIgnoreCase)))
+            var failedOnlyManifest = GetAttemptedOnlyManifest(mainManifest, failedRevision.Manifest, ns);
+            await foreach (var resource in applier.DeleteAsync(
+                               failedOnlyManifest,
+                               ns,
+                               propagationPolicy: request.DeletionPropagation.ToString(),
+                               cancellationToken: operationToken))
             {
-                var failedOnlyManifest = GetAttemptedOnlyManifest(mainManifest, failedRevision.Manifest, ns);
-                await foreach (var resource in applier.DeleteAsync(
-                                   failedOnlyManifest,
-                                   ns,
-                                   propagationPolicy: request.DeletionPropagation.ToString(),
-                                   cancellationToken: operationToken))
-                {
-                    output.AppendLine($"Deleted {resource}");
-                }
-                deletedManifests.AppendLine(failedOnlyManifest);
+                output.AppendLine($"Deleted {resource}");
             }
+            deletedManifests.AppendLine(failedOnlyManifest);
         }
         await foreach (var resource in applier.DeleteAsync(
                            mainManifest,

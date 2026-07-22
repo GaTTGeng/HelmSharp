@@ -1092,7 +1092,33 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
-    public async Task ReleaseLifecycle_PurgeDeletesResourcesIntroducedByAFailedRevision()
+    public async Task ManifestApplier_DeleteTreatsRemovedDiscoveredKindAsAlreadyGone()
+    {
+        var handler = new RecordingKubernetesHandler(includeWidget: false);
+        var client = new Kubernetes(new KubernetesClientConfiguration
+        {
+            Host = "https://helmsharp.test",
+            SkipTlsVerify = true
+        }, handler);
+        var applier = new KubernetesManifestApplier(client, "helmsharp-test");
+
+        await DrainAsync(applier.DeleteAsync("""
+            apiVersion: example.com/v1
+            kind: Widget
+            metadata:
+              name: sample
+            """, "test-ns"));
+
+        Assert.Contains(handler.Requests, request =>
+            request.Method == HttpMethod.Get && request.PathAndQuery == "/apis/example.com/v1");
+        Assert.DoesNotContain(handler.Requests, request =>
+            request.Method == HttpMethod.Delete && request.PathAndQuery.Contains("/widgets/", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReleaseLifecycle_UninstallDeletesResourcesIntroducedByAFailedRevision(bool keepHistory)
     {
         var chartDir = await CreateMinimalChartAsync("failed-revision-purge-chart");
         await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
@@ -1128,7 +1154,8 @@ public class ChartOperationsTests : IDisposable
         var uninstall = await client.UninstallAsync(new HelmUninstallRequest
         {
             ReleaseName = "failed-revision-purge",
-            Namespace = "test-ns"
+            Namespace = "test-ns",
+            KeepHistory = keepHistory
         });
 
         Assert.Equal(0, uninstall.ExitCode);
