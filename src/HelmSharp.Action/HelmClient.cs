@@ -564,18 +564,21 @@ public class HelmClient : IHelmClient
         var previousIdentities = KubernetesManifestApplier.SplitDocumentsPublic(previousManifest)
             .Select(document => ManifestIdentity.Parse(document, defaultNamespace))
             .Where(identity => identity is not null)
-            .Select(identity => $"{identity!.Namespace}/{identity.Kind}/{identity.Name}")
+            .Select(identity => ManifestIdentityKey(identity!))
             .ToHashSet(StringComparer.Ordinal);
 
         var attemptedOnly = KubernetesManifestApplier.SplitDocumentsPublic(attemptedManifest)
             .Where(document =>
             {
                 var identity = ManifestIdentity.Parse(document, defaultNamespace);
-                return identity is not null && !previousIdentities.Contains($"{identity.Namespace}/{identity.Kind}/{identity.Name}");
+                return identity is not null && !previousIdentities.Contains(ManifestIdentityKey(identity));
             });
 
         return string.Join(Environment.NewLine + "---" + Environment.NewLine, attemptedOnly);
     }
+
+    private static string ManifestIdentityKey(ManifestIdentity identity)
+        => $"{identity.ApiVersion}/{identity.Namespace}/{identity.Kind}/{identity.Name}";
 
     private static async Task<List<HelmReleaseRecord>> LoadReleaseHistoryForUpgradeInstallAsync(
         HelmReleaseStore store,

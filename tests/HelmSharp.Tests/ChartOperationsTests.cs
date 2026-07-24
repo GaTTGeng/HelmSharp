@@ -473,6 +473,29 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public void GetAttemptedOnlyManifest_UsesApiVersionInResourceIdentity()
+    {
+        const string previous = """
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: same-name
+            """;
+        const string attempted = """
+            apiVersion: example.com/v1
+            kind: Deployment
+            metadata:
+              name: same-name
+            """;
+
+        var attemptedOnly = HelmClient.GetAttemptedOnlyManifest(previous, attempted, "test-ns");
+
+        Assert.Contains("apiVersion: example.com/v1", attemptedOnly);
+        Assert.Contains("kind: Deployment", attemptedOnly);
+        Assert.Contains("name: same-name", attemptedOnly);
+    }
+
+    [Fact]
     public async Task ReleaseLifecycle_SuccessfulUpgradeAndRollbackKeepOneDeployedRevision()
     {
         var chartDir = await CreateMinimalChartAsync("lifecycle-chart");
