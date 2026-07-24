@@ -153,26 +153,27 @@ public sealed class KubernetesResourceWaiter
             yield break;
 
         var deadline = DateTime.UtcNow.AddSeconds(_timeoutSeconds);
-        var pending = new HashSet<string>(identities.Select(identity => identity.DisplayName));
+        var pending = new HashSet<string>(identities.Select(DeletionWaitKey), StringComparer.Ordinal);
         yield return $"Waiting for {pending.Count} resources to be deleted...";
         while (pending.Count > 0 && DateTime.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var deleted = new List<string>();
-            foreach (var identity in identities.Where(identity => pending.Contains(identity.DisplayName)))
+            foreach (var identity in identities.Where(identity => pending.Contains(DeletionWaitKey(identity))))
             {
+                var key = DeletionWaitKey(identity);
                 try
                 {
                     await ReadForDeletionAsync(identity, cancellationToken);
                 }
                 catch (HttpOperationException ex) when ((int)ex.Response.StatusCode == 404)
                 {
-                    pending.Remove(identity.DisplayName);
+                    pending.Remove(key);
                     deleted.Add(identity.DisplayName);
                 }
                 catch (DeletedApiResourceException)
                 {
-                    pending.Remove(identity.DisplayName);
+                    pending.Remove(key);
                     deleted.Add(identity.DisplayName);
                 }
             }
@@ -184,6 +185,9 @@ public sealed class KubernetesResourceWaiter
         if (pending.Count > 0)
             throw new TimeoutException($"Timed out after {_timeoutSeconds}s waiting for deletion of: {string.Join(", ", pending)}");
     }
+
+    private static string DeletionWaitKey(ManifestIdentity identity)
+        => $"{identity.ApiVersion}/{identity.DisplayName}";
 
     private async Task ReadForDeletionAsync(ManifestIdentity identity, CancellationToken ct)
     {

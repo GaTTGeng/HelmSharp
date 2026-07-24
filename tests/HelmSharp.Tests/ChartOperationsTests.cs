@@ -905,6 +905,19 @@ public class ChartOperationsTests : IDisposable
         }
     }
 
+    private static Task WriteRetainedAndIntroducedConfigMapAsync(string templatePath, string introducedName)
+        => File.WriteAllTextAsync(templatePath, $$"""
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: retained
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: {{introducedName}}
+            """);
+
     private sealed class ReleaseLifecycleHandler : DelegatingHandler
     {
         private readonly ReleaseLifecycleState _releaseState;
@@ -977,7 +990,10 @@ public class ChartOperationsTests : IDisposable
             }
 
             if (request.Method == HttpMethod.Get && path.Contains("/configmaps/", StringComparison.Ordinal))
+            {
+                _releaseState.WaitedPaths.Add(path);
                 return JsonResponse(request, HttpStatusCode.NotFound, "{ \"code\": 404 }");
+            }
 
             return JsonResponse(request, HttpStatusCode.OK, "{}");
         }
@@ -996,6 +1012,7 @@ public class ChartOperationsTests : IDisposable
         internal Dictionary<string, string> Secrets { get; } = new(StringComparer.Ordinal);
         internal List<string> DeleteRequestBodies { get; } = [];
         internal List<string> DeletedPaths { get; } = [];
+        internal List<string> WaitedPaths { get; } = [];
         public bool FailNextSecretCreate { get; set; }
 
         public IReadOnlyList<HelmReleaseRecord> Records(string releaseName)
@@ -1095,6 +1112,37 @@ public class ChartOperationsTests : IDisposable
 
         Assert.Contains(handler.Requests, request =>
             request.Method == HttpMethod.Get && request.PathAndQuery == "/apis/example.com/v1/namespaces/test-ns/widgets/sample");
+    }
+
+    [Fact]
+    public async Task ResourceWaiter_WaitsForDeletedResourcesWithSameDisplayNameAcrossApiVersions()
+    {
+        var handler = new RecordingKubernetesHandler();
+        var client = new Kubernetes(new KubernetesClientConfiguration
+        {
+            Host = "https://helmsharp.test",
+            SkipTlsVerify = true
+        }, handler);
+        var waiter = new KubernetesResourceWaiter(client, timeoutSeconds: 1);
+
+        await DrainAsync(waiter.WaitForDeletedAsync("""
+            apiVersion: autoscaling/v2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            ---
+            apiVersion: autoscaling/v1
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            """, "test-ns"));
+
+        Assert.Contains(handler.Requests, request =>
+            request.Method == HttpMethod.Get &&
+            request.PathAndQuery == "/apis/autoscaling/v2/namespaces/test-ns/horizontalpodautoscalers/scaler");
+        Assert.Contains(handler.Requests, request =>
+            request.Method == HttpMethod.Get &&
+            request.PathAndQuery == "/apis/autoscaling/v1/namespaces/test-ns/horizontalpodautoscalers/scaler");
     }
 
     [Fact]
@@ -1234,6 +1282,58 @@ public class ChartOperationsTests : IDisposable
             path.EndsWith("/configmaps/introduced-by-failed-revision", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task ReleaseLifecycle_UninstallWaitSeparatesMultipleFailedRevisionManifests()
+    {
+        var chartDir = await CreateMinimalChartAsync("failed-revision-wait-chart");
+        var templatePath = Path.Combine(chartDir, "templates", "configmap.yaml");
+        await File.WriteAllTextAsync(templatePath, """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: retained
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "failed-revision-wait",
+            Chart = chartDir
+        }));
+
+        await WriteRetainedAndIntroducedConfigMapAsync(templatePath, "introduced-by-first-failure");
+        releaseState.FailNextSecretCreate = true;
+        await Assert.ThrowsAsync<HttpOperationException>(async () =>
+            await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+            {
+                ReleaseName = "failed-revision-wait",
+                Chart = chartDir
+            })));
+
+        await WriteRetainedAndIntroducedConfigMapAsync(templatePath, "introduced-by-second-failure");
+        releaseState.FailNextSecretCreate = true;
+        await Assert.ThrowsAsync<HttpOperationException>(async () =>
+            await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+            {
+                ReleaseName = "failed-revision-wait",
+                Chart = chartDir
+            })));
+
+        var uninstall = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "failed-revision-wait",
+            Namespace = "test-ns",
+            Wait = true,
+            TimeoutSeconds = 1
+        });
+
+        Assert.Equal(0, uninstall.ExitCode);
+        Assert.Contains(releaseState.WaitedPaths, path =>
+            path.EndsWith("/configmaps/introduced-by-first-failure", StringComparison.Ordinal));
+        Assert.Contains(releaseState.WaitedPaths, path =>
+            path.EndsWith("/configmaps/introduced-by-second-failure", StringComparison.Ordinal));
+    }
+
     private sealed class StaticHelmOptionsProvider : IHelmOptionsProvider
     {
         private readonly HelmExecutionOptions _options;
@@ -1288,6 +1388,20 @@ public class ChartOperationsTests : IDisposable
 
             if (request.Method == HttpMethod.Get &&
                 string.Equals(request.RequestUri?.AbsolutePath, "/apis/example.com/v1/namespaces/test-ns/widgets/sample", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse(request, HttpStatusCode.NotFound, """
+                    {
+                      "kind": "Status",
+                      "apiVersion": "v1",
+                      "status": "Failure",
+                      "code": 404
+                    }
+                    """));
+            }
+
+            if (request.Method == HttpMethod.Get &&
+                request.RequestUri?.AbsolutePath.StartsWith("/apis/autoscaling/", StringComparison.Ordinal) == true &&
+                request.RequestUri.AbsolutePath.EndsWith("/horizontalpodautoscalers/scaler", StringComparison.Ordinal))
             {
                 return Task.FromResult(JsonResponse(request, HttpStatusCode.NotFound, """
                     {

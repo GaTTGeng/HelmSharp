@@ -668,7 +668,7 @@ public class HelmClient : IHelmClient
             {
                 output.AppendLine($"Deleted {resource}");
             }
-            deletedManifests.AppendLine(failedOnlyManifest);
+            AppendManifestDocuments(deletedManifests, failedOnlyManifest);
         }
         await foreach (var resource in applier.DeleteAsync(
                            mainManifest,
@@ -678,7 +678,7 @@ public class HelmClient : IHelmClient
         {
             output.AppendLine($"Deleted {resource}");
         }
-        deletedManifests.AppendLine(mainManifest);
+        AppendManifestDocuments(deletedManifests, mainManifest);
 
         if (request.Wait)
         {
@@ -703,6 +703,17 @@ public class HelmClient : IHelmClient
             await store.PurgeAsync(request.ReleaseName, ns, operationToken);
         output.AppendLine($"release \"{request.ReleaseName}\" uninstalled");
         return Ok(output.ToString());
+    }
+
+    private static void AppendManifestDocuments(StringBuilder builder, string manifest)
+    {
+        if (string.IsNullOrWhiteSpace(manifest))
+            return;
+
+        if (builder.Length > 0)
+            builder.AppendLine("---");
+
+        builder.AppendLine(manifest.Trim());
     }
 
     public async Task<CommandResult> StatusAsync(
