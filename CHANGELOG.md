@@ -9,9 +9,11 @@ This project follows semantic versioning once stable releases begin.
 ### Added
 
 - Added Helm v3 release Secret interoperability, legacy HelmSharp payload compatibility, and actionable storage diagnostics (#190).
+- Added uninstall history retention, purge, hook control, and timeout request semantics (#192).
 
 ### Changed
 
+- Clarified that golden-chart coverage is regression evidence, not complete Sprig compatibility; unknown template functions now report a renderer-specific diagnostic, and apply/delete discover untyped Kubernetes resources from the target cluster.
 - Maintain Helm's single-active-revision invariant across successful upgrade and rollback operations (#48).
 - Persist failed install and upgrade revisions while preserving the previous deployed revision during recovery (#191).
 - Validate packaged NuGet README files and require the Markdown HelmSharp wordmark before artifacts are uploaded or published.

@@ -13,6 +13,7 @@ public sealed class KubernetesResourceWaiter
 {
     private readonly k8s.Kubernetes _client;
     private readonly int _timeoutSeconds;
+    private readonly Dictionary<(string ApiVersion, string Kind), DeletionResource> _deletionResources = new();
 
     public KubernetesResourceWaiter(k8s.Kubernetes client, int timeoutSeconds = 300)
     {
@@ -134,6 +135,146 @@ public sealed class KubernetesResourceWaiter
         }
 
         yield return $"All {waitable.Count} resources are ready";
+    }
+
+    /// <summary>Waits for all resources targeted by the manifest applier to disappear after deletion.</summary>
+    public async IAsyncEnumerable<string> WaitForDeletedAsync(
+        string manifest,
+        string defaultNamespace,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var allIdentities = KubernetesManifestApplier.SplitDocumentsPublic(manifest)
+            .Select(doc => ManifestIdentity.Parse(doc, defaultNamespace))
+            .Where(identity => identity is not null)
+            .Cast<ManifestIdentity>()
+            .ToList();
+        var identities = allIdentities;
+        if (identities.Count == 0)
+            yield break;
+
+        var deadline = DateTime.UtcNow.AddSeconds(_timeoutSeconds);
+        var pending = new HashSet<string>(identities.Select(DeletionWaitKey), StringComparer.Ordinal);
+        yield return $"Waiting for {pending.Count} resources to be deleted...";
+        while (pending.Count > 0 && DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var deleted = new List<string>();
+            foreach (var identity in identities.Where(identity => pending.Contains(DeletionWaitKey(identity))))
+            {
+                var key = DeletionWaitKey(identity);
+                try
+                {
+                    await ReadForDeletionAsync(identity, cancellationToken);
+                }
+                catch (HttpOperationException ex) when ((int)ex.Response.StatusCode == 404)
+                {
+                    pending.Remove(key);
+                    deleted.Add(identity.DisplayName);
+                }
+                catch (DeletedApiResourceException)
+                {
+                    pending.Remove(key);
+                    deleted.Add(identity.DisplayName);
+                }
+            }
+            foreach (var displayName in deleted)
+                yield return $"  {displayName} deleted";
+            if (pending.Count > 0)
+                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+        }
+        if (pending.Count > 0)
+            throw new TimeoutException($"Timed out after {_timeoutSeconds}s waiting for deletion of: {string.Join(", ", pending)}");
+    }
+
+    private static string DeletionWaitKey(ManifestIdentity identity)
+        => $"{identity.ApiVersion}/{identity.DisplayName}";
+
+    private async Task ReadForDeletionAsync(ManifestIdentity identity, CancellationToken ct)
+    {
+        switch (identity.ApiVersion, identity.Kind)
+        {
+            case ("v1", "ConfigMap"): _ = await _client.CoreV1.ReadNamespacedConfigMapAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("v1", "Secret"): _ = await _client.CoreV1.ReadNamespacedSecretAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("v1", "Service"): _ = await _client.CoreV1.ReadNamespacedServiceAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("v1", "ServiceAccount"): _ = await _client.CoreV1.ReadNamespacedServiceAccountAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("v1", "PersistentVolumeClaim"): _ = await _client.CoreV1.ReadNamespacedPersistentVolumeClaimAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("v1", "Pod"): _ = await _client.CoreV1.ReadNamespacedPodAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("apps/v1", "Deployment"): _ = await _client.AppsV1.ReadNamespacedDeploymentAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("apps/v1", "StatefulSet"): _ = await _client.AppsV1.ReadNamespacedStatefulSetAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("apps/v1", "DaemonSet"): _ = await _client.AppsV1.ReadNamespacedDaemonSetAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("apps/v1", "ReplicaSet"): _ = await _client.AppsV1.ReadNamespacedReplicaSetAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("batch/v1", "Job"): _ = await _client.BatchV1.ReadNamespacedJobAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("batch/v1", "CronJob"): _ = await _client.BatchV1.ReadNamespacedCronJobAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("v1", "PersistentVolume"): _ = await _client.CoreV1.ReadPersistentVolumeAsync(identity.Name, cancellationToken: ct); break;
+            case ("v1", "LimitRange"): _ = await _client.CoreV1.ReadNamespacedLimitRangeAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("v1", "ResourceQuota"): _ = await _client.CoreV1.ReadNamespacedResourceQuotaAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("v1", "Endpoints"): _ = await _client.CoreV1.ReadNamespacedEndpointsAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("v1", "ReplicationController"): _ = await _client.CoreV1.ReadNamespacedReplicationControllerAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("networking.k8s.io/v1", "Ingress"): _ = await _client.NetworkingV1.ReadNamespacedIngressAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("networking.k8s.io/v1", "NetworkPolicy"): _ = await _client.NetworkingV1.ReadNamespacedNetworkPolicyAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("networking.k8s.io/v1", "IngressClass"): _ = await _client.NetworkingV1.ReadIngressClassAsync(identity.Name, cancellationToken: ct); break;
+            case ("rbac.authorization.k8s.io/v1", "Role"): _ = await _client.RbacAuthorizationV1.ReadNamespacedRoleAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("rbac.authorization.k8s.io/v1", "RoleBinding"): _ = await _client.RbacAuthorizationV1.ReadNamespacedRoleBindingAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("rbac.authorization.k8s.io/v1", "ClusterRole"): _ = await _client.RbacAuthorizationV1.ReadClusterRoleAsync(identity.Name, cancellationToken: ct); break;
+            case ("rbac.authorization.k8s.io/v1", "ClusterRoleBinding"): _ = await _client.RbacAuthorizationV1.ReadClusterRoleBindingAsync(identity.Name, cancellationToken: ct); break;
+            case ("autoscaling/v2", "HorizontalPodAutoscaler"):
+            case ("autoscaling/v2beta2", "HorizontalPodAutoscaler"): _ = await _client.AutoscalingV2.ReadNamespacedHorizontalPodAutoscalerAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("autoscaling/v1", "HorizontalPodAutoscaler"): _ = await _client.AutoscalingV1.ReadNamespacedHorizontalPodAutoscalerAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("policy/v1", "PodDisruptionBudget"): _ = await _client.PolicyV1.ReadNamespacedPodDisruptionBudgetAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("storage.k8s.io/v1", "StorageClass"): _ = await _client.StorageV1.ReadStorageClassAsync(identity.Name, cancellationToken: ct); break;
+            case ("storage.k8s.io/v1", "CSIDriver"): _ = await _client.StorageV1.ReadCSIDriverAsync(identity.Name, cancellationToken: ct); break;
+            case ("storage.k8s.io/v1", "CSINode"): _ = await _client.StorageV1.ReadCSINodeAsync(identity.Name, cancellationToken: ct); break;
+            case ("storage.k8s.io/v1", "VolumeAttachment"): _ = await _client.StorageV1.ReadVolumeAttachmentAsync(identity.Name, cancellationToken: ct); break;
+            case ("scheduling.k8s.io/v1", "PriorityClass"): _ = await _client.SchedulingV1.ReadPriorityClassAsync(identity.Name, cancellationToken: ct); break;
+            case ("apiextensions.k8s.io/v1", "CustomResourceDefinition"): _ = await _client.ApiextensionsV1.ReadCustomResourceDefinitionAsync(identity.Name, cancellationToken: ct); break;
+            case ("admissionregistration.k8s.io/v1", "MutatingWebhookConfiguration"): _ = await _client.AdmissionregistrationV1.ReadMutatingWebhookConfigurationAsync(identity.Name, cancellationToken: ct); break;
+            case ("admissionregistration.k8s.io/v1", "ValidatingWebhookConfiguration"): _ = await _client.AdmissionregistrationV1.ReadValidatingWebhookConfigurationAsync(identity.Name, cancellationToken: ct); break;
+            case ("apiregistration.k8s.io/v1", "APIService"): _ = await _client.ApiregistrationV1.ReadAPIServiceAsync(identity.Name, cancellationToken: ct); break;
+            case ("coordination.k8s.io/v1", "Lease"): _ = await _client.CoordinationV1.ReadNamespacedLeaseAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("node.k8s.io/v1", "RuntimeClass"): _ = await _client.NodeV1.ReadRuntimeClassAsync(identity.Name, cancellationToken: ct); break;
+            case ("discovery.k8s.io/v1", "EndpointSlice"): _ = await _client.DiscoveryV1.ReadNamespacedEndpointSliceAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("flowcontrol.apiserver.k8s.io/v1", "FlowSchema"): _ = await _client.FlowcontrolApiserverV1.ReadFlowSchemaAsync(identity.Name, cancellationToken: ct); break;
+            case ("flowcontrol.apiserver.k8s.io/v1", "PriorityLevelConfiguration"): _ = await _client.FlowcontrolApiserverV1.ReadPriorityLevelConfigurationAsync(identity.Name, cancellationToken: ct); break;
+            default: await ReadDiscoveredResourceAsync(identity, ct); break;
+        }
+    }
+
+    private async Task ReadDiscoveredResourceAsync(ManifestIdentity identity, CancellationToken ct)
+    {
+        var resource = await DiscoverDeletionResourceAsync(identity, ct);
+        if (resource.Namespaced)
+        {
+            _ = await _client.CustomObjects.GetNamespacedCustomObjectAsync(
+                resource.Group, resource.Version, identity.Namespace, resource.Plural, identity.Name, ct);
+            return;
+        }
+
+        _ = await _client.CustomObjects.GetClusterCustomObjectAsync(
+            resource.Group, resource.Version, resource.Plural, identity.Name, ct);
+    }
+
+    private async Task<DeletionResource> DiscoverDeletionResourceAsync(ManifestIdentity identity, CancellationToken ct)
+    {
+        var key = (identity.ApiVersion, identity.Kind);
+        if (_deletionResources.TryGetValue(key, out var cached))
+            return cached;
+
+        var separator = identity.ApiVersion.IndexOf('/');
+        var group = separator < 0 ? string.Empty : identity.ApiVersion[..separator];
+        var version = separator < 0 ? identity.ApiVersion : identity.ApiVersion[(separator + 1)..];
+        if (string.IsNullOrEmpty(group))
+            throw new DeletedApiResourceException(identity.ApiVersion, identity.Kind);
+
+        var resources = await _client.CustomObjects.GetAPIResourcesAsync(group, version, ct);
+        var match = resources.Resources?.SingleOrDefault(resource =>
+            string.Equals(resource.Kind, identity.Kind, StringComparison.Ordinal) &&
+            !resource.Name.Contains('/', StringComparison.Ordinal));
+        if (match is null || string.IsNullOrWhiteSpace(match.Name))
+            throw new DeletedApiResourceException(identity.ApiVersion, identity.Kind);
+
+        var discovered = new DeletionResource(group, version, match.Name, match.Namespaced == true);
+        _deletionResources.Add(key, discovered);
+        return discovered;
     }
 
     private async Task<(bool Ready, bool Failed, string Status)> CheckResourceStatusAsync(
@@ -336,4 +477,15 @@ public sealed class KubernetesResourceWaiter
         => kind is "Deployment" or "StatefulSet" or "DaemonSet" or "ReplicaSet"
             or "Job" or "Pod" or "PersistentVolumeClaim" or "Endpoints"
             or "HorizontalPodAutoscaler";
+
+}
+
+internal sealed record DeletionResource(string Group, string Version, string Plural, bool Namespaced);
+
+internal sealed class DeletedApiResourceException : Exception
+{
+    public DeletedApiResourceException(string apiVersion, string kind)
+        : base($"Kubernetes API discovery did not find resource {apiVersion}/{kind}.")
+    {
+    }
 }

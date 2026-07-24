@@ -510,7 +510,7 @@ public class HelmClient : IHelmClient
                     var attemptedOnlyManifest = GetAttemptedOnlyManifest(previous.Manifest, mainManifest, ns);
                     if (!string.IsNullOrWhiteSpace(attemptedOnlyManifest))
                     {
-                        await foreach (var resource in applier.DeleteAsync(attemptedOnlyManifest, ns, CancellationToken.None))
+                        await foreach (var resource in applier.DeleteAsync(attemptedOnlyManifest, ns, cancellationToken: CancellationToken.None))
                             output.Add($"Removed failed-upgrade resource {resource}");
                     }
                     if (request.Atomic)
@@ -530,7 +530,7 @@ public class HelmClient : IHelmClient
                 // deployed predecessor. Its resources belong solely to failed attempts.
                 try
                 {
-                    await foreach (var resource in applier.DeleteAsync(mainManifest, ns, CancellationToken.None))
+                    await foreach (var resource in applier.DeleteAsync(mainManifest, ns, cancellationToken: CancellationToken.None))
                         output.Add($"Cleaned up {resource}");
                 }
                 catch
@@ -547,7 +547,7 @@ public class HelmClient : IHelmClient
         {
             try
             {
-                await foreach (var resource in applier.DeleteAsync(mainManifest, ns, CancellationToken.None))
+                await foreach (var resource in applier.DeleteAsync(mainManifest, ns, cancellationToken: CancellationToken.None))
                     output.Add($"Cleaned up {resource}");
             }
             catch
@@ -564,18 +564,21 @@ public class HelmClient : IHelmClient
         var previousIdentities = KubernetesManifestApplier.SplitDocumentsPublic(previousManifest)
             .Select(document => ManifestIdentity.Parse(document, defaultNamespace))
             .Where(identity => identity is not null)
-            .Select(identity => $"{identity!.Namespace}/{identity.Kind}/{identity.Name}")
+            .Select(identity => ManifestIdentityKey(identity!))
             .ToHashSet(StringComparer.Ordinal);
 
         var attemptedOnly = KubernetesManifestApplier.SplitDocumentsPublic(attemptedManifest)
             .Where(document =>
             {
                 var identity = ManifestIdentity.Parse(document, defaultNamespace);
-                return identity is not null && !previousIdentities.Contains($"{identity.Namespace}/{identity.Kind}/{identity.Name}");
+                return identity is not null && !previousIdentities.Contains(ManifestIdentityKey(identity));
             });
 
         return string.Join(Environment.NewLine + "---" + Environment.NewLine, attemptedOnly);
     }
+
+    private static string ManifestIdentityKey(ManifestIdentity identity)
+        => $"{identity.ApiVersion}/{identity.Namespace}/{identity.Kind}/{identity.Name}";
 
     private static async Task<List<HelmReleaseRecord>> LoadReleaseHistoryForUpgradeInstallAsync(
         HelmReleaseStore store,
@@ -616,11 +619,28 @@ public class HelmClient : IHelmClient
         if (string.IsNullOrWhiteSpace(request.ReleaseName))
             return Fail("release name is required");
 
-        var options = await _optionsProvider.GetHelmAsync(cancellationToken);
+        using var timeoutSource = request.TimeoutSeconds is > 0
+            ? new CancellationTokenSource(TimeSpan.FromSeconds(request.TimeoutSeconds.Value))
+            : null;
+        using var operationSource = timeoutSource is null
+            ? null
+            : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
+        var operationToken = operationSource?.Token ?? cancellationToken;
+
+        var options = await _optionsProvider.GetHelmAsync(operationToken);
         var ns = request.Namespace ?? options.DefaultNamespace ?? "default";
-        using var client = await _createKubernetesClientAsync(options, request.KubeConfigPath, request.KubeConfigContent, cancellationToken);
+        using var client = await _createKubernetesClientAsync(options, request.KubeConfigPath, request.KubeConfigContent, operationToken);
         var store = new HelmReleaseStore(client);
-        var latest = await store.GetLatestAsync(request.ReleaseName, ns, cancellationToken);
+        var latest = await store.GetLatestAsync(request.ReleaseName, ns, operationToken);
+        var history = await store.HistoryAsync(request.ReleaseName, ns, operationToken);
+        if (latest is null && !request.KeepHistory)
+        {
+            if (history is { Count: > 0 } && string.Equals(history[^1].Status, "uninstalled", StringComparison.OrdinalIgnoreCase))
+            {
+                await store.PurgeAsync(request.ReleaseName, ns, operationToken);
+                return Ok($"release \"{request.ReleaseName}\" uninstalled{Environment.NewLine}");
+            }
+        }
         if (latest is null)
             return Fail($"release: not found: {request.ReleaseName}");
 
@@ -628,9 +648,9 @@ public class HelmClient : IHelmClient
         var hookExecutor = new HelmHookExecutor(client, options.FieldManager);
 
         // Execute pre-delete hooks
-        if (hooks.Any(h => h.Events.Contains(HelmHookEvent.PreDelete)))
+        if (!request.DisableHooks && hooks.Any(h => h.Events.Contains(HelmHookEvent.PreDelete)))
         {
-            await foreach (var _ in hookExecutor.ExecuteHooksAsync(hooks, HelmHookEvent.PreDelete, ns, cancellationToken))
+            await foreach (var _ in hookExecutor.ExecuteHooksAsync(hooks, HelmHookEvent.PreDelete, ns, operationToken))
             {
                 // drain
             }
@@ -638,23 +658,65 @@ public class HelmClient : IHelmClient
 
         var applier = new KubernetesManifestApplier(client, options.FieldManager);
         var output = new StringBuilder();
-        await foreach (var resource in applier.DeleteAsync(mainManifest, ns, cancellationToken))
+        var deletedManifests = new StringBuilder();
+        foreach (var failedRevision in history.Where(record =>
+                     string.Equals(record.Status, "failed", StringComparison.OrdinalIgnoreCase)))
+        {
+            var failedOnlyManifest = GetAttemptedOnlyManifest(mainManifest, failedRevision.Manifest, ns);
+            await foreach (var resource in applier.DeleteAsync(
+                               failedOnlyManifest,
+                               ns,
+                               propagationPolicy: request.DeletionPropagation.ToString(),
+                               cancellationToken: operationToken))
+            {
+                output.AppendLine($"Deleted {resource}");
+            }
+            AppendManifestDocuments(deletedManifests, failedOnlyManifest);
+        }
+        await foreach (var resource in applier.DeleteAsync(
+                           mainManifest,
+                           ns,
+                           propagationPolicy: request.DeletionPropagation.ToString(),
+                           cancellationToken: operationToken))
         {
             output.AppendLine($"Deleted {resource}");
         }
+        AppendManifestDocuments(deletedManifests, mainManifest);
+
+        if (request.Wait)
+        {
+            var timeout = request.TimeoutSeconds ?? options.TimeoutSeconds;
+            var waiter = new KubernetesResourceWaiter(client, timeout);
+            await foreach (var line in waiter.WaitForDeletedAsync(deletedManifests.ToString(), ns, operationToken))
+                output.AppendLine(line);
+        }
 
         // Execute post-delete hooks
-        if (hooks.Any(h => h.Events.Contains(HelmHookEvent.PostDelete)))
+        if (!request.DisableHooks && hooks.Any(h => h.Events.Contains(HelmHookEvent.PostDelete)))
         {
-            await foreach (var _ in hookExecutor.ExecuteHooksAsync(hooks, HelmHookEvent.PostDelete, ns, cancellationToken))
+            await foreach (var _ in hookExecutor.ExecuteHooksAsync(hooks, HelmHookEvent.PostDelete, ns, operationToken))
             {
                 // drain
             }
         }
 
-        await store.MarkUninstalledAsync(latest, cancellationToken);
+        if (request.KeepHistory)
+            await store.MarkUninstalledAsync(latest, operationToken);
+        else
+            await store.PurgeAsync(request.ReleaseName, ns, operationToken);
         output.AppendLine($"release \"{request.ReleaseName}\" uninstalled");
         return Ok(output.ToString());
+    }
+
+    private static void AppendManifestDocuments(StringBuilder builder, string manifest)
+    {
+        if (string.IsNullOrWhiteSpace(manifest))
+            return;
+
+        if (builder.Length > 0)
+            builder.AppendLine("---");
+
+        builder.AppendLine(manifest.Trim());
     }
 
     public async Task<CommandResult> StatusAsync(

@@ -148,58 +148,13 @@ See the [chart packaging and repository workflow guide](docs/guide/chart-distrib
 
 ## Compatibility Validation
 
-HelmSharp's template engine is continuously validated with golden tests. The suite includes focused fixture charts and selected public Helm charts. Each public chart below is rendered by both `helm template` (reference) and HelmSharp's managed renderer; outputs are compared document-by-document after normalization.
+HelmSharp uses focused fixture charts and selected public charts to compare managed rendering with `helm template`. These tests prevent regressions in the behaviors they exercise; they do not certify every Helm chart or every Sprig function.
 
-These results are a compatibility signal for the pinned chart versions in the table, not a blanket certification for every chart in the Helm ecosystem. Validate your own chart when it relies on uncommon Helm behavior.
-
-> **Last updated:** 2026-07-16 · **HelmSharp version:** 1.2.0 · **Helm version:** v4.2.2 · **Test framework:** net10.0
-
-### Summary
-
-| Chart | Version | Helm Docs | Templates | Passed | Failed | Per-Template Rate | Full Render | Verdict |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| **podinfo** | 6.14.0 | 5 | 21 | 21 | 0 | 100% | ✅ Success | **Pass** |
-| **metrics-server** | 3.13.1 | 9 | 18 | 18 | 0 | 100% | ✅ Success | **Pass** |
-| **external-dns** | 1.21.1 | 5 | 7 | 7 | 0 | 100% | ✅ Success | **Pass** |
-| **ingress-nginx** | 4.12.1 | 19 | 42 | 42 | 0 | 100% | ✅ Success | **Pass** |
-| **cert-manager** | 1.17.1 | 52 | 41 | 41 | 0 | 100% | ✅ Success | **Pass** |
-| **Total** | — | **90** | **129** | **129** | **0** | **100%** | — | — |
-
-### Per-Chart Breakdown
-
-```
-podinfo          █████████████████████  100%  (21/21 templates)
-metrics-server   █████████████████████  100%  (18/18 templates)
-external-dns     █████████████████████  100%  ( 7/ 7 templates)
-ingress-nginx    █████████████████████  100%  (42/42 templates)
-cert-manager     █████████████████████  100%  (41/41 templates)
-                 ─────────────────────
-                 █████████████████████  100%  (129/129 templates overall)
-```
-
-### Error Analysis
-
-For the pinned public charts listed above, all 129 templates render without parser exceptions and match `helm template` after normalization. This is the current compatibility signal for the covered charts, not a guarantee that every Helm chart uses only covered behavior.
-
-Key parity milestones closed since the 1.0.3 release:
-
-- **#109 / #111 / #113** — Block right-trim now preserves action-line indent matching Go `text/template` behavior; cert-manager golden test restored from 45/52 to 52/52 exact match.
-- **#112** — `ParseDefine` now applies right-trim to define body, matching `ParseBlock` behavior.
-- **#97** — Completed Sprig function parity for remaining gaps (`empty`, `keys`, `mergeOverwrite`, `mustRegexMatch`, `mustRegexReplaceAll`, etc.).
-- **#102** — Resolved cert-manager remaining content diffs (YAML tag, octal values, merge keys, block scalars, comment trimming).
-- **#96 / #99 / #108** — Resolved selected public-chart golden test content diffs to achieve Pass verdicts across all five charts.
-
-### Verdict Legend
-
-| Verdict | Meaning |
-| --- | --- |
-| **Pass** | The tested chart output is byte-for-byte identical after normalization (line endings, source comments). |
-| **Partial** | Structurally compatible — same document count, or most individual templates render correctly while a few hit known parser gaps. |
-| **Fail** | The renderer cannot produce output for any template in this chart. |
+For supported behavior, known boundaries, and guidance for validating a production chart, see [Helm Compatibility](docs/helm-compatibility.md).
 
 ## Known Scope
 
-HelmSharp is not a full Helm CLI clone. Some advanced Helm behaviors, edge-case template functions, plugins, provenance verification flows, OCI authentication flows, and uncommon Kubernetes resource types may need additional implementation. Contributions that add compatibility with focused tests are welcome.
+HelmSharp is not a full Helm CLI clone. An unimplemented template function produces a path-aware rendering diagnostic; it is not silently substituted. Kubernetes apply/delete discovers resource kinds from the target cluster for kinds outside the typed client surface, while readiness handling remains selective. Advanced Helm behaviors, plugins, provenance verification flows, and OCI authentication flows may need additional implementation.
 
 ## Documentation
 

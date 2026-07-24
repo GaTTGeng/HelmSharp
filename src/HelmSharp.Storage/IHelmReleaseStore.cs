@@ -12,3 +12,8 @@ public interface IHelmReleaseStore
     Task MarkStatusAsync(HelmReleaseRecord record, string status, CancellationToken cancellationToken = default);
     Task<int> NextRevisionAsync(string name, string namespaceName, CancellationToken cancellationToken = default);
 }
+
+public interface IHelmReleasePurgeStore : IHelmReleaseStore
+{
+    Task PurgeAsync(string name, string namespaceName, CancellationToken cancellationToken = default);
+}

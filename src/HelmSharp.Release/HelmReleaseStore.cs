@@ -95,6 +95,19 @@ public sealed class HelmReleaseStore
         await SaveAsync(uninstalled, cancellationToken);
     }
 
+    /// <summary>Deletes all Helm release Secret records for the supplied release.</summary>
+    public async Task PurgeAsync(string name, string ns, CancellationToken cancellationToken)
+    {
+        var history = await HistoryAsync(name, ns, cancellationToken);
+        foreach (var record in history)
+        {
+            await _client.CoreV1.DeleteNamespacedSecretAsync(
+                SecretName(record.Name, record.Revision),
+                record.Namespace,
+                cancellationToken: cancellationToken);
+        }
+    }
+
     public async Task MarkStatusAsync(HelmReleaseRecord record, string status, CancellationToken cancellationToken)
     {
         record.Status = status;

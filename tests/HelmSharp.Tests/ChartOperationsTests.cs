@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using HelmSharp.Action;
 using HelmSharp.Chart;
+using HelmSharp.Kube;
 using HelmSharp.Release;
 using k8s;
 using k8s.Autorest;
@@ -472,6 +473,29 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public void GetAttemptedOnlyManifest_UsesApiVersionInResourceIdentity()
+    {
+        const string previous = """
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: same-name
+            """;
+        const string attempted = """
+            apiVersion: example.com/v1
+            kind: Deployment
+            metadata:
+              name: same-name
+            """;
+
+        var attemptedOnly = HelmClient.GetAttemptedOnlyManifest(previous, attempted, "test-ns");
+
+        Assert.Contains("apiVersion: example.com/v1", attemptedOnly);
+        Assert.Contains("kind: Deployment", attemptedOnly);
+        Assert.Contains("name: same-name", attemptedOnly);
+    }
+
+    [Fact]
     public async Task ReleaseLifecycle_SuccessfulUpgradeAndRollbackKeepOneDeployedRevision()
     {
         var chartDir = await CreateMinimalChartAsync("lifecycle-chart");
@@ -505,7 +529,7 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
-    public async Task ReleaseLifecycle_ReinstallAfterUninstallStartsAnInstallAtTheNextRevision()
+    public async Task ReleaseLifecycle_ReinstallAfterRetainedUninstallStartsAnInstallAtTheNextRevision()
     {
         var chartDir = await CreateMinimalChartAsync("reinstall-chart");
         var releaseState = new ReleaseLifecycleState();
@@ -516,7 +540,12 @@ public class ChartOperationsTests : IDisposable
             ReleaseName = "reinstall",
             Chart = chartDir
         }));
-        var uninstall = await client.UninstallAsync("reinstall", "test-ns");
+        var uninstall = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "reinstall",
+            Namespace = "test-ns",
+            KeepHistory = true
+        });
         await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
         {
             ReleaseName = "reinstall",
@@ -529,6 +558,115 @@ public class ChartOperationsTests : IDisposable
             record => Assert.Equal((1, "superseded"), (record.Revision, record.Status)),
             record => Assert.Equal((2, "uninstalled"), (record.Revision, record.Status)),
             record => Assert.Equal((3, "deployed"), (record.Revision, record.Status)));
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_UninstallDefaultsToPurge()
+    {
+        var chartDir = await CreateMinimalChartAsync("retained-uninstall-chart");
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "retained-uninstall",
+            Chart = chartDir
+        }));
+
+        var uninstall = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "retained-uninstall",
+            Namespace = "test-ns"
+        });
+
+        Assert.Equal(0, uninstall.ExitCode);
+        Assert.Empty(releaseState.Records("retained-uninstall"));
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_UninstallPurgesPreviouslyRetainedHistory()
+    {
+        var chartDir = await CreateMinimalChartAsync("purge-retained-history-chart");
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "retained-history",
+            Chart = chartDir
+        }));
+        await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "retained-history",
+            Namespace = "test-ns",
+            KeepHistory = true
+        });
+
+        var purge = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "retained-history",
+            Namespace = "test-ns"
+        });
+
+        Assert.Equal(0, purge.ExitCode);
+        Assert.Empty(releaseState.Records("retained-history"));
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_PurgeRemovesOnlyTheRequestedReleaseHistory()
+    {
+        var chartDir = await CreateMinimalChartAsync("purge-uninstall-chart");
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "purged-release",
+            Chart = chartDir
+        }));
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "unrelated-release",
+            Chart = chartDir
+        }));
+
+        var uninstall = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "purged-release",
+            Namespace = "test-ns",
+            KeepHistory = false
+        });
+
+        Assert.Equal(0, uninstall.ExitCode);
+        Assert.Empty(releaseState.Records("purged-release"));
+        Assert.Single(releaseState.Records("unrelated-release"));
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_UninstallForwardsDeletionPropagation()
+    {
+        var chartDir = await CreateMinimalChartAsync("propagation-uninstall-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: propagation-config
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "propagation-uninstall",
+            Chart = chartDir
+        }));
+
+        var uninstall = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "propagation-uninstall",
+            Namespace = "test-ns",
+            Wait = true,
+            DeletionPropagation = HelmDeletionPropagation.Foreground
+        });
+
+        Assert.Equal(0, uninstall.ExitCode);
+        Assert.Contains(releaseState.DeleteRequestBodies, body => body.Contains("Foreground", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -790,6 +928,19 @@ public class ChartOperationsTests : IDisposable
         }
     }
 
+    private static Task WriteRetainedAndIntroducedConfigMapAsync(string templatePath, string introducedName)
+        => File.WriteAllTextAsync(templatePath, $$"""
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: retained
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: {{introducedName}}
+            """);
+
     private sealed class ReleaseLifecycleHandler : DelegatingHandler
     {
         private readonly ReleaseLifecycleState _releaseState;
@@ -802,10 +953,26 @@ public class ChartOperationsTests : IDisposable
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+            if (request.Method == HttpMethod.Delete && request.Content is not null)
+                _releaseState.DeleteRequestBodies.Add(await request.Content.ReadAsStringAsync(cancellationToken));
+            if (request.Method == HttpMethod.Delete)
+                _releaseState.DeletedPaths.Add(path);
             if (request.Method == HttpMethod.Get && path.EndsWith("/secrets", StringComparison.Ordinal))
             {
+                var selector = Uri.UnescapeDataString(request.RequestUri?.Query ?? string.Empty);
+                IEnumerable<string> secrets = _releaseState.Secrets.Values;
+                if (selector.Contains("name=", StringComparison.Ordinal))
+                {
+                    var releaseName = selector[(selector.IndexOf("name=", StringComparison.Ordinal) + "name=".Length)..]
+                        .Split('&', StringSplitOptions.RemoveEmptyEntries)[0];
+                    secrets = secrets.Where(secret =>
+                        string.Equals(
+                            JsonSerializer.Deserialize<ReleaseLifecycleState.SecretEnvelope>(secret, ReleaseLifecycleState.JsonDefaults)!.Metadata.Labels["name"],
+                            releaseName,
+                            StringComparison.Ordinal));
+                }
                 return JsonResponse(request, HttpStatusCode.OK, $$"""
-                    { "kind": "SecretList", "apiVersion": "v1", "metadata": {}, "items": [{{string.Join(',', _releaseState.Secrets.Values)}}] }
+                    { "kind": "SecretList", "apiVersion": "v1", "metadata": {}, "items": [{{string.Join(',', secrets)}}] }
                     """);
             }
 
@@ -831,6 +998,26 @@ public class ChartOperationsTests : IDisposable
                     : JsonResponse(request, HttpStatusCode.NotFound, "{ \"code\": 404 }");
             }
 
+            if (request.Method == HttpMethod.Delete && path.Contains("/secrets/", StringComparison.Ordinal))
+            {
+                var name = path[(path.LastIndexOf('/') + 1)..];
+                _releaseState.Secrets.Remove(name);
+                return JsonResponse(request, HttpStatusCode.OK, "{}");
+            }
+
+            if ((request.Method == HttpMethod.Post || request.Method == HttpMethod.Put) &&
+                path.Contains("/configmaps", StringComparison.Ordinal))
+            {
+                var configMap = await request.Content!.ReadAsStringAsync(cancellationToken);
+                return JsonResponse(request, request.Method == HttpMethod.Post ? HttpStatusCode.Created : HttpStatusCode.OK, configMap);
+            }
+
+            if (request.Method == HttpMethod.Get && path.Contains("/configmaps/", StringComparison.Ordinal))
+            {
+                _releaseState.WaitedPaths.Add(path);
+                return JsonResponse(request, HttpStatusCode.NotFound, "{ \"code\": 404 }");
+            }
+
             return JsonResponse(request, HttpStatusCode.OK, "{}");
         }
 
@@ -846,6 +1033,9 @@ public class ChartOperationsTests : IDisposable
     private sealed class ReleaseLifecycleState
     {
         internal Dictionary<string, string> Secrets { get; } = new(StringComparer.Ordinal);
+        internal List<string> DeleteRequestBodies { get; } = [];
+        internal List<string> DeletedPaths { get; } = [];
+        internal List<string> WaitedPaths { get; } = [];
         public bool FailNextSecretCreate { get; set; }
 
         public IReadOnlyList<HelmReleaseRecord> Records(string releaseName)
@@ -872,6 +1062,301 @@ public class ChartOperationsTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task ManifestApplier_UnknownResource_UsesApiDiscoveryAndDynamicEndpoint()
+    {
+        var handler = new RecordingKubernetesHandler();
+        var client = new Kubernetes(new KubernetesClientConfiguration
+        {
+            Host = "https://helmsharp.test",
+            SkipTlsVerify = true
+        }, handler);
+        var applier = new KubernetesManifestApplier(client, "helmsharp-test");
+
+        await foreach (var _ in applier.ApplyAsync("""
+            apiVersion: example.com/v1
+            kind: Widget
+            metadata:
+              name: sample
+            spec:
+              enabled: true
+            """, "test-ns"))
+        {
+        }
+
+        Assert.Contains(handler.Requests, request =>
+            request.Method == HttpMethod.Get && request.PathAndQuery == "/apis/example.com/v1");
+        Assert.Contains(handler.Requests, request =>
+            request.Method == HttpMethod.Post && request.PathAndQuery.StartsWith("/apis/example.com/v1/namespaces/test-ns/widgets", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ManifestApplier_UnsupportedCoreResource_DoesNotUseCustomObjectEndpoint()
+    {
+        var handler = new RecordingKubernetesHandler();
+        var client = new Kubernetes(new KubernetesClientConfiguration
+        {
+            Host = "https://helmsharp.test",
+            SkipTlsVerify = true
+        }, handler);
+        var applier = new KubernetesManifestApplier(client, "helmsharp-test");
+
+        var ex = await Assert.ThrowsAnyAsync<InvalidOperationException>(async () =>
+            await DrainAsync(applier.ApplyAsync("""
+                apiVersion: v1
+                kind: Event
+                metadata:
+                  name: sample
+                """, "test-ns")));
+
+        Assert.Contains("v1/Event", ex.Message);
+        Assert.DoesNotContain(handler.Requests, request =>
+            request.PathAndQuery.Contains("/apis/", StringComparison.Ordinal) ||
+            request.PathAndQuery.Contains("/events/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ResourceWaiter_WaitsForDiscoveredResourceDeletion()
+    {
+        var handler = new RecordingKubernetesHandler();
+        var client = new Kubernetes(new KubernetesClientConfiguration
+        {
+            Host = "https://helmsharp.test",
+            SkipTlsVerify = true
+        }, handler);
+        var waiter = new KubernetesResourceWaiter(client, timeoutSeconds: 1);
+
+        await DrainAsync(waiter.WaitForDeletedAsync("""
+            apiVersion: example.com/v1
+            kind: Widget
+            metadata:
+              name: sample
+            """, "test-ns"));
+
+        Assert.Contains(handler.Requests, request =>
+            request.Method == HttpMethod.Get && request.PathAndQuery == "/apis/example.com/v1/namespaces/test-ns/widgets/sample");
+    }
+
+    [Fact]
+    public async Task ResourceWaiter_WaitsForDeletedResourcesWithSameDisplayNameAcrossApiVersions()
+    {
+        var handler = new RecordingKubernetesHandler();
+        var client = new Kubernetes(new KubernetesClientConfiguration
+        {
+            Host = "https://helmsharp.test",
+            SkipTlsVerify = true
+        }, handler);
+        var waiter = new KubernetesResourceWaiter(client, timeoutSeconds: 1);
+
+        await DrainAsync(waiter.WaitForDeletedAsync("""
+            apiVersion: autoscaling/v2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            ---
+            apiVersion: autoscaling/v1
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            """, "test-ns"));
+
+        Assert.Contains(handler.Requests, request =>
+            request.Method == HttpMethod.Get &&
+            request.PathAndQuery == "/apis/autoscaling/v2/namespaces/test-ns/horizontalpodautoscalers/scaler");
+        Assert.Contains(handler.Requests, request =>
+            request.Method == HttpMethod.Get &&
+            request.PathAndQuery == "/apis/autoscaling/v1/namespaces/test-ns/horizontalpodautoscalers/scaler");
+    }
+
+    [Fact]
+    public async Task ResourceWaiter_TreatsRemovedDiscoveredApiAsDeleted()
+    {
+        var handler = new RecordingKubernetesHandler(includeWidget: false);
+        var client = new Kubernetes(new KubernetesClientConfiguration
+        {
+            Host = "https://helmsharp.test",
+            SkipTlsVerify = true
+        }, handler);
+        var waiter = new KubernetesResourceWaiter(client, timeoutSeconds: 1);
+
+        await DrainAsync(waiter.WaitForDeletedAsync("""
+            apiVersion: example.com/v1
+            kind: Widget
+            metadata:
+              name: sample
+            """, "test-ns"));
+    }
+
+    [Fact]
+    public async Task ResourceWaiter_UnsupportedCoreResourceDeletion_DoesNotUseCustomObjectEndpoint()
+    {
+        var handler = new RecordingKubernetesHandler();
+        var client = new Kubernetes(new KubernetesClientConfiguration
+        {
+            Host = "https://helmsharp.test",
+            SkipTlsVerify = true
+        }, handler);
+        var waiter = new KubernetesResourceWaiter(client, timeoutSeconds: 1);
+
+        await DrainAsync(waiter.WaitForDeletedAsync("""
+            apiVersion: v1
+            kind: Event
+            metadata:
+              name: sample
+            """, "test-ns"));
+
+        Assert.DoesNotContain(handler.Requests, request =>
+            request.PathAndQuery.Contains("/apis/", StringComparison.Ordinal) ||
+            request.PathAndQuery.Contains("/events/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ManifestApplier_DeleteTreatsRemovedDiscoveredKindAsAlreadyGone()
+    {
+        var handler = new RecordingKubernetesHandler(includeWidget: false);
+        var client = new Kubernetes(new KubernetesClientConfiguration
+        {
+            Host = "https://helmsharp.test",
+            SkipTlsVerify = true
+        }, handler);
+        var applier = new KubernetesManifestApplier(client, "helmsharp-test");
+
+        await DrainAsync(applier.DeleteAsync("""
+            apiVersion: example.com/v1
+            kind: Widget
+            metadata:
+              name: sample
+            """, "test-ns"));
+
+        Assert.Contains(handler.Requests, request =>
+            request.Method == HttpMethod.Get && request.PathAndQuery == "/apis/example.com/v1");
+        Assert.DoesNotContain(handler.Requests, request =>
+            request.Method == HttpMethod.Delete && request.PathAndQuery.Contains("/widgets/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ManifestApplier_DeleteUnsupportedCoreResource_DoesNotUseCustomObjectEndpoint()
+    {
+        var handler = new RecordingKubernetesHandler();
+        var client = new Kubernetes(new KubernetesClientConfiguration
+        {
+            Host = "https://helmsharp.test",
+            SkipTlsVerify = true
+        }, handler);
+        var applier = new KubernetesManifestApplier(client, "helmsharp-test");
+
+        await DrainAsync(applier.DeleteAsync("""
+            apiVersion: v1
+            kind: Event
+            metadata:
+              name: sample
+            """, "test-ns"));
+
+        Assert.DoesNotContain(handler.Requests, request =>
+            request.PathAndQuery.Contains("/apis/", StringComparison.Ordinal) ||
+            request.PathAndQuery.Contains("/events/", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReleaseLifecycle_UninstallDeletesResourcesIntroducedByAFailedRevision(bool keepHistory)
+    {
+        var chartDir = await CreateMinimalChartAsync("failed-revision-purge-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: retained
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "failed-revision-purge",
+            Chart = chartDir
+        }));
+
+        await File.AppendAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: introduced-by-failed-revision
+            """);
+        releaseState.FailNextSecretCreate = true;
+        await Assert.ThrowsAsync<HttpOperationException>(async () =>
+            await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+            {
+                ReleaseName = "failed-revision-purge",
+                Chart = chartDir
+            })));
+
+        var uninstall = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "failed-revision-purge",
+            Namespace = "test-ns",
+            KeepHistory = keepHistory
+        });
+
+        Assert.Equal(0, uninstall.ExitCode);
+        Assert.Contains(releaseState.DeletedPaths, path =>
+            path.EndsWith("/configmaps/introduced-by-failed-revision", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_UninstallWaitSeparatesMultipleFailedRevisionManifests()
+    {
+        var chartDir = await CreateMinimalChartAsync("failed-revision-wait-chart");
+        var templatePath = Path.Combine(chartDir, "templates", "configmap.yaml");
+        await File.WriteAllTextAsync(templatePath, """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: retained
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "failed-revision-wait",
+            Chart = chartDir
+        }));
+
+        await WriteRetainedAndIntroducedConfigMapAsync(templatePath, "introduced-by-first-failure");
+        releaseState.FailNextSecretCreate = true;
+        await Assert.ThrowsAsync<HttpOperationException>(async () =>
+            await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+            {
+                ReleaseName = "failed-revision-wait",
+                Chart = chartDir
+            })));
+
+        await WriteRetainedAndIntroducedConfigMapAsync(templatePath, "introduced-by-second-failure");
+        releaseState.FailNextSecretCreate = true;
+        await Assert.ThrowsAsync<HttpOperationException>(async () =>
+            await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+            {
+                ReleaseName = "failed-revision-wait",
+                Chart = chartDir
+            })));
+
+        var uninstall = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "failed-revision-wait",
+            Namespace = "test-ns",
+            Wait = true,
+            TimeoutSeconds = 1
+        });
+
+        Assert.Equal(0, uninstall.ExitCode);
+        Assert.Contains(releaseState.WaitedPaths, path =>
+            path.EndsWith("/configmaps/introduced-by-first-failure", StringComparison.Ordinal));
+        Assert.Contains(releaseState.WaitedPaths, path =>
+            path.EndsWith("/configmaps/introduced-by-second-failure", StringComparison.Ordinal));
+    }
+
     private sealed class StaticHelmOptionsProvider : IHelmOptionsProvider
     {
         private readonly HelmExecutionOptions _options;
@@ -893,11 +1378,13 @@ public class ChartOperationsTests : IDisposable
     private sealed class RecordingKubernetesHandler : DelegatingHandler
     {
         private readonly HttpStatusCode _secretListStatus;
+        private readonly bool _includeWidget;
         private readonly List<(HttpMethod Method, string PathAndQuery)> _requests = [];
 
-        public RecordingKubernetesHandler(HttpStatusCode secretListStatus = HttpStatusCode.OK)
+        public RecordingKubernetesHandler(HttpStatusCode secretListStatus = HttpStatusCode.OK, bool includeWidget = true)
         {
             _secretListStatus = secretListStatus;
+            _includeWidget = includeWidget;
         }
 
         public IReadOnlyList<(HttpMethod Method, string PathAndQuery)> Requests => _requests;
@@ -905,6 +1392,49 @@ public class ChartOperationsTests : IDisposable
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             _requests.Add((request.Method, request.RequestUri?.PathAndQuery ?? string.Empty));
+
+            if (request.Method == HttpMethod.Get &&
+                string.Equals(request.RequestUri?.AbsolutePath, "/apis/example.com/v1", StringComparison.Ordinal))
+            {
+                var resources = _includeWidget
+                    ? "[{ \"name\": \"widgets\", \"kind\": \"Widget\", \"namespaced\": true }]"
+                    : "[]";
+                return Task.FromResult(JsonResponse(request, HttpStatusCode.OK, $$"""
+                    {
+                      "kind": "APIResourceList",
+                      "apiVersion": "v1",
+                      "groupVersion": "example.com/v1",
+                      "resources": {{resources}}
+                    }
+                    """));
+            }
+
+            if (request.Method == HttpMethod.Get &&
+                string.Equals(request.RequestUri?.AbsolutePath, "/apis/example.com/v1/namespaces/test-ns/widgets/sample", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse(request, HttpStatusCode.NotFound, """
+                    {
+                      "kind": "Status",
+                      "apiVersion": "v1",
+                      "status": "Failure",
+                      "code": 404
+                    }
+                    """));
+            }
+
+            if (request.Method == HttpMethod.Get &&
+                request.RequestUri?.AbsolutePath.StartsWith("/apis/autoscaling/", StringComparison.Ordinal) == true &&
+                request.RequestUri.AbsolutePath.EndsWith("/horizontalpodautoscalers/scaler", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse(request, HttpStatusCode.NotFound, """
+                    {
+                      "kind": "Status",
+                      "apiVersion": "v1",
+                      "status": "Failure",
+                      "code": 404
+                    }
+                    """));
+            }
 
             if (request.Method == HttpMethod.Get &&
                 request.RequestUri?.AbsolutePath.EndsWith("/secrets", StringComparison.Ordinal) == true)
