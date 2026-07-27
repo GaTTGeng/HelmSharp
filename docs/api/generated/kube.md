@@ -30,6 +30,7 @@ Read the corresponding package page first, then use this member index to locate 
 | Source | `src/HelmSharp.Kube/KubernetesResourceWaiter.cs` |
 
 ### Methods
+- `WaitForDeletedAsync(...)`
 - `WaitForReadyAsync(...)`
 
 ### Usage note

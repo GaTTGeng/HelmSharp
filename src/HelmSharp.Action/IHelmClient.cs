@@ -54,6 +54,13 @@ public interface IHelmClient
         string? @namespace = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Rolls a release back using lifecycle options.</summary>
+    Task<CommandResult> RollbackAsync(
+        HelmRollbackRequest request,
+        CancellationToken cancellationToken = default)
+        => Task.FromException<CommandResult>(new NotSupportedException(
+            "Rollback request options require an IHelmClient implementation that supports them."));
+
     Task<CommandResult> HistoryAsync(
         string releaseName,
         string? @namespace = null,

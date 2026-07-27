@@ -147,11 +147,15 @@ public class HelmClient : IHelmClient
     {
         ValidateUpgradeRequest(request);
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
+        var timeout = request.TimeoutSeconds ?? options.TimeoutSeconds;
+        using var timeoutSource = new CancellationTokenSource(TimeSpan.FromSeconds(timeout));
+        using var operationSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
+        var operationToken = operationSource.Token;
         var ns = request.Namespace ?? options.DefaultNamespace ?? "default";
 
         yield return $"Loading chart {request.Chart}";
-        var chartPath = await ResolveChartPathAsync(request.Chart, request.Version, options, cancellationToken);
-        var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
+        var chartPath = await ResolveChartPathAsync(request.Chart, request.Version, options, operationToken);
+        var chart = await HelmChartLoader.LoadAsync(chartPath, operationToken);
 
         // Validate kubeVersion compatibility
         if (!string.IsNullOrWhiteSpace(chart.KubeVersion) && !string.IsNullOrWhiteSpace(options.KubeVersion))
@@ -165,16 +169,16 @@ public class HelmClient : IHelmClient
         }
 
         var valuesFiles = CombineValuesFiles(request.ValuesFile, request.ValuesFiles);
-        var overrides = await HelmValues.BuildOverridesAsync(valuesFiles, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
-        var values = HelmValues.BuildFromOverrides(chart, overrides);
+        var providedOverrides = await HelmValues.BuildOverridesAsync(valuesFiles, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, operationToken);
 
         if (request.DryRun)
         {
+            var dryRunValues = HelmValues.BuildFromOverrides(chart, providedOverrides);
             var dryRunRenderer = new HelmTemplateRenderer(
                 chart,
                 request.ReleaseName,
                 ns,
-                values,
+                dryRunValues,
                 options.KubeVersion,
                 options.ApiVersions,
                 request.DryRunIsUpgrade,
@@ -186,15 +190,20 @@ public class HelmClient : IHelmClient
             yield break;
         }
 
-        using var client = await _createKubernetesClientAsync(options, request.KubeConfigPath, request.KubeConfigContent, cancellationToken);
+        using var client = await _createKubernetesClientAsync(options, request.KubeConfigPath, request.KubeConfigContent, operationToken);
         var store = new HelmReleaseStore(client);
         var existingHistory = await LoadReleaseHistoryForUpgradeInstallAsync(
             store,
             request.ReleaseName,
             ns,
-            request.CreateNamespace,
-            cancellationToken);
+            request.CreateNamespace || !request.Install,
+            operationToken);
         var (isUpgrade, revision) = ResolveReleaseRenderState(existingHistory);
+        if (!isUpgrade && !request.Install)
+            throw new InvalidOperationException($"release: not found: {request.ReleaseName}");
+
+        var overrides = ResolveUpgradeOverrides(existingHistory, isUpgrade, request.ReuseValues, providedOverrides);
+        var values = HelmValues.BuildFromOverrides(chart, overrides);
         var renderer = new HelmTemplateRenderer(
             chart,
             request.ReleaseName,
@@ -208,7 +217,7 @@ public class HelmClient : IHelmClient
 
         if (request.CreateNamespace)
         {
-            await KubernetesManifestApplier.EnsureNamespaceAsync(client, ns, cancellationToken);
+            await KubernetesManifestApplier.EnsureNamespaceAsync(client, ns, operationToken);
             yield return $"Namespace {ns} is ready";
         }
 
@@ -224,7 +233,7 @@ public class HelmClient : IHelmClient
                 var crdError = (string?)null;
                 try
                 {
-                    await foreach (var resource in crdApplier.ApplyAsync(crdYaml, ns, cancellationToken))
+                    await foreach (var resource in crdApplier.ApplyAsync(crdYaml, ns, operationToken))
                     {
                         crdResults.Add($"  CRD applied: {resource}");
                     }
@@ -276,7 +285,7 @@ public class HelmClient : IHelmClient
             var hookExecutor = new HelmHookExecutor(client, options.FieldManager);
             var preEvent = isUpgrade ? HelmHookEvent.PreUpgrade : HelmHookEvent.PreInstall;
             await foreach (var hookLine in StreamWithFailureHandlingAsync(
-                               hookExecutor.ExecuteHooksWithFailureHandlingAsync(hooks, preEvent, ns, cancellationToken),
+                               hookExecutor.ExecuteHooksWithFailureHandlingAsync(hooks, preEvent, ns, operationToken),
                                error => PersistFailedLifecycleAsync(store, releaseRecord, error, null, mainManifest, existingHistory, isUpgrade, request, ns)))
             {
                 yield return hookLine;
@@ -289,7 +298,7 @@ public class HelmClient : IHelmClient
         Exception? applyError = null;
         try
         {
-            await foreach (var resource in applier.ApplyAsync(mainManifest, ns, cancellationToken))
+            await foreach (var resource in applier.ApplyAsync(mainManifest, ns, operationToken))
             {
                 applied++;
                 appliedResources.Add($"Applied {resource}");
@@ -317,7 +326,7 @@ public class HelmClient : IHelmClient
             var hookExecutor = new HelmHookExecutor(client, options.FieldManager);
             var postEvent = isUpgrade ? HelmHookEvent.PostUpgrade : HelmHookEvent.PostInstall;
             await foreach (var hookLine in StreamWithFailureHandlingAsync(
-                               hookExecutor.ExecuteHooksWithFailureHandlingAsync(hooks, postEvent, ns, cancellationToken),
+                               hookExecutor.ExecuteHooksWithFailureHandlingAsync(hooks, postEvent, ns, operationToken),
                                error => PersistFailedLifecycleAsync(store, releaseRecord, error, applier, mainManifest, existingHistory, isUpgrade, request, ns)))
             {
                 yield return hookLine;
@@ -325,14 +334,13 @@ public class HelmClient : IHelmClient
         }
 
         // Wait for resources to be ready
-        if (request.Wait && !request.DryRun)
+        if ((request.Wait || request.Atomic) && !request.DryRun)
         {
-            var timeout = request.TimeoutSeconds ?? options.TimeoutSeconds;
             yield return $"Waiting for resources to be ready (timeout: {timeout}s)...";
             var waiter = new KubernetesResourceWaiter(client, timeout);
             await using var waitEnumerator = waiter
-                .WaitForReadyAsync(mainManifest, ns, waitForJobs: request.WaitForJobs, cancellationToken: cancellationToken)
-                .GetAsyncEnumerator(cancellationToken);
+                .WaitForReadyAsync(mainManifest, ns, waitForJobs: request.WaitForJobs, cancellationToken: operationToken)
+                .GetAsyncEnumerator(operationToken);
             while (true)
             {
                 string? waitLine = null;
@@ -372,7 +380,7 @@ public class HelmClient : IHelmClient
                 UpdatedAt = completedAt,
                 FirstDeployedAt = existingHistory.Count == 0 ? completedAt : firstDeployedAt
             };
-            await store.SaveAsync(releaseRecord, cancellationToken);
+            await store.SaveAsync(releaseRecord, operationToken);
         }
         catch (Exception ex)
         {
@@ -384,13 +392,13 @@ public class HelmClient : IHelmClient
                 yield return line;
         if (saveError is not null)
             throw saveError;
-        await SupersedeDeployedReleasesAsync(store, existingHistory, cancellationToken);
+        await SupersedeDeployedReleasesAsync(store, existingHistory, operationToken);
 
         // Enforce max history
         var maxHistory = request.MaxHistory ?? options.MaxHistory;
         if (maxHistory > 0)
         {
-            await PruneOldReleasesAsync(store, request.ReleaseName, ns, maxHistory, cancellationToken);
+            await PruneOldReleasesAsync(store, request.ReleaseName, ns, maxHistory, operationToken);
         }
 
         yield return $"Release {request.ReleaseName} revision {revision} deployed ({applied} resources)";
@@ -431,6 +439,45 @@ public class HelmClient : IHelmClient
         var isUpgrade = !string.Equals(latest.Status, "uninstalled", StringComparison.OrdinalIgnoreCase);
         var revision = latest.Revision + 1;
         return (isUpgrade, revision);
+    }
+
+    internal static Dictionary<string, object?> ResolveUpgradeOverrides(
+        IReadOnlyCollection<HelmReleaseRecord> history,
+        bool isUpgrade,
+        bool reuseValues,
+        Dictionary<string, object?> providedOverrides)
+    {
+        if (!reuseValues)
+            return providedOverrides;
+
+        if (!isUpgrade)
+            throw new InvalidOperationException("ReuseValues requires an existing release.");
+
+        var latest = history.MaxBy(record => record.Revision);
+        if (latest is null)
+            throw new InvalidOperationException("ReuseValues requires an existing release.");
+
+        var result = HelmYaml.DeserializeDictionary(latest.ValuesYaml);
+        MergeValues(result, providedOverrides);
+        return result;
+    }
+
+    private static void MergeValues(
+        Dictionary<string, object?> target,
+        IReadOnlyDictionary<string, object?> source)
+    {
+        foreach (var (key, value) in source)
+        {
+            if (target.TryGetValue(key, out var existing) &&
+                existing is Dictionary<string, object?> targetMap &&
+                value is Dictionary<string, object?> sourceMap)
+            {
+                MergeValues(targetMap, sourceMap);
+                continue;
+            }
+
+            target[key] = value;
+        }
     }
 
     private static async Task SupersedeDeployedReleasesAsync(
@@ -599,14 +646,14 @@ public class HelmClient : IHelmClient
         HelmReleaseStore store,
         string releaseName,
         string ns,
-        bool createNamespace,
+        bool treatMissingNamespaceAsEmptyHistory,
         CancellationToken cancellationToken)
     {
         try
         {
             return await store.HistoryAsync(releaseName, ns, cancellationToken);
         }
-        catch (HttpOperationException ex) when (createNamespace && (int)ex.Response.StatusCode == 404)
+        catch (HttpOperationException ex) when (treatMissingNamespaceAsEmptyHistory && (int)ex.Response.StatusCode == 404)
         {
             return [];
         }
@@ -777,25 +824,46 @@ public class HelmClient : IHelmClient
         int revision,
         string? @namespace = null,
         CancellationToken cancellationToken = default)
+        => await RollbackAsync(new HelmRollbackRequest
+        {
+            ReleaseName = releaseName,
+            Revision = revision,
+            Namespace = @namespace
+        }, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<CommandResult> RollbackAsync(
+        HelmRollbackRequest request,
+        CancellationToken cancellationToken = default)
     {
+        ValidateRollbackRequest(request);
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
-        var ns = @namespace ?? options.DefaultNamespace ?? "default";
-        using var client = await _createKubernetesClientAsync(options, null, null, cancellationToken);
+        var timeout = request.TimeoutSeconds ?? options.TimeoutSeconds;
+        using var timeoutSource = new CancellationTokenSource(TimeSpan.FromSeconds(timeout));
+        using var operationSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
+        var operationToken = operationSource.Token;
+        var ns = request.Namespace ?? options.DefaultNamespace ?? "default";
+        using var client = await _createKubernetesClientAsync(
+            options,
+            request.KubeConfigPath,
+            request.KubeConfigContent,
+            operationToken);
         var store = new HelmReleaseStore(client);
 
-        var current = await store.GetLatestAsync(releaseName, ns, cancellationToken);
+        var current = await store.GetLatestAsync(request.ReleaseName, ns, operationToken);
         if (current is null)
-            return Fail($"release: not found: {releaseName}");
+            return Fail($"release: not found: {request.ReleaseName}");
 
-        var targetRecord = revision > 0
-            ? (await store.HistoryAsync(releaseName, ns, cancellationToken)).FirstOrDefault(x => x.Revision == revision)
-            : (await store.HistoryAsync(releaseName, ns, cancellationToken))
+        var storedHistory = await store.HistoryAsync(request.ReleaseName, ns, operationToken);
+        var targetRecord = request.Revision > 0
+            ? storedHistory.FirstOrDefault(x => x.Revision == request.Revision)
+            : storedHistory
                 .Where(x => x.Status != "uninstalled" && x.Revision < current.Revision)
                 .OrderByDescending(x => x.Revision)
                 .FirstOrDefault();
 
         if (targetRecord is null)
-            return Fail($"release has no revision {revision}");
+            return Fail($"release has no revision {request.Revision}");
 
         var (mainManifest, hooks) = ResolveStoredManifest(targetRecord, ns);
         var hookExecutor = new HelmHookExecutor(client, options.FieldManager);
@@ -803,9 +871,9 @@ public class HelmClient : IHelmClient
         var output = new StringBuilder();
 
         // Execute pre-rollback hooks
-        if (hooks.Any(h => h.Events.Contains(HelmHookEvent.PreRollback)))
+        if (!request.DisableHooks && hooks.Any(h => h.Events.Contains(HelmHookEvent.PreRollback)))
         {
-            await foreach (var hookLine in hookExecutor.ExecuteHooksAsync(hooks, HelmHookEvent.PreRollback, ns, cancellationToken))
+            await foreach (var hookLine in hookExecutor.ExecuteHooksAsync(hooks, HelmHookEvent.PreRollback, ns, operationToken))
             {
                 output.AppendLine(hookLine);
             }
@@ -813,25 +881,33 @@ public class HelmClient : IHelmClient
 
         var applier = new KubernetesManifestApplier(client, options.FieldManager);
 
-        await foreach (var resource in applier.ApplyAsync(mainManifest, ns, cancellationToken))
+        await foreach (var resource in applier.ApplyAsync(mainManifest, ns, operationToken))
         {
             output.AppendLine($"Rolled back {resource}");
         }
 
         // Execute post-rollback hooks
-        if (hooks.Any(h => h.Events.Contains(HelmHookEvent.PostRollback)))
+        if (!request.DisableHooks && hooks.Any(h => h.Events.Contains(HelmHookEvent.PostRollback)))
         {
-            await foreach (var hookLine in hookExecutor.ExecuteHooksAsync(hooks, HelmHookEvent.PostRollback, ns, cancellationToken))
+            await foreach (var hookLine in hookExecutor.ExecuteHooksAsync(hooks, HelmHookEvent.PostRollback, ns, operationToken))
             {
                 output.AppendLine(hookLine);
             }
         }
 
-        var newRevision = await store.NextRevisionAsync(releaseName, ns, cancellationToken);
+        if (request.Wait)
+        {
+            output.AppendLine($"Waiting for resources to be ready (timeout: {timeout}s)...");
+            var waiter = new KubernetesResourceWaiter(client, timeout);
+            await foreach (var line in waiter.WaitForReadyAsync(mainManifest, ns, request.WaitForJobs, operationToken))
+                output.AppendLine(line);
+        }
+
+        var newRevision = await store.NextRevisionAsync(request.ReleaseName, ns, operationToken);
         var deployedAt = DateTimeOffset.UtcNow;
         await store.SaveAsync(new HelmReleaseRecord
         {
-            Name = releaseName,
+            Name = request.ReleaseName,
             Namespace = ns,
             Revision = newRevision,
             Status = "deployed",
@@ -849,13 +925,16 @@ public class HelmClient : IHelmClient
             ComputedValuesYaml = targetRecord.ComputedValuesYaml,
             FirstDeployedAt = targetRecord.FirstDeployedAt,
             UpdatedAt = deployedAt,
-            Description = "Rollback complete",
+            Description = request.Description ?? "Rollback complete",
             Notes = targetRecord.Notes,
             Hooks = hooks.Select(ToReleaseHook).ToList(),
-            Labels = targetRecord.Labels
-        }, cancellationToken);
-        var history = await store.HistoryAsync(releaseName, ns, cancellationToken);
-        await SupersedeDeployedReleasesAsync(store, history.Where(record => record.Revision != newRevision), cancellationToken);
+            Labels = ResolveReleaseLabels([targetRecord], true, request.Labels)
+        }, operationToken);
+        var history = await store.HistoryAsync(request.ReleaseName, ns, operationToken);
+        await SupersedeDeployedReleasesAsync(store, history.Where(record => record.Revision != newRevision), operationToken);
+        var maxHistory = request.MaxHistory ?? options.MaxHistory;
+        if (maxHistory > 0)
+            await PruneOldReleasesAsync(store, request.ReleaseName, ns, maxHistory, operationToken);
 
         output.AppendLine($"Rollback to revision {targetRecord.Revision} was successful.");
         return Ok(output.ToString());
@@ -2207,10 +2286,67 @@ public class HelmClient : IHelmClient
 
     private static void ValidateUpgradeRequest(HelmUpgradeInstallRequest request)
     {
+        ArgumentNullException.ThrowIfNull(request);
         if (string.IsNullOrWhiteSpace(request.ReleaseName))
             throw new ArgumentException("ReleaseName is required.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.Chart))
             throw new ArgumentException("Chart is required.", nameof(request));
+        if (request.TimeoutSeconds is <= 0)
+            throw new ArgumentOutOfRangeException(nameof(request), "TimeoutSeconds must be greater than zero.");
+        if (request.MaxHistory is < 0)
+            throw new ArgumentOutOfRangeException(nameof(request), "MaxHistory cannot be negative.");
+        if (request.ReuseValues && request.ResetValues)
+            throw new ArgumentException("ReuseValues and ResetValues cannot both be enabled.", nameof(request));
+        if (request.WaitForJobs && !request.Wait && !request.Atomic)
+            throw new ArgumentException("WaitForJobs requires Wait or Atomic.", nameof(request));
+        if (request.ReuseValues && request.DryRun)
+            throw new NotSupportedException("ReuseValues is not supported for DryRun because it requires stored release values.");
+
+        var unsupported = new List<string>();
+        if (request.Force) unsupported.Add(nameof(request.Force));
+        if (request.Devel) unsupported.Add(nameof(request.Devel));
+        if (request.GenerateName) unsupported.Add(nameof(request.GenerateName));
+        if (!string.IsNullOrWhiteSpace(request.NameTemplate)) unsupported.Add(nameof(request.NameTemplate));
+        if (request.TakeOwnership) unsupported.Add(nameof(request.TakeOwnership));
+        if (request.RollbackOnFailure) unsupported.Add(nameof(request.RollbackOnFailure));
+        if (request.RenderSubchartNotes) unsupported.Add(nameof(request.RenderSubchartNotes));
+        if (request.HideSecret) unsupported.Add(nameof(request.HideSecret));
+        if (!string.IsNullOrWhiteSpace(request.ServerSideApply)) unsupported.Add(nameof(request.ServerSideApply));
+        if (!string.IsNullOrWhiteSpace(request.CaFile)) unsupported.Add(nameof(request.CaFile));
+        if (!string.IsNullOrWhiteSpace(request.CertFile)) unsupported.Add(nameof(request.CertFile));
+        if (!string.IsNullOrWhiteSpace(request.KeyFile)) unsupported.Add(nameof(request.KeyFile));
+        if (request.InsecureSkipTlsVerify) unsupported.Add(nameof(request.InsecureSkipTlsVerify));
+        if (!string.IsNullOrWhiteSpace(request.Username)) unsupported.Add(nameof(request.Username));
+        if (!string.IsNullOrWhiteSpace(request.Password)) unsupported.Add(nameof(request.Password));
+        if (!string.IsNullOrWhiteSpace(request.RepoUrl)) unsupported.Add(nameof(request.RepoUrl));
+        if (request.PassCredentials) unsupported.Add(nameof(request.PassCredentials));
+        if (request.PlainHttp) unsupported.Add(nameof(request.PlainHttp));
+        if (!string.IsNullOrWhiteSpace(request.Keyring)) unsupported.Add(nameof(request.Keyring));
+        if (request.Verify) unsupported.Add(nameof(request.Verify));
+        if (request.DisableOpenApiValidation) unsupported.Add(nameof(request.DisableOpenApiValidation));
+        if (request.SkipSchemaValidation) unsupported.Add(nameof(request.SkipSchemaValidation));
+        if (request.EnableDns) unsupported.Add(nameof(request.EnableDns));
+        if (request.DependencyUpdate) unsupported.Add(nameof(request.DependencyUpdate));
+        if (unsupported.Count > 0)
+        {
+            throw new NotSupportedException(
+                $"The managed lifecycle API does not support: {string.Join(", ", unsupported)}.");
+        }
+    }
+
+    private static void ValidateRollbackRequest(HelmRollbackRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(request.ReleaseName))
+            throw new ArgumentException("ReleaseName is required.", nameof(request));
+        if (request.Revision < 0)
+            throw new ArgumentOutOfRangeException(nameof(request), "Revision cannot be negative.");
+        if (request.TimeoutSeconds is <= 0)
+            throw new ArgumentOutOfRangeException(nameof(request), "TimeoutSeconds must be greater than zero.");
+        if (request.MaxHistory is < 0)
+            throw new ArgumentOutOfRangeException(nameof(request), "MaxHistory cannot be negative.");
+        if (request.WaitForJobs && !request.Wait)
+            throw new ArgumentException("WaitForJobs requires Wait.", nameof(request));
     }
 
     internal static (string MainManifest, List<HelmHook> Hooks) ResolveStoredManifest(

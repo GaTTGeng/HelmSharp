@@ -41,6 +41,7 @@
 - `GetManifestAsync(...)`
 - `GetNotesAsync(...)`
 - `GetValuesAsync(...)`
+- `GetValuesRevisionAsync(...)`
 - `HistoryAsync(...)`
 - `LintAsync(...)`
 - `ListReleasesAsync(...)`
@@ -64,6 +65,7 @@
 - `ShowReadmeAsync(...)`
 - `ShowValuesAsync(...)`
 - `StatusAsync(...)`
+- `StatusRevisionAsync(...)`
 - `TemplateAsync(...)`
 - `TemplateWithNotesAsync(...)`
 - `TestAsync(...)`
@@ -71,6 +73,16 @@
 - `UpgradeInstallAsync(...)`
 - `UpgradeInstallStreamAsync(...)`
 - `VersionAsync(...)`
+
+### 使用提示
+先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
+
+## HelmDeletionPropagation
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `enum` |
+| 源文件 | `src/HelmSharp.Action/HelmUninstallRequest.cs` |
 
 ### 使用提示
 先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
@@ -244,6 +256,30 @@
 ### 使用提示
 先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
+## HelmRollbackRequest
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `class` |
+| 源文件 | `src/HelmSharp.Action/HelmRollbackRequest.cs` |
+
+### 属性
+- `Description`
+- `DisableHooks`
+- `KubeConfigContent`
+- `KubeConfigPath`
+- `Labels`
+- `MaxHistory`
+- `Namespace`
+- `ReleaseName`
+- `Revision`
+- `TimeoutSeconds`
+- `Wait`
+- `WaitForJobs`
+
+### 使用提示
+先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
+
 ## HelmTemplateRequest
 
 | 字段 | 值 |
@@ -281,10 +317,15 @@
 | 源文件 | `src/HelmSharp.Action/HelmUninstallRequest.cs` |
 
 ### 属性
+- `DeletionPropagation`
+- `DisableHooks`
+- `KeepHistory`
 - `KubeConfigContent`
 - `KubeConfigPath`
 - `Namespace`
 - `ReleaseName`
+- `TimeoutSeconds`
+- `Wait`
 
 ### 使用提示
 先查看对应包页面的场景示例，再使用此成员索引定位具体类型。

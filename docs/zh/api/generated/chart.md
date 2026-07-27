@@ -26,7 +26,9 @@
 - `Icon`
 - `Keywords`
 - `KubeVersion`
+- `LockDigest`
 - `LockEntries`
+- `LockGenerated`
 - `Maintainers`
 - `Name`
 - `Sources`

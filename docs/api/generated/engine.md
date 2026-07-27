@@ -221,3 +221,13 @@ Read the corresponding package page first, then use this member index to locate 
 
 ### Usage note
 Read the corresponding package page first, then use this member index to locate the concrete type.
+
+## UnsupportedTemplateFeatureException
+
+| Field | Value |
+| --- | --- |
+| Kind | `class` |
+| Source | `src/HelmSharp.Engine/UnsupportedTemplateFeatureException.cs` |
+
+### Usage note
+Read the corresponding package page first, then use this member index to locate the concrete type.
