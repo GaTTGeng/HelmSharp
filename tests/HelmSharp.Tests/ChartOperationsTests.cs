@@ -709,6 +709,48 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task ReleaseLifecycle_RollbackFinalSaveCompletesAfterOperationCancellation()
+    {
+        var chartDir = await CreateMinimalChartAsync("rollback-final-save-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: rollback-final-save
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-final-save",
+            Chart = chartDir
+        }));
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-final-save",
+            Chart = chartDir
+        }));
+
+        using var cancellationSource = new CancellationTokenSource();
+        releaseState.CancelOnNextReleaseSecretRead = cancellationSource;
+        var result = await client.RollbackAsync(new HelmRollbackRequest
+        {
+            ReleaseName = "rollback-final-save",
+            Namespace = "test-ns",
+            Revision = 1,
+            Wait = false
+        }, cancellationSource.Token);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(cancellationSource.IsCancellationRequested);
+        Assert.Collection(
+            releaseState.Records("rollback-final-save"),
+            record => Assert.Equal((1, "superseded"), (record.Revision, record.Status)),
+            record => Assert.Equal((2, "superseded"), (record.Revision, record.Status)),
+            record => Assert.Equal((3, "deployed"), (record.Revision, record.Status)));
+    }
+
+    [Fact]
     public async Task ReleaseLifecycle_RejectsConflictingAndUnsupportedOptionsBeforeMutation()
     {
         var chartDir = await CreateMinimalChartAsync("invalid-options-chart");
@@ -1387,6 +1429,14 @@ public class ChartOperationsTests : IDisposable
 
             if (request.Method == HttpMethod.Get && path.Contains("/secrets/", StringComparison.Ordinal))
             {
+                if (_releaseState.CancelOnNextReleaseSecretRead is { } cancellationSource)
+                {
+                    _releaseState.CancelOnNextReleaseSecretRead = null;
+                    cancellationSource.Cancel();
+                    if (cancellationToken.IsCancellationRequested)
+                        return await Task.FromCanceled<HttpResponseMessage>(cancellationToken);
+                }
+
                 var name = path[(path.LastIndexOf('/') + 1)..];
                 return _releaseState.Secrets.TryGetValue(name, out var secret)
                     ? JsonResponse(request, HttpStatusCode.OK, secret)
@@ -1442,6 +1492,7 @@ public class ChartOperationsTests : IDisposable
         internal List<string> DeletedPaths { get; } = [];
         internal List<string> WaitedPaths { get; } = [];
         public bool FailNextSecretCreate { get; set; }
+        internal CancellationTokenSource? CancelOnNextReleaseSecretRead { get; set; }
 
         public IReadOnlyList<HelmReleaseRecord> Records(string releaseName)
             => Secrets.Values

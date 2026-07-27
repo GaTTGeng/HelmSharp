@@ -963,7 +963,18 @@ public class HelmClient : IHelmClient
             throw;
         }
 
-        await store.SaveAsync(rollbackRecord with { UpdatedAt = DateTimeOffset.UtcNow }, operationToken);
+        try
+        {
+            // The manifest has been applied. Complete the durable release-state transition
+            // independently of the operation deadline so history cannot retain two deployed
+            // revisions when the timeout expires during this final save.
+            await store.SaveAsync(rollbackRecord with { UpdatedAt = DateTimeOffset.UtcNow }, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            await PersistFailedRollbackAsync(store, rollbackRecord, ex);
+            throw;
+        }
         var history = await store.HistoryAsync(request.ReleaseName, ns, CancellationToken.None);
         await SupersedeDeployedReleasesAsync(store, history.Where(record => record.Revision != newRevision), CancellationToken.None);
         var maxHistory = request.MaxHistory ?? options.MaxHistory;

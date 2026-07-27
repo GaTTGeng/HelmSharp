@@ -6,6 +6,10 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve rollback release history when the caller's operation token is canceled during final persistence (#207).
+
 ### Added
 
 - Added Helm v3 release Secret interoperability, legacy HelmSharp payload compatibility, and actionable storage diagnostics (#190).
