@@ -775,7 +775,7 @@ public class ChartOperationsTests : IDisposable
 
         releaseState.CreateNextSecretThenReturnConflict = true;
 
-        await Assert.ThrowsAsync<HttpOperationException>(async () =>
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await client.RollbackAsync(new HelmRollbackRequest
             {
                 ReleaseName = "rollback-conflict",

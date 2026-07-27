@@ -968,7 +968,12 @@ public class HelmClient : IHelmClient
             // The manifest has been applied. Complete the durable release-state transition
             // independently of the operation deadline so history cannot retain two deployed
             // revisions when the timeout expires during this final save.
-            await store.SaveAsync(rollbackRecord with { UpdatedAt = DateTimeOffset.UtcNow }, CancellationToken.None);
+            var created = await store.TryCreateAsync(
+                rollbackRecord with { UpdatedAt = DateTimeOffset.UtcNow },
+                CancellationToken.None);
+            if (!created)
+                throw new InvalidOperationException(
+                    $"release revision {newRevision} already exists for {request.ReleaseName}");
         }
         catch (Exception ex)
         {
