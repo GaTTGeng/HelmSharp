@@ -633,7 +633,9 @@ public class HelmClient : IHelmClient
     {
         try
         {
-            await store.TryCreateAsync(rollbackRecord with
+            // RollbackAsync reserves this revision before applying manifests, so this
+            // replacement updates only the reservation owned by this operation.
+            await store.SaveAsync(rollbackRecord with
             {
                 Status = "failed",
                 UpdatedAt = DateTimeOffset.UtcNow,
@@ -899,7 +901,7 @@ public class HelmClient : IHelmClient
             Name = request.ReleaseName,
             Namespace = ns,
             Revision = newRevision,
-            Status = "deployed",
+            Status = "pending",
             ChartName = targetRecord.ChartName,
             ChartVersion = targetRecord.ChartVersion,
             AppVersion = targetRecord.AppVersion,
@@ -919,6 +921,10 @@ public class HelmClient : IHelmClient
             Hooks = hooks.Select(ToReleaseHook).ToList(),
             Labels = ResolveReleaseLabels([targetRecord], true, request.Labels)
         };
+
+        var reserved = await store.TryCreateAsync(rollbackRecord, operationToken);
+        if (!reserved)
+            return Fail($"release revision {newRevision} already exists for {request.ReleaseName}");
 
         var output = new StringBuilder();
 
@@ -968,12 +974,11 @@ public class HelmClient : IHelmClient
             // The manifest has been applied. Complete the durable release-state transition
             // independently of the operation deadline so history cannot retain two deployed
             // revisions when the timeout expires during this final save.
-            var created = await store.TryCreateAsync(
-                rollbackRecord with { UpdatedAt = DateTimeOffset.UtcNow },
-                CancellationToken.None);
-            if (!created)
-                throw new InvalidOperationException(
-                    $"release revision {newRevision} already exists for {request.ReleaseName}");
+            await store.SaveAsync(rollbackRecord with
+            {
+                Status = "deployed",
+                UpdatedAt = DateTimeOffset.UtcNow
+            }, CancellationToken.None);
         }
         catch (Exception ex)
         {
