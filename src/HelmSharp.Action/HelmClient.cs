@@ -828,7 +828,8 @@ public class HelmClient : IHelmClient
         {
             ReleaseName = releaseName,
             Revision = revision,
-            Namespace = @namespace
+            Namespace = @namespace,
+            Wait = false
         }, cancellationToken);
 
     /// <inheritdoc />
@@ -2474,7 +2475,7 @@ public class HelmClient : IHelmClient
     }
 
     /// <summary>
-    /// Prunes old releases beyond the max history limit.
+    /// Deletes old release records beyond the max history limit.
     /// </summary>
     private static async Task PruneOldReleasesAsync(
         HelmReleaseStore store,
@@ -2485,16 +2486,15 @@ public class HelmClient : IHelmClient
     {
         var history = await store.HistoryAsync(releaseName, ns, ct);
         var toPrune = history
-            .Where(x => x.Status != "deployed") // Keep current deployed
             .OrderByDescending(x => x.Revision)
-            .Skip(maxHistory - 1) // Keep maxHistory most recent
+            .Skip(maxHistory)
             .ToList();
 
         foreach (var old in toPrune)
         {
             try
             {
-                await store.MarkStatusAsync(old, "superseded", ct);
+                await store.DeleteAsync(old, ct);
             }
             catch
             {

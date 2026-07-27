@@ -521,6 +521,7 @@ public class ChartOperationsTests : IDisposable
         var rollback = await client.RollbackAsync("lifecycle", 1, "test-ns");
 
         Assert.Equal(0, rollback.ExitCode);
+        Assert.DoesNotContain("Waiting for resources", rollback.StandardOutput);
         Assert.Collection(
             releaseState.Records("lifecycle"),
             record => Assert.Equal((1, "superseded"), (record.Revision, record.Status)),
@@ -599,6 +600,7 @@ public class ChartOperationsTests : IDisposable
             Revision = 1,
             Namespace = "test-ns",
             Wait = false,
+            MaxHistory = 2,
             Description = "restored because of regression",
             Labels = new Dictionary<string, string> { ["reason"] = "regression" }
         });
@@ -607,6 +609,10 @@ public class ChartOperationsTests : IDisposable
         var restored = Assert.Single(releaseState.Records("rollback-options"), record => record.Revision == 3);
         Assert.Equal("restored because of regression", restored.Description);
         Assert.Equal("regression", releaseState.Labels("rollback-options", 3)["reason"]);
+        Assert.Collection(
+            releaseState.Records("rollback-options"),
+            record => Assert.Equal(2, record.Revision),
+            record => Assert.Equal(3, record.Revision));
     }
 
     [Fact]

@@ -27,7 +27,7 @@ Apply only after approval:
 ## Production notes
 
 - Keep `DryRun = true` in preview flows and switch to `false` only in the approved apply step.
-- `Install = false` makes a missing release fail instead of silently creating it. Use it when an endpoint must be upgrade-only.
+- For non-dry-run operations, `Install = false` makes a missing release fail instead of silently creating it. Use it when an endpoint must be upgrade-only; dry runs do not look up stored releases.
 - `ReuseValues = true` starts an upgrade from the stored release values, then overlays the supplied values. The default and `ResetValues = true` start from chart defaults. `ReuseValues` and `ResetValues` cannot be combined.
 - `TimeoutSeconds` covers Kubernetes apply, hooks, readiness waiting, and cancellation. `Atomic` implies readiness waiting; use `WaitForJobs` only with `Wait` (or `Atomic`).
 - `Description`, `Labels`, and `MaxHistory` are stored with the resulting revision. `RollbackAsync(new HelmRollbackRequest { ... })` exposes the same timeout, wait, hook, description, label, and history controls for a rollback while retaining the original overload.

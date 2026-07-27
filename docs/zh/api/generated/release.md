@@ -72,6 +72,7 @@
 | 源文件 | `src/HelmSharp.Release/HelmReleaseStore.cs` |
 
 ### 方法
+- `DeleteAsync(...)`
 - `GetLatestAsync(...)`
 - `HistoryAsync(...)`
 - `ListAsync(...)`
