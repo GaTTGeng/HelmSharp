@@ -633,7 +633,7 @@ public class HelmClient : IHelmClient
     {
         try
         {
-            await store.SaveAsync(rollbackRecord with
+            await store.TryCreateAsync(rollbackRecord with
             {
                 Status = "failed",
                 UpdatedAt = DateTimeOffset.UtcNow,

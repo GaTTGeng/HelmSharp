@@ -37,6 +37,25 @@ public sealed class HelmReleaseStore
         }
     }
 
+    /// <summary>
+    /// Creates a release revision only when it does not already exist.
+    /// </summary>
+    /// <returns><see langword="true"/> when the revision was created; otherwise, <see langword="false"/> when it already exists.</returns>
+    public async Task<bool> TryCreateAsync(HelmReleaseRecord record, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        var secret = BuildSecret(record, existing: null, DateTimeOffset.UtcNow);
+        try
+        {
+            await _client.CoreV1.CreateNamespacedSecretAsync(secret, record.Namespace, cancellationToken: cancellationToken);
+            return true;
+        }
+        catch (HttpOperationException ex) when ((int)ex.Response.StatusCode == 409)
+        {
+            return false;
+        }
+    }
+
     public async Task<List<HelmReleaseRecord>> ListAsync(string? ns, bool allNamespaces, CancellationToken cancellationToken)
     {
         var secrets = allNamespaces

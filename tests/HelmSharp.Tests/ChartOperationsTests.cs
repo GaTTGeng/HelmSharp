@@ -751,6 +751,47 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task ReleaseLifecycle_RollbackFinalSaveConflictDoesNotOverwriteConcurrentRevision()
+    {
+        var chartDir = await CreateMinimalChartAsync("rollback-conflict-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: rollback-conflict
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-conflict",
+            Chart = chartDir
+        }));
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-conflict",
+            Chart = chartDir
+        }));
+
+        releaseState.CreateNextSecretThenReturnConflict = true;
+
+        await Assert.ThrowsAsync<HttpOperationException>(async () =>
+            await client.RollbackAsync(new HelmRollbackRequest
+            {
+                ReleaseName = "rollback-conflict",
+                Namespace = "test-ns",
+                Revision = 1,
+                Wait = false
+            }));
+
+        Assert.Collection(
+            releaseState.Records("rollback-conflict"),
+            record => Assert.Equal((1, "superseded"), (record.Revision, record.Status)),
+            record => Assert.Equal((2, "deployed"), (record.Revision, record.Status)),
+            record => Assert.Equal((3, "deployed"), (record.Revision, record.Status)));
+    }
+
+    [Fact]
     public async Task ReleaseLifecycle_RejectsConflictingAndUnsupportedOptionsBeforeMutation()
     {
         var chartDir = await CreateMinimalChartAsync("invalid-options-chart");
@@ -1423,6 +1464,14 @@ public class ChartOperationsTests : IDisposable
                     _releaseState.FailNextSecretCreate = false;
                     return JsonResponse(request, HttpStatusCode.InternalServerError, "{ \"code\": 500 }");
                 }
+                if (request.Method == HttpMethod.Post && _releaseState.CreateNextSecretThenReturnConflict)
+                {
+                    _releaseState.CreateNextSecretThenReturnConflict = false;
+                    _releaseState.Secrets[envelope.Metadata.Name] = secret;
+                    return JsonResponse(request, HttpStatusCode.Conflict, "{ \"code\": 409 }");
+                }
+                if (request.Method == HttpMethod.Post && _releaseState.Secrets.ContainsKey(envelope.Metadata.Name))
+                    return JsonResponse(request, HttpStatusCode.Conflict, "{ \"code\": 409 }");
                 _releaseState.Secrets[envelope.Metadata.Name] = secret;
                 return JsonResponse(request, request.Method == HttpMethod.Post ? HttpStatusCode.Created : HttpStatusCode.OK, secret);
             }
@@ -1492,6 +1541,7 @@ public class ChartOperationsTests : IDisposable
         internal List<string> DeletedPaths { get; } = [];
         internal List<string> WaitedPaths { get; } = [];
         public bool FailNextSecretCreate { get; set; }
+        public bool CreateNextSecretThenReturnConflict { get; set; }
         internal CancellationTokenSource? CancelOnNextReleaseSecretRead { get; set; }
 
         public IReadOnlyList<HelmReleaseRecord> Records(string releaseName)
