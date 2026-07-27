@@ -797,6 +797,42 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task ReleaseLifecycle_RollbackCancellationBeforeReservationVisibilityCreatesAndFailsReservation()
+    {
+        var chartDir = await CreateMinimalChartAsync("rollback-reservation-delayed-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: rollback-reservation-delayed
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-reservation-delayed",
+            Chart = chartDir
+        }));
+        releaseState.AppliedPaths.Clear();
+
+        using var cancellationSource = new CancellationTokenSource();
+        releaseState.CancelNextSecretCreateBeforePersisting = cancellationSource;
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.RollbackAsync(new HelmRollbackRequest
+        {
+            ReleaseName = "rollback-reservation-delayed",
+            Namespace = "test-ns",
+            Revision = 1,
+            Wait = false
+        }, cancellationSource.Token));
+
+        Assert.Empty(releaseState.AppliedPaths);
+        Assert.Collection(
+            releaseState.Records("rollback-reservation-delayed"),
+            record => Assert.Equal((1, "deployed"), (record.Revision, record.Status)),
+            record => Assert.Equal((2, "failed"), (record.Revision, record.Status)));
+    }
+
+    [Fact]
     public async Task ReleaseLifecycle_RollbackReservationConflictDoesNotApplyManifests()
     {
         var chartDir = await CreateMinimalChartAsync("rollback-conflict-chart");
@@ -1627,6 +1663,13 @@ public class ChartOperationsTests : IDisposable
                 }
                 if (request.Method == HttpMethod.Post && _releaseState.Secrets.ContainsKey(envelope.Metadata.Name))
                     return JsonResponse(request, HttpStatusCode.Conflict, "{ \"code\": 409 }");
+                if (request.Method == HttpMethod.Post && _releaseState.CancelNextSecretCreateBeforePersisting is { } delayedCancellationSource)
+                {
+                    _releaseState.CancelNextSecretCreateBeforePersisting = null;
+                    delayedCancellationSource.Cancel();
+                    if (cancellationToken.IsCancellationRequested)
+                        return await Task.FromCanceled<HttpResponseMessage>(cancellationToken);
+                }
                 _releaseState.Secrets[envelope.Metadata.Name] = secret;
                 if (request.Method == HttpMethod.Post && _releaseState.CancelAfterNextSecretCreate is { } cancellationSource)
                 {
@@ -1708,6 +1751,7 @@ public class ChartOperationsTests : IDisposable
         public bool CreateNextSecretThenReturnConflict { get; set; }
         internal CancellationTokenSource? CancelOnNextReleaseSecretRead { get; set; }
         internal CancellationTokenSource? CancelAfterNextSecretCreate { get; set; }
+        internal CancellationTokenSource? CancelNextSecretCreateBeforePersisting { get; set; }
 
         public IReadOnlyList<HelmReleaseRecord> Records(string releaseName)
             => Secrets.Values

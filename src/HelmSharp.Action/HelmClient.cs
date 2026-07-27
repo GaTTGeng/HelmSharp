@@ -643,8 +643,10 @@ public class HelmClient : IHelmClient
     {
         try
         {
-            // The create response may be canceled after the API server persisted the
-            // reservation. Reconcile only a reservation bearing this operation's ID.
+            // A create response can be canceled before the API server makes its write
+            // observable. Retrying the same create-only reservation settles that
+            // ambiguity without replacing another operation's revision.
+            await store.TryCreateAsync(rollbackRecord, CancellationToken.None, operationId);
             await store.TryMarkPendingRollbackFailedAsync(
                 rollbackRecord,
                 operationId,
