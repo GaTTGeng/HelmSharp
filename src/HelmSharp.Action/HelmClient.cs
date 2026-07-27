@@ -67,7 +67,12 @@ public class HelmClient : IHelmClient
         // Filter by label selector
         if (!string.IsNullOrWhiteSpace(selector))
         {
-            var selectorParts = ParseLabelSelector(selector);
+            if (!TryParseExactLabelSelector(selector, out var selectorParts))
+            {
+                return Fail(
+                    $"unsupported label selector: {selector}. Only comma-separated exact key=value matches are supported.");
+            }
+
             releases = releases.Where(r =>
             {
                 if (r.Labels is null) return false;
@@ -100,17 +105,27 @@ public class HelmClient : IHelmClient
         return $"{baseName}-{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
     }
 
-    private static Dictionary<string, string> ParseLabelSelector(string selector)
+    private static bool TryParseExactLabelSelector(
+        string selector,
+        out Dictionary<string, string> result)
     {
-        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        result = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var part in selector.Split(',', StringSplitOptions.RemoveEmptyEntries))
         {
             var trimmed = part.Trim();
             var eqIndex = trimmed.IndexOf('=');
-            if (eqIndex > 0)
-                result[trimmed[..eqIndex].Trim()] = trimmed[(eqIndex + 1)..].Trim();
+            if (eqIndex <= 0 || trimmed.IndexOf('=', eqIndex + 1) >= 0)
+            {
+                return false;
+            }
+
+            var key = trimmed[..eqIndex].Trim();
+            var value = trimmed[(eqIndex + 1)..].Trim();
+            if (string.IsNullOrWhiteSpace(key) || key.Contains('!') || !result.TryAdd(key, value))
+                return false;
         }
-        return result;
+
+        return result.Count > 0;
     }
 
     public async Task<CommandResult> UpgradeInstallAsync(
@@ -723,24 +738,36 @@ public class HelmClient : IHelmClient
         string releaseName,
         string? @namespace = null,
         CancellationToken cancellationToken = default)
+        => await StatusRevisionAsync(releaseName, revision: 0, @namespace, cancellationToken);
+
+    /// <summary>Gets the durable status for a release revision. A revision of zero selects the latest stored revision.</summary>
+    public async Task<CommandResult> StatusRevisionAsync(
+        string releaseName,
+        int revision,
+        string? @namespace = null,
+        CancellationToken cancellationToken = default)
     {
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
+        var ns = @namespace ?? options.DefaultNamespace ?? "default";
         using var client = await _createKubernetesClientAsync(options, null, null, cancellationToken);
         var store = new HelmReleaseStore(client);
-        var latest = await store.GetLatestAsync(releaseName, @namespace ?? options.DefaultNamespace ?? "default", cancellationToken);
-        if (latest is null)
-            return Fail($"release: not found: {releaseName}");
+        var lookup = await FindReleaseRecordAsync(store, releaseName, ns, revision, cancellationToken);
+        if (lookup.Error is not null)
+            return Fail(lookup.Error);
+
+        var record = lookup.Record!;
 
         var statusInfo = new
         {
-            name = latest.Name,
-            @namespace = latest.Namespace,
-            revision = latest.Revision,
-            status = latest.Status,
-            chart = $"{latest.ChartName}-{latest.ChartVersion}",
-            app_version = latest.AppVersion,
-            updated = latest.UpdatedAt.ToString("o"),
-            notes = ""
+            name = record.Name,
+            @namespace = record.Namespace,
+            revision = record.Revision,
+            status = record.Status,
+            chart = $"{record.ChartName}-{record.ChartVersion}",
+            app_version = record.AppVersion,
+            updated = record.UpdatedAt.ToString("o"),
+            description = record.Description,
+            notes = GetStoredNotes(record)
         };
         return Ok(JsonSerializer.Serialize(statusInfo, JsonDefaults));
     }
@@ -911,7 +938,9 @@ public class HelmClient : IHelmClient
         using var client = await _createKubernetesClientAsync(options, null, null, cancellationToken);
         var store = new HelmReleaseStore(client);
         var history = await store.HistoryAsync(releaseName, @namespace ?? options.DefaultNamespace ?? "default", cancellationToken);
-        return Ok(JsonSerializer.Serialize(history, JsonDefaults));
+        return history.Count == 0
+            ? Fail($"release: not found: {releaseName}")
+            : Ok(JsonSerializer.Serialize(history, JsonDefaults));
     }
 
     public async Task<CommandResult> GetValuesAsync(
@@ -919,14 +948,24 @@ public class HelmClient : IHelmClient
         string? @namespace = null,
         bool allValues = false,
         CancellationToken cancellationToken = default)
+        => await GetValuesRevisionAsync(releaseName, revision: 0, @namespace, allValues, cancellationToken);
+
+    /// <summary>Gets values stored for a release revision. A revision of zero selects the latest stored revision.</summary>
+    public async Task<CommandResult> GetValuesRevisionAsync(
+        string releaseName,
+        int revision,
+        string? @namespace = null,
+        bool allValues = false,
+        CancellationToken cancellationToken = default)
     {
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
+        var ns = @namespace ?? options.DefaultNamespace ?? "default";
         using var client = await _createKubernetesClientAsync(options, null, null, cancellationToken);
         var store = new HelmReleaseStore(client);
-        var latest = await store.GetLatestAsync(releaseName, @namespace ?? options.DefaultNamespace ?? "default", cancellationToken);
-        return latest is null
-            ? Fail($"release: not found: {releaseName}")
-            : Ok(GetStoredValuesYaml(latest, allValues));
+        var lookup = await FindReleaseRecordAsync(store, releaseName, ns, revision, cancellationToken);
+        return lookup.Error is not null
+            ? Fail(lookup.Error)
+            : Ok(GetStoredValuesYaml(lookup.Record!, allValues));
     }
 
     public async Task<CommandResult> GetManifestAsync(
@@ -940,13 +979,10 @@ public class HelmClient : IHelmClient
         using var client = await _createKubernetesClientAsync(options, null, null, cancellationToken);
         var store = new HelmReleaseStore(client);
 
-        var record = revision > 0
-            ? (await store.HistoryAsync(releaseName, ns, cancellationToken)).FirstOrDefault(x => x.Revision == revision)
-            : await store.GetLatestAsync(releaseName, ns, cancellationToken);
-
-        return record is null
-            ? Fail($"release: not found: {releaseName}")
-            : Ok(record.Manifest);
+        var lookup = await FindReleaseRecordAsync(store, releaseName, ns, revision, cancellationToken);
+        return lookup.Error is not null
+            ? Fail(lookup.Error)
+            : Ok(lookup.Record!.Manifest);
     }
 
     public async Task<CommandResult> GetNotesAsync(
@@ -960,34 +996,10 @@ public class HelmClient : IHelmClient
         using var client = await _createKubernetesClientAsync(options, null, null, cancellationToken);
         var store = new HelmReleaseStore(client);
 
-        var record = revision > 0
-            ? (await store.HistoryAsync(releaseName, ns, cancellationToken)).FirstOrDefault(x => x.Revision == revision)
-            : await store.GetLatestAsync(releaseName, ns, cancellationToken);
-
-        if (record is null)
-            return Fail($"release: not found: {releaseName}");
-
-        // Render NOTES.txt from the chart if available
-        if (!string.IsNullOrWhiteSpace(record.Manifest))
-        {
-            try
-            {
-                var chart = await HelmChartLoader.LoadAsync(
-                    await ResolveChartPathAsync(record.ChartName, record.ChartVersion, options, cancellationToken),
-                    cancellationToken);
-                var values = HelmYaml.DeserializeDictionary(GetStoredValuesYaml(record, allValues: true));
-                var renderer = new HelmTemplateRenderer(chart, releaseName, ns, values);
-                var notes = renderer.RenderNotes();
-                if (!string.IsNullOrWhiteSpace(notes))
-                    return Ok(notes);
-            }
-            catch
-            {
-                // Fall through to stored notes
-            }
-        }
-
-        return Ok(GetStoredNotes(record));
+        var lookup = await FindReleaseRecordAsync(store, releaseName, ns, revision, cancellationToken);
+        return lookup.Error is not null
+            ? Fail(lookup.Error)
+            : Ok(GetStoredNotes(lookup.Record!));
     }
 
     internal static string GetStoredValuesYaml(HelmReleaseRecord record, bool allValues)
@@ -1012,6 +1024,35 @@ public class HelmClient : IHelmClient
             : record.Notes;
     }
 
+    private static async Task<ReleaseRecordLookup> FindReleaseRecordAsync(
+        HelmReleaseStore store,
+        string releaseName,
+        string namespaceName,
+        int revision,
+        CancellationToken cancellationToken)
+    {
+        if (revision < 0)
+        {
+            return new ReleaseRecordLookup(
+                null,
+                $"release: revision must be zero or a positive integer: {revision}");
+        }
+
+        var history = await store.HistoryAsync(releaseName, namespaceName, cancellationToken);
+        if (history.Count == 0)
+            return new ReleaseRecordLookup(null, $"release: not found: {releaseName}");
+
+        var record = revision == 0
+            ? history.MaxBy(candidate => candidate.Revision)
+            : history.FirstOrDefault(candidate => candidate.Revision == revision);
+
+        return record is null
+            ? new ReleaseRecordLookup(null, $"release: revision {revision} not found: {releaseName}")
+            : new ReleaseRecordLookup(record, null);
+    }
+
+    private sealed record ReleaseRecordLookup(HelmReleaseRecord? Record, string? Error);
+
     public async Task<CommandResult> GetHooksAsync(
         string releaseName,
         string? @namespace = null,
@@ -1023,12 +1064,11 @@ public class HelmClient : IHelmClient
         using var client = await _createKubernetesClientAsync(options, null, null, cancellationToken);
         var store = new HelmReleaseStore(client);
 
-        var record = revision > 0
-            ? (await store.HistoryAsync(releaseName, ns, cancellationToken)).FirstOrDefault(x => x.Revision == revision)
-            : await store.GetLatestAsync(releaseName, ns, cancellationToken);
+        var lookup = await FindReleaseRecordAsync(store, releaseName, ns, revision, cancellationToken);
+        if (lookup.Error is not null)
+            return Fail(lookup.Error);
 
-        if (record is null)
-            return Fail($"release: not found: {releaseName}");
+        var record = lookup.Record!;
 
         var (_, hooks) = ResolveStoredManifest(record, ns);
         if (hooks.Count == 0)
@@ -1058,12 +1098,11 @@ public class HelmClient : IHelmClient
         using var client = await _createKubernetesClientAsync(options, null, null, cancellationToken);
         var store = new HelmReleaseStore(client);
 
-        var record = revision > 0
-            ? (await store.HistoryAsync(releaseName, ns, cancellationToken)).FirstOrDefault(x => x.Revision == revision)
-            : await store.GetLatestAsync(releaseName, ns, cancellationToken);
+        var lookup = await FindReleaseRecordAsync(store, releaseName, ns, revision, cancellationToken);
+        if (lookup.Error is not null)
+            return Fail(lookup.Error);
 
-        if (record is null)
-            return Fail($"release: not found: {releaseName}");
+        var record = lookup.Record!;
 
         var output = new StringBuilder();
         output.AppendLine($"NAME: {record.Name}");

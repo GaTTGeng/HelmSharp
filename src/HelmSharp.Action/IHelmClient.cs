@@ -39,6 +39,15 @@ public interface IHelmClient
         string? @namespace = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Gets the status stored for a specific release revision. A revision of zero selects the latest stored revision.</summary>
+    Task<CommandResult> StatusRevisionAsync(
+        string releaseName,
+        int revision,
+        string? @namespace = null,
+        CancellationToken cancellationToken = default)
+        => Task.FromException<CommandResult>(new NotSupportedException(
+            "Revision-specific status inspection requires an IHelmClient implementation that supports it."));
+
     Task<CommandResult> RollbackAsync(
         string releaseName,
         int revision,
@@ -55,6 +64,16 @@ public interface IHelmClient
         string? @namespace = null,
         bool allValues = false,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Gets values stored for a specific release revision. A revision of zero selects the latest stored revision.</summary>
+    Task<CommandResult> GetValuesRevisionAsync(
+        string releaseName,
+        int revision,
+        string? @namespace = null,
+        bool allValues = false,
+        CancellationToken cancellationToken = default)
+        => Task.FromException<CommandResult>(new NotSupportedException(
+            "Revision-specific values inspection requires an IHelmClient implementation that supports it."));
 
     // ─── Get Release Info ───
     Task<CommandResult> GetManifestAsync(

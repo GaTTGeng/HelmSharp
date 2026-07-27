@@ -701,6 +701,193 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task ReleaseInspection_UsesDurableRevisionRecordsAcrossUpgradeRollbackAndUninstall()
+    {
+        var chartDir = await CreateMinimalChartAsync("revision-inspection-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "values.yaml"), "marker: default\n");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: revision-inspection
+            data:
+              marker: {{ .Values.marker | quote }}
+            """);
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "NOTES.txt"), "marker note: {{ .Values.marker }}\n");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "hook.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: revision-inspection-hook
+              annotations:
+                helm.sh/hook: pre-install,pre-upgrade
+            """);
+
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "revision-inspection",
+            Chart = chartDir,
+            ValuesContent = "marker: first\n"
+        }));
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "revision-inspection",
+            Chart = chartDir,
+            ValuesContent = "marker: second\n"
+        }));
+
+        var firstManifest = await client.GetManifestAsync("revision-inspection", "test-ns", revision: 1);
+        var firstValues = await client.GetValuesRevisionAsync("revision-inspection", revision: 1, @namespace: "test-ns");
+        var firstNotes = await client.GetNotesAsync("revision-inspection", "test-ns", revision: 1);
+        var firstHooks = await client.GetHooksAsync("revision-inspection", "test-ns", revision: 1);
+        var firstAll = await client.GetAllAsync("revision-inspection", "test-ns", revision: 1);
+        var firstStatus = await client.StatusRevisionAsync("revision-inspection", revision: 1, @namespace: "test-ns");
+        var legacyDefaultStatus = await client.StatusAsync("revision-inspection", default);
+        var history = await client.HistoryAsync("revision-inspection", "test-ns");
+
+        Assert.All([firstManifest, firstValues, firstNotes, firstHooks, firstAll, firstStatus, legacyDefaultStatus, history], result => Assert.Equal(0, result.ExitCode));
+        Assert.Contains("marker: \"first\"", firstManifest.StandardOutput);
+        Assert.Contains("marker: first", firstValues.StandardOutput);
+        Assert.Equal("marker note: first", firstNotes.StandardOutput);
+        Assert.Contains("revision-inspection-hook", firstHooks.StandardOutput);
+        Assert.Contains("REVISION: 1", firstAll.StandardOutput);
+        Assert.Contains("marker: \"first\"", firstAll.StandardOutput);
+        using (var statusJson = JsonDocument.Parse(firstStatus.StandardOutput))
+        {
+            Assert.Equal(1, statusJson.RootElement.GetProperty("revision").GetInt32());
+            Assert.Equal("superseded", statusJson.RootElement.GetProperty("status").GetString());
+            Assert.Equal("marker note: first", statusJson.RootElement.GetProperty("notes").GetString());
+        }
+        using (var historyJson = JsonDocument.Parse(history.StandardOutput))
+        {
+            Assert.Collection(
+                historyJson.RootElement.EnumerateArray().ToArray(),
+                record => Assert.Equal(1, record.GetProperty("revision").GetInt32()),
+                record => Assert.Equal(2, record.GetProperty("revision").GetInt32()));
+        }
+
+        var rollback = await client.RollbackAsync("revision-inspection", 1, "test-ns");
+        var secondManifest = await client.GetManifestAsync("revision-inspection", "test-ns", revision: 2);
+        var latestAfterRollback = await client.StatusAsync("revision-inspection", "test-ns");
+
+        Assert.Equal(0, rollback.ExitCode);
+        Assert.Contains("marker: \"second\"", secondManifest.StandardOutput);
+        using (var rollbackStatusJson = JsonDocument.Parse(latestAfterRollback.StandardOutput))
+        {
+            Assert.Equal(3, rollbackStatusJson.RootElement.GetProperty("revision").GetInt32());
+            Assert.Equal("deployed", rollbackStatusJson.RootElement.GetProperty("status").GetString());
+        }
+
+        var uninstall = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "revision-inspection",
+            Namespace = "test-ns",
+            KeepHistory = true
+        });
+        var latestManifest = await client.GetManifestAsync("revision-inspection", "test-ns");
+        var latestAll = await client.GetAllAsync("revision-inspection", "test-ns");
+        var latestStatus = await client.StatusAsync("revision-inspection", "test-ns");
+
+        Assert.Equal(0, uninstall.ExitCode);
+        Assert.Contains("marker: \"first\"", latestManifest.StandardOutput);
+        Assert.Contains("REVISION: 4", latestAll.StandardOutput);
+        Assert.Contains("STATUS: uninstalled", latestAll.StandardOutput);
+        using var uninstalledStatusJson = JsonDocument.Parse(latestStatus.StandardOutput);
+        Assert.Equal(4, uninstalledStatusJson.RootElement.GetProperty("revision").GetInt32());
+        Assert.Equal("uninstalled", uninstalledStatusJson.RootElement.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task ReleaseInspection_ReturnsConsistentMissingRevisionDiagnostics()
+    {
+        var chartDir = await CreateMinimalChartAsync("missing-revision-chart");
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "missing-revision",
+            Chart = chartDir
+        }));
+
+        var missingManifest = await client.GetManifestAsync("missing-revision", "test-ns", revision: 99);
+        var missingNotes = await client.GetNotesAsync("missing-revision", "test-ns", revision: 99);
+        var missingHooks = await client.GetHooksAsync("missing-revision", "test-ns", revision: 99);
+        var missingAll = await client.GetAllAsync("missing-revision", "test-ns", revision: 99);
+        var missingStatus = await client.StatusRevisionAsync("missing-revision", revision: 99, @namespace: "test-ns");
+        var missingValues = await client.GetValuesRevisionAsync("missing-revision", revision: 99, @namespace: "test-ns");
+        var invalidRevision = await client.GetManifestAsync("missing-revision", "test-ns", revision: -1);
+        var missingHistory = await client.HistoryAsync("does-not-exist", "test-ns");
+
+        Assert.All([missingManifest, missingNotes, missingHooks, missingAll, missingStatus, missingValues], result =>
+        {
+            Assert.Equal(1, result.ExitCode);
+            Assert.Equal("release: revision 99 not found: missing-revision", result.StandardError);
+        });
+        Assert.Equal("release: revision must be zero or a positive integer: -1", invalidRevision.StandardError);
+        Assert.Equal("release: not found: does-not-exist", missingHistory.StandardError);
+    }
+
+    [Fact]
+    public async Task ListReleasesAsync_AppliesSupportedSelectorsAndLimitsAfterStableOrdering()
+    {
+        var chartDir = await CreateMinimalChartAsync("release-list-chart");
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+
+        foreach (var (releaseName, team) in new[]
+                 {
+                     ("zeta", "platform"),
+                     ("alpha", "platform"),
+                     ("beta", "application"),
+                     ("empty", "")
+                 })
+        {
+            await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+            {
+                ReleaseName = releaseName,
+                Chart = chartDir,
+                Labels = new Dictionary<string, string> { ["team"] = team }
+            }));
+        }
+
+        var all = await client.ListReleasesAsync("test-ns");
+        var selected = await client.ListReleasesAsync("test-ns", selector: "team=platform", limit: 1);
+        var emptyValue = await client.ListReleasesAsync("test-ns", selector: "team=");
+        var unsupported = await client.ListReleasesAsync("test-ns", selector: "team!=platform");
+
+        Assert.Equal(0, all.ExitCode);
+        using (var allJson = JsonDocument.Parse(all.StandardOutput))
+        {
+            Assert.Equal(
+                ["alpha", "beta", "empty", "zeta"],
+                allJson.RootElement.EnumerateArray()
+                    .Select(record => record.GetProperty("name").GetString()!)
+                    .ToArray());
+        }
+
+        Assert.Equal(0, selected.ExitCode);
+        using (var selectedJson = JsonDocument.Parse(selected.StandardOutput))
+        {
+            var selectedRecord = Assert.Single(selectedJson.RootElement.EnumerateArray());
+            Assert.Equal("alpha", selectedRecord.GetProperty("name").GetString());
+        }
+
+        Assert.Equal(0, emptyValue.ExitCode);
+        using (var emptyValueJson = JsonDocument.Parse(emptyValue.StandardOutput))
+        {
+            var emptyValueRecord = Assert.Single(emptyValueJson.RootElement.EnumerateArray());
+            Assert.Equal("empty", emptyValueRecord.GetProperty("name").GetString());
+        }
+
+        Assert.Equal(1, unsupported.ExitCode);
+        Assert.Equal(
+            "unsupported label selector: team!=platform. Only comma-separated exact key=value matches are supported.",
+            unsupported.StandardError);
+    }
+
+    [Fact]
     public async Task RenderDiffManifest_UsesUpgradeReleaseStateAndCapabilities()
     {
         var chartDir = Path.Combine(_tempDir, "diff-chart");
