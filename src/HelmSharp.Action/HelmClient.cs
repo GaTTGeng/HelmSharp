@@ -733,6 +733,9 @@ public class HelmClient : IHelmClient
         var store = new HelmReleaseStore(client);
         var latest = await store.GetLatestAsync(request.ReleaseName, ns, operationToken);
         var history = await store.HistoryAsync(request.ReleaseName, ns, operationToken);
+        if (HasActivePendingOperation(history))
+            return Fail($"another operation is in progress for release {request.ReleaseName}");
+
         if (latest is null && !request.KeepHistory)
         {
             if (history is { Count: > 0 } && string.Equals(history[^1].Status, "uninstalled", StringComparison.OrdinalIgnoreCase))

@@ -1064,6 +1064,45 @@ public class ChartOperationsTests : IDisposable
         Assert.Empty(releaseState.Records("retained-uninstall"));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReleaseLifecycle_UninstallRejectsActivePendingOperationBeforeMutation(bool keepHistory)
+    {
+        var chartDir = await CreateMinimalChartAsync("uninstall-pending-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: uninstall-pending
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "uninstall-pending",
+            Chart = chartDir
+        }));
+        var deployed = Assert.Single(releaseState.Records("uninstall-pending"));
+        releaseState.AddRecord(deployed with { Revision = 2, Status = "pending-rollback" });
+        releaseState.DeletedPaths.Clear();
+
+        var result = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "uninstall-pending",
+            Namespace = "test-ns",
+            KeepHistory = keepHistory
+        });
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("another operation is in progress", result.StandardError);
+        Assert.Empty(releaseState.DeletedPaths);
+        Assert.Collection(
+            releaseState.Records("uninstall-pending"),
+            record => Assert.Equal((1, "deployed"), (record.Revision, record.Status)),
+            record => Assert.Equal((2, "pending-rollback"), (record.Revision, record.Status)));
+    }
+
     [Fact]
     public async Task ReleaseLifecycle_UninstallPurgesPreviouslyRetainedHistory()
     {
