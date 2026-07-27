@@ -738,13 +738,13 @@ public class HelmClient : IHelmClient
         string releaseName,
         string? @namespace = null,
         CancellationToken cancellationToken = default)
-        => await StatusAsync(releaseName, @namespace, revision: 0, cancellationToken);
+        => await StatusAsync(releaseName, revision: 0, @namespace, cancellationToken);
 
     /// <summary>Gets the durable status for a release revision. A revision of zero selects the latest stored revision.</summary>
     public async Task<CommandResult> StatusAsync(
         string releaseName,
-        string? @namespace,
         int revision,
+        string? @namespace = null,
         CancellationToken cancellationToken = default)
     {
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
@@ -771,14 +771,6 @@ public class HelmClient : IHelmClient
         };
         return Ok(JsonSerializer.Serialize(statusInfo, JsonDefaults));
     }
-
-    /// <summary>Gets the durable status for a release revision. A revision of zero selects the latest stored revision.</summary>
-    public async Task<CommandResult> StatusAsync(
-        string releaseName,
-        int revision,
-        string? @namespace = null,
-        CancellationToken cancellationToken = default)
-        => await StatusAsync(releaseName, @namespace, revision, cancellationToken);
 
     public async Task<CommandResult> RollbackAsync(
         string releaseName,
@@ -956,13 +948,13 @@ public class HelmClient : IHelmClient
         string? @namespace = null,
         bool allValues = false,
         CancellationToken cancellationToken = default)
-        => await GetValuesAsync(releaseName, @namespace, revision: 0, allValues, cancellationToken);
+        => await GetValuesAsync(releaseName, revision: 0, @namespace, allValues, cancellationToken);
 
     /// <summary>Gets values stored for a release revision. A revision of zero selects the latest stored revision.</summary>
     public async Task<CommandResult> GetValuesAsync(
         string releaseName,
-        string? @namespace,
         int revision,
+        string? @namespace = null,
         bool allValues = false,
         CancellationToken cancellationToken = default)
     {
@@ -975,15 +967,6 @@ public class HelmClient : IHelmClient
             ? Fail(lookup.Error)
             : Ok(GetStoredValuesYaml(lookup.Record!, allValues));
     }
-
-    /// <summary>Gets values stored for a release revision. A revision of zero selects the latest stored revision.</summary>
-    public async Task<CommandResult> GetValuesAsync(
-        string releaseName,
-        int revision,
-        string? @namespace = null,
-        bool allValues = false,
-        CancellationToken cancellationToken = default)
-        => await GetValuesAsync(releaseName, @namespace, revision, allValues, cancellationToken);
 
     public async Task<CommandResult> GetManifestAsync(
         string releaseName,

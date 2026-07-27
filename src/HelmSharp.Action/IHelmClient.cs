@@ -42,19 +42,11 @@ public interface IHelmClient
     /// <summary>Gets the status stored for a specific release revision. A revision of zero selects the latest stored revision.</summary>
     Task<CommandResult> StatusAsync(
         string releaseName,
-        string? @namespace,
-        int revision,
-        CancellationToken cancellationToken = default)
-        => Task.FromException<CommandResult>(new NotSupportedException(
-            "Revision-specific status inspection requires an IHelmClient implementation that supports it."));
-
-    /// <summary>Gets the status stored for a specific release revision. A revision of zero selects the latest stored revision.</summary>
-    Task<CommandResult> StatusAsync(
-        string releaseName,
         int revision,
         string? @namespace = null,
         CancellationToken cancellationToken = default)
-        => StatusAsync(releaseName, @namespace, revision, cancellationToken);
+        => Task.FromException<CommandResult>(new NotSupportedException(
+            "Revision-specific status inspection requires an IHelmClient implementation that supports it."));
 
     Task<CommandResult> RollbackAsync(
         string releaseName,
@@ -76,21 +68,12 @@ public interface IHelmClient
     /// <summary>Gets values stored for a specific release revision. A revision of zero selects the latest stored revision.</summary>
     Task<CommandResult> GetValuesAsync(
         string releaseName,
-        string? @namespace,
-        int revision,
-        bool allValues = false,
-        CancellationToken cancellationToken = default)
-        => Task.FromException<CommandResult>(new NotSupportedException(
-            "Revision-specific values inspection requires an IHelmClient implementation that supports it."));
-
-    /// <summary>Gets values stored for a specific release revision. A revision of zero selects the latest stored revision.</summary>
-    Task<CommandResult> GetValuesAsync(
-        string releaseName,
         int revision,
         string? @namespace = null,
         bool allValues = false,
         CancellationToken cancellationToken = default)
-        => GetValuesAsync(releaseName, @namespace, revision, allValues, cancellationToken);
+        => Task.FromException<CommandResult>(new NotSupportedException(
+            "Revision-specific values inspection requires an IHelmClient implementation that supports it."));
 
     // ─── Get Release Info ───
     Task<CommandResult> GetManifestAsync(

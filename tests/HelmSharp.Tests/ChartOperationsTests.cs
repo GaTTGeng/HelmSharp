@@ -739,11 +739,11 @@ public class ChartOperationsTests : IDisposable
         }));
 
         var firstManifest = await client.GetManifestAsync("revision-inspection", "test-ns", revision: 1);
-        var firstValues = await client.GetValuesAsync("revision-inspection", revision: 1);
+        var firstValues = await client.GetValuesAsync("revision-inspection", revision: 1, @namespace: "test-ns");
         var firstNotes = await client.GetNotesAsync("revision-inspection", "test-ns", revision: 1);
         var firstHooks = await client.GetHooksAsync("revision-inspection", "test-ns", revision: 1);
         var firstAll = await client.GetAllAsync("revision-inspection", "test-ns", revision: 1);
-        var firstStatus = await client.StatusAsync("revision-inspection", revision: 1);
+        var firstStatus = await client.StatusAsync("revision-inspection", revision: 1, @namespace: "test-ns");
         var history = await client.HistoryAsync("revision-inspection", "test-ns");
 
         Assert.All([firstManifest, firstValues, firstNotes, firstHooks, firstAll, firstStatus, history], result => Assert.Equal(0, result.ExitCode));
@@ -814,8 +814,8 @@ public class ChartOperationsTests : IDisposable
         var missingNotes = await client.GetNotesAsync("missing-revision", "test-ns", revision: 99);
         var missingHooks = await client.GetHooksAsync("missing-revision", "test-ns", revision: 99);
         var missingAll = await client.GetAllAsync("missing-revision", "test-ns", revision: 99);
-        var missingStatus = await client.StatusAsync("missing-revision", "test-ns", revision: 99);
-        var missingValues = await client.GetValuesAsync("missing-revision", "test-ns", revision: 99);
+        var missingStatus = await client.StatusAsync("missing-revision", revision: 99, @namespace: "test-ns");
+        var missingValues = await client.GetValuesAsync("missing-revision", revision: 99, @namespace: "test-ns");
         var invalidRevision = await client.GetManifestAsync("missing-revision", "test-ns", revision: -1);
         var missingHistory = await client.HistoryAsync("does-not-exist", "test-ns");
 
