@@ -198,6 +198,9 @@ public class HelmClient : IHelmClient
             ns,
             request.CreateNamespace || !request.Install,
             operationToken);
+        if (HasActivePendingOperation(existingHistory))
+            throw new InvalidOperationException($"another operation is in progress for release {request.ReleaseName}");
+
         var (isUpgrade, revision) = ResolveReleaseRenderState(existingHistory);
         if (!isUpgrade && !request.Install)
             throw new InvalidOperationException($"release: not found: {request.ReleaseName}");
@@ -443,6 +446,12 @@ public class HelmClient : IHelmClient
         return (isUpgrade, revision);
     }
 
+    private static bool HasActivePendingOperation(IReadOnlyCollection<HelmReleaseRecord> history)
+    {
+        var latest = history.MaxBy(record => record.Revision);
+        return latest?.Status.StartsWith("pending-", StringComparison.OrdinalIgnoreCase) == true;
+    }
+
     internal static Dictionary<string, object?> ResolveUpgradeOverrides(
         IReadOnlyCollection<HelmReleaseRecord> history,
         bool isUpgrade,
@@ -629,16 +638,20 @@ public class HelmClient : IHelmClient
     private static async Task PersistFailedRollbackAsync(
         HelmReleaseStore store,
         HelmReleaseRecord rollbackRecord,
+        string operationId,
         Exception error)
     {
         try
         {
-            await store.SaveAsync(rollbackRecord with
-            {
-                Status = "failed",
-                UpdatedAt = DateTimeOffset.UtcNow,
-                Description = $"Rollback failed: {error.Message}"
-            }, CancellationToken.None);
+            // A create response can be canceled before the API server makes its write
+            // observable. Retrying the same create-only reservation settles that
+            // ambiguity without replacing another operation's revision.
+            await store.TryCreateAsync(rollbackRecord, CancellationToken.None, operationId);
+            await store.TryMarkPendingRollbackFailedAsync(
+                rollbackRecord,
+                operationId,
+                $"Rollback failed: {error.Message}",
+                CancellationToken.None);
         }
         catch
         {
@@ -720,6 +733,9 @@ public class HelmClient : IHelmClient
         var store = new HelmReleaseStore(client);
         var latest = await store.GetLatestAsync(request.ReleaseName, ns, operationToken);
         var history = await store.HistoryAsync(request.ReleaseName, ns, operationToken);
+        if (HasActivePendingOperation(history))
+            return Fail($"another operation is in progress for release {request.ReleaseName}");
+
         if (latest is null && !request.KeepHistory)
         {
             if (history is { Count: > 0 } && string.Equals(history[^1].Status, "uninstalled", StringComparison.OrdinalIgnoreCase))
@@ -881,6 +897,9 @@ public class HelmClient : IHelmClient
             return Fail($"release: not found: {request.ReleaseName}");
 
         var storedHistory = await store.HistoryAsync(request.ReleaseName, ns, operationToken);
+        if (HasActivePendingOperation(storedHistory))
+            return Fail($"another operation is in progress for release {request.ReleaseName}");
+
         var targetRecord = request.Revision > 0
             ? storedHistory.FirstOrDefault(x => x.Revision == request.Revision)
             : storedHistory
@@ -899,7 +918,7 @@ public class HelmClient : IHelmClient
             Name = request.ReleaseName,
             Namespace = ns,
             Revision = newRevision,
-            Status = "deployed",
+            Status = "pending-rollback",
             ChartName = targetRecord.ChartName,
             ChartVersion = targetRecord.ChartVersion,
             AppVersion = targetRecord.AppVersion,
@@ -919,6 +938,20 @@ public class HelmClient : IHelmClient
             Hooks = hooks.Select(ToReleaseHook).ToList(),
             Labels = ResolveReleaseLabels([targetRecord], true, request.Labels)
         };
+
+        var operationId = Guid.NewGuid().ToString("N");
+        bool reserved;
+        try
+        {
+            reserved = await store.TryCreateAsync(rollbackRecord, operationToken, operationId);
+        }
+        catch (Exception ex)
+        {
+            await PersistFailedRollbackAsync(store, rollbackRecord, operationId, ex);
+            throw;
+        }
+        if (!reserved)
+            return Fail($"release revision {newRevision} already exists for {request.ReleaseName}");
 
         var output = new StringBuilder();
 
@@ -959,11 +992,26 @@ public class HelmClient : IHelmClient
         }
         catch (Exception ex)
         {
-            await PersistFailedRollbackAsync(store, rollbackRecord, ex);
+            await PersistFailedRollbackAsync(store, rollbackRecord, operationId, ex);
             throw;
         }
 
-        await store.SaveAsync(rollbackRecord with { UpdatedAt = DateTimeOffset.UtcNow }, operationToken);
+        try
+        {
+            // The manifest has been applied. Complete the durable release-state transition
+            // independently of the operation deadline so history cannot retain two deployed
+            // revisions when the timeout expires during this final save.
+            await store.SaveAsync(rollbackRecord with
+            {
+                Status = "deployed",
+                UpdatedAt = DateTimeOffset.UtcNow
+            }, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            await PersistFailedRollbackAsync(store, rollbackRecord, operationId, ex);
+            throw;
+        }
         var history = await store.HistoryAsync(request.ReleaseName, ns, CancellationToken.None);
         await SupersedeDeployedReleasesAsync(store, history.Where(record => record.Revision != newRevision), CancellationToken.None);
         var maxHistory = request.MaxHistory ?? options.MaxHistory;

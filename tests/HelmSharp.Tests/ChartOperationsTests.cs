@@ -709,6 +709,280 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task ReleaseLifecycle_RollbackFinalSaveCompletesAfterOperationCancellation()
+    {
+        var chartDir = await CreateMinimalChartAsync("rollback-final-save-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: rollback-final-save
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-final-save",
+            Chart = chartDir
+        }));
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-final-save",
+            Chart = chartDir
+        }));
+
+        using var cancellationSource = new CancellationTokenSource();
+        releaseState.CancelOnNextReleaseSecretRead = cancellationSource;
+        var result = await client.RollbackAsync(new HelmRollbackRequest
+        {
+            ReleaseName = "rollback-final-save",
+            Namespace = "test-ns",
+            Revision = 1,
+            Wait = false
+        }, cancellationSource.Token);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(cancellationSource.IsCancellationRequested);
+        Assert.Collection(
+            releaseState.Records("rollback-final-save"),
+            record => Assert.Equal((1, "superseded"), (record.Revision, record.Status)),
+            record => Assert.Equal((2, "superseded"), (record.Revision, record.Status)),
+            record => Assert.Equal((3, "deployed"), (record.Revision, record.Status)));
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_RollbackCancellationAfterReservationCreateMarksOwnedReservationFailed()
+    {
+        var chartDir = await CreateMinimalChartAsync("rollback-reservation-cancellation-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: rollback-reservation-cancellation
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-reservation-cancellation",
+            Chart = chartDir
+        }));
+        releaseState.AppliedPaths.Clear();
+
+        using var cancellationSource = new CancellationTokenSource();
+        releaseState.CancelAfterNextSecretCreate = cancellationSource;
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.RollbackAsync(new HelmRollbackRequest
+        {
+            ReleaseName = "rollback-reservation-cancellation",
+            Namespace = "test-ns",
+            Revision = 1,
+            Wait = false
+        }, cancellationSource.Token));
+
+        Assert.True(cancellationSource.IsCancellationRequested);
+        Assert.Empty(releaseState.AppliedPaths);
+        Assert.Collection(
+            releaseState.Records("rollback-reservation-cancellation"),
+            record => Assert.Equal((1, "deployed"), (record.Revision, record.Status)),
+            record => Assert.Equal((2, "failed"), (record.Revision, record.Status)));
+
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-reservation-cancellation",
+            Chart = chartDir
+        }));
+
+        Assert.Contains(releaseState.Records("rollback-reservation-cancellation"),
+            record => record.Revision == 3 && record.Status == "deployed");
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_RollbackCancellationBeforeReservationVisibilityCreatesAndFailsReservation()
+    {
+        var chartDir = await CreateMinimalChartAsync("rollback-reservation-delayed-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: rollback-reservation-delayed
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-reservation-delayed",
+            Chart = chartDir
+        }));
+        releaseState.AppliedPaths.Clear();
+
+        using var cancellationSource = new CancellationTokenSource();
+        releaseState.CancelNextSecretCreateBeforePersisting = cancellationSource;
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.RollbackAsync(new HelmRollbackRequest
+        {
+            ReleaseName = "rollback-reservation-delayed",
+            Namespace = "test-ns",
+            Revision = 1,
+            Wait = false
+        }, cancellationSource.Token));
+
+        Assert.Empty(releaseState.AppliedPaths);
+        Assert.Collection(
+            releaseState.Records("rollback-reservation-delayed"),
+            record => Assert.Equal((1, "deployed"), (record.Revision, record.Status)),
+            record => Assert.Equal((2, "failed"), (record.Revision, record.Status)));
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_RollbackReservationConflictDoesNotApplyManifests()
+    {
+        var chartDir = await CreateMinimalChartAsync("rollback-conflict-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: rollback-conflict
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-conflict",
+            Chart = chartDir
+        }));
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-conflict",
+            Chart = chartDir
+        }));
+
+        releaseState.CreateNextSecretThenReturnConflict = true;
+        releaseState.AppliedPaths.Clear();
+        var result = await client.RollbackAsync(new HelmRollbackRequest
+        {
+            ReleaseName = "rollback-conflict",
+            Namespace = "test-ns",
+            Revision = 1,
+            Wait = false
+        });
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Empty(releaseState.AppliedPaths);
+        Assert.Collection(
+            releaseState.Records("rollback-conflict"),
+            record => Assert.Equal((1, "superseded"), (record.Revision, record.Status)),
+            record => Assert.Equal((2, "deployed"), (record.Revision, record.Status)),
+            record => Assert.Equal((3, "pending-rollback"), (record.Revision, record.Status)));
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_RollbackRejectsExistingPendingOperationBeforeApply()
+    {
+        var chartDir = await CreateMinimalChartAsync("rollback-pending-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: rollback-pending
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-pending",
+            Chart = chartDir
+        }));
+        var deployed = Assert.Single(releaseState.Records("rollback-pending"));
+        releaseState.AddRecord(deployed with { Revision = 2, Status = "pending-rollback" });
+        releaseState.AppliedPaths.Clear();
+
+        var result = await client.RollbackAsync(new HelmRollbackRequest
+        {
+            ReleaseName = "rollback-pending",
+            Namespace = "test-ns",
+            Wait = false
+        });
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("another operation is in progress", result.StandardError);
+        Assert.Empty(releaseState.AppliedPaths);
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_UpgradeRejectsActivePendingOperationBeforeApply()
+    {
+        var chartDir = await CreateMinimalChartAsync("upgrade-pending-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: upgrade-pending
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "upgrade-pending",
+            Chart = chartDir
+        }));
+        var deployed = Assert.Single(releaseState.Records("upgrade-pending"));
+        releaseState.AddRecord(deployed with { Revision = 2, Status = "pending-rollback" });
+        releaseState.AppliedPaths.Clear();
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+            {
+                ReleaseName = "upgrade-pending",
+                Chart = chartDir
+            })));
+
+        Assert.Contains("another operation is in progress", exception.Message);
+        Assert.Empty(releaseState.AppliedPaths);
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_RollbackIgnoresHistoricalPendingOperation()
+    {
+        var chartDir = await CreateMinimalChartAsync("historical-pending-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: historical-pending
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "historical-pending",
+            Chart = chartDir
+        }));
+        var firstRevision = Assert.Single(releaseState.Records("historical-pending"));
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "historical-pending",
+            Chart = chartDir
+        }));
+        releaseState.AddRecord(firstRevision with { Status = "pending-rollback" });
+        releaseState.AppliedPaths.Clear();
+
+        var result = await client.RollbackAsync(new HelmRollbackRequest
+        {
+            ReleaseName = "historical-pending",
+            Namespace = "test-ns",
+            Revision = 1,
+            Wait = false
+        });
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.NotEmpty(releaseState.AppliedPaths);
+        Assert.Collection(
+            releaseState.Records("historical-pending"),
+            record => Assert.Equal((1, "pending-rollback"), (record.Revision, record.Status)),
+            record => Assert.Equal((2, "superseded"), (record.Revision, record.Status)),
+            record => Assert.Equal((3, "deployed"), (record.Revision, record.Status)));
+    }
+
+    [Fact]
     public async Task ReleaseLifecycle_RejectsConflictingAndUnsupportedOptionsBeforeMutation()
     {
         var chartDir = await CreateMinimalChartAsync("invalid-options-chart");
@@ -788,6 +1062,45 @@ public class ChartOperationsTests : IDisposable
 
         Assert.Equal(0, uninstall.ExitCode);
         Assert.Empty(releaseState.Records("retained-uninstall"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReleaseLifecycle_UninstallRejectsActivePendingOperationBeforeMutation(bool keepHistory)
+    {
+        var chartDir = await CreateMinimalChartAsync("uninstall-pending-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: uninstall-pending
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "uninstall-pending",
+            Chart = chartDir
+        }));
+        var deployed = Assert.Single(releaseState.Records("uninstall-pending"));
+        releaseState.AddRecord(deployed with { Revision = 2, Status = "pending-rollback" });
+        releaseState.DeletedPaths.Clear();
+
+        var result = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "uninstall-pending",
+            Namespace = "test-ns",
+            KeepHistory = keepHistory
+        });
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("another operation is in progress", result.StandardError);
+        Assert.Empty(releaseState.DeletedPaths);
+        Assert.Collection(
+            releaseState.Records("uninstall-pending"),
+            record => Assert.Equal((1, "deployed"), (record.Revision, record.Status)),
+            record => Assert.Equal((2, "pending-rollback"), (record.Revision, record.Status)));
     }
 
     [Fact]
@@ -1381,12 +1694,42 @@ public class ChartOperationsTests : IDisposable
                     _releaseState.FailNextSecretCreate = false;
                     return JsonResponse(request, HttpStatusCode.InternalServerError, "{ \"code\": 500 }");
                 }
+                if (request.Method == HttpMethod.Post && _releaseState.CreateNextSecretThenReturnConflict)
+                {
+                    _releaseState.CreateNextSecretThenReturnConflict = false;
+                    _releaseState.Secrets[envelope.Metadata.Name] = secret;
+                    return JsonResponse(request, HttpStatusCode.Conflict, "{ \"code\": 409 }");
+                }
+                if (request.Method == HttpMethod.Post && _releaseState.Secrets.ContainsKey(envelope.Metadata.Name))
+                    return JsonResponse(request, HttpStatusCode.Conflict, "{ \"code\": 409 }");
+                if (request.Method == HttpMethod.Post && _releaseState.CancelNextSecretCreateBeforePersisting is { } delayedCancellationSource)
+                {
+                    _releaseState.CancelNextSecretCreateBeforePersisting = null;
+                    delayedCancellationSource.Cancel();
+                    if (cancellationToken.IsCancellationRequested)
+                        return await Task.FromCanceled<HttpResponseMessage>(cancellationToken);
+                }
                 _releaseState.Secrets[envelope.Metadata.Name] = secret;
+                if (request.Method == HttpMethod.Post && _releaseState.CancelAfterNextSecretCreate is { } cancellationSource)
+                {
+                    _releaseState.CancelAfterNextSecretCreate = null;
+                    cancellationSource.Cancel();
+                    if (cancellationToken.IsCancellationRequested)
+                        return await Task.FromCanceled<HttpResponseMessage>(cancellationToken);
+                }
                 return JsonResponse(request, request.Method == HttpMethod.Post ? HttpStatusCode.Created : HttpStatusCode.OK, secret);
             }
 
             if (request.Method == HttpMethod.Get && path.Contains("/secrets/", StringComparison.Ordinal))
             {
+                if (_releaseState.CancelOnNextReleaseSecretRead is { } cancellationSource)
+                {
+                    _releaseState.CancelOnNextReleaseSecretRead = null;
+                    cancellationSource.Cancel();
+                    if (cancellationToken.IsCancellationRequested)
+                        return await Task.FromCanceled<HttpResponseMessage>(cancellationToken);
+                }
+
                 var name = path[(path.LastIndexOf('/') + 1)..];
                 return _releaseState.Secrets.TryGetValue(name, out var secret)
                     ? JsonResponse(request, HttpStatusCode.OK, secret)
@@ -1403,6 +1746,7 @@ public class ChartOperationsTests : IDisposable
             if ((request.Method == HttpMethod.Post || request.Method == HttpMethod.Put) &&
                 path.Contains("/configmaps", StringComparison.Ordinal))
             {
+                _releaseState.AppliedPaths.Add(path);
                 var configMap = await request.Content!.ReadAsStringAsync(cancellationToken);
                 return JsonResponse(request, request.Method == HttpMethod.Post ? HttpStatusCode.Created : HttpStatusCode.OK, configMap);
             }
@@ -1441,7 +1785,12 @@ public class ChartOperationsTests : IDisposable
         internal List<string> DeleteRequestBodies { get; } = [];
         internal List<string> DeletedPaths { get; } = [];
         internal List<string> WaitedPaths { get; } = [];
+        internal List<string> AppliedPaths { get; } = [];
         public bool FailNextSecretCreate { get; set; }
+        public bool CreateNextSecretThenReturnConflict { get; set; }
+        internal CancellationTokenSource? CancelOnNextReleaseSecretRead { get; set; }
+        internal CancellationTokenSource? CancelAfterNextSecretCreate { get; set; }
+        internal CancellationTokenSource? CancelNextSecretCreateBeforePersisting { get; set; }
 
         public IReadOnlyList<HelmReleaseRecord> Records(string releaseName)
             => Secrets.Values
@@ -1459,6 +1808,29 @@ public class ChartOperationsTests : IDisposable
                     string.Equals(secret.Metadata.Labels["name"], releaseName, StringComparison.Ordinal) &&
                     string.Equals(secret.Metadata.Labels["version"], revision.ToString(), StringComparison.Ordinal))
                 .Metadata.Labels;
+
+        internal void AddRecord(HelmReleaseRecord record)
+        {
+            var secretName = HelmReleaseStore.SecretName(record.Name, record.Revision);
+            Secrets[secretName] = JsonSerializer.Serialize(new SecretEnvelope
+            {
+                Metadata = new SecretMetadata
+                {
+                    Name = secretName,
+                    Labels = new Dictionary<string, string>
+                    {
+                        ["name"] = record.Name,
+                        ["owner"] = "helm",
+                        ["status"] = record.Status,
+                        ["version"] = record.Revision.ToString()
+                    }
+                },
+                Data = new Dictionary<string, string>
+                {
+                    ["release"] = Convert.ToBase64String(Encoding.UTF8.GetBytes(HelmV3ReleaseCodec.Encode(record)))
+                }
+            }, JsonDefaults);
+        }
 
         internal static readonly JsonSerializerOptions JsonDefaults = new(JsonSerializerDefaults.Web);
 

@@ -81,6 +81,8 @@
 - `NextRevisionAsync(...)`
 - `PurgeAsync(...)`
 - `SaveAsync(...)`
+- `TryCreateAsync(...)`
+- `TryMarkPendingRollbackFailedAsync(...)`
 
 ### 使用提示
 先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
