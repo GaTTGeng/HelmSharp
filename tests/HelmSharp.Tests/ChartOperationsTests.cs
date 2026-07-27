@@ -839,7 +839,8 @@ public class ChartOperationsTests : IDisposable
                  {
                      ("zeta", "platform"),
                      ("alpha", "platform"),
-                     ("beta", "application")
+                     ("beta", "application"),
+                     ("empty", "")
                  })
         {
             await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
@@ -852,13 +853,14 @@ public class ChartOperationsTests : IDisposable
 
         var all = await client.ListReleasesAsync("test-ns");
         var selected = await client.ListReleasesAsync("test-ns", selector: "team=platform", limit: 1);
+        var emptyValue = await client.ListReleasesAsync("test-ns", selector: "team=");
         var unsupported = await client.ListReleasesAsync("test-ns", selector: "team!=platform");
 
         Assert.Equal(0, all.ExitCode);
         using (var allJson = JsonDocument.Parse(all.StandardOutput))
         {
             Assert.Equal(
-                ["alpha", "beta", "zeta"],
+                ["alpha", "beta", "empty", "zeta"],
                 allJson.RootElement.EnumerateArray()
                     .Select(record => record.GetProperty("name").GetString()!)
                     .ToArray());
@@ -869,6 +871,13 @@ public class ChartOperationsTests : IDisposable
         {
             var selectedRecord = Assert.Single(selectedJson.RootElement.EnumerateArray());
             Assert.Equal("alpha", selectedRecord.GetProperty("name").GetString());
+        }
+
+        Assert.Equal(0, emptyValue.ExitCode);
+        using (var emptyValueJson = JsonDocument.Parse(emptyValue.StandardOutput))
+        {
+            var emptyValueRecord = Assert.Single(emptyValueJson.RootElement.EnumerateArray());
+            Assert.Equal("empty", emptyValueRecord.GetProperty("name").GetString());
         }
 
         Assert.Equal(1, unsupported.ExitCode);

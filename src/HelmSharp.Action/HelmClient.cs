@@ -114,16 +114,14 @@ public class HelmClient : IHelmClient
         {
             var trimmed = part.Trim();
             var eqIndex = trimmed.IndexOf('=');
-            if (eqIndex <= 0 || eqIndex == trimmed.Length - 1 ||
-                trimmed.IndexOf('=', eqIndex + 1) >= 0)
+            if (eqIndex <= 0 || trimmed.IndexOf('=', eqIndex + 1) >= 0)
             {
                 return false;
             }
 
             var key = trimmed[..eqIndex].Trim();
             var value = trimmed[(eqIndex + 1)..].Trim();
-            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value) ||
-                key.Contains('!') || !result.TryAdd(key, value))
+            if (string.IsNullOrWhiteSpace(key) || key.Contains('!') || !result.TryAdd(key, value))
                 return false;
         }
 
