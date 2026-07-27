@@ -883,6 +883,9 @@ public class HelmClient : IHelmClient
             return Fail($"release: not found: {request.ReleaseName}");
 
         var storedHistory = await store.HistoryAsync(request.ReleaseName, ns, operationToken);
+        if (storedHistory.Any(record => record.Status.StartsWith("pending-", StringComparison.OrdinalIgnoreCase)))
+            return Fail($"another operation is in progress for release {request.ReleaseName}");
+
         var targetRecord = request.Revision > 0
             ? storedHistory.FirstOrDefault(x => x.Revision == request.Revision)
             : storedHistory
@@ -901,7 +904,7 @@ public class HelmClient : IHelmClient
             Name = request.ReleaseName,
             Namespace = ns,
             Revision = newRevision,
-            Status = "pending",
+            Status = "pending-rollback",
             ChartName = targetRecord.ChartName,
             ChartVersion = targetRecord.ChartVersion,
             AppVersion = targetRecord.AppVersion,

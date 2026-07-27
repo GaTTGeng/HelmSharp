@@ -789,7 +789,40 @@ public class ChartOperationsTests : IDisposable
             releaseState.Records("rollback-conflict"),
             record => Assert.Equal((1, "superseded"), (record.Revision, record.Status)),
             record => Assert.Equal((2, "deployed"), (record.Revision, record.Status)),
-            record => Assert.Equal((3, "pending"), (record.Revision, record.Status)));
+            record => Assert.Equal((3, "pending-rollback"), (record.Revision, record.Status)));
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_RollbackRejectsExistingPendingOperationBeforeApply()
+    {
+        var chartDir = await CreateMinimalChartAsync("rollback-pending-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: rollback-pending
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-pending",
+            Chart = chartDir
+        }));
+        var deployed = Assert.Single(releaseState.Records("rollback-pending"));
+        releaseState.AddRecord(deployed with { Revision = 2, Status = "pending-rollback" });
+        releaseState.AppliedPaths.Clear();
+
+        var result = await client.RollbackAsync(new HelmRollbackRequest
+        {
+            ReleaseName = "rollback-pending",
+            Namespace = "test-ns",
+            Wait = false
+        });
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("another operation is in progress", result.StandardError);
+        Assert.Empty(releaseState.AppliedPaths);
     }
 
     [Fact]
@@ -1563,6 +1596,29 @@ public class ChartOperationsTests : IDisposable
                     string.Equals(secret.Metadata.Labels["name"], releaseName, StringComparison.Ordinal) &&
                     string.Equals(secret.Metadata.Labels["version"], revision.ToString(), StringComparison.Ordinal))
                 .Metadata.Labels;
+
+        internal void AddRecord(HelmReleaseRecord record)
+        {
+            var secretName = HelmReleaseStore.SecretName(record.Name, record.Revision);
+            Secrets[secretName] = JsonSerializer.Serialize(new SecretEnvelope
+            {
+                Metadata = new SecretMetadata
+                {
+                    Name = secretName,
+                    Labels = new Dictionary<string, string>
+                    {
+                        ["name"] = record.Name,
+                        ["owner"] = "helm",
+                        ["status"] = record.Status,
+                        ["version"] = record.Revision.ToString()
+                    }
+                },
+                Data = new Dictionary<string, string>
+                {
+                    ["release"] = Convert.ToBase64String(Encoding.UTF8.GetBytes(HelmV3ReleaseCodec.Encode(record)))
+                }
+            }, JsonDefaults);
+        }
 
         internal static readonly JsonSerializerOptions JsonDefaults = new(JsonSerializerDefaults.Web);
 
