@@ -577,6 +577,41 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task ReleaseLifecycle_ReuseValuesPrefersTheLatestDeployedRevisionOverAFailedRevision()
+    {
+        var chartDir = await CreateMinimalChartAsync("reuse-deployed-values-chart");
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "reuse-deployed-values",
+            Chart = chartDir,
+            ValuesContent = "marker: deployed\n"
+        }));
+        releaseState.FailNextSecretCreate = true;
+        await Assert.ThrowsAsync<HttpOperationException>(async () =>
+            await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+            {
+                ReleaseName = "reuse-deployed-values",
+                Chart = chartDir,
+                ValuesContent = "marker: failed\n"
+            })));
+
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "reuse-deployed-values",
+            Chart = chartDir,
+            ReuseValues = true,
+            ValuesContent = "extra: retry\n"
+        }));
+
+        var retry = Assert.Single(releaseState.Records("reuse-deployed-values"), record => record.Revision == 3);
+        Assert.Contains("marker: deployed", retry.ValuesYaml);
+        Assert.DoesNotContain("marker: failed", retry.ValuesYaml);
+    }
+
+    [Fact]
     public async Task ReleaseLifecycle_RollbackRequestPersistsOptions()
     {
         var chartDir = await CreateMinimalChartAsync("rollback-options-chart");
@@ -613,6 +648,64 @@ public class ChartOperationsTests : IDisposable
             releaseState.Records("rollback-options"),
             record => Assert.Equal(2, record.Revision),
             record => Assert.Equal(3, record.Revision));
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_RollbackWaitFailurePersistsAFailedRevision()
+    {
+        var chartDir = await CreateMinimalChartAsync("rollback-wait-failure-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "deployment.yaml"), """
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: rollback-wait-failure
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: rollback-wait-failure
+              template:
+                metadata:
+                  labels:
+                    app: rollback-wait-failure
+                spec:
+                  containers:
+                  - name: app
+                    image: nginx
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-wait-failure",
+            Chart = chartDir,
+            Wait = false
+        }));
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-wait-failure",
+            Chart = chartDir,
+            Wait = false
+        }));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.RollbackAsync(new HelmRollbackRequest
+        {
+            ReleaseName = "rollback-wait-failure",
+            Revision = 1,
+            Namespace = "test-ns",
+            Wait = true,
+            TimeoutSeconds = 1
+        }));
+
+        Assert.Collection(
+            releaseState.Records("rollback-wait-failure"),
+            record => Assert.Equal((1, "superseded"), (record.Revision, record.Status)),
+            record => Assert.Equal((2, "deployed"), (record.Revision, record.Status)),
+            record =>
+            {
+                Assert.Equal((3, "failed"), (record.Revision, record.Status));
+                Assert.StartsWith("Rollback failed:", record.Description);
+            });
     }
 
     [Fact]
@@ -1313,6 +1406,16 @@ public class ChartOperationsTests : IDisposable
                 var configMap = await request.Content!.ReadAsStringAsync(cancellationToken);
                 return JsonResponse(request, request.Method == HttpMethod.Post ? HttpStatusCode.Created : HttpStatusCode.OK, configMap);
             }
+
+            if ((request.Method == HttpMethod.Post || request.Method == HttpMethod.Put) &&
+                path.Contains("/deployments", StringComparison.Ordinal))
+            {
+                var deployment = await request.Content!.ReadAsStringAsync(cancellationToken);
+                return JsonResponse(request, request.Method == HttpMethod.Post ? HttpStatusCode.Created : HttpStatusCode.OK, deployment);
+            }
+
+            if (request.Method == HttpMethod.Get && path.Contains("/deployments/", StringComparison.Ordinal))
+                return JsonResponse(request, HttpStatusCode.NotFound, "{ \"code\": 404 }");
 
             if (request.Method == HttpMethod.Get && path.Contains("/configmaps/", StringComparison.Ordinal))
             {

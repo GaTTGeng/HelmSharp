@@ -453,7 +453,10 @@ public class HelmClient : IHelmClient
         if (!isUpgrade)
             throw new InvalidOperationException("ReuseValues requires an existing release.");
 
-        var latest = history.MaxBy(record => record.Revision);
+        var latest = history
+            .Where(record => string.Equals(record.Status, "deployed", StringComparison.OrdinalIgnoreCase))
+            .MaxBy(record => record.Revision)
+            ?? history.MaxBy(record => record.Revision);
         if (latest is null)
             throw new InvalidOperationException("ReuseValues requires an existing release.");
 
@@ -868,6 +871,32 @@ public class HelmClient : IHelmClient
 
         var (mainManifest, hooks) = ResolveStoredManifest(targetRecord, ns);
         var hookExecutor = new HelmHookExecutor(client, options.FieldManager);
+        var newRevision = await store.NextRevisionAsync(request.ReleaseName, ns, operationToken);
+        var rollbackRecord = new HelmReleaseRecord
+        {
+            Name = request.ReleaseName,
+            Namespace = ns,
+            Revision = newRevision,
+            Status = "deployed",
+            ChartName = targetRecord.ChartName,
+            ChartVersion = targetRecord.ChartVersion,
+            AppVersion = targetRecord.AppVersion,
+            ChartApiVersion = targetRecord.ChartApiVersion,
+            ChartDescription = targetRecord.ChartDescription,
+            ChartType = targetRecord.ChartType,
+            ChartKubeVersion = targetRecord.ChartKubeVersion,
+            ChartValuesYaml = targetRecord.ChartValuesYaml,
+            RawChartJson = targetRecord.RawChartJson,
+            Manifest = mainManifest,
+            ValuesYaml = targetRecord.ValuesYaml,
+            ComputedValuesYaml = targetRecord.ComputedValuesYaml,
+            FirstDeployedAt = targetRecord.FirstDeployedAt,
+            UpdatedAt = DateTimeOffset.UtcNow,
+            Description = request.Description ?? "Rollback complete",
+            Notes = targetRecord.Notes,
+            Hooks = hooks.Select(ToReleaseHook).ToList(),
+            Labels = ResolveReleaseLabels([targetRecord], true, request.Labels)
+        };
 
         var output = new StringBuilder();
 
@@ -898,39 +927,34 @@ public class HelmClient : IHelmClient
 
         if (request.Wait)
         {
-            output.AppendLine($"Waiting for resources to be ready (timeout: {timeout}s)...");
-            var waiter = new KubernetesResourceWaiter(client, timeout);
-            await foreach (var line in waiter.WaitForReadyAsync(mainManifest, ns, request.WaitForJobs, operationToken))
-                output.AppendLine(line);
+            try
+            {
+                output.AppendLine($"Waiting for resources to be ready (timeout: {timeout}s)...");
+                var waiter = new KubernetesResourceWaiter(client, timeout);
+                await foreach (var line in waiter.WaitForReadyAsync(mainManifest, ns, request.WaitForJobs, operationToken))
+                    output.AppendLine(line);
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    await store.SaveAsync(rollbackRecord with
+                    {
+                        Status = "failed",
+                        UpdatedAt = DateTimeOffset.UtcNow,
+                        Description = $"Rollback failed: {ex.Message}"
+                    }, CancellationToken.None);
+                }
+                catch
+                {
+                    // Preserve the readiness failure when its lifecycle evidence cannot be stored.
+                }
+
+                throw;
+            }
         }
 
-        var newRevision = await store.NextRevisionAsync(request.ReleaseName, ns, operationToken);
-        var deployedAt = DateTimeOffset.UtcNow;
-        await store.SaveAsync(new HelmReleaseRecord
-        {
-            Name = request.ReleaseName,
-            Namespace = ns,
-            Revision = newRevision,
-            Status = "deployed",
-            ChartName = targetRecord.ChartName,
-            ChartVersion = targetRecord.ChartVersion,
-            AppVersion = targetRecord.AppVersion,
-            ChartApiVersion = targetRecord.ChartApiVersion,
-            ChartDescription = targetRecord.ChartDescription,
-            ChartType = targetRecord.ChartType,
-            ChartKubeVersion = targetRecord.ChartKubeVersion,
-            ChartValuesYaml = targetRecord.ChartValuesYaml,
-            RawChartJson = targetRecord.RawChartJson,
-            Manifest = mainManifest,
-            ValuesYaml = targetRecord.ValuesYaml,
-            ComputedValuesYaml = targetRecord.ComputedValuesYaml,
-            FirstDeployedAt = targetRecord.FirstDeployedAt,
-            UpdatedAt = deployedAt,
-            Description = request.Description ?? "Rollback complete",
-            Notes = targetRecord.Notes,
-            Hooks = hooks.Select(ToReleaseHook).ToList(),
-            Labels = ResolveReleaseLabels([targetRecord], true, request.Labels)
-        }, operationToken);
+        await store.SaveAsync(rollbackRecord with { UpdatedAt = DateTimeOffset.UtcNow }, operationToken);
         var history = await store.HistoryAsync(request.ReleaseName, ns, operationToken);
         await SupersedeDeployedReleasesAsync(store, history.Where(record => record.Revision != newRevision), operationToken);
         var maxHistory = request.MaxHistory ?? options.MaxHistory;
