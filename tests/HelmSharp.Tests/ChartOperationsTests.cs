@@ -521,11 +521,219 @@ public class ChartOperationsTests : IDisposable
         var rollback = await client.RollbackAsync("lifecycle", 1, "test-ns");
 
         Assert.Equal(0, rollback.ExitCode);
+        Assert.DoesNotContain("Waiting for resources", rollback.StandardOutput);
         Assert.Collection(
             releaseState.Records("lifecycle"),
             record => Assert.Equal((1, "superseded"), (record.Revision, record.Status)),
             record => Assert.Equal((2, "superseded"), (record.Revision, record.Status)),
             record => Assert.Equal((3, "deployed"), (record.Revision, record.Status)));
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_InstallDisabledDoesNotCreateMissingRelease()
+    {
+        var chartDir = await CreateMinimalChartAsync("install-disabled-chart");
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+            {
+                ReleaseName = "install-disabled",
+                Chart = chartDir,
+                Install = false
+            })));
+
+        Assert.Equal("release: not found: install-disabled", ex.Message);
+        Assert.Empty(releaseState.Records("install-disabled"));
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_ReuseValuesMergesStoredOverridesWithNewOverrides()
+    {
+        var chartDir = await CreateMinimalChartAsync("reuse-values-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "values.yaml"), "marker: chart-default\nnested:\n  default: true\n");
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "reuse-values",
+            Chart = chartDir,
+            ValuesContent = "marker: retained\nnested:\n  previous: true\n"
+        }));
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "reuse-values",
+            Chart = chartDir,
+            ReuseValues = true,
+            ValuesContent = "nested:\n  current: true\n"
+        }));
+
+        var current = Assert.Single(releaseState.Records("reuse-values"), record => record.Revision == 2);
+        Assert.Contains("marker: retained", current.ValuesYaml);
+        Assert.Contains("previous: true", current.ValuesYaml);
+        Assert.Contains("current: true", current.ValuesYaml);
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_ReuseValuesPrefersTheLatestDeployedRevisionOverAFailedRevision()
+    {
+        var chartDir = await CreateMinimalChartAsync("reuse-deployed-values-chart");
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "reuse-deployed-values",
+            Chart = chartDir,
+            ValuesContent = "marker: deployed\n"
+        }));
+        releaseState.FailNextSecretCreate = true;
+        await Assert.ThrowsAsync<HttpOperationException>(async () =>
+            await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+            {
+                ReleaseName = "reuse-deployed-values",
+                Chart = chartDir,
+                ValuesContent = "marker: failed\n"
+            })));
+
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "reuse-deployed-values",
+            Chart = chartDir,
+            ReuseValues = true,
+            ValuesContent = "extra: retry\n"
+        }));
+
+        var retry = Assert.Single(releaseState.Records("reuse-deployed-values"), record => record.Revision == 3);
+        Assert.Contains("marker: deployed", retry.ValuesYaml);
+        Assert.DoesNotContain("marker: failed", retry.ValuesYaml);
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_RollbackRequestPersistsOptions()
+    {
+        var chartDir = await CreateMinimalChartAsync("rollback-options-chart");
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-options",
+            Chart = chartDir,
+            Labels = new Dictionary<string, string> { ["source"] = "install" }
+        }));
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-options",
+            Chart = chartDir
+        }));
+
+        var rollback = await client.RollbackAsync(new HelmRollbackRequest
+        {
+            ReleaseName = "rollback-options",
+            Revision = 1,
+            Namespace = "test-ns",
+            Wait = false,
+            MaxHistory = 2,
+            Description = "restored because of regression",
+            Labels = new Dictionary<string, string> { ["reason"] = "regression" }
+        });
+
+        Assert.Equal(0, rollback.ExitCode);
+        var restored = Assert.Single(releaseState.Records("rollback-options"), record => record.Revision == 3);
+        Assert.Equal("restored because of regression", restored.Description);
+        Assert.Equal("regression", releaseState.Labels("rollback-options", 3)["reason"]);
+        Assert.Collection(
+            releaseState.Records("rollback-options"),
+            record => Assert.Equal(2, record.Revision),
+            record => Assert.Equal(3, record.Revision));
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_RollbackWaitFailurePersistsAFailedRevision()
+    {
+        var chartDir = await CreateMinimalChartAsync("rollback-wait-failure-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "deployment.yaml"), """
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: rollback-wait-failure
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: rollback-wait-failure
+              template:
+                metadata:
+                  labels:
+                    app: rollback-wait-failure
+                spec:
+                  containers:
+                  - name: app
+                    image: nginx
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-wait-failure",
+            Chart = chartDir,
+            Wait = false
+        }));
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-wait-failure",
+            Chart = chartDir,
+            Wait = false
+        }));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.RollbackAsync(new HelmRollbackRequest
+        {
+            ReleaseName = "rollback-wait-failure",
+            Revision = 1,
+            Namespace = "test-ns",
+            Wait = true,
+            TimeoutSeconds = 1
+        }));
+
+        Assert.Collection(
+            releaseState.Records("rollback-wait-failure"),
+            record => Assert.Equal((1, "superseded"), (record.Revision, record.Status)),
+            record => Assert.Equal((2, "deployed"), (record.Revision, record.Status)),
+            record =>
+            {
+                Assert.Equal((3, "failed"), (record.Revision, record.Status));
+                Assert.StartsWith("Rollback failed:", record.Description);
+            });
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_RejectsConflictingAndUnsupportedOptionsBeforeMutation()
+    {
+        var chartDir = await CreateMinimalChartAsync("invalid-options-chart");
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+
+        var conflicting = await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+            {
+                ReleaseName = "invalid-options",
+                Chart = chartDir,
+                ReuseValues = true,
+                ResetValues = true
+            })));
+        var unsupported = await Assert.ThrowsAsync<NotSupportedException>(async () =>
+            await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+            {
+                ReleaseName = "invalid-options",
+                Chart = chartDir,
+                Force = true
+            })));
+
+        Assert.Contains("ReuseValues and ResetValues", conflicting.Message);
+        Assert.Contains("Force", unsupported.Message);
+        Assert.Empty(releaseState.Records("invalid-options"));
     }
 
     [Fact]
@@ -1199,6 +1407,16 @@ public class ChartOperationsTests : IDisposable
                 return JsonResponse(request, request.Method == HttpMethod.Post ? HttpStatusCode.Created : HttpStatusCode.OK, configMap);
             }
 
+            if ((request.Method == HttpMethod.Post || request.Method == HttpMethod.Put) &&
+                path.Contains("/deployments", StringComparison.Ordinal))
+            {
+                var deployment = await request.Content!.ReadAsStringAsync(cancellationToken);
+                return JsonResponse(request, request.Method == HttpMethod.Post ? HttpStatusCode.Created : HttpStatusCode.OK, deployment);
+            }
+
+            if (request.Method == HttpMethod.Get && path.Contains("/deployments/", StringComparison.Ordinal))
+                return JsonResponse(request, HttpStatusCode.NotFound, "{ \"code\": 404 }");
+
             if (request.Method == HttpMethod.Get && path.Contains("/configmaps/", StringComparison.Ordinal))
             {
                 _releaseState.WaitedPaths.Add(path);
@@ -1233,6 +1451,14 @@ public class ChartOperationsTests : IDisposable
                     Encoding.UTF8.GetString(Convert.FromBase64String(secret.Data["release"]))))
                 .OrderBy(record => record.Revision)
                 .ToList();
+
+        public IReadOnlyDictionary<string, string> Labels(string releaseName, int revision)
+            => Secrets.Values
+                .Select(secret => JsonSerializer.Deserialize<SecretEnvelope>(secret, JsonDefaults)!)
+                .Single(secret =>
+                    string.Equals(secret.Metadata.Labels["name"], releaseName, StringComparison.Ordinal) &&
+                    string.Equals(secret.Metadata.Labels["version"], revision.ToString(), StringComparison.Ordinal))
+                .Metadata.Labels;
 
         internal static readonly JsonSerializerOptions JsonDefaults = new(JsonSerializerDefaults.Web);
 

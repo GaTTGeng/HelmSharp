@@ -6,6 +6,16 @@ Use this page as a member index. Start with the package guide for usage recommen
 
 > **Version note:** This page reflects the current `master` source tree. M2 APIs are available in the latest published 1.2.0 packages.
 
+## IHelmReleasePurgeStore
+
+| Field | Value |
+| --- | --- |
+| Kind | `interface` |
+| Source | `src/HelmSharp.Storage/IHelmReleaseStore.cs` |
+
+### Usage note
+Read the corresponding package page first, then use this member index to locate the concrete type.
+
 ## IHelmReleaseStore
 
 | Field | Value |

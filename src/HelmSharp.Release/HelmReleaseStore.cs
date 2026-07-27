@@ -100,12 +100,17 @@ public sealed class HelmReleaseStore
     {
         var history = await HistoryAsync(name, ns, cancellationToken);
         foreach (var record in history)
-        {
-            await _client.CoreV1.DeleteNamespacedSecretAsync(
-                SecretName(record.Name, record.Revision),
-                record.Namespace,
-                cancellationToken: cancellationToken);
-        }
+            await DeleteAsync(record, cancellationToken);
+    }
+
+    /// <summary>Deletes one stored release revision.</summary>
+    public Task DeleteAsync(HelmReleaseRecord record, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        return _client.CoreV1.DeleteNamespacedSecretAsync(
+            SecretName(record.Name, record.Revision),
+            record.Namespace,
+            cancellationToken: cancellationToken);
     }
 
     public async Task MarkStatusAsync(HelmReleaseRecord record, string status, CancellationToken cancellationToken)

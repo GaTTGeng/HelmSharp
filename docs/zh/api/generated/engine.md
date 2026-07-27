@@ -221,3 +221,13 @@
 
 ### 使用提示
 先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
+
+## UnsupportedTemplateFeatureException
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `class` |
+| 源文件 | `src/HelmSharp.Engine/UnsupportedTemplateFeatureException.cs` |
+
+### 使用提示
+先查看对应包页面的场景示例，再使用此成员索引定位具体类型。

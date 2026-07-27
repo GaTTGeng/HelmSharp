@@ -41,6 +41,7 @@ Read the corresponding package page first, then use this member index to locate 
 - `GetManifestAsync(...)`
 - `GetNotesAsync(...)`
 - `GetValuesAsync(...)`
+- `GetValuesRevisionAsync(...)`
 - `HistoryAsync(...)`
 - `LintAsync(...)`
 - `ListReleasesAsync(...)`
@@ -64,6 +65,7 @@ Read the corresponding package page first, then use this member index to locate 
 - `ShowReadmeAsync(...)`
 - `ShowValuesAsync(...)`
 - `StatusAsync(...)`
+- `StatusRevisionAsync(...)`
 - `TemplateAsync(...)`
 - `TemplateWithNotesAsync(...)`
 - `TestAsync(...)`
@@ -71,6 +73,16 @@ Read the corresponding package page first, then use this member index to locate 
 - `UpgradeInstallAsync(...)`
 - `UpgradeInstallStreamAsync(...)`
 - `VersionAsync(...)`
+
+### Usage note
+Read the corresponding package page first, then use this member index to locate the concrete type.
+
+## HelmDeletionPropagation
+
+| Field | Value |
+| --- | --- |
+| Kind | `enum` |
+| Source | `src/HelmSharp.Action/HelmUninstallRequest.cs` |
 
 ### Usage note
 Read the corresponding package page first, then use this member index to locate the concrete type.
@@ -244,6 +256,30 @@ Read the corresponding package page first, then use this member index to locate 
 ### Usage note
 Read the corresponding package page first, then use this member index to locate the concrete type.
 
+## HelmRollbackRequest
+
+| Field | Value |
+| --- | --- |
+| Kind | `class` |
+| Source | `src/HelmSharp.Action/HelmRollbackRequest.cs` |
+
+### Properties
+- `Description`
+- `DisableHooks`
+- `KubeConfigContent`
+- `KubeConfigPath`
+- `Labels`
+- `MaxHistory`
+- `Namespace`
+- `ReleaseName`
+- `Revision`
+- `TimeoutSeconds`
+- `Wait`
+- `WaitForJobs`
+
+### Usage note
+Read the corresponding package page first, then use this member index to locate the concrete type.
+
 ## HelmTemplateRequest
 
 | Field | Value |
@@ -281,10 +317,15 @@ Read the corresponding package page first, then use this member index to locate 
 | Source | `src/HelmSharp.Action/HelmUninstallRequest.cs` |
 
 ### Properties
+- `DeletionPropagation`
+- `DisableHooks`
+- `KeepHistory`
 - `KubeConfigContent`
 - `KubeConfigPath`
 - `Namespace`
 - `ReleaseName`
+- `TimeoutSeconds`
+- `Wait`
 
 ### Usage note
 Read the corresponding package page first, then use this member index to locate the concrete type.

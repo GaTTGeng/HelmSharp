@@ -26,7 +26,9 @@ Use this page as a member index. Start with the package guide for usage recommen
 - `Icon`
 - `Keywords`
 - `KubeVersion`
+- `LockDigest`
 - `LockEntries`
+- `LockGenerated`
 - `Maintainers`
 - `Name`
 - `Sources`

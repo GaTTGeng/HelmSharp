@@ -6,21 +6,56 @@ Use this page as a member index. Start with the package guide for usage recommen
 
 > **Version note:** This page reflects the current `master` source tree. M2 APIs are available in the latest published 1.2.0 packages.
 
+## HelmReleaseHookRecord
+
+| Field | Value |
+| --- | --- |
+| Kind | `record` |
+| Source | `src/HelmSharp.Release/HelmReleaseRecord.cs` |
+
+### Properties
+- `DeletePolicies`
+- `Events`
+- `Kind`
+- `LastRunCompletedAt`
+- `LastRunPhase`
+- `LastRunStartedAt`
+- `Manifest`
+- `Name`
+- `OutputLogPolicies`
+- `Path`
+- `Weight`
+
+### Usage note
+Read the corresponding package page first, then use this member index to locate the concrete type.
+
 ## HelmReleaseRecord
 
 | Field | Value |
 | --- | --- |
 | Kind | `record` |
-| Source | `src/HelmSharp.Release/HelmReleaseStore.cs` |
+| Source | `src/HelmSharp.Release/HelmReleaseRecord.cs` |
 
 ### Properties
 - `AppVersion`
+- `ChartApiVersion`
+- `ChartDescription`
+- `ChartKubeVersion`
 - `ChartName`
+- `ChartType`
+- `ChartValuesYaml`
 - `ChartVersion`
+- `ComputedValuesYaml`
+- `DeletedAt`
+- `Description`
+- `FirstDeployedAt`
+- `Hooks`
 - `Labels`
 - `Manifest`
 - `Name`
 - `Namespace`
+- `Notes`
+- `RawChartJson`
 - `Revision`
 - `Status`
 - `UpdatedAt`
@@ -37,13 +72,30 @@ Read the corresponding package page first, then use this member index to locate 
 | Source | `src/HelmSharp.Release/HelmReleaseStore.cs` |
 
 ### Methods
+- `DeleteAsync(...)`
 - `GetLatestAsync(...)`
 - `HistoryAsync(...)`
 - `ListAsync(...)`
 - `MarkStatusAsync(...)`
 - `MarkUninstalledAsync(...)`
 - `NextRevisionAsync(...)`
+- `PurgeAsync(...)`
 - `SaveAsync(...)`
+
+### Usage note
+Read the corresponding package page first, then use this member index to locate the concrete type.
+
+## HelmReleaseStoreException
+
+| Field | Value |
+| --- | --- |
+| Kind | `class` |
+| Source | `src/HelmSharp.Release/HelmReleaseStoreException.cs` |
+
+### Properties
+- `Format`
+- `NamespaceName`
+- `SecretName`
 
 ### Usage note
 Read the corresponding package page first, then use this member index to locate the concrete type.

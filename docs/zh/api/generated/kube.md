@@ -30,6 +30,7 @@
 | 源文件 | `src/HelmSharp.Kube/KubernetesResourceWaiter.cs` |
 
 ### 方法
+- `WaitForDeletedAsync(...)`
 - `WaitForReadyAsync(...)`
 
 ### 使用提示
