@@ -82,6 +82,7 @@ Read the corresponding package page first, then use this member index to locate 
 - `PurgeAsync(...)`
 - `SaveAsync(...)`
 - `TryCreateAsync(...)`
+- `TryMarkPendingRollbackFailedAsync(...)`
 
 ### Usage note
 Read the corresponding package page first, then use this member index to locate the concrete type.

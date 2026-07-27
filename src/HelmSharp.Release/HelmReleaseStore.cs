@@ -41,10 +41,15 @@ public sealed class HelmReleaseStore
     /// Creates a release revision only when it does not already exist.
     /// </summary>
     /// <returns><see langword="true"/> when the revision was created; otherwise, <see langword="false"/> when it already exists.</returns>
-    public async Task<bool> TryCreateAsync(HelmReleaseRecord record, CancellationToken cancellationToken)
+    public async Task<bool> TryCreateAsync(
+        HelmReleaseRecord record,
+        CancellationToken cancellationToken,
+        string? operationId = null)
     {
         ArgumentNullException.ThrowIfNull(record);
         var secret = BuildSecret(record, existing: null, DateTimeOffset.UtcNow);
+        if (!string.IsNullOrWhiteSpace(operationId))
+            secret.Metadata.Labels![RollbackOperationIdLabel] = operationId;
         try
         {
             await _client.CoreV1.CreateNamespacedSecretAsync(secret, record.Namespace, cancellationToken: cancellationToken);
@@ -54,6 +59,57 @@ public sealed class HelmReleaseStore
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Marks a pending rollback reservation as failed only when it belongs to the supplied operation.
+    /// </summary>
+    /// <returns><see langword="true"/> when the owned pending reservation was marked failed; otherwise, <see langword="false"/>.</returns>
+    public async Task<bool> TryMarkPendingRollbackFailedAsync(
+        HelmReleaseRecord record,
+        string operationId,
+        string description,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationId);
+
+        var secretName = SecretName(record.Name, record.Revision);
+        V1Secret existing;
+        try
+        {
+            existing = await _client.CoreV1.ReadNamespacedSecretAsync(
+                secretName,
+                record.Namespace,
+                cancellationToken: cancellationToken);
+        }
+        catch (HttpOperationException ex) when ((int)ex.Response.StatusCode == 404)
+        {
+            return false;
+        }
+
+        if (existing.Metadata?.Labels is not { } labels ||
+            !labels.TryGetValue(RollbackOperationIdLabel, out var storedOperationId) ||
+            storedOperationId != operationId)
+            return false;
+
+        var persisted = ReadRecord(existing);
+        if (!string.Equals(persisted.Status, "pending-rollback", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var failed = persisted with
+        {
+            Status = "failed",
+            UpdatedAt = DateTimeOffset.UtcNow,
+            Description = description
+        };
+        var secret = BuildSecret(failed, existing, DateTimeOffset.UtcNow);
+        await _client.CoreV1.ReplaceNamespacedSecretAsync(
+            secret,
+            secretName,
+            record.Namespace,
+            cancellationToken: cancellationToken);
+        return true;
     }
 
     public async Task<List<HelmReleaseRecord>> ListAsync(string? ns, bool allNamespaces, CancellationToken cancellationToken)
@@ -189,6 +245,8 @@ public sealed class HelmReleaseStore
         var labels = new Dictionary<string, string>(StringComparer.Ordinal);
         MergeCustomLabels(labels, existing?.Metadata?.Labels);
         MergeCustomLabels(labels, record.Labels);
+        if (existing?.Metadata?.Labels?.TryGetValue(RollbackOperationIdLabel, out var operationId) == true)
+            labels[RollbackOperationIdLabel] = operationId;
         labels[existing is null ? "createdAt" : "modifiedAt"] = timestamp.ToUnixTimeSeconds().ToString();
         labels["name"] = record.Name;
         labels["owner"] = "helm";
@@ -255,7 +313,9 @@ public sealed class HelmReleaseStore
         => $"sh.helm.release.v1.{releaseName}.v{revision}";
 
     private static readonly HashSet<string> SystemLabels =
-        ["name", "owner", "status", "version", "createdAt", "modifiedAt"];
+        ["name", "owner", "status", "version", "createdAt", "modifiedAt", RollbackOperationIdLabel];
+
+    private const string RollbackOperationIdLabel = "helmsharp.sh/rollback-operation-id";
 
     private static bool IsActiveRelease(HelmReleaseRecord record)
         => string.Equals(record.Status, "deployed", StringComparison.OrdinalIgnoreCase);

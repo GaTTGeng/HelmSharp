@@ -638,18 +638,18 @@ public class HelmClient : IHelmClient
     private static async Task PersistFailedRollbackAsync(
         HelmReleaseStore store,
         HelmReleaseRecord rollbackRecord,
+        string operationId,
         Exception error)
     {
         try
         {
-            // RollbackAsync reserves this revision before applying manifests, so this
-            // replacement updates only the reservation owned by this operation.
-            await store.SaveAsync(rollbackRecord with
-            {
-                Status = "failed",
-                UpdatedAt = DateTimeOffset.UtcNow,
-                Description = $"Rollback failed: {error.Message}"
-            }, CancellationToken.None);
+            // The create response may be canceled after the API server persisted the
+            // reservation. Reconcile only a reservation bearing this operation's ID.
+            await store.TryMarkPendingRollbackFailedAsync(
+                rollbackRecord,
+                operationId,
+                $"Rollback failed: {error.Message}",
+                CancellationToken.None);
         }
         catch
         {
@@ -934,7 +934,17 @@ public class HelmClient : IHelmClient
             Labels = ResolveReleaseLabels([targetRecord], true, request.Labels)
         };
 
-        var reserved = await store.TryCreateAsync(rollbackRecord, operationToken);
+        var operationId = Guid.NewGuid().ToString("N");
+        bool reserved;
+        try
+        {
+            reserved = await store.TryCreateAsync(rollbackRecord, operationToken, operationId);
+        }
+        catch (Exception ex)
+        {
+            await PersistFailedRollbackAsync(store, rollbackRecord, operationId, ex);
+            throw;
+        }
         if (!reserved)
             return Fail($"release revision {newRevision} already exists for {request.ReleaseName}");
 
@@ -977,7 +987,7 @@ public class HelmClient : IHelmClient
         }
         catch (Exception ex)
         {
-            await PersistFailedRollbackAsync(store, rollbackRecord, ex);
+            await PersistFailedRollbackAsync(store, rollbackRecord, operationId, ex);
             throw;
         }
 
@@ -994,7 +1004,7 @@ public class HelmClient : IHelmClient
         }
         catch (Exception ex)
         {
-            await PersistFailedRollbackAsync(store, rollbackRecord, ex);
+            await PersistFailedRollbackAsync(store, rollbackRecord, operationId, ex);
             throw;
         }
         var history = await store.HistoryAsync(request.ReleaseName, ns, CancellationToken.None);
