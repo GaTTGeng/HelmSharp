@@ -739,14 +739,15 @@ public class ChartOperationsTests : IDisposable
         }));
 
         var firstManifest = await client.GetManifestAsync("revision-inspection", "test-ns", revision: 1);
-        var firstValues = await client.GetValuesAsync("revision-inspection", revision: 1, @namespace: "test-ns");
+        var firstValues = await client.GetValuesRevisionAsync("revision-inspection", revision: 1, @namespace: "test-ns");
         var firstNotes = await client.GetNotesAsync("revision-inspection", "test-ns", revision: 1);
         var firstHooks = await client.GetHooksAsync("revision-inspection", "test-ns", revision: 1);
         var firstAll = await client.GetAllAsync("revision-inspection", "test-ns", revision: 1);
-        var firstStatus = await client.StatusAsync("revision-inspection", revision: 1, @namespace: "test-ns");
+        var firstStatus = await client.StatusRevisionAsync("revision-inspection", revision: 1, @namespace: "test-ns");
+        var legacyDefaultStatus = await client.StatusAsync("revision-inspection", default);
         var history = await client.HistoryAsync("revision-inspection", "test-ns");
 
-        Assert.All([firstManifest, firstValues, firstNotes, firstHooks, firstAll, firstStatus, history], result => Assert.Equal(0, result.ExitCode));
+        Assert.All([firstManifest, firstValues, firstNotes, firstHooks, firstAll, firstStatus, legacyDefaultStatus, history], result => Assert.Equal(0, result.ExitCode));
         Assert.Contains("marker: \"first\"", firstManifest.StandardOutput);
         Assert.Contains("marker: first", firstValues.StandardOutput);
         Assert.Equal("marker note: first", firstNotes.StandardOutput);
@@ -814,8 +815,8 @@ public class ChartOperationsTests : IDisposable
         var missingNotes = await client.GetNotesAsync("missing-revision", "test-ns", revision: 99);
         var missingHooks = await client.GetHooksAsync("missing-revision", "test-ns", revision: 99);
         var missingAll = await client.GetAllAsync("missing-revision", "test-ns", revision: 99);
-        var missingStatus = await client.StatusAsync("missing-revision", revision: 99, @namespace: "test-ns");
-        var missingValues = await client.GetValuesAsync("missing-revision", revision: 99, @namespace: "test-ns");
+        var missingStatus = await client.StatusRevisionAsync("missing-revision", revision: 99, @namespace: "test-ns");
+        var missingValues = await client.GetValuesRevisionAsync("missing-revision", revision: 99, @namespace: "test-ns");
         var invalidRevision = await client.GetManifestAsync("missing-revision", "test-ns", revision: -1);
         var missingHistory = await client.HistoryAsync("does-not-exist", "test-ns");
 

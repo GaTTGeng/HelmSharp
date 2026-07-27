@@ -43,7 +43,7 @@ dotnet add package HelmSharp.Action --version 1.2.0
 
 ## 发布检查语义
 
-检查操作只读取持久化的发布 revision，绝不重新渲染 Chart。`revision = 0` 选择最新持久化 revision（包括保留历史的卸载记录）；正数选择对应的历史记录。`StatusAsync` 和 `GetValuesAsync` 提供按 revision 查询的重载，manifest、notes、hooks 和完整检查方法原本就支持 `revision`。不存在的发布和 revision 会返回可区分的失败诊断。
+检查操作只读取持久化的发布 revision，绝不重新渲染 Chart。`revision = 0` 选择最新持久化 revision（包括保留历史的卸载记录）；正数选择对应的历史记录。`StatusRevisionAsync` 和 `GetValuesRevisionAsync` 提供按 revision 查询的专用方法，且不会修改既有方法签名；manifest、notes、hooks 和完整检查方法原本就支持 `revision`。不存在的发布和 revision 会返回可区分的失败诊断。
 
 `ListReleasesAsync` 为每个发布返回 `deployed` revision，按 namespace、name 排序。当前支持的 selector 子集是以逗号分隔的精确 `key=value` 标签匹配；`limit` 在过滤和排序后应用。
 

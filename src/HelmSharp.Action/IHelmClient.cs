@@ -40,7 +40,7 @@ public interface IHelmClient
         CancellationToken cancellationToken = default);
 
     /// <summary>Gets the status stored for a specific release revision. A revision of zero selects the latest stored revision.</summary>
-    Task<CommandResult> StatusAsync(
+    Task<CommandResult> StatusRevisionAsync(
         string releaseName,
         int revision,
         string? @namespace = null,
@@ -66,7 +66,7 @@ public interface IHelmClient
         CancellationToken cancellationToken = default);
 
     /// <summary>Gets values stored for a specific release revision. A revision of zero selects the latest stored revision.</summary>
-    Task<CommandResult> GetValuesAsync(
+    Task<CommandResult> GetValuesRevisionAsync(
         string releaseName,
         int revision,
         string? @namespace = null,

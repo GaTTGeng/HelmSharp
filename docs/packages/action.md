@@ -48,7 +48,7 @@ See [Chart Packaging and Repository Workflows](../guide/chart-distribution.md) f
 
 ## Release inspection semantics
 
-Inspection reads the stored release revision and never re-renders a chart. `revision = 0` selects the latest stored revision, including a retained uninstall; a positive revision selects that exact historical record. `StatusAsync` and `GetValuesAsync` have revision-specific overloads, while manifest, notes, hooks, and combined inspection already accept `revision`. Missing releases and revisions return command failures with distinct diagnostics.
+Inspection reads the stored release revision and never re-renders a chart. `revision = 0` selects the latest stored revision, including a retained uninstall; a positive revision selects that exact historical record. `StatusRevisionAsync` and `GetValuesRevisionAsync` provide revision-specific inspection without changing existing method signatures, while manifest, notes, hooks, and combined inspection already accept `revision`. Missing releases and revisions return command failures with distinct diagnostics.
 
 `ListReleasesAsync` returns the deployed revision for each release, ordered by namespace then name. Its supported selector subset is comma-separated exact `key=value` label matches; `limit` is applied after filtering and ordering.
 

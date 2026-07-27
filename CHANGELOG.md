@@ -10,7 +10,7 @@ This project follows semantic versioning once stable releases begin.
 
 - Added Helm v3 release Secret interoperability, legacy HelmSharp payload compatibility, and actionable storage diagnostics (#190).
 - Added uninstall history retention, purge, hook control, and timeout request semantics (#192).
-- Added revision-specific status and values inspection overloads, with durable inspection of historical and retained-uninstall release records (#193).
+- Added revision-specific status and values inspection methods, with durable inspection of historical and retained-uninstall release records (#193).
 
 ### Changed
 

@@ -738,10 +738,10 @@ public class HelmClient : IHelmClient
         string releaseName,
         string? @namespace = null,
         CancellationToken cancellationToken = default)
-        => await StatusAsync(releaseName, revision: 0, @namespace, cancellationToken);
+        => await StatusRevisionAsync(releaseName, revision: 0, @namespace, cancellationToken);
 
     /// <summary>Gets the durable status for a release revision. A revision of zero selects the latest stored revision.</summary>
-    public async Task<CommandResult> StatusAsync(
+    public async Task<CommandResult> StatusRevisionAsync(
         string releaseName,
         int revision,
         string? @namespace = null,
@@ -948,10 +948,10 @@ public class HelmClient : IHelmClient
         string? @namespace = null,
         bool allValues = false,
         CancellationToken cancellationToken = default)
-        => await GetValuesAsync(releaseName, revision: 0, @namespace, allValues, cancellationToken);
+        => await GetValuesRevisionAsync(releaseName, revision: 0, @namespace, allValues, cancellationToken);
 
     /// <summary>Gets values stored for a release revision. A revision of zero selects the latest stored revision.</summary>
-    public async Task<CommandResult> GetValuesAsync(
+    public async Task<CommandResult> GetValuesRevisionAsync(
         string releaseName,
         int revision,
         string? @namespace = null,
