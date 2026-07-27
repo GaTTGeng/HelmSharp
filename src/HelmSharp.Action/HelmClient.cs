@@ -392,13 +392,15 @@ public class HelmClient : IHelmClient
                 yield return line;
         if (saveError is not null)
             throw saveError;
-        await SupersedeDeployedReleasesAsync(store, existingHistory, operationToken);
+        // Once the new revision is durable, preserve the single-active-revision invariant
+        // even if the caller's operation timeout expires during finalization.
+        await SupersedeDeployedReleasesAsync(store, existingHistory, CancellationToken.None);
 
         // Enforce max history
         var maxHistory = request.MaxHistory ?? options.MaxHistory;
         if (maxHistory > 0)
         {
-            await PruneOldReleasesAsync(store, request.ReleaseName, ns, maxHistory, operationToken);
+            await PruneOldReleasesAsync(store, request.ReleaseName, ns, maxHistory, CancellationToken.None);
         }
 
         yield return $"Release {request.ReleaseName} revision {revision} deployed ({applied} resources)";
@@ -622,6 +624,26 @@ public class HelmClient : IHelmClient
         }
 
         return output;
+    }
+
+    private static async Task PersistFailedRollbackAsync(
+        HelmReleaseStore store,
+        HelmReleaseRecord rollbackRecord,
+        Exception error)
+    {
+        try
+        {
+            await store.SaveAsync(rollbackRecord with
+            {
+                Status = "failed",
+                UpdatedAt = DateTimeOffset.UtcNow,
+                Description = $"Rollback failed: {error.Message}"
+            }, CancellationToken.None);
+        }
+        catch
+        {
+            // Preserve the operation failure when its lifecycle evidence cannot be stored.
+        }
     }
 
     internal static string GetAttemptedOnlyManifest(string previousManifest, string attemptedManifest, string defaultNamespace)
@@ -900,66 +922,53 @@ public class HelmClient : IHelmClient
 
         var output = new StringBuilder();
 
-        // Execute pre-rollback hooks
-        if (!request.DisableHooks && hooks.Any(h => h.Events.Contains(HelmHookEvent.PreRollback)))
+        try
         {
-            await foreach (var hookLine in hookExecutor.ExecuteHooksAsync(hooks, HelmHookEvent.PreRollback, ns, operationToken))
+            // Execute pre-rollback hooks
+            if (!request.DisableHooks && hooks.Any(h => h.Events.Contains(HelmHookEvent.PreRollback)))
             {
-                output.AppendLine(hookLine);
+                await foreach (var hookLine in hookExecutor.ExecuteHooksAsync(hooks, HelmHookEvent.PreRollback, ns, operationToken))
+                {
+                    output.AppendLine(hookLine);
+                }
             }
-        }
 
-        var applier = new KubernetesManifestApplier(client, options.FieldManager);
+            var applier = new KubernetesManifestApplier(client, options.FieldManager);
 
-        await foreach (var resource in applier.ApplyAsync(mainManifest, ns, operationToken))
-        {
-            output.AppendLine($"Rolled back {resource}");
-        }
-
-        // Execute post-rollback hooks
-        if (!request.DisableHooks && hooks.Any(h => h.Events.Contains(HelmHookEvent.PostRollback)))
-        {
-            await foreach (var hookLine in hookExecutor.ExecuteHooksAsync(hooks, HelmHookEvent.PostRollback, ns, operationToken))
+            await foreach (var resource in applier.ApplyAsync(mainManifest, ns, operationToken))
             {
-                output.AppendLine(hookLine);
+                output.AppendLine($"Rolled back {resource}");
             }
-        }
 
-        if (request.Wait)
-        {
-            try
+            // Execute post-rollback hooks
+            if (!request.DisableHooks && hooks.Any(h => h.Events.Contains(HelmHookEvent.PostRollback)))
+            {
+                await foreach (var hookLine in hookExecutor.ExecuteHooksAsync(hooks, HelmHookEvent.PostRollback, ns, operationToken))
+                {
+                    output.AppendLine(hookLine);
+                }
+            }
+
+            if (request.Wait)
             {
                 output.AppendLine($"Waiting for resources to be ready (timeout: {timeout}s)...");
                 var waiter = new KubernetesResourceWaiter(client, timeout);
                 await foreach (var line in waiter.WaitForReadyAsync(mainManifest, ns, request.WaitForJobs, operationToken))
                     output.AppendLine(line);
             }
-            catch (Exception ex)
-            {
-                try
-                {
-                    await store.SaveAsync(rollbackRecord with
-                    {
-                        Status = "failed",
-                        UpdatedAt = DateTimeOffset.UtcNow,
-                        Description = $"Rollback failed: {ex.Message}"
-                    }, CancellationToken.None);
-                }
-                catch
-                {
-                    // Preserve the readiness failure when its lifecycle evidence cannot be stored.
-                }
-
-                throw;
-            }
+        }
+        catch (Exception ex)
+        {
+            await PersistFailedRollbackAsync(store, rollbackRecord, ex);
+            throw;
         }
 
         await store.SaveAsync(rollbackRecord with { UpdatedAt = DateTimeOffset.UtcNow }, operationToken);
-        var history = await store.HistoryAsync(request.ReleaseName, ns, operationToken);
-        await SupersedeDeployedReleasesAsync(store, history.Where(record => record.Revision != newRevision), operationToken);
+        var history = await store.HistoryAsync(request.ReleaseName, ns, CancellationToken.None);
+        await SupersedeDeployedReleasesAsync(store, history.Where(record => record.Revision != newRevision), CancellationToken.None);
         var maxHistory = request.MaxHistory ?? options.MaxHistory;
         if (maxHistory > 0)
-            await PruneOldReleasesAsync(store, request.ReleaseName, ns, maxHistory, operationToken);
+            await PruneOldReleasesAsync(store, request.ReleaseName, ns, maxHistory, CancellationToken.None);
 
         output.AppendLine($"Rollback to revision {targetRecord.Revision} was successful.");
         return Ok(output.ToString());
