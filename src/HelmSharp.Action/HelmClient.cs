@@ -198,6 +198,9 @@ public class HelmClient : IHelmClient
             ns,
             request.CreateNamespace || !request.Install,
             operationToken);
+        if (HasActivePendingOperation(existingHistory))
+            throw new InvalidOperationException($"another operation is in progress for release {request.ReleaseName}");
+
         var (isUpgrade, revision) = ResolveReleaseRenderState(existingHistory);
         if (!isUpgrade && !request.Install)
             throw new InvalidOperationException($"release: not found: {request.ReleaseName}");
@@ -441,6 +444,12 @@ public class HelmClient : IHelmClient
         var isUpgrade = !string.Equals(latest.Status, "uninstalled", StringComparison.OrdinalIgnoreCase);
         var revision = latest.Revision + 1;
         return (isUpgrade, revision);
+    }
+
+    private static bool HasActivePendingOperation(IReadOnlyCollection<HelmReleaseRecord> history)
+    {
+        var latest = history.MaxBy(record => record.Revision);
+        return latest?.Status.StartsWith("pending-", StringComparison.OrdinalIgnoreCase) == true;
     }
 
     internal static Dictionary<string, object?> ResolveUpgradeOverrides(
@@ -883,7 +892,7 @@ public class HelmClient : IHelmClient
             return Fail($"release: not found: {request.ReleaseName}");
 
         var storedHistory = await store.HistoryAsync(request.ReleaseName, ns, operationToken);
-        if (storedHistory.Any(record => record.Status.StartsWith("pending-", StringComparison.OrdinalIgnoreCase)))
+        if (HasActivePendingOperation(storedHistory))
             return Fail($"another operation is in progress for release {request.ReleaseName}");
 
         var targetRecord = request.Revision > 0

@@ -826,6 +826,81 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task ReleaseLifecycle_UpgradeRejectsActivePendingOperationBeforeApply()
+    {
+        var chartDir = await CreateMinimalChartAsync("upgrade-pending-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: upgrade-pending
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "upgrade-pending",
+            Chart = chartDir
+        }));
+        var deployed = Assert.Single(releaseState.Records("upgrade-pending"));
+        releaseState.AddRecord(deployed with { Revision = 2, Status = "pending-rollback" });
+        releaseState.AppliedPaths.Clear();
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+            {
+                ReleaseName = "upgrade-pending",
+                Chart = chartDir
+            })));
+
+        Assert.Contains("another operation is in progress", exception.Message);
+        Assert.Empty(releaseState.AppliedPaths);
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_RollbackIgnoresHistoricalPendingOperation()
+    {
+        var chartDir = await CreateMinimalChartAsync("historical-pending-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: historical-pending
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "historical-pending",
+            Chart = chartDir
+        }));
+        var firstRevision = Assert.Single(releaseState.Records("historical-pending"));
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "historical-pending",
+            Chart = chartDir
+        }));
+        releaseState.AddRecord(firstRevision with { Status = "pending-rollback" });
+        releaseState.AppliedPaths.Clear();
+
+        var result = await client.RollbackAsync(new HelmRollbackRequest
+        {
+            ReleaseName = "historical-pending",
+            Namespace = "test-ns",
+            Revision = 1,
+            Wait = false
+        });
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.NotEmpty(releaseState.AppliedPaths);
+        Assert.Collection(
+            releaseState.Records("historical-pending"),
+            record => Assert.Equal((1, "pending-rollback"), (record.Revision, record.Status)),
+            record => Assert.Equal((2, "superseded"), (record.Revision, record.Status)),
+            record => Assert.Equal((3, "deployed"), (record.Revision, record.Status)));
+    }
+
+    [Fact]
     public async Task ReleaseLifecycle_RejectsConflictingAndUnsupportedOptionsBeforeMutation()
     {
         var chartDir = await CreateMinimalChartAsync("invalid-options-chart");
