@@ -749,7 +749,7 @@ public class HelmClient : IHelmClient
             return Fail($"release: not found: {request.ReleaseName}");
 
         var (mainManifest, hooks) = ResolveStoredManifest(latest, ns);
-        var hookTimeout = request.TimeoutSeconds ?? options.TimeoutSeconds;
+        var hookTimeout = request.TimeoutSeconds is > 0 ? request.TimeoutSeconds.Value : options.TimeoutSeconds;
         var hookExecutor = new HelmHookExecutor(client, options.FieldManager, hookTimeout);
 
         // Execute pre-delete hooks
@@ -1363,7 +1363,10 @@ public class HelmClient : IHelmClient
         }
         finally
         {
-            await store.SaveAsync(WithHookExecution(latest, hooks), CancellationToken.None);
+            var current = (await store.HistoryAsync(releaseName, ns, CancellationToken.None))
+                .FirstOrDefault(record => record.Revision == latest.Revision);
+            if (current is not null)
+                await store.SaveAsync(WithHookExecution(current, hooks), CancellationToken.None);
         }
 
         output.AppendLine();
@@ -2499,6 +2502,7 @@ public class HelmClient : IHelmClient
             Kind = record.Kind,
             Path = record.Path,
             Manifest = record.Manifest,
+            Namespace = ManifestIdentity.Parse(record.Manifest, string.Empty)?.Namespace ?? string.Empty,
             Weight = record.Weight,
             LastRunStartedAt = record.LastRunStartedAt,
             LastRunCompletedAt = record.LastRunCompletedAt,

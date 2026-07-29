@@ -301,6 +301,36 @@ public class HelmHookTests
     }
 
     [Fact]
+    public void ResolveStoredManifest_UsesExplicitHookNamespace()
+    {
+        var record = new HelmSharp.Release.HelmReleaseRecord
+        {
+            Manifest = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: main\n",
+            Hooks =
+            [
+                new HelmSharp.Release.HelmReleaseHookRecord
+                {
+                    Name = "namespace-hook",
+                    Kind = "Pod",
+                    Path = "templates/hook.yaml",
+                    Manifest = """
+                        apiVersion: v1
+                        kind: Pod
+                        metadata:
+                          name: namespace-hook
+                          namespace: hook-ns
+                        """,
+                    Events = ["test"]
+                }
+            ]
+        };
+
+        var (_, hooks) = HelmClient.ResolveStoredManifest(record, "release-ns");
+
+        Assert.Equal("hook-ns", Assert.Single(hooks).Namespace);
+    }
+
+    [Fact]
     public async Task ExecuteHooks_OrdersSameWeightHooksByNameAndRecordsSuccess()
     {
         var (_, hooks) = HelmHookExecutor.ExtractHooks("""
