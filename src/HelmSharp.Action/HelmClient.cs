@@ -829,7 +829,7 @@ public class HelmClient : IHelmClient
         }
 
         if (request.KeepHistory)
-            await store.MarkUninstalledAsync(latest, operationToken);
+            await store.MarkUninstalledAsync(WithHookExecution(latest, hooks), operationToken);
         else
             await store.PurgeAsync(request.ReleaseName, ns, operationToken);
         output.AppendLine($"release \"{request.ReleaseName}\" uninstalled");
@@ -2495,7 +2495,8 @@ public class HelmClient : IHelmClient
             LastRunCompletedAt = hook.LastRunCompletedAt,
             LastRunPhase = hook.LastRunPhase ?? "Unknown",
             Weight = hook.Weight,
-            DeletePolicies = hook.DeletePolicies.Select(ToReleaseHookDeletePolicy).ToList()
+            DeletePolicies = hook.DeletePolicies.Select(ToReleaseHookDeletePolicy).ToList(),
+            OutputLogPolicies = hook.OutputLogPolicies.ToList()
         };
 
     private static HelmHook FromReleaseHook(HelmReleaseHookRecord record)
@@ -2522,6 +2523,7 @@ public class HelmClient : IHelmClient
             if (TryParseReleaseHookDeletePolicy(value, out var deletePolicy))
                 hook.DeletePolicies.Add(deletePolicy);
         }
+        hook.OutputLogPolicies.AddRange(record.OutputLogPolicies);
         return hook;
     }
 

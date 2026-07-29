@@ -1043,6 +1043,82 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task ReleaseLifecycle_RetainedUninstallPreservesPostDeleteHookExecution()
+    {
+        var chartDir = await CreateMinimalChartAsync("retained-hook-state-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "post-delete-hook.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: retained-delete-hook
+              annotations:
+                helm.sh/hook: post-delete
+            data:
+              key: value
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "retained-hook-state",
+            Chart = chartDir
+        }));
+
+        var uninstall = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "retained-hook-state",
+            Namespace = "test-ns",
+            KeepHistory = true
+        });
+
+        Assert.Equal(0, uninstall.ExitCode);
+        var uninstalled = Assert.Single(releaseState.Records("retained-hook-state"), record =>
+            record.Status == "uninstalled");
+        var hook = Assert.Single(uninstalled.Hooks);
+        Assert.Equal("Succeeded", hook.LastRunPhase);
+        Assert.NotNull(hook.LastRunStartedAt);
+        Assert.NotNull(hook.LastRunCompletedAt);
+    }
+
+    [Fact]
+    public async Task TestAsync_PreservesStoredHookOutputLogPolicies()
+    {
+        var chartDir = await CreateMinimalChartAsync("test-hook-output-policy-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "test-hook.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: output-policy-hook
+              annotations:
+                helm.sh/hook: test
+            data:
+              key: value
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "test-hook-output-policy",
+            Chart = chartDir
+        }));
+        var deployed = Assert.Single(releaseState.Records("test-hook-output-policy"));
+        releaseState.AddRecord(deployed with
+        {
+            Hooks = deployed.Hooks.Select(hook => hook with
+            {
+                OutputLogPolicies = ["hook-succeeded"]
+            }).ToList()
+        });
+
+        var result = await client.TestAsync("test-hook-output-policy", "test-ns");
+
+        Assert.Equal(0, result.ExitCode);
+        var hook = Assert.Single(Assert.Single(releaseState.Records("test-hook-output-policy")).Hooks);
+        Assert.Equal(["hook-succeeded"], hook.OutputLogPolicies);
+        Assert.Equal("Succeeded", hook.LastRunPhase);
+    }
+
+    [Fact]
     public async Task ReleaseLifecycle_UninstallDefaultsToPurge()
     {
         var chartDir = await CreateMinimalChartAsync("retained-uninstall-chart");

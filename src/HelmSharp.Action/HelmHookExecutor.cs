@@ -47,6 +47,7 @@ internal sealed class HelmHook
     public string Namespace { get; init; } = string.Empty;
     public List<HelmHookEvent> Events { get; } = new();
     public List<HelmHookDeletePolicy> DeletePolicies { get; } = new();
+    public List<string> OutputLogPolicies { get; } = new();
     public int Weight { get; init; }
     public DateTimeOffset? LastRunStartedAt { get; set; }
     public DateTimeOffset? LastRunCompletedAt { get; set; }
