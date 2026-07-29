@@ -47,6 +47,9 @@ internal sealed class HelmHook
     public List<HelmHookEvent> Events { get; } = new();
     public List<HelmHookDeletePolicy> DeletePolicies { get; } = new();
     public int Weight { get; init; }
+    public DateTimeOffset? LastRunStartedAt { get; set; }
+    public DateTimeOffset? LastRunCompletedAt { get; set; }
+    public string? LastRunPhase { get; set; }
 }
 
 /// <summary>
@@ -56,11 +59,13 @@ internal sealed class HelmHookExecutor
 {
     private readonly k8s.Kubernetes _client;
     private readonly string _fieldManager;
+    private readonly int _timeoutSeconds;
 
-    public HelmHookExecutor(k8s.Kubernetes client, string fieldManager)
+    public HelmHookExecutor(k8s.Kubernetes client, string fieldManager, int timeoutSeconds)
     {
         _client = client;
         _fieldManager = fieldManager;
+        _timeoutSeconds = timeoutSeconds;
     }
 
     /// <summary>
@@ -152,45 +157,8 @@ internal sealed class HelmHookExecutor
         string releaseNamespace,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var executing = hooks
-            .Where(h => h.Events.Contains(hookEvent))
-            .OrderBy(h => h.Weight)
-            .ThenBy(h => h.Name)
-            .ToList();
-
-        foreach (var hook in executing)
-        {
-            var ns = string.IsNullOrWhiteSpace(hook.Namespace) ? releaseNamespace : hook.Namespace;
-
-            // Delete according to delete policy (before-hook-creation)
-            if (hook.DeletePolicies.Contains(HelmHookDeletePolicy.BeforeHookCreation))
-            {
-                await DeleteHookResourceAsync(hook, ns, cancellationToken);
-            }
-
-            // Apply the hook resource
-            yield return $"Applying hook {hookEvent}: {hook.Kind}/{hook.Name}";
-
-            var applier = new KubernetesManifestApplier(_client, _fieldManager);
-            await foreach (var resource in applier.ApplyAsync(hook.Manifest, ns, cancellationToken))
-            {
-                yield return $"  Hook resource applied: {resource}";
-            }
-
-            // For test hooks, we could wait for completion here
-            // For now, just log that the hook was applied
-        }
-
-        // Clean up hooks based on delete policies after all hooks complete
-        foreach (var hook in executing)
-        {
-            var ns = string.IsNullOrWhiteSpace(hook.Namespace) ? releaseNamespace : hook.Namespace;
-            if (hook.DeletePolicies.Contains(HelmHookDeletePolicy.HookSucceeded))
-            {
-                await DeleteHookResourceAsync(hook, ns, cancellationToken);
-                yield return $"Deleted hook (succeeded policy): {hook.Kind}/{hook.Name}";
-            }
-        }
+        await foreach (var line in ExecuteHooksWithFailureHandlingAsync(hooks, hookEvent, releaseNamespace, cancellationToken))
+            yield return line;
     }
 
     /// <summary>
@@ -205,7 +173,9 @@ internal sealed class HelmHookExecutor
         var executing = hooks
             .Where(h => h.Events.Contains(hookEvent))
             .OrderBy(h => h.Weight)
-            .ThenBy(h => h.Name)
+            .ThenBy(h => h.Name, StringComparer.Ordinal)
+            .ThenBy(h => h.Kind, StringComparer.Ordinal)
+            .ThenBy(h => h.Path, StringComparer.Ordinal)
             .ToList();
 
         foreach (var hook in executing)
@@ -217,6 +187,9 @@ internal sealed class HelmHookExecutor
                 await DeleteHookResourceAsync(hook, ns, cancellationToken);
             }
 
+            hook.LastRunStartedAt = DateTimeOffset.UtcNow;
+            hook.LastRunCompletedAt = null;
+            hook.LastRunPhase = "Running";
             yield return $"Applying hook {hookEvent}: {hook.Kind}/{hook.Name}";
             var hookApplied = new List<string>();
             Exception? hookError = null;
@@ -226,6 +199,19 @@ internal sealed class HelmHookExecutor
                 await foreach (var resource in applier.ApplyAsync(hook.Manifest, ns, cancellationToken))
                 {
                     hookApplied.Add($"  Hook resource applied: {resource}");
+                }
+
+                if (IsCompletionHook(hook))
+                {
+                    var waiter = new KubernetesResourceWaiter(_client, _timeoutSeconds);
+                    await foreach (var line in waiter.WaitForReadyAsync(
+                                       hook.Manifest,
+                                       ns,
+                                       waitForJobs: true,
+                                       cancellationToken: cancellationToken))
+                    {
+                        hookApplied.Add($"  {line}");
+                    }
                 }
             }
             catch (Exception ex)
@@ -237,6 +223,8 @@ internal sealed class HelmHookExecutor
 
             if (hookError is not null)
             {
+                hook.LastRunCompletedAt = DateTimeOffset.UtcNow;
+                hook.LastRunPhase = "Failed";
                 yield return $"  Hook failed: {hookError.Message}";
                 if (hook.DeletePolicies.Contains(HelmHookDeletePolicy.HookFailed))
                 {
@@ -246,6 +234,8 @@ internal sealed class HelmHookExecutor
                 throw hookError;
             }
 
+            hook.LastRunCompletedAt = DateTimeOffset.UtcNow;
+            hook.LastRunPhase = "Succeeded";
             if (hook.DeletePolicies.Contains(HelmHookDeletePolicy.HookSucceeded))
             {
                 await DeleteHookResourceAsync(hook, ns, cancellationToken);
@@ -253,6 +243,9 @@ internal sealed class HelmHookExecutor
             }
         }
     }
+
+    private static bool IsCompletionHook(HelmHook hook)
+        => hook.Kind is "Job" or "Pod";
 
     private async Task DeleteHookResourceAsync(HelmHook hook, string ns, CancellationToken ct)
     {

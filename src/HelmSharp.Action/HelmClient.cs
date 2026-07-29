@@ -285,11 +285,11 @@ public class HelmClient : IHelmClient
         // Execute pre-hooks
         if (!request.DisableHooks && hooks.Count > 0)
         {
-            var hookExecutor = new HelmHookExecutor(client, options.FieldManager);
+            var hookExecutor = new HelmHookExecutor(client, options.FieldManager, timeout);
             var preEvent = isUpgrade ? HelmHookEvent.PreUpgrade : HelmHookEvent.PreInstall;
             await foreach (var hookLine in StreamWithFailureHandlingAsync(
                                hookExecutor.ExecuteHooksWithFailureHandlingAsync(hooks, preEvent, ns, operationToken),
-                               error => PersistFailedLifecycleAsync(store, releaseRecord, error, null, mainManifest, existingHistory, isUpgrade, request, ns)))
+                               error => PersistFailedLifecycleAsync(store, WithHookExecution(releaseRecord, hooks), error, null, mainManifest, existingHistory, isUpgrade, request, ns)))
             {
                 yield return hookLine;
             }
@@ -317,7 +317,7 @@ public class HelmClient : IHelmClient
 
         if (applyError is not null)
         {
-            var recovery = await PersistFailedLifecycleAsync(store, releaseRecord, applyError, applier, mainManifest, existingHistory, isUpgrade, request, ns);
+            var recovery = await PersistFailedLifecycleAsync(store, WithHookExecution(releaseRecord, hooks), applyError, applier, mainManifest, existingHistory, isUpgrade, request, ns);
             foreach (var line in recovery)
                 yield return line;
             throw applyError;
@@ -326,11 +326,11 @@ public class HelmClient : IHelmClient
         // Execute post-hooks
         if (!request.DisableHooks && hooks.Count > 0)
         {
-            var hookExecutor = new HelmHookExecutor(client, options.FieldManager);
+            var hookExecutor = new HelmHookExecutor(client, options.FieldManager, timeout);
             var postEvent = isUpgrade ? HelmHookEvent.PostUpgrade : HelmHookEvent.PostInstall;
             await foreach (var hookLine in StreamWithFailureHandlingAsync(
                                hookExecutor.ExecuteHooksWithFailureHandlingAsync(hooks, postEvent, ns, operationToken),
-                               error => PersistFailedLifecycleAsync(store, releaseRecord, error, applier, mainManifest, existingHistory, isUpgrade, request, ns)))
+                               error => PersistFailedLifecycleAsync(store, WithHookExecution(releaseRecord, hooks), error, applier, mainManifest, existingHistory, isUpgrade, request, ns)))
             {
                 yield return hookLine;
             }
@@ -364,7 +364,7 @@ public class HelmClient : IHelmClient
                     yield return waitLine;
                 if (waitError is not null)
                 {
-                    var recovery = await PersistFailedLifecycleAsync(store, releaseRecord, waitError, applier, mainManifest, existingHistory, isUpgrade, request, ns);
+                    var recovery = await PersistFailedLifecycleAsync(store, WithHookExecution(releaseRecord, hooks), waitError, applier, mainManifest, existingHistory, isUpgrade, request, ns);
                     foreach (var line in recovery)
                         yield return line;
                     throw waitError;
@@ -381,13 +381,14 @@ public class HelmClient : IHelmClient
             releaseRecord = releaseRecord with
             {
                 UpdatedAt = completedAt,
-                FirstDeployedAt = existingHistory.Count == 0 ? completedAt : firstDeployedAt
+                FirstDeployedAt = existingHistory.Count == 0 ? completedAt : firstDeployedAt,
+                Hooks = hooks.Select(ToReleaseHook).ToList()
             };
             await store.SaveAsync(releaseRecord, operationToken);
         }
         catch (Exception ex)
         {
-            saveRecovery = await PersistFailedLifecycleAsync(store, releaseRecord, ex, applier, mainManifest, existingHistory, isUpgrade, request, ns);
+            saveRecovery = await PersistFailedLifecycleAsync(store, WithHookExecution(releaseRecord, hooks), ex, applier, mainManifest, existingHistory, isUpgrade, request, ns);
             saveError = ex;
         }
         if (saveRecovery is not null)
@@ -748,14 +749,23 @@ public class HelmClient : IHelmClient
             return Fail($"release: not found: {request.ReleaseName}");
 
         var (mainManifest, hooks) = ResolveStoredManifest(latest, ns);
-        var hookExecutor = new HelmHookExecutor(client, options.FieldManager);
+        var hookTimeout = request.TimeoutSeconds ?? options.TimeoutSeconds;
+        var hookExecutor = new HelmHookExecutor(client, options.FieldManager, hookTimeout);
 
         // Execute pre-delete hooks
         if (!request.DisableHooks && hooks.Any(h => h.Events.Contains(HelmHookEvent.PreDelete)))
         {
-            await foreach (var _ in hookExecutor.ExecuteHooksAsync(hooks, HelmHookEvent.PreDelete, ns, operationToken))
+            try
             {
-                // drain
+                await foreach (var _ in hookExecutor.ExecuteHooksAsync(hooks, HelmHookEvent.PreDelete, ns, operationToken))
+                {
+                    // drain
+                }
+            }
+            finally
+            {
+                latest = WithHookExecution(latest, hooks);
+                await store.SaveAsync(latest, CancellationToken.None);
             }
         }
 
@@ -797,9 +807,17 @@ public class HelmClient : IHelmClient
         // Execute post-delete hooks
         if (!request.DisableHooks && hooks.Any(h => h.Events.Contains(HelmHookEvent.PostDelete)))
         {
-            await foreach (var _ in hookExecutor.ExecuteHooksAsync(hooks, HelmHookEvent.PostDelete, ns, operationToken))
+            try
             {
-                // drain
+                await foreach (var _ in hookExecutor.ExecuteHooksAsync(hooks, HelmHookEvent.PostDelete, ns, operationToken))
+                {
+                    // drain
+                }
+            }
+            finally
+            {
+                latest = WithHookExecution(latest, hooks);
+                await store.SaveAsync(latest, CancellationToken.None);
             }
         }
 
@@ -911,7 +929,7 @@ public class HelmClient : IHelmClient
             return Fail($"release has no revision {request.Revision}");
 
         var (mainManifest, hooks) = ResolveStoredManifest(targetRecord, ns);
-        var hookExecutor = new HelmHookExecutor(client, options.FieldManager);
+        var hookExecutor = new HelmHookExecutor(client, options.FieldManager, timeout);
         var newRevision = await store.NextRevisionAsync(request.ReleaseName, ns, operationToken);
         var rollbackRecord = new HelmReleaseRecord
         {
@@ -947,7 +965,7 @@ public class HelmClient : IHelmClient
         }
         catch (Exception ex)
         {
-            await PersistFailedRollbackAsync(store, rollbackRecord, operationId, ex);
+            await PersistFailedRollbackAsync(store, WithHookExecution(rollbackRecord, hooks), operationId, ex);
             throw;
         }
         if (!reserved)
@@ -960,7 +978,7 @@ public class HelmClient : IHelmClient
             // Execute pre-rollback hooks
             if (!request.DisableHooks && hooks.Any(h => h.Events.Contains(HelmHookEvent.PreRollback)))
             {
-                await foreach (var hookLine in hookExecutor.ExecuteHooksAsync(hooks, HelmHookEvent.PreRollback, ns, operationToken))
+                await foreach (var hookLine in hookExecutor.ExecuteHooksWithFailureHandlingAsync(hooks, HelmHookEvent.PreRollback, ns, operationToken))
                 {
                     output.AppendLine(hookLine);
                 }
@@ -976,7 +994,7 @@ public class HelmClient : IHelmClient
             // Execute post-rollback hooks
             if (!request.DisableHooks && hooks.Any(h => h.Events.Contains(HelmHookEvent.PostRollback)))
             {
-                await foreach (var hookLine in hookExecutor.ExecuteHooksAsync(hooks, HelmHookEvent.PostRollback, ns, operationToken))
+                await foreach (var hookLine in hookExecutor.ExecuteHooksWithFailureHandlingAsync(hooks, HelmHookEvent.PostRollback, ns, operationToken))
                 {
                     output.AppendLine(hookLine);
                 }
@@ -992,7 +1010,7 @@ public class HelmClient : IHelmClient
         }
         catch (Exception ex)
         {
-            await PersistFailedRollbackAsync(store, rollbackRecord, operationId, ex);
+            await PersistFailedRollbackAsync(store, WithHookExecution(rollbackRecord, hooks), operationId, ex);
             throw;
         }
 
@@ -1004,12 +1022,13 @@ public class HelmClient : IHelmClient
             await store.SaveAsync(rollbackRecord with
             {
                 Status = "deployed",
-                UpdatedAt = DateTimeOffset.UtcNow
+                UpdatedAt = DateTimeOffset.UtcNow,
+                Hooks = hooks.Select(ToReleaseHook).ToList()
             }, CancellationToken.None);
         }
         catch (Exception ex)
         {
-            await PersistFailedRollbackAsync(store, rollbackRecord, operationId, ex);
+            await PersistFailedRollbackAsync(store, WithHookExecution(rollbackRecord, hooks), operationId, ex);
             throw;
         }
         var history = await store.HistoryAsync(request.ReleaseName, ns, CancellationToken.None);
@@ -1243,6 +1262,11 @@ public class HelmClient : IHelmClient
             output.AppendLine($"# Events: {string.Join(", ", hook.Events)}");
             output.AppendLine($"# Weight: {hook.Weight}");
             output.AppendLine($"# Delete Policies: {string.Join(", ", hook.DeletePolicies)}");
+            output.AppendLine($"# Last Run Phase: {hook.LastRunPhase ?? "Unknown"}");
+            if (hook.LastRunStartedAt is not null)
+                output.AppendLine($"# Last Run Started: {hook.LastRunStartedAt:O}");
+            if (hook.LastRunCompletedAt is not null)
+                output.AppendLine($"# Last Run Completed: {hook.LastRunCompletedAt:O}");
             output.AppendLine(hook.Manifest);
         }
         return Ok(output.ToString());
@@ -1308,27 +1332,38 @@ public class HelmClient : IHelmClient
 
         var output = new StringBuilder();
         output.AppendLine($"TESTING: {releaseName}");
-        var hookExecutor = new HelmHookExecutor(client, options.FieldManager);
+        var hookExecutor = new HelmHookExecutor(client, options.FieldManager, timeout);
         var passed = 0;
         var failed = 0;
 
-        foreach (var hook in testHooks)
+        try
         {
-            try
+            foreach (var hook in testHooks)
             {
-                await foreach (var line in hookExecutor.ExecuteHooksAsync(
-                    new List<HelmHook> { hook }, HelmHookEvent.Test, ns, cancellationToken))
+                try
                 {
-                    output.AppendLine(line);
+                    await foreach (var line in hookExecutor.ExecuteHooksAsync(
+                        new List<HelmHook> { hook }, HelmHookEvent.Test, ns, cancellationToken))
+                    {
+                        output.AppendLine(line);
+                    }
+                    passed++;
+                    output.AppendLine($"PASSED: {hook.Name}");
                 }
-                passed++;
-                output.AppendLine($"PASSED: {hook.Name}");
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    output.AppendLine($"FAILED: {hook.Name}: {ex.Message}");
+                }
             }
-            catch (Exception ex)
-            {
-                failed++;
-                output.AppendLine($"FAILED: {hook.Name}: {ex.Message}");
-            }
+        }
+        finally
+        {
+            await store.SaveAsync(WithHookExecution(latest, hooks), CancellationToken.None);
         }
 
         output.AppendLine();
@@ -2449,7 +2484,9 @@ public class HelmClient : IHelmClient
             Path = hook.Path,
             Manifest = hook.Manifest,
             Events = hook.Events.Select(ToReleaseHookEvent).ToList(),
-            LastRunPhase = "Unknown",
+            LastRunStartedAt = hook.LastRunStartedAt,
+            LastRunCompletedAt = hook.LastRunCompletedAt,
+            LastRunPhase = hook.LastRunPhase ?? "Unknown",
             Weight = hook.Weight,
             DeletePolicies = hook.DeletePolicies.Select(ToReleaseHookDeletePolicy).ToList()
         };
@@ -2462,7 +2499,10 @@ public class HelmClient : IHelmClient
             Kind = record.Kind,
             Path = record.Path,
             Manifest = record.Manifest,
-            Weight = record.Weight
+            Weight = record.Weight,
+            LastRunStartedAt = record.LastRunStartedAt,
+            LastRunCompletedAt = record.LastRunCompletedAt,
+            LastRunPhase = record.LastRunPhase
         };
         foreach (var value in record.Events)
         {
@@ -2476,6 +2516,11 @@ public class HelmClient : IHelmClient
         }
         return hook;
     }
+
+    private static HelmReleaseRecord WithHookExecution(
+        HelmReleaseRecord releaseRecord,
+        IEnumerable<HelmHook> hooks)
+        => releaseRecord with { Hooks = hooks.Select(ToReleaseHook).ToList() };
 
     private static string ToReleaseHookEvent(HelmHookEvent value)
         => value switch

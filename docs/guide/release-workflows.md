@@ -31,6 +31,7 @@ Apply only after approval:
 - `ReuseValues = true` starts an upgrade from the stored release values, then overlays the supplied values. The default and `ResetValues = true` start from chart defaults. `ReuseValues` and `ResetValues` cannot be combined.
 - `TimeoutSeconds` covers Kubernetes apply, hooks, readiness waiting, and cancellation. `Atomic` implies readiness waiting; use `WaitForJobs` only with `Wait` (or `Atomic`).
 - `Description`, `Labels`, and `MaxHistory` are stored with the resulting revision. `RollbackAsync(new HelmRollbackRequest { ... })` exposes the same timeout, wait, hook, description, label, and history controls for a rollback while retaining the original overload.
+- Hooks run by weight and then name. Job and Pod hooks wait for completion within `TimeoutSeconds`; other hook resource kinds are applied without a completion observer. `before-hook-creation`, `hook-succeeded`, and `hook-failed` cleanup policies are supported, and `GetHooksAsync` shows each stored hook's latest run state.
 - Options without a managed implementation, such as `Force`, ownership takeover, repository TLS/authentication, provenance verification, or server-side apply selection, fail with a clear diagnostic before any cluster mutation.
 - Capture `CommandResult.StandardError` and `ExitCode` in product logs.
 
