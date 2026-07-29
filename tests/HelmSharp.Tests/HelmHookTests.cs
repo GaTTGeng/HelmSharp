@@ -410,6 +410,65 @@ public class HelmHookTests
     }
 
     [Fact]
+    public async Task ExecuteHooks_WaitsForZeroBackoffJobBeforeDeclaringFailure()
+    {
+        var (_, hooks) = HelmHookExecutor.ExtractHooks("""
+            apiVersion: batch/v1
+            kind: Job
+            metadata:
+              name: migration
+              annotations:
+                helm.sh/hook: pre-upgrade
+            spec:
+              backoffLimit: 0
+              template:
+                spec:
+                  restartPolicy: Never
+                  containers:
+                  - name: migration
+                    image: example.invalid/migration
+            """, "test-ns");
+        var handler = new HookKubernetesHandler(pendingZeroBackoffJob: true);
+        using var client = CreateClient(handler);
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 3);
+
+        await CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
+            hooks, HelmHookEvent.PreUpgrade, "test-ns", CancellationToken.None));
+
+        Assert.True(handler.ZeroBackoffJobReadCount >= 2);
+        Assert.Equal("Succeeded", Assert.Single(hooks).LastRunPhase);
+    }
+
+    [Fact]
+    public async Task ExecuteHooks_FailsZeroBackoffJobAfterAnActualFailure()
+    {
+        var (_, hooks) = HelmHookExecutor.ExtractHooks("""
+            apiVersion: batch/v1
+            kind: Job
+            metadata:
+              name: migration
+              annotations:
+                helm.sh/hook: pre-upgrade
+            spec:
+              backoffLimit: 0
+              template:
+                spec:
+                  restartPolicy: Never
+                  containers:
+                  - name: migration
+                    image: example.invalid/migration
+            """, "test-ns");
+        using var client = CreateClient(new HookKubernetesHandler(failedZeroBackoffJob: true));
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 1);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
+                hooks, HelmHookEvent.PreUpgrade, "test-ns", CancellationToken.None)));
+
+        Assert.Equal("Failed", Assert.Single(hooks).LastRunPhase);
+    }
+
+    [Fact]
     public async Task ExecuteHooks_FailedJobRecordsFailureAndHonorsFailureCleanup()
     {
         var (_, hooks) = HelmHookExecutor.ExtractHooks("""
@@ -486,9 +545,13 @@ public class HelmHookTests
         return collected;
     }
 
-    private sealed class HookKubernetesHandler(bool failJob = false) : DelegatingHandler
+    private sealed class HookKubernetesHandler(
+        bool failJob = false,
+        bool pendingZeroBackoffJob = false,
+        bool failedZeroBackoffJob = false) : DelegatingHandler
     {
         public List<(HttpMethod Method, string Path)> Requests { get; } = [];
+        public int ZeroBackoffJobReadCount { get; private set; }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -497,15 +560,40 @@ public class HelmHookTests
 
             if (request.Method == HttpMethod.Get && path.EndsWith("/jobs/migration", StringComparison.Ordinal))
             {
+                if (failedZeroBackoffJob)
+                {
+                    return Task.FromResult(JsonResponse(request, HttpStatusCode.OK, """
+                        {
+                          "apiVersion": "batch/v1",
+                          "kind": "Job",
+                          "metadata": { "name": "migration", "resourceVersion": "1" },
+                          "spec": { "backoffLimit": 0, "completions": 1 },
+                          "status": { "failed": 1 }
+                        }
+                        """));
+                }
+                if (pendingZeroBackoffJob && ++ZeroBackoffJobReadCount == 1)
+                {
+                    return Task.FromResult(JsonResponse(request, HttpStatusCode.OK, """
+                        {
+                          "apiVersion": "batch/v1",
+                          "kind": "Job",
+                          "metadata": { "name": "migration", "resourceVersion": "1" },
+                          "spec": { "backoffLimit": 0, "completions": 1 },
+                          "status": { }
+                        }
+                        """));
+                }
                 var condition = failJob
                     ? "{ \"type\": \"Failed\", \"status\": \"True\", \"reason\": \"HookFailed\" }"
                     : "{ \"type\": \"Complete\", \"status\": \"True\" }";
+                var backoffLimit = pendingZeroBackoffJob ? 0 : 1;
                 return Task.FromResult(JsonResponse(request, HttpStatusCode.OK, $$"""
                     {
                       "apiVersion": "batch/v1",
                       "kind": "Job",
                       "metadata": { "name": "migration", "resourceVersion": "1" },
-                      "spec": { "backoffLimit": 1, "completions": 1 },
+                      "spec": { "backoffLimit": {{backoffLimit}}, "completions": 1 },
                       "status": { "conditions": [ {{condition}} ] }
                     }
                     """));

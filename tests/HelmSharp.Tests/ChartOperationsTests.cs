@@ -1119,6 +1119,37 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task TestAsync_TimeoutCancelsStalledHookApply()
+    {
+        var chartDir = await CreateMinimalChartAsync("test-hook-timeout-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "test-hook.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: timeout-hook
+              annotations:
+                helm.sh/hook: test
+            data:
+              key: value
+            """);
+        var releaseState = new ReleaseLifecycleState
+        {
+            StallNextConfigMapWrite = true
+        };
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "test-hook-timeout",
+            Chart = chartDir
+        }));
+
+        var result = await client.TestAsync("test-hook-timeout", "test-ns", timeoutSeconds: 1);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.True(releaseState.ConfigMapWriteWasCanceled);
+    }
+
+    [Fact]
     public async Task ReleaseLifecycle_UninstallDefaultsToPurge()
     {
         var chartDir = await CreateMinimalChartAsync("retained-uninstall-chart");
@@ -1822,6 +1853,19 @@ public class ChartOperationsTests : IDisposable
             if ((request.Method == HttpMethod.Post || request.Method == HttpMethod.Put) &&
                 path.Contains("/configmaps", StringComparison.Ordinal))
             {
+                if (_releaseState.StallNextConfigMapWrite)
+                {
+                    _releaseState.StallNextConfigMapWrite = false;
+                    try
+                    {
+                        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        _releaseState.ConfigMapWriteWasCanceled = true;
+                        throw;
+                    }
+                }
                 _releaseState.AppliedPaths.Add(path);
                 var configMap = await request.Content!.ReadAsStringAsync(cancellationToken);
                 return JsonResponse(request, request.Method == HttpMethod.Post ? HttpStatusCode.Created : HttpStatusCode.OK, configMap);
@@ -1867,6 +1911,8 @@ public class ChartOperationsTests : IDisposable
         internal CancellationTokenSource? CancelOnNextReleaseSecretRead { get; set; }
         internal CancellationTokenSource? CancelAfterNextSecretCreate { get; set; }
         internal CancellationTokenSource? CancelNextSecretCreateBeforePersisting { get; set; }
+        internal bool StallNextConfigMapWrite { get; set; }
+        internal bool ConfigMapWriteWasCanceled { get; set; }
 
         public IReadOnlyList<HelmReleaseRecord> Records(string releaseName)
             => Secrets.Values

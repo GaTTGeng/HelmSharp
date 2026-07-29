@@ -1324,10 +1324,17 @@ public class HelmClient : IHelmClient
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
         var ns = @namespace ?? options.DefaultNamespace ?? "default";
         var timeout = timeoutSeconds ?? options.TimeoutSeconds;
-        using var client = await _createKubernetesClientAsync(options, null, null, cancellationToken);
+        using var timeoutSource = timeout > 0
+            ? new CancellationTokenSource(TimeSpan.FromSeconds(timeout))
+            : null;
+        using var operationSource = timeoutSource is null
+            ? null
+            : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
+        var operationToken = operationSource?.Token ?? cancellationToken;
+        using var client = await _createKubernetesClientAsync(options, null, null, operationToken);
         var store = new HelmReleaseStore(client);
 
-        var latest = await store.GetLatestAsync(releaseName, ns, cancellationToken);
+        var latest = await store.GetLatestAsync(releaseName, ns, operationToken);
         if (latest is null)
             return Fail($"release: not found: {releaseName}");
 
@@ -1350,7 +1357,7 @@ public class HelmClient : IHelmClient
                 try
                 {
                     await foreach (var line in hookExecutor.ExecuteHooksAsync(
-                        new List<HelmHook> { hook }, HelmHookEvent.Test, ns, cancellationToken))
+                        new List<HelmHook> { hook }, HelmHookEvent.Test, ns, operationToken))
                     {
                         output.AppendLine(line);
                     }

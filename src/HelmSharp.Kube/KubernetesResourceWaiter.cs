@@ -392,7 +392,7 @@ public sealed class KubernetesResourceWaiter
         // Check for too many failures
         var failures = job.Status?.Failed ?? 0;
         var backoffLimit = job.Spec?.BackoffLimit ?? 6;
-        if (failures >= backoffLimit)
+        if (failures > 0 && failures >= backoffLimit)
             return (false, true, $"Job exceeded backoff limit ({failures}/{backoffLimit})");
 
         return (false, false, $"Job in progress (completions: {job.Status?.Succeeded ?? 0}/{job.Spec?.Completions ?? 1})");
