@@ -1043,6 +1043,164 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task ReleaseLifecycle_RetainedUninstallPreservesPostDeleteHookExecution()
+    {
+        var chartDir = await CreateMinimalChartAsync("retained-hook-state-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "post-delete-hook.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: retained-delete-hook
+              annotations:
+                helm.sh/hook: post-delete
+            data:
+              key: value
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "retained-hook-state",
+            Chart = chartDir
+        }));
+
+        var uninstall = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "retained-hook-state",
+            Namespace = "test-ns",
+            KeepHistory = true
+        });
+
+        Assert.Equal(0, uninstall.ExitCode);
+        var uninstalled = Assert.Single(releaseState.Records("retained-hook-state"), record =>
+            record.Status == "uninstalled");
+        var hook = Assert.Single(uninstalled.Hooks);
+        Assert.Equal("Succeeded", hook.LastRunPhase);
+        Assert.NotNull(hook.LastRunStartedAt);
+        Assert.NotNull(hook.LastRunCompletedAt);
+    }
+
+    [Fact]
+    public async Task TestAsync_PreservesStoredHookOutputLogPolicies()
+    {
+        var chartDir = await CreateMinimalChartAsync("test-hook-output-policy-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "test-hook.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: output-policy-hook
+              annotations:
+                helm.sh/hook: test
+            data:
+              key: value
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "test-hook-output-policy",
+            Chart = chartDir
+        }));
+        var deployed = Assert.Single(releaseState.Records("test-hook-output-policy"));
+        releaseState.AddRecord(deployed with
+        {
+            Hooks = deployed.Hooks.Select(hook => hook with
+            {
+                OutputLogPolicies = ["hook-succeeded"]
+            }).ToList()
+        });
+
+        var result = await client.TestAsync("test-hook-output-policy", "test-ns");
+
+        Assert.Equal(0, result.ExitCode);
+        var hook = Assert.Single(Assert.Single(releaseState.Records("test-hook-output-policy")).Hooks);
+        Assert.Equal(["hook-succeeded"], hook.OutputLogPolicies);
+        Assert.Equal("Succeeded", hook.LastRunPhase);
+    }
+
+    [Fact]
+    public async Task TestAsync_TimeoutCancelsStalledHookApply()
+    {
+        var chartDir = await CreateMinimalChartAsync("test-hook-timeout-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "test-hook.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: timeout-hook
+              annotations:
+                helm.sh/hook: test
+                helm.sh/hook-weight: "-1"
+            data:
+              key: value
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: skipped-after-timeout-hook
+              annotations:
+                helm.sh/hook: test
+                helm.sh/hook-weight: "1"
+            data:
+              key: value
+            """);
+        var releaseState = new ReleaseLifecycleState
+        {
+            StallNextConfigMapWrite = true
+        };
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "test-hook-timeout",
+            Chart = chartDir
+        }));
+
+        var result = await client.TestAsync("test-hook-timeout", "test-ns", timeoutSeconds: 1);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.True(releaseState.ConfigMapWriteWasCanceled);
+        Assert.DoesNotContain("skipped-after-timeout-hook", releaseState.AppliedConfigMapNames);
+    }
+
+    [Fact]
+    public async Task TestAsync_OrdersHooksByWeight()
+    {
+        var chartDir = await CreateMinimalChartAsync("ordered-test-hooks-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "test-hooks.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: higher-weight-hook
+              annotations:
+                helm.sh/hook: test
+                helm.sh/hook-weight: "5"
+            data:
+              key: value
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: lower-weight-hook
+              annotations:
+                helm.sh/hook: test
+                helm.sh/hook-weight: "-1"
+            data:
+              key: value
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "ordered-test-hooks",
+            Chart = chartDir
+        }));
+
+        var result = await client.TestAsync("ordered-test-hooks", "test-ns");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(["lower-weight-hook", "higher-weight-hook"], releaseState.AppliedConfigMapNames);
+    }
+
+    [Fact]
     public async Task ReleaseLifecycle_UninstallDefaultsToPurge()
     {
         var chartDir = await CreateMinimalChartAsync("retained-uninstall-chart");
@@ -1746,8 +1904,23 @@ public class ChartOperationsTests : IDisposable
             if ((request.Method == HttpMethod.Post || request.Method == HttpMethod.Put) &&
                 path.Contains("/configmaps", StringComparison.Ordinal))
             {
+                if (_releaseState.StallNextConfigMapWrite)
+                {
+                    _releaseState.StallNextConfigMapWrite = false;
+                    try
+                    {
+                        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        _releaseState.ConfigMapWriteWasCanceled = true;
+                        throw;
+                    }
+                }
                 _releaseState.AppliedPaths.Add(path);
                 var configMap = await request.Content!.ReadAsStringAsync(cancellationToken);
+                _releaseState.AppliedConfigMapNames.Add(
+                    JsonDocument.Parse(configMap).RootElement.GetProperty("metadata").GetProperty("name").GetString()!);
                 return JsonResponse(request, request.Method == HttpMethod.Post ? HttpStatusCode.Created : HttpStatusCode.OK, configMap);
             }
 
@@ -1786,11 +1959,14 @@ public class ChartOperationsTests : IDisposable
         internal List<string> DeletedPaths { get; } = [];
         internal List<string> WaitedPaths { get; } = [];
         internal List<string> AppliedPaths { get; } = [];
+        internal List<string> AppliedConfigMapNames { get; } = [];
         public bool FailNextSecretCreate { get; set; }
         public bool CreateNextSecretThenReturnConflict { get; set; }
         internal CancellationTokenSource? CancelOnNextReleaseSecretRead { get; set; }
         internal CancellationTokenSource? CancelAfterNextSecretCreate { get; set; }
         internal CancellationTokenSource? CancelNextSecretCreateBeforePersisting { get; set; }
+        internal bool StallNextConfigMapWrite { get; set; }
+        internal bool ConfigMapWriteWasCanceled { get; set; }
 
         public IReadOnlyList<HelmReleaseRecord> Records(string releaseName)
             => Secrets.Values

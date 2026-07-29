@@ -1,4 +1,7 @@
 using HelmSharp.Action;
+using System.Net;
+using System.Text;
+using k8s;
 
 namespace HelmSharp.Tests;
 
@@ -295,5 +298,362 @@ public class HelmHookTests
         var hook = Assert.Single(hooks);
         Assert.Equal("legacy-test-hook", hook.Name);
         Assert.Contains(HelmHookEvent.Test, hook.Events);
+    }
+
+    [Fact]
+    public void ResolveStoredManifest_UsesExplicitHookNamespace()
+    {
+        var record = new HelmSharp.Release.HelmReleaseRecord
+        {
+            Manifest = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: main\n",
+            Hooks =
+            [
+                new HelmSharp.Release.HelmReleaseHookRecord
+                {
+                    Name = "namespace-hook",
+                    Kind = "Pod",
+                    Path = "templates/hook.yaml",
+                    Manifest = """
+                        apiVersion: v1
+                        kind: Pod
+                        metadata:
+                          name: namespace-hook
+                          namespace: hook-ns
+                        """,
+                    Events = ["test"]
+                }
+            ]
+        };
+
+        var (_, hooks) = HelmClient.ResolveStoredManifest(record, "release-ns");
+
+        Assert.Equal("hook-ns", Assert.Single(hooks).Namespace);
+    }
+
+    [Fact]
+    public async Task ExecuteHooks_OrdersSameWeightHooksByNameAndRecordsSuccess()
+    {
+        var (_, hooks) = HelmHookExecutor.ExtractHooks("""
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: zeta
+              annotations:
+                helm.sh/hook: pre-install
+                helm.sh/hook-weight: "2"
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: bravo
+              annotations:
+                helm.sh/hook: pre-install
+                helm.sh/hook-weight: "2"
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: alpha
+              annotations:
+                helm.sh/hook: pre-install
+                helm.sh/hook-weight: "-1"
+            """, "test-ns");
+        using var client = CreateClient(new HookKubernetesHandler());
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 1);
+
+        var lines = await CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
+            hooks, HelmHookEvent.PreInstall, "test-ns", CancellationToken.None));
+
+        Assert.Equal(
+            ["Applying hook PreInstall: ConfigMap/alpha", "Applying hook PreInstall: ConfigMap/bravo", "Applying hook PreInstall: ConfigMap/zeta"],
+            lines.Where(line => line.StartsWith("Applying hook", StringComparison.Ordinal)));
+        Assert.All(hooks, hook =>
+        {
+            Assert.Equal("Succeeded", hook.LastRunPhase);
+            Assert.NotNull(hook.LastRunStartedAt);
+            Assert.NotNull(hook.LastRunCompletedAt);
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteHooks_WaitsForJobAndCleansUpAfterSuccess()
+    {
+        var (_, hooks) = HelmHookExecutor.ExtractHooks("""
+            apiVersion: batch/v1
+            kind: Job
+            metadata:
+              name: migration
+              annotations:
+                helm.sh/hook: pre-upgrade
+                helm.sh/hook-delete-policy: hook-succeeded
+            spec:
+              template:
+                spec:
+                  restartPolicy: Never
+                  containers:
+                  - name: migration
+                    image: example.invalid/migration
+            """, "test-ns");
+        var handler = new HookKubernetesHandler();
+        using var client = CreateClient(handler);
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 1);
+
+        var lines = await CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
+            hooks, HelmHookEvent.PreUpgrade, "test-ns", CancellationToken.None));
+
+        Assert.Contains(lines, line => line.Contains("All 1 resources are ready", StringComparison.Ordinal));
+        Assert.Contains(handler.Requests, request => request.Method == HttpMethod.Get &&
+            request.Path == "/apis/batch/v1/namespaces/test-ns/jobs/migration");
+        Assert.Contains(handler.Requests, request => request.Method == HttpMethod.Delete &&
+            request.Path == "/apis/batch/v1/namespaces/test-ns/jobs/migration");
+        Assert.Equal("Succeeded", Assert.Single(hooks).LastRunPhase);
+    }
+
+    [Fact]
+    public async Task ExecuteHooks_AllowsCleanupWithinConfiguredTimeout()
+    {
+        var (_, hooks) = HelmHookExecutor.ExtractHooks("""
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: cleanup-hook
+              annotations:
+                helm.sh/hook: pre-upgrade
+                helm.sh/hook-delete-policy: hook-succeeded
+            data:
+              key: value
+            """, "test-ns");
+        var handler = new HookKubernetesHandler(deleteDelay: TimeSpan.FromMilliseconds(1200));
+        using var client = CreateClient(handler);
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 2);
+
+        var lines = await CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
+            hooks, HelmHookEvent.PreUpgrade, "test-ns", CancellationToken.None));
+
+        Assert.Contains(lines, line => line.Contains("Deleted hook (succeeded policy)", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ExecuteHooks_WaitsForZeroBackoffJobBeforeDeclaringFailure()
+    {
+        var (_, hooks) = HelmHookExecutor.ExtractHooks("""
+            apiVersion: batch/v1
+            kind: Job
+            metadata:
+              name: migration
+              annotations:
+                helm.sh/hook: pre-upgrade
+            spec:
+              backoffLimit: 0
+              template:
+                spec:
+                  restartPolicy: Never
+                  containers:
+                  - name: migration
+                    image: example.invalid/migration
+            """, "test-ns");
+        var handler = new HookKubernetesHandler(pendingZeroBackoffJob: true);
+        using var client = CreateClient(handler);
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 3);
+
+        await CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
+            hooks, HelmHookEvent.PreUpgrade, "test-ns", CancellationToken.None));
+
+        Assert.True(handler.ZeroBackoffJobReadCount >= 2);
+        Assert.Equal("Succeeded", Assert.Single(hooks).LastRunPhase);
+    }
+
+    [Fact]
+    public async Task ExecuteHooks_FailsZeroBackoffJobAfterAnActualFailure()
+    {
+        var (_, hooks) = HelmHookExecutor.ExtractHooks("""
+            apiVersion: batch/v1
+            kind: Job
+            metadata:
+              name: migration
+              annotations:
+                helm.sh/hook: pre-upgrade
+            spec:
+              backoffLimit: 0
+              template:
+                spec:
+                  restartPolicy: Never
+                  containers:
+                  - name: migration
+                    image: example.invalid/migration
+            """, "test-ns");
+        using var client = CreateClient(new HookKubernetesHandler(failedZeroBackoffJob: true));
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 1);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
+                hooks, HelmHookEvent.PreUpgrade, "test-ns", CancellationToken.None)));
+
+        Assert.Equal("Failed", Assert.Single(hooks).LastRunPhase);
+    }
+
+    [Fact]
+    public async Task ExecuteHooks_FailedJobRecordsFailureAndHonorsFailureCleanup()
+    {
+        var (_, hooks) = HelmHookExecutor.ExtractHooks("""
+            apiVersion: batch/v1
+            kind: Job
+            metadata:
+              name: migration
+              annotations:
+                helm.sh/hook: pre-upgrade
+                helm.sh/hook-delete-policy: hook-failed
+            spec:
+              template:
+                spec:
+                  restartPolicy: Never
+                  containers:
+                  - name: migration
+                    image: example.invalid/migration
+            """, "test-ns");
+        var handler = new HookKubernetesHandler(failJob: true);
+        using var client = CreateClient(handler);
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 1);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
+                hooks, HelmHookEvent.PreUpgrade, "test-ns", CancellationToken.None)));
+
+        Assert.Equal("Failed", Assert.Single(hooks).LastRunPhase);
+        Assert.NotNull(hooks[0].LastRunCompletedAt);
+        Assert.Contains(handler.Requests, request => request.Method == HttpMethod.Delete &&
+            request.Path == "/apis/batch/v1/namespaces/test-ns/jobs/migration");
+    }
+
+    [Fact]
+    public async Task ExecuteHooks_WaitsForPodTerminationInsteadOfReadiness()
+    {
+        var (_, hooks) = HelmHookExecutor.ExtractHooks("""
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: pod-hook
+              annotations:
+                helm.sh/hook: test
+            spec:
+              restartPolicy: Never
+              containers:
+              - name: test
+                image: example.invalid/test
+            """, "test-ns");
+        var handler = new HookKubernetesHandler();
+        using var client = CreateClient(handler);
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 1);
+
+        var lines = await CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
+            hooks, HelmHookEvent.Test, "test-ns", CancellationToken.None));
+
+        Assert.Contains(lines, line => line.Contains("Pod/pod-hook completed", StringComparison.Ordinal));
+        Assert.Contains(handler.Requests, request => request.Method == HttpMethod.Get &&
+            request.Path == "/api/v1/namespaces/test-ns/pods/pod-hook");
+        Assert.Equal("Succeeded", Assert.Single(hooks).LastRunPhase);
+    }
+
+    private static Kubernetes CreateClient(DelegatingHandler handler)
+        => new(new KubernetesClientConfiguration
+        {
+            Host = "https://helmsharp.test",
+            SkipTlsVerify = true
+        }, handler);
+
+    private static async Task<List<string>> CollectAsync(IAsyncEnumerable<string> lines)
+    {
+        var collected = new List<string>();
+        await foreach (var line in lines)
+            collected.Add(line);
+        return collected;
+    }
+
+    private sealed class HookKubernetesHandler(
+        bool failJob = false,
+        bool pendingZeroBackoffJob = false,
+        bool failedZeroBackoffJob = false,
+        TimeSpan? deleteDelay = null) : DelegatingHandler
+    {
+        public List<(HttpMethod Method, string Path)> Requests { get; } = [];
+        public int ZeroBackoffJobReadCount { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+            Requests.Add((request.Method, path));
+
+            if (request.Method == HttpMethod.Delete && deleteDelay is { } delay)
+                await Task.Delay(delay, cancellationToken);
+
+            if (request.Method == HttpMethod.Get && path.EndsWith("/jobs/migration", StringComparison.Ordinal))
+            {
+                if (failedZeroBackoffJob)
+                {
+                    return JsonResponse(request, HttpStatusCode.OK, """
+                        {
+                          "apiVersion": "batch/v1",
+                          "kind": "Job",
+                          "metadata": { "name": "migration", "resourceVersion": "1" },
+                          "spec": { "backoffLimit": 0, "completions": 1 },
+                          "status": { "failed": 1 }
+                        }
+                        """);
+                }
+                if (pendingZeroBackoffJob && ++ZeroBackoffJobReadCount == 1)
+                {
+                    return JsonResponse(request, HttpStatusCode.OK, """
+                        {
+                          "apiVersion": "batch/v1",
+                          "kind": "Job",
+                          "metadata": { "name": "migration", "resourceVersion": "1" },
+                          "spec": { "backoffLimit": 0, "completions": 1 },
+                          "status": { }
+                        }
+                        """);
+                }
+                var condition = failJob
+                    ? "{ \"type\": \"Failed\", \"status\": \"True\", \"reason\": \"HookFailed\" }"
+                    : "{ \"type\": \"Complete\", \"status\": \"True\" }";
+                var backoffLimit = pendingZeroBackoffJob ? 0 : 1;
+                return JsonResponse(request, HttpStatusCode.OK, $$"""
+                    {
+                      "apiVersion": "batch/v1",
+                      "kind": "Job",
+                      "metadata": { "name": "migration", "resourceVersion": "1" },
+                      "spec": { "backoffLimit": {{backoffLimit}}, "completions": 1 },
+                      "status": { "conditions": [ {{condition}} ] }
+                    }
+                    """);
+            }
+
+            if (request.Method == HttpMethod.Get && path.EndsWith("/pods/pod-hook", StringComparison.Ordinal))
+            {
+                return JsonResponse(request, HttpStatusCode.OK, """
+                    {
+                      "apiVersion": "v1",
+                      "kind": "Pod",
+                      "metadata": { "name": "pod-hook", "resourceVersion": "1" },
+                      "status": { "phase": "Succeeded" }
+                    }
+                    """);
+            }
+
+            if (request.Method == HttpMethod.Get && path.Contains("/configmaps/", StringComparison.Ordinal))
+            {
+                return JsonResponse(request, HttpStatusCode.NotFound, """
+                    { "kind": "Status", "apiVersion": "v1", "status": "Failure", "code": 404 }
+                    """);
+            }
+
+            return JsonResponse(request, HttpStatusCode.OK, "{}");
+        }
+
+        private static HttpResponseMessage JsonResponse(HttpRequestMessage request, HttpStatusCode status, string content)
+            => new(status)
+            {
+                RequestMessage = request,
+                Content = new StringContent(content, Encoding.UTF8, "application/json")
+            };
     }
 }
