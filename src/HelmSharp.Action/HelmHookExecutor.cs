@@ -281,8 +281,10 @@ internal sealed class HelmHookExecutor
     private async Task<bool> DeleteHookResourceDuringFinalizationAsync(HelmHook hook, string ns)
     {
         // A failed operation's token may already be canceled, but cleanup must not keep
-        // the caller waiting for another full lifecycle timeout.
-        using var cleanupSource = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+        // the caller waiting for another full lifecycle timeout. Allow a meaningful
+        // cleanup window for slow API servers while retaining an independent bound.
+        var cleanupSeconds = Math.Clamp(_timeoutSeconds, 2, 10);
+        using var cleanupSource = new CancellationTokenSource(TimeSpan.FromSeconds(cleanupSeconds));
         return await DeleteHookResourceAsync(hook, ns, cleanupSource.Token);
     }
 

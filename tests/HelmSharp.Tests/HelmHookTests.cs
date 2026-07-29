@@ -410,6 +410,30 @@ public class HelmHookTests
     }
 
     [Fact]
+    public async Task ExecuteHooks_AllowsCleanupWithinConfiguredTimeout()
+    {
+        var (_, hooks) = HelmHookExecutor.ExtractHooks("""
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: cleanup-hook
+              annotations:
+                helm.sh/hook: pre-upgrade
+                helm.sh/hook-delete-policy: hook-succeeded
+            data:
+              key: value
+            """, "test-ns");
+        var handler = new HookKubernetesHandler(deleteDelay: TimeSpan.FromMilliseconds(1200));
+        using var client = CreateClient(handler);
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 2);
+
+        var lines = await CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
+            hooks, HelmHookEvent.PreUpgrade, "test-ns", CancellationToken.None));
+
+        Assert.Contains(lines, line => line.Contains("Deleted hook (succeeded policy)", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ExecuteHooks_WaitsForZeroBackoffJobBeforeDeclaringFailure()
     {
         var (_, hooks) = HelmHookExecutor.ExtractHooks("""
@@ -548,21 +572,25 @@ public class HelmHookTests
     private sealed class HookKubernetesHandler(
         bool failJob = false,
         bool pendingZeroBackoffJob = false,
-        bool failedZeroBackoffJob = false) : DelegatingHandler
+        bool failedZeroBackoffJob = false,
+        TimeSpan? deleteDelay = null) : DelegatingHandler
     {
         public List<(HttpMethod Method, string Path)> Requests { get; } = [];
         public int ZeroBackoffJobReadCount { get; private set; }
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var path = request.RequestUri?.AbsolutePath ?? string.Empty;
             Requests.Add((request.Method, path));
+
+            if (request.Method == HttpMethod.Delete && deleteDelay is { } delay)
+                await Task.Delay(delay, cancellationToken);
 
             if (request.Method == HttpMethod.Get && path.EndsWith("/jobs/migration", StringComparison.Ordinal))
             {
                 if (failedZeroBackoffJob)
                 {
-                    return Task.FromResult(JsonResponse(request, HttpStatusCode.OK, """
+                    return JsonResponse(request, HttpStatusCode.OK, """
                         {
                           "apiVersion": "batch/v1",
                           "kind": "Job",
@@ -570,11 +598,11 @@ public class HelmHookTests
                           "spec": { "backoffLimit": 0, "completions": 1 },
                           "status": { "failed": 1 }
                         }
-                        """));
+                        """);
                 }
                 if (pendingZeroBackoffJob && ++ZeroBackoffJobReadCount == 1)
                 {
-                    return Task.FromResult(JsonResponse(request, HttpStatusCode.OK, """
+                    return JsonResponse(request, HttpStatusCode.OK, """
                         {
                           "apiVersion": "batch/v1",
                           "kind": "Job",
@@ -582,13 +610,13 @@ public class HelmHookTests
                           "spec": { "backoffLimit": 0, "completions": 1 },
                           "status": { }
                         }
-                        """));
+                        """);
                 }
                 var condition = failJob
                     ? "{ \"type\": \"Failed\", \"status\": \"True\", \"reason\": \"HookFailed\" }"
                     : "{ \"type\": \"Complete\", \"status\": \"True\" }";
                 var backoffLimit = pendingZeroBackoffJob ? 0 : 1;
-                return Task.FromResult(JsonResponse(request, HttpStatusCode.OK, $$"""
+                return JsonResponse(request, HttpStatusCode.OK, $$"""
                     {
                       "apiVersion": "batch/v1",
                       "kind": "Job",
@@ -596,29 +624,29 @@ public class HelmHookTests
                       "spec": { "backoffLimit": {{backoffLimit}}, "completions": 1 },
                       "status": { "conditions": [ {{condition}} ] }
                     }
-                    """));
+                    """);
             }
 
             if (request.Method == HttpMethod.Get && path.EndsWith("/pods/pod-hook", StringComparison.Ordinal))
             {
-                return Task.FromResult(JsonResponse(request, HttpStatusCode.OK, """
+                return JsonResponse(request, HttpStatusCode.OK, """
                     {
                       "apiVersion": "v1",
                       "kind": "Pod",
                       "metadata": { "name": "pod-hook", "resourceVersion": "1" },
                       "status": { "phase": "Succeeded" }
                     }
-                    """));
+                    """);
             }
 
             if (request.Method == HttpMethod.Get && path.Contains("/configmaps/", StringComparison.Ordinal))
             {
-                return Task.FromResult(JsonResponse(request, HttpStatusCode.NotFound, """
+                return JsonResponse(request, HttpStatusCode.NotFound, """
                     { "kind": "Status", "apiVersion": "v1", "status": "Failure", "code": 404 }
-                    """));
+                    """);
             }
 
-            return Task.FromResult(JsonResponse(request, HttpStatusCode.OK, "{}"));
+            return JsonResponse(request, HttpStatusCode.OK, "{}");
         }
 
         private static HttpResponseMessage JsonResponse(HttpRequestMessage request, HttpStatusCode status, string content)

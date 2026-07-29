@@ -1129,6 +1129,17 @@ public class ChartOperationsTests : IDisposable
               name: timeout-hook
               annotations:
                 helm.sh/hook: test
+                helm.sh/hook-weight: "-1"
+            data:
+              key: value
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: skipped-after-timeout-hook
+              annotations:
+                helm.sh/hook: test
+                helm.sh/hook-weight: "1"
             data:
               key: value
             """);
@@ -1147,6 +1158,46 @@ public class ChartOperationsTests : IDisposable
 
         Assert.NotEqual(0, result.ExitCode);
         Assert.True(releaseState.ConfigMapWriteWasCanceled);
+        Assert.DoesNotContain("skipped-after-timeout-hook", releaseState.AppliedConfigMapNames);
+    }
+
+    [Fact]
+    public async Task TestAsync_OrdersHooksByWeight()
+    {
+        var chartDir = await CreateMinimalChartAsync("ordered-test-hooks-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "test-hooks.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: higher-weight-hook
+              annotations:
+                helm.sh/hook: test
+                helm.sh/hook-weight: "5"
+            data:
+              key: value
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: lower-weight-hook
+              annotations:
+                helm.sh/hook: test
+                helm.sh/hook-weight: "-1"
+            data:
+              key: value
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "ordered-test-hooks",
+            Chart = chartDir
+        }));
+
+        var result = await client.TestAsync("ordered-test-hooks", "test-ns");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(["lower-weight-hook", "higher-weight-hook"], releaseState.AppliedConfigMapNames);
     }
 
     [Fact]
@@ -1868,6 +1919,8 @@ public class ChartOperationsTests : IDisposable
                 }
                 _releaseState.AppliedPaths.Add(path);
                 var configMap = await request.Content!.ReadAsStringAsync(cancellationToken);
+                _releaseState.AppliedConfigMapNames.Add(
+                    JsonDocument.Parse(configMap).RootElement.GetProperty("metadata").GetProperty("name").GetString()!);
                 return JsonResponse(request, request.Method == HttpMethod.Post ? HttpStatusCode.Created : HttpStatusCode.OK, configMap);
             }
 
@@ -1906,6 +1959,7 @@ public class ChartOperationsTests : IDisposable
         internal List<string> DeletedPaths { get; } = [];
         internal List<string> WaitedPaths { get; } = [];
         internal List<string> AppliedPaths { get; } = [];
+        internal List<string> AppliedConfigMapNames { get; } = [];
         public bool FailNextSecretCreate { get; set; }
         public bool CreateNextSecretThenReturnConflict { get; set; }
         internal CancellationTokenSource? CancelOnNextReleaseSecretRead { get; set; }

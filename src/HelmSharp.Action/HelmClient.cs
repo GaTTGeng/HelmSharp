@@ -1339,7 +1339,13 @@ public class HelmClient : IHelmClient
             return Fail($"release: not found: {releaseName}");
 
         var (_, hooks) = ResolveStoredManifest(latest, ns);
-        var testHooks = hooks.Where(h => h.Events.Contains(HelmHookEvent.Test)).ToList();
+        var testHooks = hooks
+            .Where(h => h.Events.Contains(HelmHookEvent.Test))
+            .OrderBy(h => h.Weight)
+            .ThenBy(h => h.Name, StringComparer.Ordinal)
+            .ThenBy(h => h.Kind, StringComparer.Ordinal)
+            .ThenBy(h => h.Path, StringComparer.Ordinal)
+            .ToList();
 
         if (testHooks.Count == 0)
             return Ok($"No test hooks found for release {releaseName}");
@@ -1367,6 +1373,12 @@ public class HelmClient : IHelmClient
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     throw;
+                }
+                catch (OperationCanceledException ex) when (timeoutSource?.IsCancellationRequested == true)
+                {
+                    failed++;
+                    output.AppendLine($"FAILED: {hook.Name}: {ex.Message}");
+                    break;
                 }
                 catch (Exception ex)
                 {
