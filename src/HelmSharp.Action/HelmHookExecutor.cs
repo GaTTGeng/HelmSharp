@@ -5,6 +5,7 @@ using HelmSharp.Chart;
 using HelmSharp.Kube;
 using k8s;
 using k8s.Autorest;
+using k8s.Models;
 
 namespace HelmSharp.Action;
 
@@ -201,7 +202,7 @@ internal sealed class HelmHookExecutor
                     hookApplied.Add($"  Hook resource applied: {resource}");
                 }
 
-                if (IsCompletionHook(hook))
+                if (hook.Kind == "Job")
                 {
                     var waiter = new KubernetesResourceWaiter(_client, _timeoutSeconds);
                     await foreach (var line in waiter.WaitForReadyAsync(
@@ -212,6 +213,11 @@ internal sealed class HelmHookExecutor
                     {
                         hookApplied.Add($"  {line}");
                     }
+                }
+                else if (hook.Kind == "Pod")
+                {
+                    await foreach (var line in WaitForPodCompletionAsync(hook, ns, cancellationToken))
+                        hookApplied.Add($"  {line}");
                 }
             }
             catch (Exception ex)
@@ -228,8 +234,8 @@ internal sealed class HelmHookExecutor
                 yield return $"  Hook failed: {hookError.Message}";
                 if (hook.DeletePolicies.Contains(HelmHookDeletePolicy.HookFailed))
                 {
-                    await DeleteHookResourceAsync(hook, ns, cancellationToken);
-                    yield return $"  Deleted failed hook: {hook.Kind}/{hook.Name}";
+                    if (await DeleteHookResourceDuringFinalizationAsync(hook, ns))
+                        yield return $"  Deleted failed hook: {hook.Kind}/{hook.Name}";
                 }
                 throw hookError;
             }
@@ -238,16 +244,46 @@ internal sealed class HelmHookExecutor
             hook.LastRunPhase = "Succeeded";
             if (hook.DeletePolicies.Contains(HelmHookDeletePolicy.HookSucceeded))
             {
-                await DeleteHookResourceAsync(hook, ns, cancellationToken);
-                yield return $"  Deleted hook (succeeded policy): {hook.Kind}/{hook.Name}";
+                if (await DeleteHookResourceDuringFinalizationAsync(hook, ns))
+                    yield return $"  Deleted hook (succeeded policy): {hook.Kind}/{hook.Name}";
             }
         }
     }
 
-    private static bool IsCompletionHook(HelmHook hook)
-        => hook.Kind is "Job" or "Pod";
+    private async IAsyncEnumerable<string> WaitForPodCompletionAsync(
+        HelmHook hook,
+        string ns,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(_timeoutSeconds);
+        yield return $"Waiting for Pod/{hook.Name} to complete...";
 
-    private async Task DeleteHookResourceAsync(HelmHook hook, string ns, CancellationToken ct)
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            V1Pod pod = await _client.CoreV1.ReadNamespacedPodAsync(hook.Name, ns, cancellationToken: cancellationToken);
+            switch (pod.Status?.Phase)
+            {
+                case "Succeeded":
+                    yield return $"Pod/{hook.Name} completed";
+                    yield break;
+                case "Failed":
+                    throw new InvalidOperationException($"Pod hook failed: {pod.Status.Reason ?? "unknown"}");
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+        }
+
+        throw new TimeoutException($"Timed out after {_timeoutSeconds}s waiting for Pod/{hook.Name} to complete.");
+    }
+
+    private async Task<bool> DeleteHookResourceDuringFinalizationAsync(HelmHook hook, string ns)
+    {
+        using var cleanupSource = new CancellationTokenSource(TimeSpan.FromSeconds(_timeoutSeconds));
+        return await DeleteHookResourceAsync(hook, ns, cleanupSource.Token);
+    }
+
+    private async Task<bool> DeleteHookResourceAsync(HelmHook hook, string ns, CancellationToken ct)
     {
         try
         {
@@ -256,10 +292,12 @@ internal sealed class HelmHookExecutor
             {
                 // drain the async enumerable
             }
+            return true;
         }
         catch
         {
             // Ignore errors during hook cleanup
+            return false;
         }
     }
 

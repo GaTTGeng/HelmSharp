@@ -412,6 +412,35 @@ public class HelmHookTests
             request.Path == "/apis/batch/v1/namespaces/test-ns/jobs/migration");
     }
 
+    [Fact]
+    public async Task ExecuteHooks_WaitsForPodTerminationInsteadOfReadiness()
+    {
+        var (_, hooks) = HelmHookExecutor.ExtractHooks("""
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: pod-hook
+              annotations:
+                helm.sh/hook: test
+            spec:
+              restartPolicy: Never
+              containers:
+              - name: test
+                image: example.invalid/test
+            """, "test-ns");
+        var handler = new HookKubernetesHandler();
+        using var client = CreateClient(handler);
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 1);
+
+        var lines = await CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
+            hooks, HelmHookEvent.Test, "test-ns", CancellationToken.None));
+
+        Assert.Contains(lines, line => line.Contains("Pod/pod-hook completed", StringComparison.Ordinal));
+        Assert.Contains(handler.Requests, request => request.Method == HttpMethod.Get &&
+            request.Path == "/api/v1/namespaces/test-ns/pods/pod-hook");
+        Assert.Equal("Succeeded", Assert.Single(hooks).LastRunPhase);
+    }
+
     private static Kubernetes CreateClient(DelegatingHandler handler)
         => new(new KubernetesClientConfiguration
         {
@@ -448,6 +477,18 @@ public class HelmHookTests
                       "metadata": { "name": "migration", "resourceVersion": "1" },
                       "spec": { "backoffLimit": 1, "completions": 1 },
                       "status": { "conditions": [ {{condition}} ] }
+                    }
+                    """));
+            }
+
+            if (request.Method == HttpMethod.Get && path.EndsWith("/pods/pod-hook", StringComparison.Ordinal))
+            {
+                return Task.FromResult(JsonResponse(request, HttpStatusCode.OK, """
+                    {
+                      "apiVersion": "v1",
+                      "kind": "Pod",
+                      "metadata": { "name": "pod-hook", "resourceVersion": "1" },
+                      "status": { "phase": "Succeeded" }
                     }
                     """));
             }
