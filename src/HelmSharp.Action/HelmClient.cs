@@ -648,11 +648,20 @@ public class HelmClient : IHelmClient
             // observable. Retrying the same create-only reservation settles that
             // ambiguity without replacing another operation's revision.
             await store.TryCreateAsync(rollbackRecord, CancellationToken.None, operationId);
-            await store.TryMarkPendingRollbackFailedAsync(
+            var markedFailed = await store.TryMarkPendingRollbackFailedAsync(
                 rollbackRecord,
                 operationId,
                 $"Rollback failed: {error.Message}",
                 CancellationToken.None);
+            if (markedFailed)
+            {
+                await store.SaveAsync(rollbackRecord with
+                {
+                    Status = "failed",
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                    Description = $"Rollback failed: {error.Message}"
+                }, CancellationToken.None);
+            }
         }
         catch
         {
@@ -764,8 +773,7 @@ public class HelmClient : IHelmClient
             }
             finally
             {
-                latest = WithHookExecution(latest, hooks);
-                await store.SaveAsync(latest, CancellationToken.None);
+                await PersistHookExecutionAsync(store, latest, hooks);
             }
         }
 
@@ -816,8 +824,7 @@ public class HelmClient : IHelmClient
             }
             finally
             {
-                latest = WithHookExecution(latest, hooks);
-                await store.SaveAsync(latest, CancellationToken.None);
+                await PersistHookExecutionAsync(store, latest, hooks);
             }
         }
 
@@ -1363,10 +1370,7 @@ public class HelmClient : IHelmClient
         }
         finally
         {
-            var current = (await store.HistoryAsync(releaseName, ns, CancellationToken.None))
-                .FirstOrDefault(record => record.Revision == latest.Revision);
-            if (current is not null)
-                await store.SaveAsync(WithHookExecution(current, hooks), CancellationToken.None);
+            await PersistHookExecutionAsync(store, latest, hooks);
         }
 
         output.AppendLine();
@@ -2525,6 +2529,20 @@ public class HelmClient : IHelmClient
         HelmReleaseRecord releaseRecord,
         IEnumerable<HelmHook> hooks)
         => releaseRecord with { Hooks = hooks.Select(ToReleaseHook).ToList() };
+
+    private static async Task PersistHookExecutionAsync(
+        HelmReleaseStore store,
+        HelmReleaseRecord originalRecord,
+        IEnumerable<HelmHook> hooks)
+    {
+        var current = (await store.HistoryAsync(
+                originalRecord.Name,
+                originalRecord.Namespace,
+                CancellationToken.None))
+            .FirstOrDefault(record => record.Revision == originalRecord.Revision);
+        if (current is not null)
+            await store.SaveAsync(WithHookExecution(current, hooks), CancellationToken.None);
+    }
 
     private static string ToReleaseHookEvent(HelmHookEvent value)
         => value switch
