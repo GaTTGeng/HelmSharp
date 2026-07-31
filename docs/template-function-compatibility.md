@@ -9,12 +9,12 @@ The inventory was audited against:
 - Helm [`v3.21.3` `pkg/engine/funcs.go`](https://github.com/helm/helm/blob/v3.21.3/pkg/engine/funcs.go)
 - Sprig [`v3.3.0` `functions.go`](https://github.com/Masterminds/sprig/blob/v3.3.0/functions.go), the version declared by [Helm's `go.mod`](https://github.com/helm/helm/blob/v3.21.3/go.mod)
 
-Helm begins with `sprig.TxtFuncMap()`, deletes `env` and `expandenv`, then adds its own helpers. The matrix therefore contains 217 Helm-visible names: 206 remaining Sprig names and 11 Helm-only names. The renderer's dispatch surface and focused test coverage live in `HelmTemplateRenderer` and `TemplateFunctionTests`; Helm CLI tests are optional and skip clearly when the CLI is unavailable. Direct per-function Helm CLI parity coverage for the existing supported surface is tracked by #214.
+Helm begins with `sprig.TxtFuncMap()`, deletes `env` and `expandenv`, then adds its own helpers. Go's `text/template` also supplies built-ins independently of Helm's `FuncMap`. This inventory records 237 names: 217 Helm `FuncMap` names (206 remaining Sprig names and 11 Helm-only names), the two intentionally excluded Sprig names, and 18 additional Go built-ins (`slice` is already a Sprig name). The renderer's dispatch surface and focused test coverage live in `HelmTemplateRenderer` and `TemplateFunctionTests`; Helm CLI tests are optional and skip clearly when the CLI is unavailable. Direct per-function Helm CLI parity coverage for the existing supported surface is tracked by #214.
 
 | Status | Count | Meaning |
 | --- | ---: | --- |
-| Supported | 150 | The managed renderer dispatches the function. Focused and golden tests protect the current surface; direct per-function Helm CLI coverage is tracked by #214. |
-| Unsupported | 67 | The renderer produces `Helm template function '<name>' is not supported by the managed renderer.`; `Render()` adds the template path. |
+| Supported | 164 | The managed renderer dispatches the function. Focused and golden tests protect the current surface; direct per-function Helm CLI coverage is tracked by #214. |
+| Unsupported | 71 | The renderer produces `Helm template function '<name>' is not supported by the managed renderer.`; `Render()` adds the template path. |
 | Intentionally excluded | 2 | Helm removes this Sprig helper from its function map. HelmSharp rejects it with the same path-aware diagnostic. |
 
 ## Sprig v3.3.0
@@ -30,6 +30,18 @@ Helm begins with `sprig.TxtFuncMap()`, deletes `env` and `expandenv`, then adds 
 ### Intentionally excluded by Helm (2)
 
 `env`, `expandenv`. Helm removes both from `sprig.TxtFuncMap()`; rejecting them prevents chart rendering from depending on the host process environment. The `environment-function-exclusion` fixture verifies Helm CLI rejection and the managed renderer's actionable diagnostic.
+
+## Go `text/template` built-ins
+
+The following names are available independently of Helm's `FuncMap`. Native template actions such as `if`, `range`, `template`, and `with` are syntax rather than functions and are outside this list.
+
+### Supported (14)
+
+`and`, `eq`, `ge`, `gt`, `index`, `le`, `len`, `lt`, `ne`, `not`, `or`, `print`, `printf`, `println`.
+
+### Unsupported (4)
+
+`call`, `html`, `js`, `urlquery`.
 
 ## Helm-only additions
 
