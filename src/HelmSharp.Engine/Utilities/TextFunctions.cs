@@ -41,20 +41,6 @@ internal static class TextFunctions
         return input.Length <= maxWidth ? input : input[..maxWidth];
     }
 
-    public static string Abbrevinitial(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
-    {
-        var maxWidth = (int)TypeConverters.ToLong(eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));
-        var input = TypeConverters.ToTemplateString(pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(2), context));
-        var parts = input.Split('.', StringSplitOptions.RemoveEmptyEntries);
-        var sb = new StringBuilder();
-        foreach (var part in parts)
-        {
-            if (sb.Length >= maxWidth) break;
-            sb.Append(part.Length > 0 ? part[0] : "");
-        }
-        return sb.ToString()[..Math.Min(sb.Length, maxWidth)];
-    }
-
     public static string TrimAll(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
         var cutset = TypeConverters.ToTemplateString(eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));

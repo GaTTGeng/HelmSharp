@@ -1066,7 +1066,6 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "initials" => StringFunctions.Initials(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "abbrev" => TextFunctions.Abbrev(tokens, context, pipelineValue, this),
             "trunc" => CoreFunctions.Trunc(tokens, context, pipelineValue, this),
-            "abbrevinitial" => TextFunctions.Abbrevinitial(tokens, context, pipelineValue, this),
             "untitle" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)).ToLowerInvariant(),
             "title" => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "upper" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)).ToUpperInvariant(),
@@ -1287,9 +1286,6 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
 
             // Len
             "len" => TypeFunctions.GetLength(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-
-            // Auto
-            "auto" => "auto",
 
             _ => pipelineValue is not null && tokens.Count == 1
                 ? ApplySimpleFunction(head, pipelineValue, context)

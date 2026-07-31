@@ -39,6 +39,22 @@ public class TemplateFunctionTests
         Assert.Contains("Helm template function 'env' is not supported by the managed renderer.", exception.Message);
     }
 
+    [Theory]
+    [InlineData("abbrevinitial", "10 \"example.text\"")]
+    [InlineData("auto", "")]
+    public void Render_FunctionsWithoutHelmEquivalent_ReportPathAwareDiagnostic(string functionName, string arguments)
+    {
+        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        chart.Templates["templates/test.yaml"] = $"value: {{{{ {functionName} {arguments} }}}}";
+
+        var renderer = new HelmTemplateRenderer(chart, "release", "default", new Dictionary<string, object?>());
+
+        var exception = Assert.Throws<InvalidOperationException>(() => renderer.Render());
+
+        Assert.Contains("test.yaml", exception.Message);
+        Assert.Contains($"Helm template function '{functionName}' is not supported by the managed renderer.", exception.Message);
+    }
+
     [Fact]
     public void IncludeResult_IsTrimmed()
     {

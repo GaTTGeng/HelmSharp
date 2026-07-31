@@ -9,11 +9,11 @@
 - Helm [`v3.21.3` 的 `pkg/engine/funcs.go`](https://github.com/helm/helm/blob/v3.21.3/pkg/engine/funcs.go)
 - Sprig [`v3.3.0` 的 `functions.go`](https://github.com/Masterminds/sprig/blob/v3.3.0/functions.go)；该版本由 [Helm 的 `go.mod`](https://github.com/helm/helm/blob/v3.21.3/go.mod) 声明
 
-Helm 以 `sprig.TxtFuncMap()` 为起点，删除 `env` 和 `expandenv`，再加入自己的 helper。Go 的 `text/template` 还会独立于 Helm `FuncMap` 提供内建函数。此清单共记录 237 个名称：217 个 Helm `FuncMap` 名称（206 个保留 Sprig 名称和 11 个 Helm 专用名称）、两个有意排除的 Sprig 名称，以及 18 个额外的 Go 内建函数（`slice` 已是 Sprig 名称）。渲染器调度和聚焦测试位于 `HelmTemplateRenderer` 与 `TemplateFunctionTests`；Helm CLI 测试在 CLI 不可用时会明确跳过。现有已支持函数的逐项 Helm CLI parity 覆盖由 #214 跟踪。
+Helm 以 `sprig.TxtFuncMap()` 为起点，删除 `env` 和 `expandenv`，再加入自己的 helper。Go 的 `text/template` 还会独立于 Helm `FuncMap` 提供内建函数。上游清单共记录 237 个名称：217 个 Helm `FuncMap` 名称（206 个保留 Sprig 名称和 11 个 Helm 专用名称）、两个有意排除的 Sprig 名称，以及 18 个额外的 Go 内建函数（`slice` 已是 Sprig 名称）。HelmSharp 还保留一个有文档记录的渲染器专有扩展，因此完整托管渲染器清单包含 238 个名称。渲染器调度和聚焦测试位于 `HelmTemplateRenderer` 与 `TemplateFunctionTests`；Helm CLI 测试在 CLI 不可用时会明确跳过。现有已支持函数的逐项 Helm CLI parity 覆盖由 #214 跟踪。
 
 | 状态 | 数量 | 含义 |
 | --- | ---: | --- |
-| 已支持 | 164 | 托管渲染器会调度该函数。聚焦测试和 golden 测试保护当前表面；逐项 Helm CLI 覆盖由 #214 跟踪。 |
+| 已支持 | 165 | 托管渲染器会调度该函数。聚焦测试和 golden 测试保护当前表面；逐项 Helm CLI 覆盖由 #214 跟踪。 |
 | 未支持 | 71 | 渲染器产生 `Helm template function '<name>' is not supported by the managed renderer.`；`Render()` 会附加模板路径。 |
 | 有意排除 | 2 | Helm 从 Sprig 函数映射中删除该 helper；HelmSharp 同样拒绝并提供带路径的诊断。 |
 
@@ -52,6 +52,12 @@ Helm 以 `sprig.TxtFuncMap()` 为起点，删除 `env` 和 `expandenv`，再加�
 ### 未支持（5）
 
 `fromJsonArray`, `fromToml`, `fromYamlArray`, `toToml`, `toYamlPretty`。
+
+## HelmSharp 渲染器专有扩展
+
+### 已支持（1）
+
+`mustSortAlpha` 不属于 Helm v3.21.3 或 Sprig v3.3.0；HelmSharp 将其保留为托管模板表面的有文档记录扩展。它计入完整渲染器清单，但不计入上游 Helm 兼容性声明。
 
 ## 后续实现分组
 

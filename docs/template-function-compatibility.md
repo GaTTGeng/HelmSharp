@@ -9,11 +9,11 @@ The inventory was audited against:
 - Helm [`v3.21.3` `pkg/engine/funcs.go`](https://github.com/helm/helm/blob/v3.21.3/pkg/engine/funcs.go)
 - Sprig [`v3.3.0` `functions.go`](https://github.com/Masterminds/sprig/blob/v3.3.0/functions.go), the version declared by [Helm's `go.mod`](https://github.com/helm/helm/blob/v3.21.3/go.mod)
 
-Helm begins with `sprig.TxtFuncMap()`, deletes `env` and `expandenv`, then adds its own helpers. Go's `text/template` also supplies built-ins independently of Helm's `FuncMap`. This inventory records 237 names: 217 Helm `FuncMap` names (206 remaining Sprig names and 11 Helm-only names), the two intentionally excluded Sprig names, and 18 additional Go built-ins (`slice` is already a Sprig name). The renderer's dispatch surface and focused test coverage live in `HelmTemplateRenderer` and `TemplateFunctionTests`; Helm CLI tests are optional and skip clearly when the CLI is unavailable. Direct per-function Helm CLI parity coverage for the existing supported surface is tracked by #214.
+Helm begins with `sprig.TxtFuncMap()`, deletes `env` and `expandenv`, then adds its own helpers. Go's `text/template` also supplies built-ins independently of Helm's `FuncMap`. The upstream inventory records 237 names: 217 Helm `FuncMap` names (206 remaining Sprig names and 11 Helm-only names), the two intentionally excluded Sprig names, and 18 additional Go built-ins (`slice` is already a Sprig name). HelmSharp additionally retains one documented renderer-only extension, so the complete managed-renderer inventory has 238 names. The renderer's dispatch surface and focused test coverage live in `HelmTemplateRenderer` and `TemplateFunctionTests`; Helm CLI tests are optional and skip clearly when the CLI is unavailable. Direct per-function Helm CLI parity coverage for the existing supported surface is tracked by #214.
 
 | Status | Count | Meaning |
 | --- | ---: | --- |
-| Supported | 164 | The managed renderer dispatches the function. Focused and golden tests protect the current surface; direct per-function Helm CLI coverage is tracked by #214. |
+| Supported | 165 | The managed renderer dispatches the function. Focused and golden tests protect the current surface; direct per-function Helm CLI coverage is tracked by #214. |
 | Unsupported | 71 | The renderer produces `Helm template function '<name>' is not supported by the managed renderer.`; `Render()` adds the template path. |
 | Intentionally excluded | 2 | Helm removes this Sprig helper from its function map. HelmSharp rejects it with the same path-aware diagnostic. |
 
@@ -52,6 +52,12 @@ The following names are available independently of Helm's `FuncMap`. Native temp
 ### Unsupported (5)
 
 `fromJsonArray`, `fromToml`, `fromYamlArray`, `toToml`, `toYamlPretty`.
+
+## HelmSharp renderer-only extension
+
+### Supported (1)
+
+`mustSortAlpha`. This is not part of Helm v3.21.3 or Sprig v3.3.0; HelmSharp retains it as a documented extension of its managed template surface. It is included in the complete renderer inventory and excluded from upstream Helm compatibility claims.
 
 ## Follow-up implementation groups
 
