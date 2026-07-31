@@ -150,6 +150,8 @@ await foreach (var line in client.UpgradeInstallStreamAsync(new HelmUpgradeInsta
 
 HelmSharp 使用聚焦测试用 Chart 和选定公开 Chart，将托管渲染结果与 `helm template` 比对。这些测试可防止已覆盖行为回归，但不代表所有 Helm Chart 或所有 Sprig 函数都已认证兼容。
 
+维护中的[模板函数兼容性矩阵](docs/zh/template-function-compatibility.md)记录了精确的 Helm/Sprig 基线以及每个暴露函数的状态。
+
 支持范围、已知边界以及生产 Chart 的验证建议，请见 [Helm 兼容性](docs/helm-compatibility.md)。
 
 ## 当前边界

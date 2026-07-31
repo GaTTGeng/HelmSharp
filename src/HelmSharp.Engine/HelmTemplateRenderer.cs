@@ -1066,7 +1066,6 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "initials" => StringFunctions.Initials(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "abbrev" => TextFunctions.Abbrev(tokens, context, pipelineValue, this),
             "trunc" => CoreFunctions.Trunc(tokens, context, pipelineValue, this),
-            "abbrevinitial" => TextFunctions.Abbrevinitial(tokens, context, pipelineValue, this),
             "untitle" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)).ToLowerInvariant(),
             "title" => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "upper" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)).ToUpperInvariant(),
@@ -1164,10 +1163,6 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "b64dec" => Encoding.UTF8.GetString(Convert.FromBase64String(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)))),
             "b32enc" => EncodingHelpers.Base32Encode(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "b32dec" => EncodingHelpers.Base32Decode(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
-
-            // Environment
-            "env" => Environment.GetEnvironmentVariable(TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context))) ?? string.Empty,
-            "expandenv" => EncodingHelpers.ExpandEnv(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
 
             // Path functions
             "dir" => Path.GetDirectoryName(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))) ?? string.Empty,
@@ -1291,9 +1286,6 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
 
             // Len
             "len" => TypeFunctions.GetLength(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
-
-            // Auto
-            "auto" => "auto",
 
             _ => pipelineValue is not null && tokens.Count == 1
                 ? ApplySimpleFunction(head, pipelineValue, context)
