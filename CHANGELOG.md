@@ -8,6 +8,7 @@ This project follows semantic versioning once stable releases begin.
 
 ### Fixed
 
+- Exclude Sprig's `env` and `expandenv` helpers from managed rendering, matching Helm's function map and retaining path-aware diagnostics (#203).
 - Preserve rollback release history when the caller's operation token is canceled during final persistence (#207).
 
 ### Added

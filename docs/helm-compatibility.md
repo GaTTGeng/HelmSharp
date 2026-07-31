@@ -8,6 +8,8 @@ The Helm CLI is used as a test oracle. It is not required at runtime by consumer
 
 Focused fixture charts and selected public charts are compared with `helm template` in CI. They exercise helpers, nested values, `.Files`, capabilities, and formatting patterns that small examples miss. This is regression coverage for those behaviors, not a universal compatibility certification. Validate your own chart when it relies on an uncommon Helm behavior.
 
+For the exact template-function surface, use the maintained [template-function compatibility matrix](template-function-compatibility.md). It records the upstream versions, every Helm-visible function, and the explicit disposition for gaps.
+
 ## Compatibility contract
 
 A behavior is treated as supported when it:

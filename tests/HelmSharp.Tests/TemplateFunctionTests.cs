@@ -13,6 +13,32 @@ public class TemplateFunctionTests
         _output = output;
     }
 
+    [HelmCliFact]
+    public async Task Render_EnvironmentFunction_ReportsHelmCompatiblePathAwareDiagnostic()
+    {
+        var chartPath = TestFixtures.ChartPath("environment-function-exclusion");
+        var helmResult = await HelmCliRunner.TemplateAsync(
+            chartPath,
+            "golden-release",
+            "golden-namespace",
+            CancellationToken.None);
+
+        Assert.NotEqual(0, helmResult.ExitCode);
+        Assert.Contains("env", helmResult.Stderr, StringComparison.OrdinalIgnoreCase);
+
+        var chart = await HelmChartLoader.LoadAsync(chartPath, CancellationToken.None);
+        var renderer = new HelmTemplateRenderer(
+            chart,
+            "golden-release",
+            "golden-namespace",
+            new Dictionary<string, object?>());
+
+        var exception = Assert.Throws<InvalidOperationException>(() => renderer.Render());
+
+        Assert.Contains("env.yaml", exception.Message);
+        Assert.Contains("Helm template function 'env' is not supported by the managed renderer.", exception.Message);
+    }
+
     [Fact]
     public void IncludeResult_IsTrimmed()
     {

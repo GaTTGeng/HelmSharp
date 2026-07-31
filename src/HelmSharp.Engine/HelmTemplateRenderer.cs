@@ -1165,10 +1165,6 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "b32enc" => EncodingHelpers.Base32Encode(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "b32dec" => EncodingHelpers.Base32Decode(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
 
-            // Environment
-            "env" => Environment.GetEnvironmentVariable(TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context))) ?? string.Empty,
-            "expandenv" => EncodingHelpers.ExpandEnv(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
-
             // Path functions
             "dir" => Path.GetDirectoryName(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))) ?? string.Empty,
             "base" => Path.GetFileName(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),

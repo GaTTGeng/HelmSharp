@@ -150,6 +150,8 @@ See the [chart packaging and repository workflow guide](docs/guide/chart-distrib
 
 HelmSharp uses focused fixture charts and selected public charts to compare managed rendering with `helm template`. These tests prevent regressions in the behaviors they exercise; they do not certify every Helm chart or every Sprig function.
 
+The maintained [template-function compatibility matrix](docs/template-function-compatibility.md) records the exact Helm/Sprig baseline and the status of every exposed function.
+
 For supported behavior, known boundaries, and guidance for validating a production chart, see [Helm Compatibility](docs/helm-compatibility.md).
 
 ## Known Scope

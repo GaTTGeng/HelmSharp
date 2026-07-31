@@ -8,6 +8,8 @@ Helm CLI 只作为测试基准使用，消费者运行时不需要安装 Helm。
 
 CI 会将聚焦测试用 Chart 和选定公开 Chart 与 `helm template` 进行比较。它们覆盖辅助模板、嵌套 values、`.Files`、capabilities 和格式细节，这些情况很难由手写小 Chart 覆盖。这是对已覆盖行为的回归测试，不是通用兼容性认证；若 Chart 依赖少见 Helm 行为，仍应单独验证。
 
+模板函数的精确范围请参阅维护中的[模板函数兼容性矩阵](template-function-compatibility.md)。其中记录上游版本、每个 Helm 可见函数和缺口的明确处置。
+
 ## 兼容性契约
 
 一个行为会被视为已支持，需要满足：
