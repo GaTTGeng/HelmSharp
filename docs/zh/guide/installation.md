@@ -1,58 +1,48 @@
-# 安装
+# 安装 HelmSharp
 
-## 你在解决什么问题
+HelmSharp 支持 `net8.0`、`net9.0` 和 `net10.0`。同一个应用中的 HelmSharp 包应保持同一版本；下面以当前发布版 `1.3.1` 为例。
 
-这页帮助你选择最小的 HelmSharp 包组合。先从你的工作流出发：只做渲染预览、使用类似 Helm 命令的高层操作、处理仓库，还是执行 Kubernetes 发布操作。
+## 按任务选择最小包
 
-HelmSharp 运行时不需要 `helm` 可执行文件。只有发布、提交、删除、等待等 Kubernetes 操作需要可访问的集群和 kubeconfig。
+| 你需要… | 安装 | 它负责什么 |
+| --- | --- | --- |
+| 加载 Chart、合并 values、渲染 YAML | `HelmSharp.Chart` 与 `HelmSharp.Engine` | Chart 文件、values 和模板渲染。 |
+| 执行 template、安装、升级、回滚或历史查询 | `HelmSharp.Action` | 高层客户端及其依赖包。 |
+| 提交已经渲染好的 YAML | `HelmSharp.Kube` | Kubernetes 提交、删除、资源标识和就绪等待。 |
+| 搜索、拉取或生成传统 HTTP Chart 仓库索引 | `HelmSharp.Repo` | 仓库配置、缓存、搜索和拉取。 |
 
-## 安装哪些包
-
-大多数应用从高层客户端开始：
+多数拥有部署职责的服务从 `HelmSharp.Action` 开始：
 
 ```powershell
 dotnet add package HelmSharp.Action --version 1.3.1
 ```
 
-只做渲染时安装低层包：
+预览工具则应只依赖渲染所需的两个包：
 
 ```powershell
 dotnet add package HelmSharp.Chart --version 1.3.1
 dotnet add package HelmSharp.Engine --version 1.3.1
 ```
 
-## 完整最小代码
+`HelmSharp.Action` 已引用渲染、Kubernetes、release、仓库、存储、registry 和 post-renderer 包。除非代码确实需要低层 API，否则无需再逐一安装它们。
 
-```csharp
-using HelmSharp.Action;
+## 运行时需要什么
 
-var client = new HelmClient(new StaticHelmOptionsProvider());
+渲染只需要可读取的 Chart 目录或 `.tgz` 归档。它不会调用、打包或要求安装 `helm` 可执行文件。
 
-var result = await client.TemplateAsync(new HelmTemplateRequest
-{
-    ReleaseName = "demo",
-    Namespace = "default",
-    Chart = "/charts/my-chart",
-    SetValues = new Dictionary<string, string>
-    {
-        ["image.tag"] = "1.1.0",
-        ["replicaCount"] = "2"
-    }
-});
+会变更集群的操作则和任何 Kubernetes .NET 客户端一样，需要可访问的 API Server、凭据，以及对目标资源和 release Secret 的 RBAC 权限。把命名空间、field manager、Kubernetes 版本和超时等默认值收敛到应用自己的 `IHelmOptionsProvider`；不要让一次 Web 请求任意指定本地 kubeconfig 路径。
 
-Console.WriteLine(result.StandardOutput);
-```
+## 验证安装
 
-## 关键 API 为什么这样用
+按[渲染 Chart](first-render.md)运行一个从本地 Chart 生成清单的程序。如果应用还要部署，请继续阅读[安装和升级 Release](release-workflows.md)，为操作加上试运行与结果处理。
 
-`HelmSharp.Action` 适合类 Helm 命令工作流。`HelmSharp.Chart` 和 `HelmSharp.Engine` 更适合只渲染、不接触集群的预览工具。
+## 通常只作为扩展点的包
 
-## 生产环境注意事项
+| 包 | 仅在以下场景直接使用 |
+| --- | --- |
+| `HelmSharp.Release` | 需要脱离 `HelmClient` 单独使用 release 模型或存储。 |
+| `HelmSharp.Storage` | 要实现自定义 `IHelmReleaseStore`。 |
+| `HelmSharp.PostRenderer` | 要实现确定性的清单转换。 |
+| `HelmSharp.Registry` | 要接入试验性的 OCI registry 客户端。 |
 
-- 本地构建全部目标框架需要 .NET 8、.NET 9 和 .NET 10 SDK。
-- 只有需要发布状态、Kubernetes 提交/删除/等待、仓库操作或命令式结果时才用 `HelmSharp.Action`。
-- 会修改集群的示例在审批前保持 `DryRun = true`。
-
-## 下一步
-
-继续阅读 [第一次渲染](first-render.md)，再查看 [包职责](../packages/action.md)。
+这些契约和当前限制请看对应的[包参考](../packages/action.md)。

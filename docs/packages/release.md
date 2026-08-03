@@ -1,32 +1,13 @@
 # HelmSharp.Release
 
-## Package responsibility
+`HelmSharp.Release` contains the release model and Kubernetes Secret-backed storage used by lifecycle operations. Application code normally reaches it through `HelmSharp.Action`.
 
-`HelmSharp.Release` stores Helm-style release records in Kubernetes Secrets.
-
-## When to install
-
-Most applications get this package through `HelmSharp.Action`. Install it directly only when building custom release storage workflows.
+Install it directly only when implementing or inspecting release persistence outside `HelmClient`:
 
 ```powershell
 dotnet add package HelmSharp.Release --version 1.3.1
 ```
 
-## Dependencies
+Stored revisions represent lifecycle outcomes such as deployed, superseded, failed, and retained-uninstalled. The store is a record of what was applied; it is not a request to re-render the current chart.
 
-This package depends on the Kubernetes .NET client and references chart and Kubernetes helper packages.
-
-## Main types
-
-| Type | Use it for |
-| --- | --- |
-| `HelmReleaseStore` | Save, list, load, and update release records. |
-| `HelmReleaseRecord` | Represent a release revision, manifest, values, and status. |
-
-## Common combinations
-
-`HelmClient` uses `HelmReleaseStore` for install, upgrade, uninstall, status, history, and get operations.
-
-## Current boundaries
-
-Release storage follows Helm-style Secret records, but this package is not a general-purpose audit database.
+Use the package guide for `HelmSharp.Action` before coupling application code to release storage. The [generated Release API](../api/generated/release.md) is the source of member-level detail.

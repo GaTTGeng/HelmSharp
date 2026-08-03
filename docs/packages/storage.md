@@ -1,31 +1,11 @@
 # HelmSharp.Storage
 
-## Package responsibility
-
-`HelmSharp.Storage` contains release storage extension contracts.
-
-## When to install
-
-Most applications use `HelmSharp.Action` instead. Install directly only when implementing custom storage integration.
+`HelmSharp.Storage` defines the `IHelmReleaseStore` extension contract. It is for products that need to replace or wrap release persistence; ordinary applications should use `HelmSharp.Action` and its built-in release store.
 
 ```powershell
 dotnet add package HelmSharp.Storage --version 1.3.1
 ```
 
-## Dependencies
+When implementing the interface, preserve the distinction between revisions and the chart used to produce them. A store must support inspection of past lifecycle state without quietly re-rendering a newer chart.
 
-This package references release and Kubernetes helper packages.
-
-## Main types
-
-| Type | Use it for |
-| --- | --- |
-| `IHelmReleaseStore` | Extension point for release record storage. |
-
-## Common combinations
-
-Use this package when a product needs to abstract release storage behind its own implementation.
-
-## Current boundaries
-
-The built-in release store lives in `HelmSharp.Release`; this package exists for the storage contract.
+See the [generated Storage API](../api/generated/storage.md) and [release workflow guide](../guide/release-workflows.md).

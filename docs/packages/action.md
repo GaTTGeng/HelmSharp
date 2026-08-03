@@ -1,57 +1,31 @@
 # HelmSharp.Action
 
-## Package responsibility
-
-`HelmSharp.Action` is the high-level facade for applications that want Helm-like operations from managed code: template, install/upgrade, uninstall, rollback, status, history, get, lint, package, repository, and registry-oriented commands.
-
-## When to install
-
-Install this package when your product thinks in release workflows or command-style results:
+`HelmSharp.Action` is the application-facing package for Helm-style operations. Install it for an API, worker, operator, or CLI that owns more than manifest text.
 
 ```powershell
 dotnet add package HelmSharp.Action --version 1.3.1
 ```
 
-::: warning Version availability
-1.3.1 is the latest published package. The M2 request types and distribution workflows, plus the M3 install, upgrade, rollback, uninstall, inspection, and hook APIs below, are available from this install command.
-:::
+It brings in the chart, renderer, Kubernetes, release, repository, registry, storage, and post-renderer layers. Use `HelmSharp.Chart` plus `HelmSharp.Engine` instead when an application only renders YAML.
 
-## Dependencies
+## The entry point
 
-This package references the rendering, chart, Kubernetes, release, repository, registry, storage, and post-renderer packages.
+`HelmClient` implements `IHelmClient` and accepts an `IHelmOptionsProvider`. Keep product defaults—namespace, field manager, timeout, and target capabilities—in that provider. Methods return `CommandResult`, so callers can handle output and errors without parsing exceptions into a command-line shape.
 
-## Main types
+| Operation | Request or method | Read first |
+| --- | --- | --- |
+| Render a chart | `TemplateAsync(HelmTemplateRequest)` | [Render a chart](../guide/first-render.md) |
+| Install or upgrade | `UpgradeInstallAsync(HelmUpgradeInstallRequest)` | [Release workflow](../guide/release-workflows.md) |
+| Roll back or uninstall | `RollbackAsync`, `UninstallAsync` | [Release workflow](../guide/release-workflows.md) |
+| Inspect a stored release | `StatusAsync`, `HistoryAsync`, `GetManifestAsync`, `GetValuesAsync` | [Release workflow](../guide/release-workflows.md) |
+| Package, index, pull, or resolve dependencies | Request-object methods such as `PackageAsync` and `DependencyBuildAsync` | [Chart delivery](../guide/chart-distribution.md) |
 
-| Type | Use it for |
-| --- | --- |
-| `HelmClient` / `IHelmClient` | Command-like SDK entry point. |
-| `HelmTemplateRequest` | Render a chart without applying resources. |
-| `HelmUpgradeInstallRequest` | Install or upgrade, including dry-run. |
-| `HelmUninstallRequest` | Remove release resources. |
-| `HelmPackageRequest` | Package a chart with metadata and dependency options. |
-| `HelmDependencyUpdateRequest` | Resolve dependencies and update `Chart.lock`. |
-| `HelmDependencyBuildRequest` | Restore exact versions from `Chart.lock`. |
-| `HelmExecutionOptions` | Centralized environment defaults. |
-| `IHelmOptionsProvider` | Provide options from config, DI, or tenant context. |
-| `CommandResult` | Capture stdout, stderr, and exit code. |
+Inspection reads stored revisions; it does not re-render today's version of a chart. Revision `0` selects the latest stored record, including a retained uninstall. `ListReleasesAsync` lists deployed revisions and supports comma-separated exact `key=value` label selectors.
 
-## Common combinations
+## Important lifecycle constraints
 
-- `TemplateAsync` for preview pages.
-- `UpgradeInstallAsync` with `DryRun = true` for review workflows.
-- `UpgradeInstallAsync` with `DryRun = false` only after approval.
-- `StatusAsync`, `HistoryAsync`, `GetManifestAsync`, and `GetValuesAsync` for release inspection.
-- `PackageAsync`, `PullAsync`, and `RepoIndexAsync` for chart distribution.
-- `DependencyListAsync`, `DependencyUpdateAsync`, and `DependencyBuildAsync` for dependency lifecycle management.
+Use dry run for review. Non-dry-run lifecycle requests that reach release persistence leave a Secret-backed revision for later inspection. Successful upgrades and rollbacks supersede the prior deployed revision; failures retain a failed revision. Unsupported options fail before cluster mutation rather than being silently ignored.
 
-See [Chart Packaging and Repository Workflows](../guide/chart-distribution.md) for complete request examples, lock-file behavior, repository isolation, and compatibility boundaries.
+Traditional HTTP repositories and local dependencies are supported. Full OCI authentication, provenance verification, and every Helm CLI switch are not `1.3.1` guarantees; check [Compatibility](../helm-compatibility.md) for the current boundary.
 
-## Release inspection semantics
-
-Inspection reads the stored release revision and never re-renders a chart. `revision = 0` selects the latest stored revision, including a retained uninstall; a positive revision selects that exact historical record. `StatusRevisionAsync` and `GetValuesRevisionAsync` provide revision-specific inspection without changing existing method signatures, while manifest, notes, hooks, and combined inspection already accept `revision`. Missing releases and revisions return command failures with distinct diagnostics.
-
-`ListReleasesAsync` returns the deployed revision for each release, ordered by namespace then name. Its supported selector subset is comma-separated exact `key=value` label matches; `limit` is applied after filtering and ordering.
-
-## Current boundaries
-
-HelmSharp does not shell out to `helm`. M2 covers traditional HTTP repositories and local file dependencies; provenance and full OCI authentication/pull/push parity remain later compatibility work.
+For all public members, use the [generated Action API](../api/generated/action.md).

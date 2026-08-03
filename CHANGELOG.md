@@ -6,6 +6,10 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+### Changed
+
+- Rebuilt the VitePress documentation around concrete developer tasks, copyable workflows, package boundaries, troubleshooting, and independently written English and Simplified Chinese guidance.
+
 ## [1.3.1] - 2026-08-03
 
 ### Security

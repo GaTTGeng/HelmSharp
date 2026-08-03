@@ -1,31 +1,11 @@
 # HelmSharp.PostRenderer
 
-## 包职责
-
-`HelmSharp.PostRenderer` 定义后处理器扩展契约，用于在模板渲染后、提交前转换清单。
-
-## 何时安装
-
-构建自定义后处理集成时直接安装：
+`HelmSharp.PostRenderer` 提供 `IPostRenderer`：在模板执行完成、进入下一工作流步骤前转换渲染后清单文本的契约。
 
 ```powershell
 dotnet add package HelmSharp.PostRenderer --version 1.3.1
 ```
 
-## 依赖关系
+它适合产品拥有的转换，如策略标签、注解或确定性规范化。实现应无副作用，并用有代表性的 YAML 测试。Chart 特有的行为应放进 Chart 模板，避免把 post-renderer 变成第二种隐藏模板语言。
 
-该包很小，不依赖 Kubernetes。
-
-## 主要类型
-
-| 类型 | 用途 |
-| --- | --- |
-| `IPostRenderer` | 在下一步工作流之前转换渲染后的 YAML。 |
-
-## 常见组合
-
-用于策略注入、标签、注解或清单规范化。
-
-## 当前边界
-
-后处理器是扩展点。转换逻辑应保持确定性，并用具代表性的 Chart 输出测试。
+接口签名请看[生成的 Post-renderer API](../api/generated/postrenderer.md)。

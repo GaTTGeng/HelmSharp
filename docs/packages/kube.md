@@ -1,33 +1,17 @@
 # HelmSharp.Kube
 
-## Package responsibility
-
-`HelmSharp.Kube` applies, deletes, identifies, and waits for Kubernetes resources from rendered YAML.
-
-## When to install
-
-Install this package when you already have manifests and want lower-level Kubernetes operations:
+`HelmSharp.Kube` is the lower-level Kubernetes layer. Install it when YAML already exists and your code needs managed apply, delete, resource identity, or selective readiness waiting.
 
 ```powershell
 dotnet add package HelmSharp.Kube --version 1.3.1
 ```
 
-## Dependencies
-
-This package depends on the Kubernetes .NET client and references `HelmSharp.Chart`.
-
-## Main types
-
-| Type | Use it for |
+| Type | Use |
 | --- | --- |
-| `KubernetesManifestApplier` | Apply and delete multi-document YAML. |
-| `KubernetesResourceWaiter` | Wait for common resources to become ready. |
-| `ManifestIdentity` | Parse API version, kind, name, and namespace from YAML. |
+| `KubernetesManifestApplier` | Split multi-document YAML and apply or delete every resource. |
+| `KubernetesResourceWaiter` | Wait for supported workloads to become ready. |
+| `ManifestIdentity` | Parse API version, kind, name, and namespace from a YAML document. |
 
-## Common combinations
+The package uses the Kubernetes .NET client. It does not merge chart values, execute template hooks, or persist Helm revisions. Use it directly for a controller or custom deployment workflow; use `HelmSharp.Action` when those lifecycle responsibilities belong together.
 
-Use this package directly for platform controllers, or indirectly through `HelmClient.UpgradeInstallAsync`.
-
-## Current boundaries
-
-Wait behavior covers common Kubernetes resources. Uncommon CRD readiness semantics should be handled by product-specific checks when needed.
+The waiter covers common workload kinds, not arbitrary CRD readiness. See [Apply manifests directly](../guide/kubernetes-operations.md) and the [generated Kube API](../api/generated/kube.md).

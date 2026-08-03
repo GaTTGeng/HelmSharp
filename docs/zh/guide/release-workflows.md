@@ -1,41 +1,75 @@
-# 发布工作流
+# 安装和升级 Release
 
-## 你在解决什么问题
-
-发布工作流会组合渲染、Kubernetes 提交/删除/等待、hooks 和发布历史。只有当应用确实拥有部署动作时才走这条路径。
-
-## 安装哪些包
+当一个组件既拥有部署动作、又不能只停留在 YAML 预览时，使用 `HelmSharp.Action`。`HelmClient.UpgradeInstallAsync` 会组合 Chart 加载、values、渲染、hook、Kubernetes 提交、可选的就绪等待，以及 release 历史持久化。
 
 ```powershell
 dotnet add package HelmSharp.Action --version 1.3.1
 ```
 
-## 完整最小代码
+## 先从试运行开始
 
-先试运行：
+将 `HelmClient` 交给应用自己的 `IHelmOptionsProvider` 创建。命名空间、field manager、Kubernetes 版本、API 版本和超时等默认值应在这里集中管理，而不是由每个调用方各自猜测。
 
-<<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#dry-run-release{csharp}
+```csharp
+var request = new HelmUpgradeInstallRequest
+{
+    ReleaseName = "demo",
+    Namespace = "default",
+    Chart = chartPath,
+    ValuesFiles = ["values.production.yaml"],
+    CreateNamespace = true,
+    Wait = true,
+    TimeoutSeconds = 300,
+    DryRun = true
+};
 
-审批后再提交：
+var result = await client.UpgradeInstallAsync(request, cancellationToken);
 
-<<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#apply-release{csharp}
+if (!result.Succeeded)
+{
+    logger.LogWarning("Release preview failed: {Error}", result.StandardError);
+    return;
+}
 
-## 关键 API 为什么这样用
+Console.WriteLine(result.StandardOutput);
+```
 
-`HelmClient.UpgradeInstallAsync` 是安装/升级的主要入口。它会加载 Chart、合并 values、渲染清单、按需应用 CRDs、执行 hooks、等待资源就绪，并保存发布历史。
+试运行会渲染并校验请求，但不会提交资源，也不会创建 release revision。在产品中，应把预览、values 输入与结果一起纳入审批记录。
 
-## 生产环境注意事项
+## 提交已经审批的请求
 
-- 预览流程保持 `DryRun = true`，审批通过后才切换为 `false`。
-- 对非试运行操作，`Install = false` 会让不存在的发布失败，而不是悄悄创建它；仅升级接口应使用此选项。试运行不会查询已存储的发布。
-- `ReuseValues = true` 从已存储的发布 values 开始，再覆盖本次提供的 values。默认行为和 `ResetValues = true` 从 Chart 默认值开始。不能同时启用 `ReuseValues` 与 `ResetValues`。
-- `TimeoutSeconds` 覆盖 Kubernetes 提交、hooks、就绪等待和取消。`Atomic` 隐含就绪等待；`WaitForJobs` 只能与 `Wait`（或 `Atomic`）一起使用。
-- `Description`、`Labels` 和 `MaxHistory` 会随结果 revision 持久化。`RollbackAsync(new HelmRollbackRequest { ... })` 在保留旧重载的同时，为回滚提供相同的超时、等待、hook、描述、标签和历史控制。
-- 每次到达发布持久化阶段的非试运行生命周期尝试，都会在 Kubernetes Secret 中留下可查询的持久化记录；前置校验失败和试运行请求不会创建 revision。成功升级和回滚会将先前的 `deployed` revision 标记为 `superseded`；失败的安装、升级和回滚会保留 `failed` revision 供检查。保留历史的卸载会新增 `uninstalled` revision，而默认卸载会清除历史。
-- Hook 按 weight、再按名称执行。Job 和 Pod hook 会在 `TimeoutSeconds` 内等待完成；其他 hook 资源类型只提交，不设置完成状态观察。支持 `before-hook-creation`、`hook-succeeded` 和 `hook-failed` 清理策略；`GetHooksAsync` 会显示每个已存储 hook 的最近运行状态。
-- 没有托管实现的选项（例如 `Force`、接管资源、仓库 TLS/认证、来源验证或选择 server-side apply）会在任何集群变更前返回清晰诊断。
-- 在产品日志里记录 `CommandResult.StandardError` 和 `ExitCode`。
+获得明确审批后，用 `DryRun = false` 再执行同一请求。不要在预览和提交之间悄悄改变 values、Chart 版本、目标命名空间或 capabilities 输入。`HelmUpgradeInstallRequest` 是可变对象：要么根据已审批的数据创建新请求，要么只在实例未被共享时修改标记。
 
-## 下一步
+```csharp
+request.DryRun = false;
+var applyResult = await client.UpgradeInstallAsync(request, cancellationToken);
 
-阅读 [Kubernetes 操作](kubernetes-operations.md) 了解低层提交、删除和等待行为。
+if (!applyResult.Succeeded)
+    throw new InvalidOperationException(applyResult.StandardError);
+```
+
+## 明确设置生命周期行为
+
+| 设置 | 含义 |
+| --- | --- |
+| `Install = false` | 找不到 release 即失败；适用于只允许升级的接口。 |
+| `ReuseValues = true` | 从已存储的 release values 开始，再覆盖本请求 values。 |
+| `ResetValues = true` | 从 Chart 默认值开始，不能和 `ReuseValues` 同时使用。 |
+| `Wait = true` | 提交后等待已支持资源就绪。 |
+| `WaitForJobs = true` | 同时等待 Job，需要 `Wait` 或 `Atomic`。 |
+| `TimeoutSeconds` | Kubernetes 提交、hook、就绪等待和取消共用的上限。 |
+| `Atomic = true` | 等待并在失败时恢复。 |
+| `DisableHooks = true` | 不执行 Chart hook。 |
+| `MaxHistory` | 最多保留多少个 revision；`0` 表示不限制。 |
+
+HelmSharp 将成功、被 supersede、失败以及保留卸载记录的 revision 存在 Kubernetes Secret 中。默认卸载会清除 release 历史；保留历史的卸载会写入一个 `uninstalled` revision。用 `StatusAsync`、`HistoryAsync`、`GetManifestAsync`、`GetValuesAsync` 和按 revision 查询的方法读取真正保存的记录；查询不会重新渲染当前 Chart。
+
+## Hook 和就绪等待属于一次操作
+
+Hook 先按 weight、再按名称运行。Job 和 Pod hook 会在超时内观察完成状态，其他 hook 类型会被提交但不会有完成状态观察。支持的清理策略是 `before-hook-creation`、`hook-succeeded` 和 `hook-failed`。
+
+内置就绪等待器覆盖常见工作负载。CRD 可以被提交，但不会自动推导其领域就绪语义。当 Kubernetes 接受对象还不足以说明部署可用时，应添加产品自己的健康检查。
+
+## 权限和错误处理
+
+Kubernetes 身份需要目标资源种类、命名空间、所用 CRD、hook 和 release Secret 的权限。高层操作返回 `CommandResult`，在向用户报告结果前检查 `Succeeded`、`ExitCode`、`StandardOutput` 和 `StandardError`。[排查失败](error-handling.md)说明了两类失败模型以及应保留哪些诊断上下文。

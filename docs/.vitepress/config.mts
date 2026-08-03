@@ -3,50 +3,48 @@ import { defineConfig } from 'vitepress';
 const docsBase = '/HelmSharp/';
 
 const englishNav = [
-  { text: 'Guide', link: '/getting-started' },
+  { text: 'Get started', link: '/getting-started' },
+  { text: 'Guides', link: '/guide/first-render' },
   { text: 'Examples', link: '/examples/render-preview-api' },
-  { text: 'Packages', link: '/packages/action' },
-  { text: 'API', link: '/api/' },
+  { text: 'Reference', link: '/api-overview' },
   { text: 'Compatibility', link: '/helm-compatibility' },
   { text: 'Compare', link: '/compare' }
 ];
 
 const englishSidebar = [
   {
-    text: 'HelmSharp',
+    text: 'Start here',
     items: [
       { text: 'Overview', link: '/' },
-      { text: 'Getting Started', link: '/getting-started' },
-      { text: 'API Overview', link: '/api-overview' },
-      { text: 'Roadmap', link: '/roadmap' },
-      { text: 'Compare', link: '/compare' }
+      { text: 'Quickstart', link: '/getting-started' },
+      { text: 'Choose a package', link: '/api-overview' }
     ]
   },
   {
-    text: 'Guide',
+    text: 'Guides',
     items: [
-      { text: 'Installation', link: '/guide/installation' },
-      { text: 'First Render', link: '/guide/first-render' },
-      { text: 'Values', link: '/guide/values' },
-      { text: 'Template Rendering', link: '/guide/template-rendering' },
-      { text: 'Chart Distribution', link: '/guide/chart-distribution' },
-      { text: 'Release Workflows', link: '/guide/release-workflows' },
-      { text: 'Kubernetes Operations', link: '/guide/kubernetes-operations' },
-      { text: 'Error Handling', link: '/guide/error-handling' }
+      { text: 'Install packages', link: '/guide/installation' },
+      { text: 'Render a chart', link: '/guide/first-render' },
+      { text: 'Values and overrides', link: '/guide/values' },
+      { text: 'Render for a target cluster', link: '/guide/template-rendering' },
+      { text: 'Install and upgrade releases', link: '/guide/release-workflows' },
+      { text: 'Apply manifests directly', link: '/guide/kubernetes-operations' },
+      { text: 'Package charts and manage dependencies', link: '/guide/chart-distribution' },
+      { text: 'Troubleshoot failures', link: '/guide/error-handling' }
     ]
   },
   {
     text: 'Examples',
     items: [
-      { text: 'Render Preview API', link: '/examples/render-preview-api' },
-      { text: 'GitOps PR Generator', link: '/examples/gitops-pr-generator' },
-      { text: 'Dry-run Deployment', link: '/examples/dry-run-deployment' },
-      { text: 'Public Chart Rendering', link: '/examples/real-chart-rendering' },
-      { text: 'Multi-tenant Options', link: '/examples/multi-tenant-options' }
+      { text: 'Build a render-preview endpoint', link: '/examples/render-preview-api' },
+      { text: 'Turn a review into a deployment', link: '/examples/dry-run-deployment' },
+      { text: 'Generate manifests for GitOps', link: '/examples/gitops-pr-generator' },
+      { text: 'Render a public chart', link: '/examples/real-chart-rendering' },
+      { text: 'Keep tenant defaults isolated', link: '/examples/multi-tenant-options' }
     ]
   },
   {
-    text: 'Packages',
+    text: 'Package reference',
     items: [
       { text: 'HelmSharp.Action', link: '/packages/action' },
       { text: 'HelmSharp.Chart', link: '/packages/chart' },
@@ -60,9 +58,9 @@ const englishSidebar = [
     ]
   },
   {
-    text: 'API Reference',
+    text: 'API reference',
     items: [
-      { text: 'How to read API pages', link: '/api/' },
+      { text: 'About the API reference', link: '/api/' },
       { text: 'Action API', link: '/api/generated/action' },
       { text: 'Chart API', link: '/api/generated/chart' },
       { text: 'Engine API', link: '/api/generated/engine' },
@@ -71,70 +69,64 @@ const englishSidebar = [
       { text: 'Repo API', link: '/api/generated/repo' },
       { text: 'Registry API', link: '/api/generated/registry' },
       { text: 'Storage API', link: '/api/generated/storage' },
-      { text: 'PostRenderer API', link: '/api/generated/postrenderer' }
+      { text: 'Post-renderer API', link: '/api/generated/postrenderer' }
     ]
   },
   {
-    text: 'Compatibility',
+    text: 'Compatibility and project',
     items: [
-      { text: 'Helm Compatibility', link: '/helm-compatibility' }
-    ]
-  },
-  {
-    text: 'Project',
-    items: [
-      { text: 'GitHub', link: 'https://github.com/GaTTGeng/HelmSharp' },
-      { text: 'NuGet', link: 'https://www.nuget.org/packages/HelmSharp.Action' },
+      { text: 'Compatibility contract', link: '/helm-compatibility' },
+      { text: 'Template-function matrix', link: '/template-function-compatibility' },
+      { text: 'HelmCompare', link: '/compare' },
+      { text: 'Roadmap', link: '/roadmap' },
       { text: 'Changelog', link: 'https://github.com/GaTTGeng/HelmSharp/blob/master/CHANGELOG.md' }
     ]
   }
 ];
 
 const chineseNav = [
-  { text: '指南', link: '/zh/getting-started' },
+  { text: '开始使用', link: '/zh/getting-started' },
+  { text: '指南', link: '/zh/guide/first-render' },
   { text: '示例', link: '/zh/examples/render-preview-api' },
-  { text: '包', link: '/zh/packages/action' },
-  { text: 'API', link: '/zh/api/' },
+  { text: '参考', link: '/zh/api-overview' },
   { text: '兼容性', link: '/zh/helm-compatibility' },
   { text: '对比', link: '/zh/compare' }
 ];
 
 const chineseSidebar = [
   {
-    text: 'HelmSharp',
+    text: '从这里开始',
     items: [
       { text: '概览', link: '/zh/' },
       { text: '快速开始', link: '/zh/getting-started' },
-      { text: 'API 选择', link: '/zh/api-overview' },
-      { text: '路线图', link: '/zh/roadmap' },
-      { text: '对比工具', link: '/zh/compare' }
+      { text: '选择包和 API', link: '/zh/api-overview' }
     ]
   },
   {
-    text: '指南',
+    text: '使用指南',
     items: [
-      { text: '安装', link: '/zh/guide/installation' },
-      { text: '第一次渲染', link: '/zh/guide/first-render' },
-      { text: '值配置（Values）', link: '/zh/guide/values' },
-      { text: '模板渲染', link: '/zh/guide/template-rendering' },
-      { text: 'Chart 分发', link: '/zh/guide/chart-distribution' },
-      { text: '发布工作流', link: '/zh/guide/release-workflows' },
-      { text: 'Kubernetes 操作', link: '/zh/guide/kubernetes-operations' },
-      { text: '错误处理', link: '/zh/guide/error-handling' }
+      { text: '安装包', link: '/zh/guide/installation' },
+      { text: '渲染 Chart', link: '/zh/guide/first-render' },
+      { text: 'Values 与覆盖项', link: '/zh/guide/values' },
+      { text: '按目标集群渲染', link: '/zh/guide/template-rendering' },
+      { text: '安装和升级 Release', link: '/zh/guide/release-workflows' },
+      { text: '直接提交清单', link: '/zh/guide/kubernetes-operations' },
+      { text: '打包 Chart 与管理依赖', link: '/zh/guide/chart-distribution' },
+      { text: '排查失败', link: '/zh/guide/error-handling' }
     ]
   },
   {
     text: '示例',
     items: [
-      { text: '渲染预览 API', link: '/zh/examples/render-preview-api' },
-      { text: 'GitOps PR 生成器', link: '/zh/examples/gitops-pr-generator' },
-      { text: '试运行部署', link: '/zh/examples/dry-run-deployment' },
-      { text: '公开 Chart 渲染', link: '/zh/examples/real-chart-rendering' },
-      { text: '多租户选项', link: '/zh/examples/multi-tenant-options' }
+      { text: '构建渲染预览接口', link: '/zh/examples/render-preview-api' },
+      { text: '把评审结果变成部署', link: '/zh/examples/dry-run-deployment' },
+      { text: '为 GitOps 生成清单', link: '/zh/examples/gitops-pr-generator' },
+      { text: '渲染公开 Chart', link: '/zh/examples/real-chart-rendering' },
+      { text: '隔离租户默认配置', link: '/zh/examples/multi-tenant-options' }
     ]
   },
   {
-    text: '包',
+    text: '包参考',
     items: [
       { text: 'HelmSharp.Action', link: '/zh/packages/action' },
       { text: 'HelmSharp.Chart', link: '/zh/packages/chart' },
@@ -150,7 +142,7 @@ const chineseSidebar = [
   {
     text: 'API 参考',
     items: [
-      { text: '如何阅读 API 页', link: '/zh/api/' },
+      { text: '如何使用 API 参考', link: '/zh/api/' },
       { text: 'Action API', link: '/zh/api/generated/action' },
       { text: 'Chart API', link: '/zh/api/generated/chart' },
       { text: 'Engine API', link: '/zh/api/generated/engine' },
@@ -159,20 +151,16 @@ const chineseSidebar = [
       { text: 'Repo API', link: '/zh/api/generated/repo' },
       { text: 'Registry API', link: '/zh/api/generated/registry' },
       { text: 'Storage API', link: '/zh/api/generated/storage' },
-      { text: 'PostRenderer API', link: '/zh/api/generated/postrenderer' }
+      { text: 'Post-renderer API', link: '/zh/api/generated/postrenderer' }
     ]
   },
   {
-    text: '兼容性',
+    text: '兼容性和项目',
     items: [
-      { text: 'Helm 兼容性', link: '/zh/helm-compatibility' }
-    ]
-  },
-  {
-    text: '项目',
-    items: [
-      { text: 'GitHub', link: 'https://github.com/GaTTGeng/HelmSharp' },
-      { text: 'NuGet', link: 'https://www.nuget.org/packages/HelmSharp.Action' },
+      { text: '兼容性约定', link: '/zh/helm-compatibility' },
+      { text: '模板函数矩阵', link: '/zh/template-function-compatibility' },
+      { text: 'HelmCompare', link: '/zh/compare' },
+      { text: '路线图', link: '/zh/roadmap' },
       { text: '更新日志', link: 'https://github.com/GaTTGeng/HelmSharp/blob/master/CHANGELOG.md' }
     ]
   }
@@ -180,16 +168,16 @@ const chineseSidebar = [
 
 export default defineConfig({
   title: 'HelmSharp',
-  description: 'Managed Helm-compatible chart rendering and Kubernetes release workflows for .NET.',
+  description: 'Use Helm charts from managed .NET code.',
   base: docsBase,
   cleanUrls: true,
   lastUpdated: true,
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: `${docsBase}logo.svg` }],
-    ['meta', { name: 'theme-color', content: '#2563eb' }],
+    ['meta', { name: 'theme-color', content: '#1f5f52' }],
     ['meta', { property: 'og:type', content: 'website' }],
-    ['meta', { property: 'og:title', content: 'HelmSharp Documentation' }],
-    ['meta', { property: 'og:description', content: 'Managed Helm-compatible SDK for .NET.' }]
+    ['meta', { property: 'og:title', content: 'HelmSharp documentation' }],
+    ['meta', { property: 'og:description', content: 'Render, inspect, and release Helm charts from .NET.' }]
   ],
   markdown: {
     theme: {
@@ -215,13 +203,15 @@ export default defineConfig({
       lang: 'en-US',
       link: '/',
       title: 'HelmSharp',
-      description: 'Managed Helm-compatible chart rendering and Kubernetes release workflows for .NET.',
+      description: 'Use Helm charts from managed .NET code.',
       themeConfig: {
         nav: englishNav,
         sidebar: englishSidebar,
+        outline: { label: 'On this page' },
+        docFooter: { prev: 'Previous page', next: 'Next page' },
         editLink: {
           pattern: 'https://github.com/GaTTGeng/HelmSharp/edit/master/docs/:path',
-          text: 'Edit this page on GitHub'
+          text: 'Edit this page'
         },
         footer: {
           message: 'Released under the MIT License.',
@@ -234,20 +224,15 @@ export default defineConfig({
       lang: 'zh-CN',
       link: '/zh/',
       title: 'HelmSharp',
-      description: '面向 .NET 的托管 Helm 兼容 SDK。',
+      description: '在 .NET 进程中使用 Helm Chart。',
       themeConfig: {
         nav: chineseNav,
         sidebar: chineseSidebar,
+        outline: { label: '本页内容' },
+        docFooter: { prev: '上一页', next: '下一页' },
         editLink: {
           pattern: 'https://github.com/GaTTGeng/HelmSharp/edit/master/docs/:path',
           text: '在 GitHub 上编辑此页'
-        },
-        outline: {
-          label: '本页内容'
-        },
-        docFooter: {
-          prev: '上一页',
-          next: '下一页'
         },
         footer: {
           message: '基于 MIT License 发布。',

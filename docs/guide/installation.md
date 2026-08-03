@@ -1,58 +1,50 @@
-# Installation
+# Install HelmSharp
 
-## What problem this solves
+HelmSharp targets `net8.0`, `net9.0`, and `net10.0`. Every package in an application should use the same HelmSharp version; the examples below use the current package release, `1.3.1`.
 
-Use this page to choose the smallest HelmSharp package set for your application. Start from the workflow you need: render-only preview, command-like Helm operations, repository helpers, or Kubernetes release operations.
+## Pick the smallest package for the job
 
-HelmSharp does not require the `helm` executable at runtime. Kubernetes release operations still require a reachable cluster and kubeconfig.
+| You need to… | Install | What it owns |
+| --- | --- | --- |
+| Load a chart, merge values, and render YAML | `HelmSharp.Chart` and `HelmSharp.Engine` | Chart files, values, and template rendering. |
+| Run template, install, upgrade, rollback, or history operations | `HelmSharp.Action` | The high-level client and its dependent packages. |
+| Apply YAML that is already rendered | `HelmSharp.Kube` | Kubernetes apply, delete, identity, and readiness helpers. |
+| Search, pull, or index traditional HTTP chart repositories | `HelmSharp.Repo` | Repository configuration, cache, search, and pull operations. |
 
-## Packages to install
-
-For most applications, start with the high-level client:
+Most services that own a deployment start with `HelmSharp.Action`:
 
 ```powershell
 dotnet add package HelmSharp.Action --version 1.3.1
 ```
 
-For render-only tools, install the lower layers:
+A preview tool should depend on the smaller rendering pair instead:
 
 ```powershell
 dotnet add package HelmSharp.Chart --version 1.3.1
 dotnet add package HelmSharp.Engine --version 1.3.1
 ```
 
-## Minimal complete code
+`HelmSharp.Action` already references the rendering, Kubernetes, release, repository, storage, registry, and post-renderer packages. Do not add those packages separately unless your code needs their lower-level APIs.
 
-```csharp
-using HelmSharp.Action;
+## What HelmSharp needs at runtime
 
-var client = new HelmClient(new StaticHelmOptionsProvider());
+Rendering needs a readable chart directory or `.tgz` archive. It does not invoke, bundle, or require the `helm` executable.
 
-var result = await client.TemplateAsync(new HelmTemplateRequest
-{
-    ReleaseName = "demo",
-    Namespace = "default",
-    Chart = "/charts/my-chart",
-    SetValues = new Dictionary<string, string>
-    {
-        ["image.tag"] = "1.1.0",
-        ["replicaCount"] = "2"
-    }
-});
+Cluster-changing operations need the same prerequisites as any Kubernetes .NET client: a reachable API server, credentials, and RBAC permissions for the resources and release Secrets they manage. Supply these through your application's `IHelmOptionsProvider` and request objects; do not make a web request choose arbitrary local kubeconfig paths.
 
-Console.WriteLine(result.StandardOutput);
-```
+## Verify the installation
 
-## Why these APIs
+Follow [Render a chart](first-render.md) for a program that reads a local chart and writes manifests to standard output. If the application will deploy, continue with [Install and upgrade releases](release-workflows.md) to put dry-run and result handling around that operation.
 
-`HelmSharp.Action` references the package set needed for command-like workflows. `HelmSharp.Chart` and `HelmSharp.Engine` keep preview tools smaller when you only need manifest output.
+## Direct-use packages
 
-## Production notes
+These packages are usually extension points, not first choices for an application:
 
-- Build all target frameworks locally with .NET 8, .NET 9, and .NET 10 SDKs.
-- Use `HelmSharp.Action` only when your application needs release state, Kubernetes apply/delete/wait, repository operations, or command-style results.
-- Keep `DryRun = true` for cluster-changing examples until your product has an explicit approval step.
+| Package | Use it directly when… |
+| --- | --- |
+| `HelmSharp.Release` | You need the release model or store independently of `HelmClient`. |
+| `HelmSharp.Storage` | You are implementing a custom `IHelmReleaseStore`. |
+| `HelmSharp.PostRenderer` | You are implementing a deterministic manifest transformation. |
+| `HelmSharp.Registry` | You are integrating an experimental OCI registry client. |
 
-## Next step
-
-Continue with [your first render](first-render.md), then review [package responsibilities](../packages/action.md).
+Their [package pages](../packages/action.md) document the contracts and current limitations.

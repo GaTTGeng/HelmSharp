@@ -1,44 +1,51 @@
-# Error Handling
+# Troubleshoot failures
 
-## What problem this solves
+HelmSharp has two intentionally different failure models. Handle the one used by your entry point instead of converting every failure into a vague “render failed” response.
 
-HelmSharp exposes two failure shapes: high-level `CommandResult` failures for command-like APIs and exceptions for lower-level APIs. Handle both deliberately so chart authors get useful diagnostics.
+| API layer | Failure shape | Typical caller |
+| --- | --- | --- |
+| `HelmClient` in `HelmSharp.Action` | `CommandResult` with exit code, standard output, and standard error | HTTP endpoint, CLI wrapper, deployment service. |
+| `HelmChartLoader`, `HelmValues`, `HelmTemplateRenderer`, repository helpers | .NET exception | Library code that wants normal exception composition. |
 
-## Packages to install
-
-Use the package that owns the failing workflow. Most application-level error handling starts from:
-
-```powershell
-dotnet add package HelmSharp.Action --version 1.3.1
-```
-
-## Minimal complete code
+## Handle high-level operations
 
 ```csharp
 var result = await client.TemplateAsync(request, cancellationToken);
 
-if (result.ExitCode != 0)
+if (!result.Succeeded)
 {
     logger.LogWarning(
-        "HelmSharp template failed for {Chart}: {Error}",
+        "Chart render failed for {Chart}, release {Release}: {Error}",
         request.Chart,
+        request.ReleaseName,
         result.StandardError);
-    return Results.BadRequest(result.StandardError);
+
+    return Results.BadRequest(new
+    {
+        error = result.StandardError,
+        exitCode = result.ExitCode
+    });
 }
 
 return Results.Text(result.StandardOutput, "text/yaml");
 ```
 
-## Why these APIs
+`StandardOutput` can still be useful when a command fails, so retain it with the operation record when access controls permit. Do not infer success from a non-empty output string; use `Succeeded` or `ExitCode`.
 
-`HelmClient` methods generally return `CommandResult` so application code can model stdout, stderr, and exit codes. `HelmChartLoader`, `HelmValues`, and `HelmTemplateRenderer` throw ordinary .NET exceptions when loading, values parsing, or template evaluation fails.
+## Add context around lower-level rendering
 
-## Production notes
+Let loading, YAML parsing, and template exceptions keep their original message and stack trace. Add request context at the boundary that owns the chart path and values, not in a catch block that erases the exception type.
 
-- Log chart path, release name, namespace, values file names, inline values source, HelmSharp version, and target kube version.
-- For compatibility reports, capture HelmSharp output and `helm template` output with line endings normalized only.
-- Do not hide parser context from chart authors; template name and failing expression are usually the fastest path to a fix.
+Useful context includes the chart identity or path, release name, namespace, selected chart version, values-file names, explicit set keys (not secret values), target Kubernetes version, and API versions. For a parity report, keep the exact values inputs and normalize line endings only before comparing output.
 
-## Next step
+## Common failure questions
 
-Use [API Reference](../api/index.md) when you need member-level details.
+| Symptom | First thing to inspect |
+| --- | --- |
+| A template function is not supported | [Template-function matrix](../template-function-compatibility.md), then the template path in the renderer diagnostic. |
+| A chart differs from Helm | Target capabilities, effective values, and the [compatibility contract](../helm-compatibility.md). [HelmCompare](../compare.md) can help inspect the difference. |
+| A release command returns failure | `StandardError`, Kubernetes RBAC, target namespace, hook status, and readiness timeout. |
+| A release exists but output is unexpected | Stored revision with `StatusAsync`, `HistoryAsync`, `GetManifestAsync`, or `GetValuesAsync`; do not assume the current chart was used. |
+| A direct apply fails for a CRD | API discovery, resource identity, and the target cluster's installed CRD version. |
+
+Rendered manifests and values may contain credentials. Return sanitized diagnostics to untrusted callers and keep sensitive artifacts in a restricted operation record rather than application logs.

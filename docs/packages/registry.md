@@ -1,31 +1,9 @@
 # HelmSharp.Registry
 
-## Package responsibility
-
-`HelmSharp.Registry` contains registry-related extension contracts for future OCI workflows.
-
-## When to install
-
-Most applications do not install this package directly. It is referenced by `HelmSharp.Action` and `HelmSharp.Repo`.
+`HelmSharp.Registry` contains extension contracts for OCI registry work. Most applications should not install it directly; it is already referenced by the higher-level packages.
 
 ```powershell
 dotnet add package HelmSharp.Registry --version 1.3.1
 ```
 
-## Dependencies
-
-This package has no Kubernetes dependency.
-
-## Main types
-
-| Type | Use it for |
-| --- | --- |
-| `IOciRegistryClient` | Extension point for OCI registry integration. |
-
-## Common combinations
-
-Use it when experimenting with custom registry clients around HelmSharp repository workflows.
-
-## Current boundaries
-
-Full Helm OCI authentication parity is planned work and is not a 1.3.1 guarantee.
+`IOciRegistryClient` is an integration seam, not a promise of complete Helm OCI behavior. Do not use this package as evidence that OCI authentication, push, pull, provenance, or credential parity is available. Check the [compatibility boundary](../helm-compatibility.md) and the [generated Registry API](../api/generated/registry.md) before building an integration.

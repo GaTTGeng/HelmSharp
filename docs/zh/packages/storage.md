@@ -1,31 +1,11 @@
 # HelmSharp.Storage
 
-## 包职责
-
-`HelmSharp.Storage` 包含发布存储扩展契约。
-
-## 何时安装
-
-大多数应用使用 `HelmSharp.Action`。只有实现自定义 storage 集成时才直接安装。
+`HelmSharp.Storage` 定义 `IHelmReleaseStore` 扩展契约。它面向需要替换或包装 release 持久化的产品；普通应用应使用 `HelmSharp.Action` 及其内置 release store。
 
 ```powershell
 dotnet add package HelmSharp.Storage --version 1.3.1
 ```
 
-## 依赖关系
+实现接口时，必须保留 revision 和产生它的 Chart 之间的区别。存储层应能检查历史生命周期状态，而不能悄悄改用新版本 Chart 重新渲染。
 
-该包引用 release 和 Kubernetes 辅助包。
-
-## 主要类型
-
-| 类型 | 用途 |
-| --- | --- |
-| `IHelmReleaseStore` | 发布记录存储扩展点。 |
-
-## 常见组合
-
-当产品需要把发布存储抽象到自己的实现后面时使用。
-
-## 当前边界
-
-内置发布存储位于 `HelmSharp.Release`；该包主要提供存储契约。
+请看[生成的 Storage API](../api/generated/storage.md)和[发布工作流](../guide/release-workflows.md)。

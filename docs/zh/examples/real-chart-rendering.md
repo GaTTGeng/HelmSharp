@@ -1,48 +1,32 @@
-# 公开 Chart 渲染
+# 渲染公开 Chart
 
-## 你在解决什么问题
+公开 Chart 是必须固定版本、检查和验证的输入。某个 Chart 能在一套 Helm 环境中运行，并不代表它必然与任意托管渲染器兼容。
 
-公开 Chart 很适合作为集成检查，因为它们会触达辅助模板、嵌套 values、capabilities、CRDs 和格式细节，这些行为在手写小样例里经常缺失。需要预览固定版本的公开 Chart 并检查生成清单时，可以使用这个工作流。
-
-## 安装哪些包
-
-```powershell
-dotnet add package HelmSharp.Action --version 1.3.1
-```
-
-## 完整最小代码
+先使用 `HelmSharp.Repo` 或制品流水线将指定版本的 Chart 拉到受控目录，再像处理内部 Chart 一样渲染解压后的目录：
 
 ```csharp
-var result = await client.TemplateAsync(new HelmTemplateRequest
-{
-    ReleaseName = "ingress-nginx",
-    Namespace = "ingress-system",
-    Chart = "/charts/ingress-nginx",
-    ValuesFiles = ["ci/controller-deployment-values.yaml"],
-    KubeVersion = "1.30.0",
-    ApiVersions =
-    [
-        "networking.k8s.io/v1",
-        "policy/v1",
-        "monitoring.coreos.com/v1"
-    ],
-    IncludeCRDs = true,
-    ShowNotes = true
-}, cancellationToken);
+var chart = await HelmChartLoader.LoadAsync(extractedChartPath, cancellationToken);
+var values = await HelmValues.BuildAsync(
+    chart,
+    valuesFiles: ["values.organization.yaml"],
+    valuesContent: null,
+    setValues: null,
+    setFileValues: null,
+    setStringValues: null,
+    setJsonValues: null,
+    cancellationToken: cancellationToken);
 
-Console.WriteLine(result.StandardOutput);
+var renderer = new HelmTemplateRenderer(
+    chart,
+    releaseName: "external-dns",
+    releaseNamespace: "platform",
+    values: values,
+    kubeVersion: "1.30.0",
+    apiVersions: ["externaldns.k8s.io/v1alpha1"]);
+
+var manifest = renderer.Render();
 ```
 
-## 关键 API 为什么这样用
+在将它引入产品前，固定归档摘要，并用准确的 Chart 版本、values 和 capabilities 测试。输出与 Helm 不同时，先把差异缩减到一个小 Chart/模板，再比较生效 values、目标 capabilities 和[函数矩阵](../template-function-compatibility.md)。[HelmCompare](../compare.md)适合并排检查。
 
-`HelmTemplateRequest` 对应 Helm 用户熟悉的预览形态：发布、namespace、Chart、values、Kubernetes 版本、API 版本、CRDs 和 NOTES。
-
-## 生产环境注意事项
-
-- 渲染公开 Chart 时固定 Chart 版本。
-- 让 Chart 副本或来源证明与预览输出关联。
-- 当前公开 Chart 测试覆盖和已知边界见兼容性页面。
-
-## 下一步
-
-查看 [Helm 兼容性](../helm-compatibility.md)。
+仓库中的公开 Chart golden 测试是回归证据，并不是对所有公开 Chart、所有版本的认证。

@@ -1,56 +1,40 @@
-# 试运行部署
+# 把评审结果变成部署
 
-## 你在解决什么问题
-
-部署产品应拆分预览和提交。HelmSharp 支持用同一个高层发布工作流先 `DryRun = true`，审批后再提交。
-
-## 安装哪些包
-
-```powershell
-dotnet add package HelmSharp.Action --version 1.3.1
-```
-
-## 完整最小代码
+评审和实际提交各使用一个 release 请求。关键约束是：审批后只能改变 `DryRun`，Chart 标识、values、命名空间和 options provider 配置必须保持不变。
 
 ```csharp
-var dryRun = await client.UpgradeInstallAsync(new HelmUpgradeInstallRequest
+var preview = new HelmUpgradeInstallRequest
 {
-    ReleaseName = "payments",
-    Namespace = "apps",
-    Chart = "/charts/payments",
-    ValuesFiles = ["values.production.yaml"],
+    ReleaseName = releaseName,
+    Namespace = targetNamespace,
+    Chart = approvedChartPath,
+    ValuesFiles = approvedValuesFiles,
+    CreateNamespace = true,
     Wait = true,
     TimeoutSeconds = 300,
     DryRun = true
-}, cancellationToken);
+};
 
-if (dryRun.ExitCode != 0)
-    return Results.BadRequest(dryRun.StandardError);
+var previewResult = await client.UpgradeInstallAsync(preview, cancellationToken);
+if (!previewResult.Succeeded)
+    return Results.BadRequest(previewResult.StandardError);
 
-// 用户明确审批后：
-var apply = await client.UpgradeInstallAsync(new HelmUpgradeInstallRequest
-{
-    ReleaseName = "payments",
-    Namespace = "apps",
-    Chart = "/charts/payments",
-    ValuesFiles = ["values.production.yaml"],
-    Wait = true,
-    WaitForJobs = true,
-    TimeoutSeconds = 300,
-    DryRun = false
-}, cancellationToken);
+await approvals.SaveAsync(preview, previewResult.StandardOutput, cancellationToken);
 ```
 
-## 关键 API 为什么这样用
+审批服务校验该记录后，根据持久化字段重建请求并提交：
 
-`UpgradeInstallAsync` 同时覆盖安装和升级。预览与提交使用相似请求，可以减少用户审核内容和实际部署内容之间的漂移。
+```csharp
+var apply = await approvals.CreateApprovedRequestAsync(approvalId, cancellationToken);
+apply.DryRun = false;
 
-## 生产环境注意事项
+var result = await client.UpgradeInstallAsync(apply, cancellationToken);
+if (!result.Succeeded)
+    return Results.Problem(result.StandardError, statusCode: 409);
 
-- 审批记录应包含 Chart 版本、values 输入、发布名称、namespace 和试运行输出哈希。
-- 如果 Chart 或 values 可能变化，提交前重新渲染。
-- `DryRun = false` 是唯一会修改集群的步骤。
+return Results.Ok(new { result.StandardOutput });
+```
 
-## 下一步
+不要相信浏览器第二次提交的 values 或 Chart 版本。执行提交的服务应当自己读取已评审记录。失败时保留 `CommandResult.StandardError`、退出码和操作 ID，不要把 Kubernetes、hook 或模板诊断压缩为笼统的 HTTP 500。
 
-阅读 [发布工作流](../guide/release-workflows.md)。
+`Wait`、`WaitForJobs`、`Atomic` 和 `TimeoutSeconds` 共同决定一次操作何时算完成。选择它们之前，请阅读[安装和升级 Release](../guide/release-workflows.md)。

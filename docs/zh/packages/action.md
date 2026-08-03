@@ -1,52 +1,31 @@
 # HelmSharp.Action
 
-## 包职责
-
-`HelmSharp.Action` 是高层门面，面向需要 Helm 风格操作的应用：模板渲染、安装/升级、卸载、回滚、状态查询、历史记录、get、lint、打包、仓库和注册表相关命令。
-
-## 何时安装
-
-当产品按发布工作流或类命令结果组织逻辑时安装：
+`HelmSharp.Action` 是面向应用的 Helm 风格操作包。API、worker、operator 或 CLI 只要除了清单文本之外还拥有其他职责，就应从它开始。
 
 ```powershell
 dotnet add package HelmSharp.Action --version 1.3.1
 ```
 
-::: warning 版本可用性
-1.3.1 是最新发布包。下文的 M2 请求类型和分发工作流，以及 M3 安装、升级、回滚、卸载、检查和 hook API，均已包含在上面的安装命令所安装的包中。
-:::
+它会带入 chart、渲染、Kubernetes、release、仓库、registry、存储和 post-renderer 层。应用只渲染 YAML 时，应使用 `HelmSharp.Chart` 与 `HelmSharp.Engine`。
 
-## 依赖关系
+## 入口
 
-该包引用渲染、Chart、Kubernetes、Release、Repo、Registry、Storage 和 PostRenderer 相关包。
+`HelmClient` 实现 `IHelmClient`，并接收 `IHelmOptionsProvider`。将产品默认值——命名空间、field manager、超时和目标 capabilities——放在这个 provider 中。方法返回 `CommandResult`，调用方无需把异常再解析成命令行形态，就能处理输出与错误。
 
-## 主要类型
+| 操作 | 请求或方法 | 先阅读 |
+| --- | --- | --- |
+| 渲染 Chart | `TemplateAsync(HelmTemplateRequest)` | [渲染 Chart](../guide/first-render.md) |
+| 安装或升级 | `UpgradeInstallAsync(HelmUpgradeInstallRequest)` | [发布工作流](../guide/release-workflows.md) |
+| 回滚或卸载 | `RollbackAsync`、`UninstallAsync` | [发布工作流](../guide/release-workflows.md) |
+| 检查已存储 release | `StatusAsync`、`HistoryAsync`、`GetManifestAsync`、`GetValuesAsync` | [发布工作流](../guide/release-workflows.md) |
+| 打包、生成索引、拉取或解析依赖 | `PackageAsync`、`DependencyBuildAsync` 等请求对象方法 | [Chart 交付](../guide/chart-distribution.md) |
 
-| 类型 | 用途 |
-| --- | --- |
-| `HelmClient` / `IHelmClient` | 类命令 SDK 入口。 |
-| `HelmTemplateRequest` | 渲染 Chart，不提交。 |
-| `HelmUpgradeInstallRequest` | 安装或升级，包括试运行。 |
-| `HelmUninstallRequest` | 删除发布资源。 |
-| `HelmPackageRequest` | 使用元数据与依赖选项打包 Chart。 |
-| `HelmDependencyUpdateRequest` | 解析依赖并更新 `Chart.lock`。 |
-| `HelmDependencyBuildRequest` | 按 `Chart.lock` 恢复精确版本。 |
-| `HelmExecutionOptions` | 集中管理环境默认值。 |
-| `IHelmOptionsProvider` | 从配置、DI 或租户上下文提供选项。 |
-| `CommandResult` | 捕获标准输出、标准错误和退出码。 |
+检查读取的是已存储 revision，不会重新渲染今天版本的 Chart。revision `0` 选择最新存储记录，包括保留卸载记录。`ListReleasesAsync` 列出已部署 revision，并支持逗号分隔、完全匹配的 `key=value` 标签选择器。
 
-## 常见组合
+## 重要的生命周期约束
 
-`TemplateAsync` 用于预览，`UpgradeInstallAsync` + `DryRun = true` 用于审核，审批后才使用 `DryRun = false`。状态和审计可用 `StatusAsync`、`HistoryAsync`、`GetManifestAsync`、`GetValuesAsync`。Chart 分发使用 `PackageAsync`、`PullAsync` 与 `RepoIndexAsync`；依赖生命周期使用 `DependencyListAsync`、`DependencyUpdateAsync` 与 `DependencyBuildAsync`。
+评审时使用试运行。到达 release 持久化阶段的非试运行请求，会留下供后续检查的 Secret 记录。成功升级和回滚会 supersede 之前的已部署 revision；失败会保留失败 revision。未实现的选项会在变更集群前失败，不会被悄悄忽略。
 
-完整请求示例、锁文件行为、仓库隔离与兼容性边界见 [Chart 打包与仓库工作流](../guide/chart-distribution.md)。
+传统 HTTP 仓库和本地依赖已支持。完整 OCI 认证、provenance 验证和全部 Helm CLI 开关并不是 `1.3.1` 的保证；当前边界请看[兼容性](../helm-compatibility.md)。
 
-## 发布检查语义
-
-检查操作只读取持久化的发布 revision，绝不重新渲染 Chart。`revision = 0` 选择最新持久化 revision（包括保留历史的卸载记录）；正数选择对应的历史记录。`StatusRevisionAsync` 和 `GetValuesRevisionAsync` 提供按 revision 查询的专用方法，且不会修改既有方法签名；manifest、notes、hooks 和完整检查方法原本就支持 `revision`。不存在的发布和 revision 会返回可区分的失败诊断。
-
-`ListReleasesAsync` 为每个发布返回 `deployed` revision，按 namespace、name 排序。当前支持的 selector 子集是以逗号分隔的精确 `key=value` 标签匹配；`limit` 在过滤和排序后应用。
-
-## 当前边界
-
-HelmSharp 不调用 `helm`。M2 覆盖传统 HTTP 仓库与本地文件依赖；来源证明以及完整 OCI 认证和拉取/推送对齐仍属于后续兼容性工作。
+成员级信息请看[生成的 Action API](../api/generated/action.md)。

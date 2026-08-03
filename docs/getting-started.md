@@ -1,45 +1,58 @@
-# Getting Started
+# Quickstart: render a chart
 
-This 10-minute path helps you decide whether your application only needs rendered manifests or needs full release workflows.
+This quickstart renders a local Helm chart from a .NET console application. It does not require a cluster or the Helm CLI.
 
-## 1. Install the smallest package set
-
-Render-only preview tools:
+## Create the project
 
 ```powershell
+dotnet new console --name RenderChart
+cd RenderChart
 dotnet add package HelmSharp.Chart --version 1.3.1
 dotnet add package HelmSharp.Engine --version 1.3.1
 ```
 
-Release workflows:
+## Render a chart directory
 
-```powershell
-dotnet add package HelmSharp.Action --version 1.3.1
+Replace `Program.cs` with the following code. Run it with the path to a directory containing `Chart.yaml`.
+
+```csharp
+using HelmSharp.Chart;
+using HelmSharp.Engine;
+
+var chartPath = args.Length == 1
+    ? args[0]
+    : throw new ArgumentException("Pass the path to a Helm chart.");
+
+var chart = await HelmChartLoader.LoadAsync(chartPath, CancellationToken.None);
+var values = await HelmValues.BuildAsync(
+    chart,
+    valuesFiles: null,
+    valuesContent: null,
+    setValues: null,
+    setFileValues: null,
+    setStringValues: null,
+    setJsonValues: null,
+    cancellationToken: CancellationToken.None);
+
+var renderer = new HelmTemplateRenderer(chart, "demo", "default", values);
+
+Console.WriteLine(renderer.Render());
 ```
 
-## 2. Render without Helm CLI
+```powershell
+dotnet run -- ../charts/my-chart
+```
 
-<<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#render-first-chart{csharp}
+The manifest is written to standard output. Redirect it to a file, return it from an HTTP endpoint, send it to a policy engine, or commit it to a GitOps repository. `renderer.RenderNotes()` is available when the chart has `NOTES.txt` and your application needs to show it separately.
 
-This path never shells out to `helm` and does not mutate a cluster.
+## Where to go from here
 
-## 3. Move to dry-run release workflows
-
-<<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#dry-run-release{csharp}
-
-Keep `DryRun = true` until your application has an explicit approval step.
-
-## 4. Choose your next page
-
-| Need | Read |
+| You want to… | Read |
 | --- | --- |
-| Install details | [Installation](guide/installation.md) |
-| Values precedence | [Values](guide/values.md) |
-| Capabilities and NOTES | [Template Rendering](guide/template-rendering.md) |
-| Install/upgrade behavior | [Release Workflows](guide/release-workflows.md) |
-| Real examples | [Examples](examples/render-preview-api.md) |
-| Member-level reference | [API Reference](api/index.md) |
+| Supply `values.yaml`, `--set`, JSON, or string-preserving overrides | [Values and overrides](guide/values.md) |
+| Render conditional templates for a known Kubernetes version | [Render for a target cluster](guide/template-rendering.md) |
+| Build a real preview endpoint | [Render-preview endpoint](examples/render-preview-api.md) |
+| Apply a chart and save release history | [Install and upgrade releases](guide/release-workflows.md) |
+| Choose another package | [Choose a package](api-overview.md) |
 
-## Current compatibility baseline
-
-Before relying on an edge Helm behavior in production, review [Helm Compatibility](helm-compatibility.md) for the current golden-test coverage, known boundaries, and reporting guidance.
+Before relying on a chart feature in production, read the [compatibility contract](helm-compatibility.md). It is a description of verified behavior and boundaries, not a blanket claim of Helm parity.

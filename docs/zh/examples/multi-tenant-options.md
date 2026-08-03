@@ -1,29 +1,23 @@
-# 多租户选项
+# 隔离租户默认配置
 
-## 你在解决什么问题
+`IHelmOptionsProvider` 是一条策略边界。用它从租户身份推导允许使用的命名空间、field manager、Kubernetes capabilities 和仓库/缓存目录；不要让调用方通过原始环境路径或集群配置覆盖这些默认值。
 
-SaaS 和内部平台通常需要按租户提供 namespace、kubeconfig、API 版本和超时默认值。`IHelmOptionsProvider` 把这些决策集中到请求之外。
-
-## 安装哪些包
-
-```powershell
-dotnet add package HelmSharp.Action --version 1.3.1
+```csharp
+public sealed class TenantHelmOptionsProvider(TenantContext tenant) : IHelmOptionsProvider
+{
+    public ValueTask<HelmExecutionOptions> GetHelmAsync(
+        CancellationToken cancellationToken = default)
+        => ValueTask.FromResult(new HelmExecutionOptions
+        {
+            DefaultNamespace = $"tenant-{tenant.Slug}",
+            FieldManager = "my-platform",
+            TimeoutSeconds = 300,
+            KubeVersion = tenant.KubernetesVersion,
+            ApiVersions = tenant.ApiVersions
+        });
+}
 ```
 
-## 完整最小代码
+用租户范围的 provider 创建客户端后，仍要校验每个请求的 release 名称、Chart 标识、允许的 values 路径和命名空间。provider 只提供默认值，本身不是授权系统。
 
-<<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#options-provider{csharp}
-
-## 关键 API 为什么这样用
-
-请求描述一次操作。`HelmExecutionOptions` 描述执行这次操作的环境策略：kubeconfig、默认 namespace、字段管理器、超时时间、目标 Kubernetes 版本和 API 版本。
-
-## 生产环境注意事项
-
-- 构造客户端或选项提供器（options provider）前先解析租户身份。
-- 不要允许请求体指定任意 kubeconfig 路径。
-- 租户 id、部署 id 等审计字段应写入产品自己的日志。
-
-## 下一步
-
-阅读 [错误处理](../guide/error-handling.md)，保证租户级失败可诊断。
+仓库工作流中，为每个租户创建带明确配置和缓存路径的 `HelmRepositoryOptions`。这样可以避免仓库凭据和陈旧索引跨租户泄漏；模式见[分发指南](../guide/chart-distribution.md)。

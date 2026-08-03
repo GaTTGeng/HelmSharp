@@ -1,33 +1,26 @@
-# 渲染预览 API
+# 构建渲染预览接口
 
-## 你在解决什么问题
+预览接口应当渲染 Chart 并返回清单，不应创建 release、访问集群，也不应接受调用方给出的任意本地文件路径。
 
-很多平台需要一个预览接口：用户选择 Chart 和 values，产品先展示清单，不修改集群。
-
-## 安装哪些包
-
-```powershell
-dotnet add package HelmSharp.Chart --version 1.3.1
-dotnet add package HelmSharp.Engine --version 1.3.1
-```
-
-## 完整最小代码
+安装 `HelmSharp.Chart` 与 `HelmSharp.Engine` 后，先通过应用自己维护的 catalog 解析请求的 Chart，再调用渲染器：
 
 ```csharp
 app.MapPost("/preview", async (
     PreviewRequest request,
+    ChartCatalog charts,
     CancellationToken cancellationToken) =>
 {
-    var chart = await HelmChartLoader.LoadAsync(request.ChartPath, cancellationToken);
+    var chartPath = charts.GetPath(request.ChartId); // 执行你自己的允许列表校验。
+    var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
     var values = await HelmValues.BuildAsync(
         chart,
-        request.ValuesFiles,
-        request.ValuesContent,
-        request.SetValues,
+        valuesFiles: request.ValuesFiles,
+        valuesContent: request.ValuesContent,
+        setValues: request.SetValues,
         setFileValues: null,
-        request.SetStringValues,
-        request.SetJsonValues,
-        cancellationToken);
+        setStringValues: request.SetStringValues,
+        setJsonValues: request.SetJsonValues,
+        cancellationToken: cancellationToken);
 
     var renderer = new HelmTemplateRenderer(
         chart,
@@ -41,16 +34,13 @@ app.MapPost("/preview", async (
 });
 ```
 
-## 关键 API 为什么这样用
+`ChartCatalog` 是刻意留给应用实现的部分：它可以将 Chart ID 映射到带版本的目录、已经解压的归档，或租户有权限使用的 catalog 项。将这个决策放在请求之外，可避免路径穿越，也能让每个预览都追溯到准确的 Chart 版本。
 
-这个示例不使用 `HelmClient`，因为预览 API 通常不应该拥有发布状态。低层路径能清楚表达：加载、合并、渲染，仅此而已。
+生产接口还应：
 
-## 生产环境注意事项
+- 限制上传/内联 values 的大小，并拒绝产品不支持的覆盖路径；
+- 保存 Chart 版本、生效输入集、目标 capabilities 和渲染产物，供后续审批使用；
+- 控制对清单和 values 的访问，因为二者都可能含有凭据；
+- 只有响应中有单独的 notes 字段时，才调用 `RenderNotes()`。
 
-- Chart 路径应来自白名单或内部 Chart 注册表。
-- 保存每次预览使用的 values 输入。
-- 限制上传 values 内容的大小。
-
-## 下一步
-
-如果预览后可以发布，继续看 [试运行部署](dry-run-deployment.md)。
+[从评审到部署](dry-run-deployment.md)展示了如何把保存的预览变成集群变更操作，同时不破坏这里的只渲染边界。

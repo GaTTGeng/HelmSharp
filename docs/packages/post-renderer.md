@@ -1,31 +1,11 @@
 # HelmSharp.PostRenderer
 
-## Package responsibility
-
-`HelmSharp.PostRenderer` defines the post-renderer extension contract used to transform rendered manifests after template rendering and before apply.
-
-## When to install
-
-Install directly when building a custom post-rendering integration:
+`HelmSharp.PostRenderer` exposes `IPostRenderer`, a contract for transforming rendered manifest text after template evaluation and before the next workflow step.
 
 ```powershell
 dotnet add package HelmSharp.PostRenderer --version 1.3.1
 ```
 
-## Dependencies
+Use a post-renderer for product-owned transformations such as policy labels, annotations, or deterministic normalization. Keep it side-effect free and test it against representative rendered YAML. Put chart-specific behavior in chart templates instead; a post-renderer should not become a second hidden templating language.
 
-This package is intentionally small and has no Kubernetes dependency.
-
-## Main types
-
-| Type | Use it for |
-| --- | --- |
-| `IPostRenderer` | Transform rendered YAML before the next workflow step. |
-
-## Common combinations
-
-Use a post-renderer for policy injection, labels, annotations, or manifest normalization that should happen outside chart templates.
-
-## Current boundaries
-
-Post-renderer execution is an extension point. Keep transformations deterministic and test them against representative chart output.
+For the interface signature, see the [generated post-renderer API](../api/generated/postrenderer.md).

@@ -1,56 +1,40 @@
-# Dry-run Deployment
+# Turn a review into a deployment
 
-## What problem this solves
-
-Products that deploy to Kubernetes should separate preview from apply. HelmSharp lets you run the same high-level release workflow with `DryRun = true`, then submit the release only after approval.
-
-## Packages to install
-
-```powershell
-dotnet add package HelmSharp.Action --version 1.3.1
-```
-
-## Minimal complete code
+Use one release request for the review and another, equivalent request for the approved apply. The important invariant is that only `DryRun` changes after approval; chart identity, values, namespace, and the options-provider configuration stay fixed.
 
 ```csharp
-var dryRun = await client.UpgradeInstallAsync(new HelmUpgradeInstallRequest
+var preview = new HelmUpgradeInstallRequest
 {
-    ReleaseName = "payments",
-    Namespace = "apps",
-    Chart = "/charts/payments",
-    ValuesFiles = ["values.production.yaml"],
+    ReleaseName = releaseName,
+    Namespace = targetNamespace,
+    Chart = approvedChartPath,
+    ValuesFiles = approvedValuesFiles,
+    CreateNamespace = true,
     Wait = true,
     TimeoutSeconds = 300,
     DryRun = true
-}, cancellationToken);
+};
 
-if (dryRun.ExitCode != 0)
-    return Results.BadRequest(dryRun.StandardError);
+var previewResult = await client.UpgradeInstallAsync(preview, cancellationToken);
+if (!previewResult.Succeeded)
+    return Results.BadRequest(previewResult.StandardError);
 
-// Later, after explicit user approval:
-var apply = await client.UpgradeInstallAsync(new HelmUpgradeInstallRequest
-{
-    ReleaseName = "payments",
-    Namespace = "apps",
-    Chart = "/charts/payments",
-    ValuesFiles = ["values.production.yaml"],
-    Wait = true,
-    WaitForJobs = true,
-    TimeoutSeconds = 300,
-    DryRun = false
-}, cancellationToken);
+await approvals.SaveAsync(preview, previewResult.StandardOutput, cancellationToken);
 ```
 
-## Why these APIs
+When the approval service has verified that record, rebuild the request from the persisted fields and apply it:
 
-`UpgradeInstallAsync` is the same entry point for install and upgrade. Keeping request construction similar between preview and apply reduces drift between what users review and what the product deploys.
+```csharp
+var apply = await approvals.CreateApprovedRequestAsync(approvalId, cancellationToken);
+apply.DryRun = false;
 
-## Production notes
+var result = await client.UpgradeInstallAsync(apply, cancellationToken);
+if (!result.Succeeded)
+    return Results.Problem(result.StandardError, statusCode: 409);
 
-- Persist an approval record that includes chart version, values inputs, release name, namespace, and dry-run output hash.
-- Re-render immediately before apply if chart contents or values can change.
-- Treat `DryRun = false` as the only point where the request may mutate a cluster.
+return Results.Ok(new { result.StandardOutput });
+```
 
-## Next step
+Do not trust a browser to send a second copy of the values or chart version. The service that applies must read the reviewed record itself. Keep `CommandResult.StandardError`, exit code, and operation ID on failure; do not turn Kubernetes, hook, or template diagnostics into a generic HTTP 500.
 
-Read [Release Workflows](../guide/release-workflows.md) for lifecycle behavior.
+`Wait`, `WaitForJobs`, `Atomic`, and `TimeoutSeconds` determine the operation's completion contract. See [Install and upgrade releases](../guide/release-workflows.md) before selecting them.

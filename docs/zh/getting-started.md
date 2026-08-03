@@ -1,45 +1,58 @@
-# 快速开始
+# 快速开始：渲染 Chart
 
-这条 10 分钟路线帮助你判断：应用只是需要渲染后的清单，还是需要完整发布工作流。
+本快速开始会在 .NET 控制台应用中渲染本地 Helm Chart，不需要 Kubernetes 集群，也不需要 Helm CLI。
 
-## 1. 安装最小包组合
-
-只渲染预览：
+## 创建项目
 
 ```powershell
+dotnet new console --name RenderChart
+cd RenderChart
 dotnet add package HelmSharp.Chart --version 1.3.1
 dotnet add package HelmSharp.Engine --version 1.3.1
 ```
 
-发布工作流：
+## 渲染 Chart 目录
 
-```powershell
-dotnet add package HelmSharp.Action --version 1.3.1
+用以下代码替换 `Program.cs`，运行时传入包含 `Chart.yaml` 的目录路径。
+
+```csharp
+using HelmSharp.Chart;
+using HelmSharp.Engine;
+
+var chartPath = args.Length == 1
+    ? args[0]
+    : throw new ArgumentException("Pass the path to a Helm chart.");
+
+var chart = await HelmChartLoader.LoadAsync(chartPath, CancellationToken.None);
+var values = await HelmValues.BuildAsync(
+    chart,
+    valuesFiles: null,
+    valuesContent: null,
+    setValues: null,
+    setFileValues: null,
+    setStringValues: null,
+    setJsonValues: null,
+    cancellationToken: CancellationToken.None);
+
+var renderer = new HelmTemplateRenderer(chart, "demo", "default", values);
+
+Console.WriteLine(renderer.Render());
 ```
 
-## 2. 不通过 Helm CLI 渲染
+```powershell
+dotnet run -- ../charts/my-chart
+```
 
-<<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#render-first-chart{csharp}
+清单会输出到标准输出。你可以重定向到文件、从 HTTP 接口返回、交给策略引擎，或提交到 GitOps 仓库。如果 Chart 有 `NOTES.txt` 且应用需要展示它，再调用 `renderer.RenderNotes()`。
 
-这条路径不会调用 `helm`，也不会修改集群。
+## 接下来做什么
 
-## 3. 进入试运行发布工作流
-
-<<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#dry-run-release{csharp}
-
-产品流程明确审批前，保持 `DryRun = true`。
-
-## 4. 选择下一页
-
-| 需要 | 阅读 |
+| 你想… | 阅读 |
 | --- | --- |
-| 安装细节 | [安装](guide/installation.md) |
-| 值配置优先级 | [值配置（Values）](guide/values.md) |
-| Capabilities 和 NOTES | [模板渲染](guide/template-rendering.md) |
-| 安装/升级行为 | [发布工作流](guide/release-workflows.md) |
-| 真实例子 | [示例](examples/render-preview-api.md) |
-| 成员级参考 | [API 参考](api/index.md) |
+| 传入 `values.yaml`、`--set`、JSON 或保留字符串的覆盖项 | [Values 与覆盖项](guide/values.md) |
+| 按指定 Kubernetes 版本渲染条件模板 | [按目标集群渲染](guide/template-rendering.md) |
+| 构建真实的预览接口 | [渲染预览接口](examples/render-preview-api.md) |
+| 提交 Chart 并保存 release 历史 | [安装和升级 Release](guide/release-workflows.md) |
+| 选择其他包 | [选择包和 API](api-overview.md) |
 
-## 当前兼容性基线
-
-在生产环境依赖某个 Helm 边缘行为前，请先查看 [Helm 兼容性](helm-compatibility.md)，确认当前 golden-test 覆盖范围、已知边界和问题报告方式。
+将某项 Chart 功能作为生产依赖前，请阅读[兼容性约定](helm-compatibility.md)。它描述的是已验证行为和边界，而非对全部 Helm 能力的一揽子承诺。
