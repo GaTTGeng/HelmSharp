@@ -48,6 +48,6 @@ if (!result.Succeeded)
 return Results.Ok(new { result.StandardOutput });
 ```
 
-不要相信浏览器第二次提交的 values 或 Chart 版本。执行提交的服务应当自己读取已评审记录。将内容寻址的不可变 Chart 归档和 values 内容快照（或其哈希校验）随审批记录保存；仅保存路径不是稳定输入。本示例在预览和 apply 中都设置 `SkipCRDs = true`：CRD 应作为单独、明确审批的操作来审查和安装。`LoadHistoryForUpgradeInstallAsync` 是应用自有的 `HistoryAsync` 适配器：启用 `CreateNamespace` 时，它会像 apply 路径一样将目标命名空间不存在视为零历史。必须从该完整历史中取最高 revision 来派生预览状态，其中包括失败和保留卸载的 revision，然后将解析出的状态和审批记录一起保存；如果提交前 release 状态已变化，就拒绝提交，或重新渲染并要求新的审批。把 `CommandResult.StandardError`、退出码和操作 ID 保存到受限的操作记录中；对不受信任的调用方只返回通用失败信息。
+不要相信浏览器第二次提交的 values 或 Chart 版本。执行提交的服务应当自己读取已评审记录。将内容寻址的不可变 Chart 归档和 values 内容快照（或其哈希校验）随审批记录保存；仅保存路径不是稳定输入。本示例在预览和 apply 中都设置 `SkipCRDs = true`：CRD 应作为单独、明确审批的操作来审查和安装。`LoadHistoryForUpgradeInstallAsync` 是应用自有的 `HistoryAsync` 适配器：启用 `CreateNamespace` 时，它会像 apply 路径一样将目标命名空间不存在视为零历史。必须从该完整历史中取最高 revision 来派生预览状态，其中包括失败和保留卸载的 revision，然后将解析出的状态和审批记录一起保存；如果提交前 release 状态已变化，就拒绝提交，或重新渲染并要求新的审批。该工作流要求模板具有确定性：由于 apply 会再次渲染 Chart，审批服务必须拒绝使用 `now`、`uuidv4` 或 `randAlphaNum` 等非确定性函数的 Chart。若必须支持这类 Chart，应使用另一条部署路径来应用已审批的精确 manifest。把 `CommandResult.StandardError`、退出码和操作 ID 保存到受限的操作记录中；对不受信任的调用方只返回通用失败信息。
 
 `Wait`、`WaitForJobs`、`Atomic` 和 `TimeoutSeconds` 共同决定一次操作何时算完成。选择它们之前，请阅读[安装和升级 Release](../guide/release-workflows.md)。
