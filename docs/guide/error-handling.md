@@ -22,7 +22,7 @@ if (!result.Succeeded)
 
     return Results.BadRequest(new
     {
-        error = result.StandardError,
+        error = "The chart could not be rendered.",
         exitCode = result.ExitCode
     });
 }

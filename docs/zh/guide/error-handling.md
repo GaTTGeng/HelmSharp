@@ -22,7 +22,7 @@ if (!result.Succeeded)
 
     return Results.BadRequest(new
     {
-        error = result.StandardError,
+        error = "Chart 无法渲染。",
         exitCode = result.ExitCode
     });
 }

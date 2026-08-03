@@ -8,13 +8,15 @@
 app.MapPost("/preview", async (
     PreviewRequest request,
     ChartCatalog charts,
+    ValuesCatalog valuesCatalog,
     CancellationToken cancellationToken) =>
 {
     var chartPath = charts.GetPath(request.ChartId); // 执行你自己的允许列表校验。
+    var valuesFilePaths = valuesCatalog.GetPaths(request.ValuesFileIds); // 解析 ID，绝不直接使用调用方给出的路径。
     var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
     var values = await HelmValues.BuildAsync(
         chart,
-        valuesFiles: request.ValuesFiles,
+        valuesFiles: valuesFilePaths,
         valuesContent: request.ValuesContent,
         setValues: request.SetValues,
         setFileValues: null,
@@ -34,11 +36,11 @@ app.MapPost("/preview", async (
 });
 ```
 
-`ChartCatalog` 是刻意留给应用实现的部分：它可以将 Chart ID 映射到带版本的目录、已经解压的归档，或租户有权限使用的 catalog 项。将这个决策放在请求之外，可避免路径穿越，也能让每个预览都追溯到准确的 Chart 版本。
+`ChartCatalog` 和 `ValuesCatalog` 都刻意留给应用实现：它们可以将 ID 映射到带版本的目录、已经解压的归档，或租户有权限使用的 catalog 项。将路径解析放在请求之外，可避免路径穿越和服务端非预期的文件读取，也能让每个预览都追溯到准确的输入。
 
 生产接口还应：
 
-- 限制上传/内联 values 的大小，并拒绝产品不支持的覆盖路径；
+- 接受 values 文件 ID 而非路径，限制上传/内联 values 的大小，并拒绝产品不支持的覆盖路径；
 - 保存 Chart 版本、生效输入集、目标 capabilities 和渲染产物，供后续审批使用；
 - 控制对清单和 values 的访问，因为二者都可能含有凭据；
 - 只有响应中有单独的 notes 字段时，才调用 `RenderNotes()`。

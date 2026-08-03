@@ -8,13 +8,15 @@ Install `HelmSharp.Chart` and `HelmSharp.Engine`, then resolve the requested cha
 app.MapPost("/preview", async (
     PreviewRequest request,
     ChartCatalog charts,
+    ValuesCatalog valuesCatalog,
     CancellationToken cancellationToken) =>
 {
     var chartPath = charts.GetPath(request.ChartId); // Enforces your allowlist.
+    var valuesFilePaths = valuesCatalog.GetPaths(request.ValuesFileIds); // Resolve IDs, never caller-provided paths.
     var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
     var values = await HelmValues.BuildAsync(
         chart,
-        valuesFiles: request.ValuesFiles,
+        valuesFiles: valuesFilePaths,
         valuesContent: request.ValuesContent,
         setValues: request.SetValues,
         setFileValues: null,
@@ -34,11 +36,11 @@ app.MapPost("/preview", async (
 });
 ```
 
-`ChartCatalog` is intentionally application-specific. It might resolve a chart ID to a versioned directory, an extracted archive, or a tenant's authorized catalog entry. Keeping that decision outside the request prevents path traversal and makes every preview traceable to an exact chart version.
+`ChartCatalog` and `ValuesCatalog` are intentionally application-specific. They might resolve IDs to versioned directories, extracted archives, or a tenant's authorized catalog entries. Keeping path resolution outside the request prevents path traversal and unintended server-side file reads, and makes every preview traceable to exact inputs.
 
 For a production endpoint:
 
-- limit uploaded/inline values size and reject override paths your product does not support;
+- accept values-file IDs rather than paths, limit uploaded/inline values size, and reject override paths your product does not support;
 - persist the chart version, effective input set, target capabilities, and rendered artifact for later approval;
 - keep manifest and values access-controlled because either can contain credentials;
 - call `RenderNotes()` only when the response has a separate field for human-facing notes.
