@@ -12,7 +12,7 @@ Use the request overload when the build needs metadata overrides or a dependency
 
 <<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#package-chart{csharp}
 
-`Version` and `AppVersion` change the packaged `Chart.yaml`, not the source file. The archive is named `<chart-name>-<version>.tgz`, has one chart root, includes nested charts and CRDs, and rejects symbolic links. `.helmignore` supports file, directory, `*`, `?`, character-class, rooted, and `!` negation patterns; `**` is rejected explicitly.
+`Version` and `AppVersion` change the packaged `Chart.yaml`, not the source file. The archive is named `<chart-name>-<version>.tgz`, has one chart root, includes nested charts and CRDs, and skips symbolic links. `.helmignore` supports file, directory, `*`, `?`, character-class, rooted, and `!` negation patterns; `**` is rejected explicitly.
 
 ## Produce repository metadata
 
@@ -40,7 +40,7 @@ The repository config stores definitions; cached indexes use `<repository-name>-
 
 <<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#pull-chart{csharp}
 
-The pull request accepts `repo/chart`, a chart name plus `RepositoryUrl`, or a direct `https://…tgz` URL. `Untar` extracts under `Destination`; extraction rejects entries that escape its destination. Credentials stay on the repository origin by default. Enable `PassCredentialsAll` only when a trusted repository intentionally redirects archives to another authenticated origin.
+The pull request accepts `repo/chart`, a chart name plus `RepositoryUrl`, or a direct `https://…tgz` URL. The downloaded archive is stored under `Destination`. When `Untar` is enabled, `UntarDirectory` selects the extraction root; otherwise `Destination` is the extraction root. Extraction rejects entries that escape the selected root. Credentials stay on the repository origin by default. Enable `PassCredentialsAll` only when a trusted repository intentionally redirects archives to another authenticated origin.
 
 ## Make dependency builds reproducible
 

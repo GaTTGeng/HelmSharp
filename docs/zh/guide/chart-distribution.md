@@ -12,7 +12,7 @@ OCI 认证和推拉对齐、provenance 文件、签名和签名验证不属于�
 
 <<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#package-chart{csharp}
 
-`Version` 和 `AppVersion` 只改变归档内的 `Chart.yaml`，不修改源文件。归档名是 `<chart-name>-<version>.tgz`，只含一个 Chart 根目录，包含嵌套 Chart 和 CRD，并拒绝符号链接。`.helmignore` 支持文件、目录、`*`、`?`、字符类、根路径和 `!` 反选模式；`**` 会被明确拒绝。
+`Version` 和 `AppVersion` 只改变归档内的 `Chart.yaml`，不修改源文件。归档名是 `<chart-name>-<version>.tgz`，只含一个 Chart 根目录，包含嵌套 Chart 和 CRD，并跳过符号链接。`.helmignore` 支持文件、目录、`*`、`?`、字符类、根路径和 `!` 反选模式；`**` 会被明确拒绝。
 
 ## 生成仓库元数据
 
@@ -40,7 +40,7 @@ using var repository = new HelmChartRepository(new HelmRepositoryOptions
 
 <<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#pull-chart{csharp}
 
-请求可接受 `repo/chart`、Chart 名加 `RepositoryUrl`，或直接的 `https://…tgz` URL。`Untar` 会在 `Destination` 下解包，任何逃逸出目标目录的条目都会被拒绝。凭据默认只发送给仓库源站；只有可信仓库有意将归档跳转到另一个受认证源站时，才启用 `PassCredentialsAll`。
+请求可接受 `repo/chart`、Chart 名加 `RepositoryUrl`，或直接的 `https://…tgz` URL。下载的归档存放在 `Destination` 下。启用 `Untar` 时，`UntarDirectory` 选择解压根目录；未设置时才以 `Destination` 为解压根目录。任何逃逸出所选根目录的条目都会被拒绝。凭据默认只发送给仓库源站；只有可信仓库有意将归档跳转到另一个受认证源站时，才启用 `PassCredentialsAll`。
 
 ## 让依赖构建可复现
 
