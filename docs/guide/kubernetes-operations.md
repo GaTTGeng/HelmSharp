@@ -21,7 +21,7 @@ var applier = new KubernetesManifestApplier(
 
 await foreach (var resource in applier.ApplyAsync(
     manifest,
-    @namespace: "platform",
+    defaultNamespace: "platform",
     cancellationToken))
 {
     Console.WriteLine($"Applied {resource}");

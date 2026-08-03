@@ -23,7 +23,8 @@ var renderer = new HelmTemplateRenderer(
     releaseNamespace: targetNamespace,
     values: values,
     kubeVersion: targetKubeVersion,
-    apiVersions: targetApiVersions);
+    apiVersions: targetApiVersions,
+    isUpgrade: false);
 
 var manifest = renderer.Render();
 await File.WriteAllTextAsync(outputPath, manifest, cancellationToken);

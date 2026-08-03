@@ -22,7 +22,8 @@ var renderer = new HelmTemplateRenderer(
     releaseNamespace: "platform",
     values: values,
     kubeVersion: "1.30.0",
-    apiVersions: ["externaldns.k8s.io/v1alpha1"]);
+    apiVersions: ["externaldns.k8s.io/v1alpha1"],
+    isUpgrade: false);
 
 var manifest = renderer.Render();
 ```

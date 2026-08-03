@@ -30,7 +30,8 @@ app.MapPost("/preview", async (
         request.Namespace,
         values,
         kubeVersion: request.KubeVersion,
-        apiVersions: request.ApiVersions);
+        apiVersions: request.ApiVersions,
+        isUpgrade: false);
 
     return Results.Text(renderer.Render(), "text/yaml");
 });
