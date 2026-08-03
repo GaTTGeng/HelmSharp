@@ -34,7 +34,7 @@ if (!result.Succeeded)
 Console.WriteLine(result.StandardOutput);
 ```
 
-A dry run renders and validates the request without applying resources or creating a release revision. This short example is suitable for a one-off preview. When the target release might have history, an approval preview must also derive `DryRunIsUpgrade` and `DryRunRevision` from the complete history; use the [state-aware review-to-deployment example](../examples/dry-run-deployment.md) before recording the approval.
+A dry run renders and validates the request without applying resources or creating a release revision. This short example is suitable for a one-off preview. When the target release might have history, an approval preview must also derive `DryRunIsUpgrade` and `DryRunRevision` from the complete history; use the [state-aware review-to-deployment example](../examples/dry-run-deployment.md) before recording the approval. `ReuseValues` is not supported with `DryRun`; for an approval workflow, resolve and persist the stored effective values before rendering instead.
 
 ## Apply the approved request
 
@@ -45,7 +45,7 @@ After an explicit approval, rebuild the request from the recorded inputs and app
 | Setting | Meaning |
 | --- | --- |
 | `Install = false` | A missing release is an error; use this for upgrade-only endpoints. |
-| `ReuseValues = true` | Start from the stored release values, then overlay this request's values. |
+| `ReuseValues = true` | Start from the stored release values, then overlay this request's values. It is incompatible with `DryRun`; resolve those values yourself before an approval preview. |
 | `ResetValues = true` | Start from chart defaults. It cannot be combined with `ReuseValues`. |
 | `Wait = true` | Wait for supported resource readiness after apply. |
 | `WaitForJobs = true` | Also wait for Jobs; it requires `Wait` or `Atomic`. |
@@ -64,4 +64,4 @@ The built-in readiness waiter covers common workload resources. A CRD can be app
 
 ## Permissions and error handling
 
-The Kubernetes identity needs permission for the rendered resource kinds, namespaces, CRDs where used, hooks, and the release Secret records. High-level operations return `CommandResult`; inspect `Succeeded`, `ExitCode`, `StandardOutput`, and `StandardError` before reporting a result to users. [Troubleshoot failures](error-handling.md) covers the two failure models and the diagnostic context worth retaining.
+The Kubernetes identity needs permission for the rendered resource kinds, namespaces, CRDs where used, hooks, and the release Secret records. High-level operations can return `CommandResult` or throw; inspect `Succeeded`, `ExitCode`, `StandardOutput`, and `StandardError` when a result is returned, and catch/log exceptions at the service boundary. [Troubleshoot failures](error-handling.md) covers the two failure models and the diagnostic context worth retaining.

@@ -34,7 +34,7 @@ if (!result.Succeeded)
 Console.WriteLine(result.StandardOutput);
 ```
 
-试运行会渲染并校验请求，但不会提交资源，也不会创建 release revision。这个简短示例适合一次性预览。目标 release 可能已有历史时，审批预览还必须从完整历史派生 `DryRunIsUpgrade` 与 `DryRunRevision`；写入审批记录前，请使用[状态感知的从评审到部署示例](../examples/dry-run-deployment.md)。
+试运行会渲染并校验请求，但不会提交资源，也不会创建 release revision。这个简短示例适合一次性预览。目标 release 可能已有历史时，审批预览还必须从完整历史派生 `DryRunIsUpgrade` 与 `DryRunRevision`；写入审批记录前，请使用[状态感知的从评审到部署示例](../examples/dry-run-deployment.md)。`ReuseValues` 不支持与 `DryRun` 同时使用；审批工作流应在渲染前自行解析并持久化已存储的生效 values。
 
 ## 提交已经审批的请求
 
@@ -45,7 +45,7 @@ Console.WriteLine(result.StandardOutput);
 | 设置 | 含义 |
 | --- | --- |
 | `Install = false` | 找不到 release 即失败；适用于只允许升级的接口。 |
-| `ReuseValues = true` | 从已存储的 release values 开始，再覆盖本请求 values。 |
+| `ReuseValues = true` | 从已存储的 release values 开始，再覆盖本请求 values。它不能与 `DryRun` 同时使用；审批预览前应自行解析这些 values。 |
 | `ResetValues = true` | 从 Chart 默认值开始，不能和 `ReuseValues` 同时使用。 |
 | `Wait = true` | 提交后等待已支持资源就绪。 |
 | `WaitForJobs = true` | 同时等待 Job，需要 `Wait` 或 `Atomic`。 |
@@ -64,4 +64,4 @@ Hook 先按 weight、再按名称运行。Job 和 Pod hook 会在超时内观察
 
 ## 权限和错误处理
 
-Kubernetes 身份需要目标资源种类、命名空间、所用 CRD、hook 和 release Secret 的权限。高层操作返回 `CommandResult`，在向用户报告结果前检查 `Succeeded`、`ExitCode`、`StandardOutput` 和 `StandardError`。[排查失败](error-handling.md)说明了两类失败模型以及应保留哪些诊断上下文。
+Kubernetes 身份需要目标资源种类、命名空间、所用 CRD、hook 和 release Secret 的权限。高层操作既可能返回 `CommandResult`，也可能抛异常；返回结果时检查 `Succeeded`、`ExitCode`、`StandardOutput` 和 `StandardError`，并在服务边界捕获和记录异常。[排查失败](error-handling.md)说明了两类失败模型以及应保留哪些诊断上下文。

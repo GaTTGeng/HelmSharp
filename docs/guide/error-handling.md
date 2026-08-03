@@ -4,33 +4,41 @@ HelmSharp has two intentionally different failure models. Handle the one used by
 
 | API layer | Failure shape | Typical caller |
 | --- | --- | --- |
-| `HelmClient` in `HelmSharp.Action` | `CommandResult` with exit code, standard output, and standard error | HTTP endpoint, CLI wrapper, deployment service. |
+| `HelmClient` in `HelmSharp.Action` | `CommandResult` for operation results, or a .NET exception for validation, loading, rendering, Kubernetes, or timeout failures | HTTP endpoint, CLI wrapper, deployment service. |
 | `HelmChartLoader`, `HelmValues`, `HelmTemplateRenderer`, repository helpers | .NET exception | Library code that wants normal exception composition. |
 
 ## Handle high-level operations
 
 ```csharp
-var result = await client.TemplateAsync(request, cancellationToken);
-
-if (!result.Succeeded)
+try
 {
-    logger.LogWarning(
-        "Chart render failed for {Chart}, release {Release}: {Error}",
-        request.Chart,
-        request.ReleaseName,
-        result.StandardError);
+    var result = await client.TemplateAsync(request, cancellationToken);
 
-    return Results.BadRequest(new
+    if (!result.Succeeded)
     {
-        error = "The chart could not be rendered.",
-        exitCode = result.ExitCode
-    });
-}
+        logger.LogWarning(
+            "Chart render failed for {Chart}, release {Release}: {Error}",
+            request.Chart,
+            request.ReleaseName,
+            result.StandardError);
 
-return Results.Text(result.StandardOutput, "text/yaml");
+        return Results.BadRequest(new
+        {
+            error = "The chart could not be rendered.",
+            exitCode = result.ExitCode
+        });
+    }
+
+    return Results.Text(result.StandardOutput, "text/yaml");
+}
+catch (Exception ex)
+{
+    logger.LogError(ex, "Chart render threw for {Chart}, release {Release}", request.Chart, request.ReleaseName);
+    return Results.Problem("The chart could not be rendered.", statusCode: 500);
+}
 ```
 
-`StandardOutput` can still be useful when a command fails, so retain it with the operation record when access controls permit. Do not infer success from a non-empty output string; use `Succeeded` or `ExitCode`.
+`StandardOutput` can still be useful when a command returns failure, so retain it with the operation record when access controls permit. Do not infer success from a non-empty output string; use `Succeeded` or `ExitCode`. High-level operations can also throw before producing a `CommandResult`, so catch and log exceptions at the service boundary.
 
 ## Add context around lower-level rendering
 

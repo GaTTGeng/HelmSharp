@@ -4,33 +4,41 @@ HelmSharp 有两种刻意区分的失败模型。根据入口 API 处理相应�
 
 | API 层 | 失败形态 | 常见调用方 |
 | --- | --- | --- |
-| `HelmSharp.Action` 的 `HelmClient` | 含退出码、标准输出和标准错误的 `CommandResult` | HTTP 接口、CLI 包装层、部署服务。 |
+| `HelmSharp.Action` 的 `HelmClient` | 操作结果为 `CommandResult`；验证、加载、渲染、Kubernetes 或超时失败可抛出 .NET 异常 | HTTP 接口、CLI 包装层、部署服务。 |
 | `HelmChartLoader`、`HelmValues`、`HelmTemplateRenderer`、仓库辅助方法 | .NET 异常 | 需要正常异常组合的库代码。 |
 
 ## 处理高层操作
 
 ```csharp
-var result = await client.TemplateAsync(request, cancellationToken);
-
-if (!result.Succeeded)
+try
 {
-    logger.LogWarning(
-        "Chart render failed for {Chart}, release {Release}: {Error}",
-        request.Chart,
-        request.ReleaseName,
-        result.StandardError);
+    var result = await client.TemplateAsync(request, cancellationToken);
 
-    return Results.BadRequest(new
+    if (!result.Succeeded)
     {
-        error = "Chart 无法渲染。",
-        exitCode = result.ExitCode
-    });
-}
+        logger.LogWarning(
+            "Chart render failed for {Chart}, release {Release}: {Error}",
+            request.Chart,
+            request.ReleaseName,
+            result.StandardError);
 
-return Results.Text(result.StandardOutput, "text/yaml");
+        return Results.BadRequest(new
+        {
+            error = "Chart 无法渲染。",
+            exitCode = result.ExitCode
+        });
+    }
+
+    return Results.Text(result.StandardOutput, "text/yaml");
+}
+catch (Exception ex)
+{
+    logger.LogError(ex, "Chart render threw for {Chart}, release {Release}", request.Chart, request.ReleaseName);
+    return Results.Problem("Chart 无法渲染。", statusCode: 500);
+}
 ```
 
-命令失败时 `StandardOutput` 仍可能有价值；在访问控制允许的情况下，将它与操作记录一起保存。不要以输出非空来判断成功，应使用 `Succeeded` 或 `ExitCode`。
+命令返回失败时 `StandardOutput` 仍可能有价值；在访问控制允许的情况下，将它与操作记录一起保存。不要以输出非空来判断成功，应使用 `Succeeded` 或 `ExitCode`。高层操作也可能在产生 `CommandResult` 前抛异常，因此要在服务边界捕获并记录异常。
 
 ## 在低层渲染外补充上下文
 
