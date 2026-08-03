@@ -36,8 +36,7 @@ var result = await client.TemplateAsync(new HelmTemplateRequest
     Namespace = "platform",
     Chart = chartPath,
     ValuesFiles = ["values.production.yaml"],
-    KubeVersion = "1.30.0",
-    IncludeCRDs = true
+    KubeVersion = "1.30.0"
 }, cancellationToken);
 
 if (!result.Succeeded)

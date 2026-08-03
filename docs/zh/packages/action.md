@@ -10,7 +10,7 @@ dotnet add package HelmSharp.Action --version 1.3.1
 
 ## 入口
 
-`HelmClient` 实现 `IHelmClient`，并接收 `IHelmOptionsProvider`。将产品默认值——命名空间、field manager、超时和目标 capabilities——放在这个 provider 中。方法返回 `CommandResult`，调用方无需把异常再解析成命令行形态，就能处理输出与错误。
+`HelmClient` 实现 `IHelmClient`，并接收 `IHelmOptionsProvider`。将产品默认值——命名空间、field manager 和超时——放在这个 provider 中。`TemplateAsync` 从 `HelmTemplateRequest.KubeVersion` 和 `ApiVersions` 获取目标 capabilities，因此每个渲染请求都要设置这些字段。方法返回 `CommandResult`，调用方无需把异常再解析成命令行形态，就能处理输出与错误。
 
 | 操作 | 请求或方法 | 先阅读 |
 | --- | --- | --- |
@@ -24,7 +24,7 @@ dotnet add package HelmSharp.Action --version 1.3.1
 
 ## 重要的生命周期约束
 
-评审时使用试运行。到达 release 持久化阶段的非试运行请求，会留下供后续检查的 Secret 记录。成功升级和回滚会 supersede 之前的已部署 revision；失败会保留失败 revision。未实现的选项会在变更集群前失败，不会被悄悄忽略。
+评审时使用试运行。安装、升级、回滚和保留历史的卸载会留下供后续检查的 Secret 生命周期记录；默认卸载会清除历史。成功升级和回滚会 supersede 之前的已部署 revision；失败会保留失败 revision。未实现的选项会在变更集群前失败，不会被悄悄忽略。
 
 传统 HTTP 仓库和本地依赖已支持。完整 OCI 认证、provenance 验证和全部 Helm CLI 开关并不是 `1.3.1` 的保证；当前边界请看[兼容性](../helm-compatibility.md)。
 

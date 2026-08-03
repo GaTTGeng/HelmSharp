@@ -10,7 +10,7 @@ It brings in the chart, renderer, Kubernetes, release, repository, registry, sto
 
 ## The entry point
 
-`HelmClient` implements `IHelmClient` and accepts an `IHelmOptionsProvider`. Keep product defaults—namespace, field manager, timeout, and target capabilities—in that provider. Methods return `CommandResult`, so callers can handle output and errors without parsing exceptions into a command-line shape.
+`HelmClient` implements `IHelmClient` and accepts an `IHelmOptionsProvider`. Keep product defaults—namespace, field manager, and timeout—in that provider. `TemplateAsync` takes target capabilities from `HelmTemplateRequest.KubeVersion` and `ApiVersions`, so set those fields on each rendering request. Methods return `CommandResult`, so callers can handle output and errors without parsing exceptions into a command-line shape.
 
 | Operation | Request or method | Read first |
 | --- | --- | --- |
@@ -24,7 +24,7 @@ Inspection reads stored revisions; it does not re-render today's version of a ch
 
 ## Important lifecycle constraints
 
-Use dry run for review. Non-dry-run lifecycle requests that reach release persistence leave a Secret-backed revision for later inspection. Successful upgrades and rollbacks supersede the prior deployed revision; failures retain a failed revision. Unsupported options fail before cluster mutation rather than being silently ignored.
+Use dry run for review. Install, upgrade, rollback, and retained uninstalls leave Secret-backed lifecycle evidence for later inspection; a default uninstall purges its history. Successful upgrades and rollbacks supersede the prior deployed revision; failures retain a failed revision. Unsupported options fail before cluster mutation rather than being silently ignored.
 
 Traditional HTTP repositories and local dependencies are supported. Full OCI authentication, provenance verification, and every Helm CLI switch are not `1.3.1` guarantees; check [Compatibility](../helm-compatibility.md) for the current boundary.
 
