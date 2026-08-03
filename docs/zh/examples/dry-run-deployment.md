@@ -35,10 +35,16 @@ if (!previewResult.Succeeded)
 await approvals.SaveAsync(preview, previewResult.StandardOutput, cancellationToken);
 ```
 
-审批服务校验该记录后，根据持久化字段重建请求并提交：
+审批服务校验该记录后，获取该 release 的应用自有锁；在持有锁时校验已持久化的 release 状态，再重建请求并提交，最后才释放锁：
 
 ```csharp
+await using var releaseLock = await releaseLocks.AcquireAsync(
+    releaseName,
+    targetNamespace,
+    cancellationToken);
+
 var apply = await approvals.CreateApprovedRequestAsync(approvalId, cancellationToken);
+await approvals.VerifyReleaseStateAsync(apply, cancellationToken);
 apply.DryRun = false;
 
 var result = await client.UpgradeInstallAsync(apply, cancellationToken);
@@ -48,6 +54,6 @@ if (!result.Succeeded)
 return Results.Ok(new { result.StandardOutput });
 ```
 
-不要相信浏览器第二次提交的 values 或 Chart 版本。执行提交的服务应当自己读取已评审记录。将内容寻址的不可变 Chart 归档和 values 内容快照（或其哈希校验）随审批记录保存；仅保存路径不是稳定输入。本示例在预览和 apply 中都设置 `SkipCRDs = true`：CRD 应作为单独、明确审批的操作来审查和安装。`LoadHistoryForUpgradeInstallAsync` 是应用自有的 `HistoryAsync` 适配器：启用 `CreateNamespace` 时，它会像 apply 路径一样将目标命名空间不存在视为零历史。必须从该完整历史中取最高 revision 来派生预览状态，其中包括失败和保留卸载的 revision，然后将解析出的状态和审批记录一起保存；如果提交前 release 状态已变化，就拒绝提交，或重新渲染并要求新的审批。该工作流要求模板具有确定性：由于 apply 会再次渲染 Chart，审批服务必须拒绝使用 `now`、`uuidv4` 或 `randAlphaNum` 等非确定性函数的 Chart。若必须支持这类 Chart，应使用另一条部署路径来应用已审批的精确 manifest。把 `CommandResult.StandardError`、退出码和操作 ID 保存到受限的操作记录中；对不受信任的调用方只返回通用失败信息。
+不要相信浏览器第二次提交的 values 或 Chart 版本。执行提交的服务应当自己读取已评审记录。将内容寻址的不可变 Chart 归档和 values 内容快照（或其哈希校验）随审批记录保存；仅保存路径不是稳定输入。本示例在预览和 apply 中都设置 `SkipCRDs = true`：CRD 应作为单独、明确审批的操作来审查和安装。`LoadHistoryForUpgradeInstallAsync` 是应用自有的 `HistoryAsync` 适配器：启用 `CreateNamespace` 时，它会像 apply 路径一样将目标命名空间不存在视为零历史。必须从该完整历史中取最高 revision 来派生预览状态，其中包括失败和保留卸载的 revision，然后将解析出的状态和审批记录一起保存。状态校验和 apply 必须是原子的：先获取按 release 粒度的锁，再校验已持久化的状态，直到生命周期调用结束才释放该锁；所有 install、upgrade、rollback 和 uninstall 路径都必须使用同一把锁。若 release 状态已变化，就拒绝提交，否则重新渲染并要求新的审批。该工作流要求模板具有确定性：由于 apply 会再次渲染 Chart，审批服务必须拒绝使用 `now`、`uuidv4` 或 `randAlphaNum` 等非确定性函数的 Chart。若必须支持这类 Chart，应使用另一条部署路径来应用已审批的精确 manifest。把 `CommandResult.StandardError`、退出码和操作 ID 保存到受限的操作记录中；对不受信任的调用方只返回通用失败信息。
 
 `Wait`、`WaitForJobs`、`Atomic` 和 `TimeoutSeconds` 共同决定一次操作何时算完成。选择它们之前，请阅读[安装和升级 Release](../guide/release-workflows.md)。

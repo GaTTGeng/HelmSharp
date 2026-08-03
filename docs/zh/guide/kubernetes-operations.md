@@ -28,7 +28,7 @@ await foreach (var resource in applier.ApplyAsync(
 }
 ```
 
-提交器会拆分 YAML 文档、推导每个资源的标识，并通过 Kubernetes .NET 客户端提交。为每个产品指定稳定的 field manager 名称，这会让服务端字段归属和故障排查更清晰。
+提交器会拆分 YAML 文档、推导每个资源的标识，并通过 Kubernetes .NET 客户端提交。field manager 当前只会传递给通过动态发现路径处理的资源，例如自定义资源；为这些路径使用稳定的名称，可让服务端字段归属和故障排查更清晰。Deployment、Service 等常见的强类型资源当前不会收到该 field manager 值。
 
 ## 命名空间参数的含义
 

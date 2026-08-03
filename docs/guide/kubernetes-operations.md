@@ -28,7 +28,7 @@ await foreach (var resource in applier.ApplyAsync(
 }
 ```
 
-The applier splits YAML documents, derives each resource identity, and applies it through the Kubernetes .NET client. Give every product a stable field-manager name; it makes server-side ownership and troubleshooting more intelligible.
+The applier splits YAML documents, derives each resource identity, and applies it through the Kubernetes .NET client. The field-manager value is currently sent only on dynamically discovered resource paths, such as custom resources; use a stable name there to make server-side ownership and troubleshooting more intelligible. Common typed resources, including Deployments and Services, do not currently receive this field-manager value.
 
 ## Know what the namespace argument does
 
