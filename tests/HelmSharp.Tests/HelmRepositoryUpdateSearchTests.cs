@@ -114,7 +114,7 @@ public sealed class HelmRepositoryUpdateSearchTests : IDisposable
         => new(
             new StaticHelmOptionsProvider(),
             (_, _, _, _) => throw new InvalidOperationException("Kubernetes is not used by repository commands."),
-            () => CreateNoProxyRepository(options));
+            repositoryOptions => CreateNoProxyRepository(repositoryOptions ?? options));
 
     private HelmRepositoryOptions CreateOptions()
     {

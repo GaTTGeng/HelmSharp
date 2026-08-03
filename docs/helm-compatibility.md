@@ -32,7 +32,7 @@ Exact CLI colors, progress text, terminal formatting, and plugin execution are n
 | Named templates and helpers | Supported | Cross-template `define`/`template`/`include` calls are covered by dedicated fixtures and public charts with extensive helper usage. |
 | Built-in objects (`.Release`, `.Chart`, `.Values`, `.Files`, `.Capabilities`, `.Template`) | Supported | All built-in objects are populated and render consistently with Helm CLI output. |
 | Chart packaging and repositories | Partial | Useful APIs exist; archive and repository edge cases remain. |
-| Install, upgrade, rollback, uninstall | Partial | Dry-run and managed workflows exist; full lifecycle parity is still expanding. |
+| Install, upgrade, rollback, uninstall | Supported | Managed lifecycle flows persist deployed, superseded, failed, and retained-uninstall revisions; support operation-wide timeouts, atomic recovery, rollback reservations, and deterministic hooks. Unsupported Helm options fail before mutation. |
 | Kubernetes apply, delete, wait | Partial | Typed operations cover common resources. Other API resources are discovered from the target cluster for apply/delete; readiness behavior remains selective. |
 | Release history in Kubernetes Secrets | Supported | Release records can be persisted without Helm CLI. |
 | OCI registry and provenance | Planned | API surface exists or is planned; production parity is not complete. |

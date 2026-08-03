@@ -938,7 +938,6 @@ internal sealed class KubernetesApiResourceNotFoundException : Exception
     {
     }
 }
-
 internal sealed class KubernetesApiResourceUnsupportedException : InvalidOperationException
 {
     public KubernetesApiResourceUnsupportedException(string apiVersion, string kind)

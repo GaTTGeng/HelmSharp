@@ -9,7 +9,7 @@
 
 HelmSharp is a managed .NET library for rendering Helm-style charts and driving Kubernetes release workflows without invoking the `helm` executable. It is intended for applications that need Helm-like behavior inside a .NET process: template rendering, values merging, chart packaging, repository operations, and release lifecycle operations against Kubernetes.
 
-The project is under active development. M1 (Helm template parity) and M2 (chart packaging and repository parity) are complete, with the renderer continuously checked against focused fixtures and selected public Helm charts. Later milestones expand release lifecycle and Kubernetes operations.
+The project is under active development. M1 (Helm template parity), M2 (chart packaging and repository parity), and M3 (release lifecycle parity) are complete. The renderer and lifecycle flows are continuously checked with focused fixtures, controlled Kubernetes dependencies, and selected public Helm charts. Later milestones expand Kubernetes semantics and compatibility coverage.
 
 The latest published version is **1.2.0**. The M2 packaging, repository, pull, and dependency capabilities described below and in the linked distribution guide are available in the 1.2.0 NuGet packages.
 
@@ -141,8 +141,8 @@ The list below describes the current `master` branch. See the version note above
 - Traditional HTTP repository config/cache management, index generation/merge, offline search, semantic-version pull, digest verification, and safe extraction.
 - Dependency list/update/build with Helm-compatible `Chart.lock`, repository aliases, chart aliases, and local `file://` dependencies.
 - Managed Kubernetes apply/delete/wait operations for common Kubernetes resources.
-- Release history stored in Kubernetes Secrets.
-- Install, upgrade, uninstall, rollback, status, history, manifest, values, hooks, notes, and test-oriented APIs.
+- Helm v3-compatible release history stored in Kubernetes Secrets, including failed and retained-uninstall revisions.
+- Install, upgrade, uninstall, rollback, status, history, manifest, values, hooks, notes, and test-oriented APIs with revision-aware inspection, lifecycle timeouts, atomic recovery, and deterministic hook execution.
 
 See the [chart packaging and repository workflow guide](docs/guide/chart-distribution.md) for complete examples. OCI/provenance parity remains planned separately.
 
@@ -163,6 +163,7 @@ HelmSharp is not a full Helm CLI clone. An unimplemented template function produ
 - [Documentation site](https://gattgeng.github.io/HelmSharp/)
 - [Getting started](docs/getting-started.md)
 - [Guide: installation and rendering](docs/guide/installation.md)
+- [Guide: release workflows](docs/guide/release-workflows.md)
 - [Examples: render preview API](docs/examples/render-preview-api.md)
 - [Package guide: HelmSharp.Action](docs/packages/action.md)
 - [Generated API reference](docs/api/index.md)

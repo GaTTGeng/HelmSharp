@@ -564,7 +564,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
             var sharpRef = helmRepoUrl is null
                 ? helmChartRef
                 : $"{helmRepoUrl.TrimEnd('/')}/{helmChartRef}";
-            using var repository = new HelmChartRepository(Path.Combine(_tempDir, $"sharp-cache-{Guid.NewGuid():N}"));
+            using var repository = CreateNoProxyRepository($"direct-archive-{Guid.NewGuid():N}");
             var sharpPath = await repository.PullChartAsync(sharpRef, version, CancellationToken.None);
 
             AssertOperationSucceeded("helm pull", helmResult);
@@ -592,7 +592,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
 
         async Task AssertPulledVersionAsync(string? version, string expectedVersion)
         {
-            using var repository = new HelmChartRepository(Path.Combine(_tempDir, $"sharp-cache-{Guid.NewGuid():N}"));
+            using var repository = CreateNoProxyRepository($"semver-pull-{Guid.NewGuid():N}");
             var sharpPath = await repository.PullChartAsync(
                 new HelmPullRequest
                 {
@@ -824,7 +824,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
 
         async Task AssertPulledVersionAsync(string? version, string expectedVersion)
         {
-            using var repository = new HelmChartRepository(Path.Combine(_tempDir, $"sharp-cache-{Guid.NewGuid():N}"));
+            using var repository = CreateNoProxyRepository($"short-version-{Guid.NewGuid():N}");
             var sharpPath = await repository.PullChartAsync(
                 $"{server.BaseUrl}/repo-golden",
                 version,
@@ -846,7 +846,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         await using var server = await LocalFileServer.StartAsync(repoDir, username, password);
         await HelmRepoIndexer.GenerateIndexAsync(repoDir, server.BaseUrl, CancellationToken.None);
 
-        using var repository = new HelmChartRepository(Path.Combine(_tempDir, "authenticated-pull-cache"));
+        using var repository = CreateNoProxyRepository("authenticated-pull");
         var chartPath = await repository.PullChartAsync(
             new HelmPullRequest
             {
@@ -910,7 +910,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         await HelmRepoIndexer.GenerateIndexAsync(indexDir, archiveServer.BaseUrl, CancellationToken.None);
         await using var indexServer = await LocalFileServer.StartAsync(indexDir, username, password);
 
-        using var repository = new HelmChartRepository(Path.Combine(_tempDir, "cross-origin-cache"));
+        using var repository = CreateNoProxyRepository("cross-origin");
         var chartPath = await repository.PullChartAsync(
             new HelmPullRequest
             {
@@ -946,7 +946,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         await HelmRepoIndexer.GenerateIndexAsync(indexDir, archiveServer.BaseUrl, CancellationToken.None);
         await using var indexServer = await LocalFileServer.StartAsync(indexDir, username, password);
 
-        using var repository = new HelmChartRepository(Path.Combine(_tempDir, "pass-credentials-cache"));
+        using var repository = CreateNoProxyRepository("pass-credentials");
         var chartPath = await repository.PullChartAsync(
             new HelmPullRequest
             {
@@ -1923,18 +1923,18 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
     private static string GetSinglePackagePath(string destination)
         => Directory.EnumerateFiles(destination, "*.tgz", SearchOption.AllDirectories).Single();
 
-    private static HelmClient CreateClient()
-        => new(new StaticHelmOptionsProvider());
+    private HelmClient CreateClient()
+        => CreateNoProxyClient($"client-{Guid.NewGuid():N}");
 
     private HelmClient CreateNoProxyClient(string name)
         => new(
             new StaticHelmOptionsProvider(),
             (_, _, _, _) => throw new NotSupportedException(),
-            () => CreateNoProxyRepository(name));
+            options => CreateNoProxyRepository(name, options));
 
-    private HelmChartRepository CreateNoProxyRepository(string name)
+    private HelmChartRepository CreateNoProxyRepository(string name, HelmRepositoryOptions? options = null)
     {
-        var options = new HelmRepositoryOptions
+        options ??= new HelmRepositoryOptions
         {
             ConfigDirectory = Path.Combine(_tempDir, name, "config"),
             CacheDirectory = Path.Combine(_tempDir, name, "cache")
