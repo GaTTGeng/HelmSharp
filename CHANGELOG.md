@@ -6,11 +6,15 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+### Security
+
+- Updated the documentation build's transitive PostCSS dependency to resolve the public GHSA-r28c-9q8g-f849 path-traversal advisory.
+
 ## [1.3.0] - 2026-08-03
 
 ### Fixed
 
-- Made loopback chart-repository golden coverage independent of ambient HTTP proxy configuration (#217).
+- Hardened chart-repository compatibility verification against ambient HTTP proxy configuration (#217).
 - Exclude Sprig's `env` and `expandenv` helpers from managed rendering, matching Helm's function map and retaining path-aware diagnostics (#203).
 - Preserve rollback release history when the caller's operation token is canceled during final persistence (#207).
 
