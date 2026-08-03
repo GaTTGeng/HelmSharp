@@ -19,6 +19,7 @@ var preview = new HelmUpgradeInstallRequest
     Namespace = targetNamespace,
     Chart = approvedChartPath,
     ValuesFiles = approvedValuesFiles,
+    SkipCRDs = true,
     CreateNamespace = true,
     Wait = true,
     TimeoutSeconds = 300,
@@ -47,6 +48,6 @@ if (!result.Succeeded)
 return Results.Ok(new { result.StandardOutput });
 ```
 
-Do not trust a browser to send a second copy of the values or chart version. The service that applies must read the reviewed record itself. `LoadHistoryForUpgradeInstallAsync` is an application-owned adapter around `HistoryAsync`: when `CreateNamespace` is enabled, it treats a missing target namespace as empty history, just like the apply path. Derive the preview state from the highest revision in that complete history, including failed and retained-uninstall revisions, then persist that resolved state with the approval. Reject it if the release state has changed before apply; otherwise re-render and require a new approval. Keep `CommandResult.StandardError`, exit code, and operation ID in a restricted operation record; return a generic failure to untrusted callers.
+Do not trust a browser to send a second copy of the values or chart version. The service that applies must read the reviewed record itself. Store a content-addressed immutable chart archive and snapshotted values content (or verify their hashes) with the approval; paths alone are not stable inputs. This example sets `SkipCRDs = true` for both preview and apply: review and install CRDs as a separate, explicitly approved operation. `LoadHistoryForUpgradeInstallAsync` is an application-owned adapter around `HistoryAsync`: when `CreateNamespace` is enabled, it treats a missing target namespace as empty history, just like the apply path. Derive the preview state from the highest revision in that complete history, including failed and retained-uninstall revisions, then persist that resolved state with the approval. Reject it if the release state has changed before apply; otherwise re-render and require a new approval. Keep `CommandResult.StandardError`, exit code, and operation ID in a restricted operation record; return a generic failure to untrusted callers.
 
 `Wait`, `WaitForJobs`, `Atomic`, and `TimeoutSeconds` determine the operation's completion contract. See [Install and upgrade releases](../guide/release-workflows.md) before selecting them.
