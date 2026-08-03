@@ -13,6 +13,7 @@ This project follows semantic versioning once stable releases begin.
 
 ### Added
 
+- Added deterministic lifecycle coverage that verifies Kubernetes resource operations and persisted release transitions through install, upgrade, rollback, and retained uninstall (#25).
 - Completed lifecycle hook execution: deterministic ordering, Job/Pod completion waiting, cleanup policies, and persisted run status (#194).
 - Added Helm v3 release Secret interoperability, legacy HelmSharp payload compatibility, and actionable storage diagnostics (#190).
 - Added uninstall history retention, purge, hook control, and timeout request semantics (#192).
