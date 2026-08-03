@@ -24,7 +24,7 @@ Inspection reads stored revisions; it does not re-render today's version of a ch
 
 ## Important lifecycle constraints
 
-Use dry run for review. Install, upgrade, rollback, and retained uninstalls leave Secret-backed lifecycle evidence for later inspection; a default uninstall purges its history. Successful upgrades and rollbacks supersede the prior deployed revision; failures retain a failed revision. Unsupported options fail before cluster mutation rather than being silently ignored.
+Use dry run for review. Install, upgrade, rollback, and retained uninstalls leave Secret-backed lifecycle evidence for later inspection; a default uninstall purges its history. Successful upgrades and rollbacks supersede the prior deployed revision. Once a lifecycle record has been constructed and persistence handling is active, a failure retains a failed revision; validation, chart loading or rendering, client/history initialization, and namespace-creation failures can occur earlier and leave no revision. Unsupported options fail before cluster mutation rather than being silently ignored.
 
 Traditional HTTP repositories and local dependencies are supported. Full OCI authentication, provenance verification, and every Helm CLI switch are not `1.3.1` guarantees; check [Compatibility](../helm-compatibility.md) for the current boundary.
 

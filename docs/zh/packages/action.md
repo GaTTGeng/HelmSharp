@@ -24,7 +24,7 @@ dotnet add package HelmSharp.Action --version 1.3.1
 
 ## 重要的生命周期约束
 
-评审时使用试运行。安装、升级、回滚和保留历史的卸载会留下供后续检查的 Secret 生命周期记录；默认卸载会清除历史。成功升级和回滚会 supersede 之前的已部署 revision；失败会保留失败 revision。未实现的选项会在变更集群前失败，不会被悄悄忽略。
+评审时使用试运行。安装、升级、回滚和保留历史的卸载会留下供后续检查的 Secret 生命周期记录；默认卸载会清除历史。成功升级和回滚会 supersede 之前的已部署 revision。只有在构造生命周期记录并启动持久化处理后发生的失败才会保留失败 revision；验证、Chart 加载或渲染、客户端或历史初始化以及命名空间创建可能更早失败，因而不会留下 revision。未实现的选项会在变更集群前失败，不会被悄悄忽略。
 
 传统 HTTP 仓库和本地依赖已支持。完整 OCI 认证、provenance 验证和全部 Helm CLI 开关并不是 `1.3.1` 的保证；当前边界请看[兼容性](../helm-compatibility.md)。
 
