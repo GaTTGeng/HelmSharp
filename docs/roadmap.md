@@ -8,7 +8,7 @@ GitHub milestones remain the source of truth for issue-level scope.
 
 **M1: Helm Template Parity** is complete in 1.1.0, **M2: Chart Packaging and Repository Parity** is complete in 1.2.0, and **M3: Release Lifecycle Parity** is complete in 1.3.0. Work now focuses on Kubernetes operations, OCI/provenance, public SDK hardening, and compatibility expansion from real user charts.
 
-The latest published version is 1.3.0. M2 chart-distribution and M3 release-lifecycle documentation describe APIs available from the 1.3.0 NuGet packages.
+The latest published version is 1.3.1. M2 chart-distribution and M3 release-lifecycle documentation describe APIs available from the 1.3.1 NuGet packages.
 
 Review the [compatibility page](helm-compatibility.md) for current rendering coverage, the [chart distribution guide](guide/chart-distribution.md) for M2 workflows, or follow the later milestones on GitHub for release lifecycle, Kubernetes semantics, OCI, and public SDK hardening.
 

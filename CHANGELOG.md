@@ -6,6 +6,8 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-08-03
+
 ### Security
 
 - Updated the documentation build's transitive PostCSS dependency to resolve the public GHSA-r28c-9q8g-f849 path-traversal advisory.
@@ -240,7 +242,8 @@ This was achieved by fixing two parser bugs that blocked full-chart rendering (#
 - Open source project documentation.
 - GitHub Actions workflows for CI and NuGet release publishing.
 
-[Unreleased]: https://github.com/GaTTGeng/HelmSharp/compare/1.3.0...HEAD
+[Unreleased]: https://github.com/GaTTGeng/HelmSharp/compare/1.3.1...HEAD
+[1.3.1]: https://github.com/GaTTGeng/HelmSharp/compare/1.3.0...1.3.1
 [1.3.0]: https://github.com/GaTTGeng/HelmSharp/compare/1.2.0...1.3.0
 [1.2.0]: https://github.com/GaTTGeng/HelmSharp/compare/1.1.1...1.2.0
 [1.1.1]: https://github.com/GaTTGeng/HelmSharp/compare/1.1.0...1.1.1

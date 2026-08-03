@@ -96,18 +96,18 @@ Console.WriteLine(result.StandardOutput);
 多数应用从高层包开始：
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.3.0
+dotnet add package HelmSharp.Action --version 1.3.1
 ```
 
 如果只需要渲染，可以依赖更小的层：
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.3.0
-dotnet add package HelmSharp.Engine --version 1.3.0
+dotnet add package HelmSharp.Chart --version 1.3.1
+dotnet add package HelmSharp.Engine --version 1.3.1
 ```
 
 ::: warning 版本可用性
-1.3.0 是最新发布版本。本站记录的 M2 Chart 分发和 M3 发布生命周期 API 已包含在 1.3.0 NuGet 包中。
+1.3.1 是最新发布版本。本站记录的 M2 Chart 分发和 M3 发布生命周期 API 已包含在 1.3.1 NuGet 包中。
 :::
 
 ## 当前范围

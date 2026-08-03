@@ -9,11 +9,11 @@
 当产品按发布工作流或类命令结果组织逻辑时安装：
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.3.0
+dotnet add package HelmSharp.Action --version 1.3.1
 ```
 
 ::: warning 版本可用性
-1.3.0 是最新发布包。下文的 M2 请求类型和分发工作流，以及 M3 安装、升级、回滚、卸载、检查和 hook API，均已包含在上面的安装命令所安装的包中。
+1.3.1 是最新发布包。下文的 M2 请求类型和分发工作流，以及 M3 安装、升级、回滚、卸载、检查和 hook API，均已包含在上面的安装命令所安装的包中。
 :::
 
 ## 依赖关系

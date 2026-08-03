@@ -9,11 +9,11 @@
 Install this package for any render-only integration:
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.3.0
+dotnet add package HelmSharp.Chart --version 1.3.1
 ```
 
 ::: warning Version availability
-1.3.0 is the latest published package. The M2 lock-file, dependency-alias, and local-dependency behavior described below is available in 1.3.0.
+1.3.1 is the latest published package. The M2 lock-file, dependency-alias, and local-dependency behavior described below is available in 1.3.1.
 :::
 
 ## Dependencies

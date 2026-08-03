@@ -5,7 +5,7 @@
 `HelmSharp.Repo` handles chart repository metadata: add, remove, list, search, pull, push-to-OCI placeholder behavior, and index generation.
 
 ::: warning Version availability
-1.3.0 is the latest published package. The complete M2 configuration, cache, search, semantic-version pull, digest, and extraction behavior described below is available in 1.3.0.
+1.3.1 is the latest published package. The complete M2 configuration, cache, search, semantic-version pull, digest, and extraction behavior described below is available in 1.3.1.
 :::
 
 ## Repository configuration and cache
@@ -29,7 +29,7 @@ The existing `HelmChartRepository(cacheDirectory)` overload remains available an
 Install directly when building repository management tools:
 
 ```powershell
-dotnet add package HelmSharp.Repo --version 1.3.0
+dotnet add package HelmSharp.Repo --version 1.3.1
 ```
 
 ## Dependencies

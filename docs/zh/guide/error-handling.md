@@ -9,7 +9,7 @@ HelmSharp 有两类失败形态：高层类命令 API 的 `CommandResult`，以�
 大多数应用层错误处理从这里开始：
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.3.0
+dotnet add package HelmSharp.Action --version 1.3.1
 ```
 
 ## 完整最小代码

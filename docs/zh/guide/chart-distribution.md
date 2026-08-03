@@ -3,7 +3,7 @@
 M2 使用纯托管 .NET 覆盖传统 HTTP Chart 工作流：打包 Chart、生成 `index.yaml`、管理仓库配置与缓存、拉取归档，以及更新或按锁文件重建依赖。测试套件把 Helm 作为参照，但运行时不依赖 Helm。
 
 ::: warning M2 API 尚未发布
-本指南的工作流和请求对象已包含在 HelmSharp 1.3.0 中。
+本指南的工作流和请求对象已包含在 HelmSharp 1.3.1 中。
 :::
 
 ## 打包 Chart

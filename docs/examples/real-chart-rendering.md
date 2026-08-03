@@ -7,7 +7,7 @@ Public charts are useful integration checks because they exercise helpers, neste
 ## Packages to install
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.3.0
+dotnet add package HelmSharp.Action --version 1.3.1
 ```
 
 ## Minimal complete code

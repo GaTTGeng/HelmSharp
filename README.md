@@ -11,7 +11,7 @@ HelmSharp is a managed .NET library for rendering Helm-style charts and driving 
 
 The project is under active development. M1 (Helm template parity), M2 (chart packaging and repository parity), and M3 (release lifecycle parity) are complete. The renderer and lifecycle flows are continuously checked with focused fixtures, controlled Kubernetes dependencies, and selected public Helm charts. Later milestones expand Kubernetes semantics and compatibility coverage.
 
-The latest published version is **1.3.0**. The M2 chart-distribution and M3 release-lifecycle capabilities described below and in the linked guides are available in the 1.3.0 NuGet packages.
+The latest published version is **1.3.1**. The M2 chart-distribution and M3 release-lifecycle capabilities described below and in the linked guides are available in the 1.3.1 NuGet packages.
 
 Documentation site: [https://gattgeng.github.io/HelmSharp/](https://gattgeng.github.io/HelmSharp/)
 

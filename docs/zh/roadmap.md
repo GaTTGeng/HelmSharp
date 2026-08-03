@@ -8,7 +8,7 @@
 
 **M1：Helm 模板对齐** 已在 1.1.0 完成，**M2：Chart 打包和仓库对齐** 已在 1.2.0 完成，**M3：发布生命周期对齐** 已在 1.3.0 完成。当前重点转向 Kubernetes 操作、OCI/来源证明、公共 SDK 加固，以及来自真实用户 Chart 的兼容性扩展。
 
-最新发布版本是 1.3.0。M2 Chart 分发和 M3 发布生命周期文档描述的是 1.3.0 NuGet 包中可用的 API。
+最新发布版本是 1.3.1。M2 Chart 分发和 M3 发布生命周期文档描述的是 1.3.1 NuGet 包中可用的 API。
 
 当前渲染覆盖范围见 [兼容性页面](helm-compatibility.md)，M2 工作流见 [Chart 分发指南](guide/chart-distribution.md)；发布生命周期、Kubernetes 语义、OCI 和公共 SDK 加固可继续跟踪 GitHub 上的后续 milestones。
 
