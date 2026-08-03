@@ -7,6 +7,15 @@ internal static class HelmCliRunner
 {
     private static readonly TimeSpan AvailabilityTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(30);
+    private static readonly string[] ProxyEnvironmentVariables =
+    [
+        "ALL_PROXY",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "all_proxy",
+        "http_proxy",
+        "https_proxy"
+    ];
     private static readonly Lazy<bool> HelmAvailability = new(
         DetectAvailability,
         LazyThreadSafetyMode.ExecutionAndPublication);
@@ -250,6 +259,8 @@ internal static class HelmCliRunner
         process.StartInfo.Environment["HELM_CONFIG_HOME"] = home.ConfigHome;
         process.StartInfo.Environment["HELM_CACHE_HOME"] = home.CacheHome;
         process.StartInfo.Environment["HELM_DATA_HOME"] = home.DataHome;
+        foreach (var variable in ProxyEnvironmentVariables)
+            process.StartInfo.Environment.Remove(variable);
 
         foreach (var argument in arguments)
             process.StartInfo.ArgumentList.Add(argument);

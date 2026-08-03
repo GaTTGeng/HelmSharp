@@ -9,7 +9,7 @@
 
 HelmSharp 是一个面向 .NET 的托管 Helm 风格库，用于在不调用 `helm` 可执行文件的情况下渲染 Helm 风格 Chart 并驱动 Kubernetes Release 工作流。它适合需要在 .NET 进程内完成模板渲染、values 合并、Chart 打包、仓库操作和 Kubernetes 发布生命周期管理的应用。
 
-项目仍在积极开发中。M1（Helm 模板对齐）和 M2（Chart 打包和仓库对齐）均已完成，渲染器会持续通过聚焦测试用 Chart 和选定公开 Helm Chart 校验；后续里程碑将扩展发布生命周期和 Kubernetes 操作。
+项目仍在积极开发中。M1（Helm 模板对齐）、M2（Chart 打包和仓库对齐）以及 M3（发布生命周期对齐）均已完成。渲染器和发布生命周期会持续通过聚焦测试用 Chart、受控 Kubernetes 依赖以及选定公开 Helm Chart 校验；后续里程碑将扩展 Kubernetes 语义和兼容性覆盖。
 
 最新发布版本是 **1.2.0**。下文以及所链接分发指南中的 M2 打包、仓库、拉取和依赖能力已包含在 1.2.0 NuGet 包中。
 
@@ -141,8 +141,8 @@ await foreach (var line in client.UpgradeInstallStreamAsync(new HelmUpgradeInsta
 - 传统 HTTP 仓库配置/缓存管理、索引生成与合并、离线搜索、语义版本拉取、摘要校验和安全解压。
 - 使用兼容 Helm 的 `Chart.lock` 执行依赖 list/update/build，并支持仓库别名、Chart 别名和本地 `file://` 依赖。
 - 对常见 Kubernetes 资源执行托管 apply/delete/wait。
-- 使用 Kubernetes Secret 保存 Release 历史。
-- 提供 install、upgrade、uninstall、rollback、status、history、manifest、values、hooks、notes 和 test 相关 API。
+- 使用兼容 Helm v3 的 Kubernetes Secret 保存 Release 历史，包括失败 revision 和保留历史的卸载 revision。
+- 提供 install、upgrade、uninstall、rollback、status、history、manifest、values、hooks、notes 和 test 相关 API，并支持按 revision 查询、生命周期超时、原子恢复和确定性 hook 执行。
 
 完整示例见 [Chart 打包与仓库工作流指南](docs/zh/guide/chart-distribution.md)。OCI 与来源证明对齐将单独推进。
 
@@ -163,6 +163,7 @@ HelmSharp 不是完整的 Helm CLI 克隆。尚未实现的模板函数会产生
 - [文档站点](https://gattgeng.github.io/HelmSharp/)
 - [入门指南](docs/getting-started.md)
 - [指南：安装与渲染](docs/guide/installation.md)
+- [指南：发布工作流](docs/zh/guide/release-workflows.md)
 - [示例：渲染预览 API](docs/examples/render-preview-api.md)
 - [包指南：HelmSharp.Action](docs/packages/action.md)
 - [生成 API 参考](docs/api/index.md)
