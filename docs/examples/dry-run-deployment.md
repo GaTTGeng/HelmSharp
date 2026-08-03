@@ -1,12 +1,16 @@
 # Turn a review into a deployment
 
-Use one release request for the review and another, equivalent request for the approved apply. Before rendering the review, resolve the current release state from an application-owned release store so the preview has the same install/upgrade state and next revision as the apply. After approval, only `DryRun` changes; chart identity, values, namespace, release state, and the options-provider configuration stay fixed.
+Use one release request for the review and another, equivalent request for the approved apply. Before rendering the review, resolve the full release history from an application-owned release store so the preview has the same install/upgrade state and next revision as the apply. After approval, only `DryRun` changes; chart identity, values, namespace, release state, and the options-provider configuration stay fixed.
 
 ```csharp
-var currentRelease = await releases.GetLatestAsync(
+var releaseHistory = await releases.HistoryAsync(
     releaseName,
     targetNamespace,
     cancellationToken);
+var latestRelease = releaseHistory.MaxBy(release => release.Revision);
+var isUpgrade = latestRelease is not null &&
+    !string.Equals(latestRelease.Status, "uninstalled", StringComparison.OrdinalIgnoreCase);
+var nextRevision = latestRelease?.Revision + 1 ?? 1;
 
 var preview = new HelmUpgradeInstallRequest
 {
@@ -18,8 +22,8 @@ var preview = new HelmUpgradeInstallRequest
     Wait = true,
     TimeoutSeconds = 300,
     DryRun = true,
-    DryRunIsUpgrade = currentRelease is not null,
-    DryRunRevision = currentRelease is null ? 1 : currentRelease.Revision + 1
+    DryRunIsUpgrade = isUpgrade,
+    DryRunRevision = nextRevision
 };
 
 var previewResult = await client.UpgradeInstallAsync(preview, cancellationToken);
@@ -42,6 +46,6 @@ if (!result.Succeeded)
 return Results.Ok(new { result.StandardOutput });
 ```
 
-Do not trust a browser to send a second copy of the values or chart version. The service that applies must read the reviewed record itself. Persist the preview's resolved release state with the approval and reject it if the release state has changed before apply; otherwise re-render and require a new approval. Keep `CommandResult.StandardError`, exit code, and operation ID in a restricted operation record; return a generic failure to untrusted callers.
+Do not trust a browser to send a second copy of the values or chart version. The service that applies must read the reviewed record itself. Derive the preview state from the highest revision in the complete history, including failed and retained-uninstall revisions, then persist that resolved state with the approval. Reject it if the release state has changed before apply; otherwise re-render and require a new approval. Keep `CommandResult.StandardError`, exit code, and operation ID in a restricted operation record; return a generic failure to untrusted callers.
 
 `Wait`, `WaitForJobs`, `Atomic`, and `TimeoutSeconds` determine the operation's completion contract. See [Install and upgrade releases](../guide/release-workflows.md) before selecting them.

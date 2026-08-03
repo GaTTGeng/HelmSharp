@@ -1,12 +1,16 @@
 # 把评审结果变成部署
 
-评审和实际提交各使用一个 release 请求。渲染评审前，应从应用自己持久化的 release store 读取当前 release 状态，让预览和实际提交使用相同的安装/升级状态及下一 revision。审批后只能改变 `DryRun`；Chart 标识、values、命名空间、release 状态和 options provider 配置必须保持不变。
+评审和实际提交各使用一个 release 请求。渲染评审前，应从应用自己持久化的 release store 读取完整 release 历史，让预览和实际提交使用相同的安装/升级状态及下一 revision。审批后只能改变 `DryRun`；Chart 标识、values、命名空间、release 状态和 options provider 配置必须保持不变。
 
 ```csharp
-var currentRelease = await releases.GetLatestAsync(
+var releaseHistory = await releases.HistoryAsync(
     releaseName,
     targetNamespace,
     cancellationToken);
+var latestRelease = releaseHistory.MaxBy(release => release.Revision);
+var isUpgrade = latestRelease is not null &&
+    !string.Equals(latestRelease.Status, "uninstalled", StringComparison.OrdinalIgnoreCase);
+var nextRevision = latestRelease?.Revision + 1 ?? 1;
 
 var preview = new HelmUpgradeInstallRequest
 {
@@ -18,8 +22,8 @@ var preview = new HelmUpgradeInstallRequest
     Wait = true,
     TimeoutSeconds = 300,
     DryRun = true,
-    DryRunIsUpgrade = currentRelease is not null,
-    DryRunRevision = currentRelease is null ? 1 : currentRelease.Revision + 1
+    DryRunIsUpgrade = isUpgrade,
+    DryRunRevision = nextRevision
 };
 
 var previewResult = await client.UpgradeInstallAsync(preview, cancellationToken);
@@ -42,6 +46,6 @@ if (!result.Succeeded)
 return Results.Ok(new { result.StandardOutput });
 ```
 
-不要相信浏览器第二次提交的 values 或 Chart 版本。执行提交的服务应当自己读取已评审记录。将预览时解析出的 release 状态和审批记录一起保存；如果提交前 release 状态已变化，就拒绝提交，或重新渲染并要求新的审批。把 `CommandResult.StandardError`、退出码和操作 ID 保存到受限的操作记录中；对不受信任的调用方只返回通用失败信息。
+不要相信浏览器第二次提交的 values 或 Chart 版本。执行提交的服务应当自己读取已评审记录。必须从完整历史中取最高 revision 来派生预览状态，其中包括失败和保留卸载的 revision，然后将解析出的状态和审批记录一起保存；如果提交前 release 状态已变化，就拒绝提交，或重新渲染并要求新的审批。把 `CommandResult.StandardError`、退出码和操作 ID 保存到受限的操作记录中；对不受信任的调用方只返回通用失败信息。
 
 `Wait`、`WaitForJobs`、`Atomic` 和 `TimeoutSeconds` 共同决定一次操作何时算完成。选择它们之前，请阅读[安装和升级 Release](../guide/release-workflows.md)。
