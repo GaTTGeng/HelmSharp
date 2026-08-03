@@ -34,19 +34,11 @@ if (!result.Succeeded)
 Console.WriteLine(result.StandardOutput);
 ```
 
-试运行会渲染并校验请求，但不会提交资源，也不会创建 release revision。在产品中，应把预览、values 输入与结果一起纳入审批记录。
+试运行会渲染并校验请求，但不会提交资源，也不会创建 release revision。这个简短示例适合一次性预览。目标 release 可能已有历史时，审批预览还必须从完整历史派生 `DryRunIsUpgrade` 与 `DryRunRevision`；写入审批记录前，请使用[状态感知的从评审到部署示例](../examples/dry-run-deployment.md)。
 
 ## 提交已经审批的请求
 
-获得明确审批后，用 `DryRun = false` 再执行同一请求。不要在预览和提交之间悄悄改变 values、Chart 版本、目标命名空间或 capabilities 输入。`HelmUpgradeInstallRequest` 是可变对象：要么根据已审批的数据创建新请求，要么只在实例未被共享时修改标记。
-
-```csharp
-request.DryRun = false;
-var applyResult = await client.UpgradeInstallAsync(request, cancellationToken);
-
-if (!applyResult.Succeeded)
-    throw new InvalidOperationException(applyResult.StandardError);
-```
+获得明确审批后，根据记录的输入重建请求，并通过[状态感知的从评审到部署示例](../examples/dry-run-deployment.md)提交。不要在预览和提交之间悄悄改变 values、Chart 版本、目标命名空间、capabilities 输入或已解析出的 release 状态。`HelmUpgradeInstallRequest` 是可变对象，因此不要在预览与提交操作之间共享该请求。
 
 ## 明确设置生命周期行为
 

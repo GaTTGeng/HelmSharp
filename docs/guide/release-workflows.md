@@ -34,19 +34,11 @@ if (!result.Succeeded)
 Console.WriteLine(result.StandardOutput);
 ```
 
-A dry run renders and validates the request without applying resources or creating a release revision. Make the preview, values inputs, and result part of the approval record in your own product.
+A dry run renders and validates the request without applying resources or creating a release revision. This short example is suitable for a one-off preview. When the target release might have history, an approval preview must also derive `DryRunIsUpgrade` and `DryRunRevision` from the complete history; use the [state-aware review-to-deployment example](../examples/dry-run-deployment.md) before recording the approval.
 
 ## Apply the approved request
 
-After an explicit approval, issue the same request with `DryRun = false`. Do not silently change values, chart version, target namespace, or capability inputs between preview and apply. `HelmUpgradeInstallRequest` is mutable, so either create a new request from the approved data or flip the flag only when the request instance is not shared.
-
-```csharp
-request.DryRun = false;
-var applyResult = await client.UpgradeInstallAsync(request, cancellationToken);
-
-if (!applyResult.Succeeded)
-    throw new InvalidOperationException(applyResult.StandardError);
-```
+After an explicit approval, rebuild the request from the recorded inputs and apply it through the [state-aware review-to-deployment example](../examples/dry-run-deployment.md). Do not silently change values, chart version, target namespace, capability inputs, or the resolved release state between preview and apply. `HelmUpgradeInstallRequest` is mutable, so do not share the preview request with the apply operation.
 
 ## Set lifecycle behavior deliberately
 
