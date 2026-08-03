@@ -201,7 +201,7 @@ public static class Snippets
         {
             ChartPath = chartPath,
             Destination = outputDirectory,
-            Version = "1.2.0",
+            Version = "1.3.0",
             AppVersion = "2026.07",
             DependencyUpdate = true
         }, cancellationToken);
@@ -246,7 +246,7 @@ public static class Snippets
         return await repository.PullChartAsync(new HelmPullRequest
         {
             ChartReference = "stable/app",
-            Version = "~1.2.0",
+            Version = "~1.3.0",
             Destination = outputDirectory,
             Untar = true,
             UntarDirectory = Path.Combine(outputDirectory, "expanded"),

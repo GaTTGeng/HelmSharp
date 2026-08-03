@@ -3,7 +3,7 @@
 Start with the workflow, then choose the smallest package. The detailed member index lives under [API Reference](api/index.md); this page is the decision guide.
 
 ::: warning Version availability
-1.2.0 is the latest published version. The M2 request objects and distribution workflows on this page are available in the 1.2.0 NuGet packages.
+1.3.0 is the latest published version. The M2 request objects, distribution workflows, and M3 lifecycle APIs on this page are available in the 1.3.0 NuGet packages.
 :::
 
 ## Package decision table
@@ -53,13 +53,13 @@ await client.PackageAsync(new HelmPackageRequest
 {
     ChartPath = "./charts/app",
     Destination = "./artifacts",
-    Version = "1.2.0"
+    Version = "1.3.0"
 });
 
 await client.PullAsync(new HelmPullRequest
 {
     ChartReference = "app",
-    Version = "~1.2.0",
+    Version = "~1.3.0",
     RepositoryUrl = "https://charts.example.com"
 });
 

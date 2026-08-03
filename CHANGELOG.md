@@ -6,6 +6,8 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-03
+
 ### Fixed
 
 - Made loopback chart-repository golden coverage independent of ambient HTTP proxy configuration (#217).

@@ -7,7 +7,7 @@ Values are usually the integration boundary between your product model and a Hel
 ## Packages to install
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.2.0
+dotnet add package HelmSharp.Chart --version 1.3.0
 ```
 
 ## Minimal complete code

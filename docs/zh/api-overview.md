@@ -3,7 +3,7 @@
 先看工作流，再选最小包。详细成员索引在 [API 参考](api/index.md)，本页用于决策。
 
 ::: warning 版本可用性
-1.2.0 是最新发布版本。本页的 M2 请求对象和分发工作流已包含在 1.2.0 NuGet 包中。
+1.3.0 是最新发布版本。本页的 M2 请求对象、分发工作流和 M3 生命周期 API 已包含在 1.3.0 NuGet 包中。
 :::
 
 ## 包选择表
@@ -53,13 +53,13 @@ await client.PackageAsync(new HelmPackageRequest
 {
     ChartPath = "./charts/app",
     Destination = "./artifacts",
-    Version = "1.2.0"
+    Version = "1.3.0"
 });
 
 await client.PullAsync(new HelmPullRequest
 {
     ChartReference = "app",
-    Version = "~1.2.0",
+    Version = "~1.3.0",
     RepositoryUrl = "https://charts.example.com"
 });
 

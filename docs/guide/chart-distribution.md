@@ -3,7 +3,7 @@
 M2 covers the traditional HTTP chart workflow entirely in managed .NET: package a chart, generate an `index.yaml`, manage repository configuration and caches, pull an archive, and update or rebuild dependencies. Helm is used by the test suite as an oracle, but it is not a runtime dependency.
 
 ::: warning Unreleased M2 APIs
-The workflows and request objects in this guide are available in HelmSharp 1.2.0.
+The workflows and request objects in this guide are available in HelmSharp 1.3.0.
 :::
 
 ## Package a chart

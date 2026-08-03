@@ -7,8 +7,8 @@ GitOps 工作流可以在进程内渲染 Chart，把 YAML 写入仓库，再打�
 ## 安装哪些包
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.2.0
-dotnet add package HelmSharp.Engine --version 1.2.0
+dotnet add package HelmSharp.Chart --version 1.3.0
+dotnet add package HelmSharp.Engine --version 1.3.0
 ```
 
 ## 完整最小代码

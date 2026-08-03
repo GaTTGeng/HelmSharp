@@ -6,9 +6,9 @@ GitHub milestones remain the source of truth for issue-level scope.
 
 ## Current focus
 
-**M1: Helm Template Parity** is complete in 1.1.0, **M2: Chart Packaging and Repository Parity** is complete in 1.2.0, and **M3: Release Lifecycle Parity** is complete on `master` for the next feature release. Work now focuses on Kubernetes operations, OCI/provenance, public SDK hardening, and compatibility expansion from real user charts.
+**M1: Helm Template Parity** is complete in 1.1.0, **M2: Chart Packaging and Repository Parity** is complete in 1.2.0, and **M3: Release Lifecycle Parity** is complete in 1.3.0. Work now focuses on Kubernetes operations, OCI/provenance, public SDK hardening, and compatibility expansion from real user charts.
 
-The latest published version is 1.2.0. M2 API documentation and examples describe APIs available from the 1.2.0 NuGet packages.
+The latest published version is 1.3.0. M2 chart-distribution and M3 release-lifecycle documentation describe APIs available from the 1.3.0 NuGet packages.
 
 Review the [compatibility page](helm-compatibility.md) for current rendering coverage, the [chart distribution guide](guide/chart-distribution.md) for M2 workflows, or follow the later milestones on GitHub for release lifecycle, Kubernetes semantics, OCI, and public SDK hardening.
 
@@ -26,7 +26,7 @@ Review the [compatibility page](helm-compatibility.md) for current rendering cov
 | --- | --- | --- |
 | [M1: Helm Template Parity](https://github.com/GaTTGeng/HelmSharp/milestone/1) | Complete in 1.1.0 | Render common charts from .NET with predictable Helm-compatible output. |
 | [M2: Chart Packaging and Repository Parity](https://github.com/GaTTGeng/HelmSharp/milestone/2) | Complete in 1.2.0 | Package, index, pull, and resolve chart dependencies without CLI handoffs. |
-| [M3: Release Lifecycle Parity](https://github.com/GaTTGeng/HelmSharp/milestone/6) | Complete on `master` | Install, upgrade, rollback, uninstall, status, history, and hook behavior with durable revision transitions. |
+| [M3: Release Lifecycle Parity](https://github.com/GaTTGeng/HelmSharp/milestone/6) | Complete in 1.3.0 | Install, upgrade, rollback, uninstall, status, history, and hook behavior with durable revision transitions. |
 | [M4: Kubernetes Apply and Wait Semantics](https://github.com/GaTTGeng/HelmSharp/milestone/5) | Planned | Correct resource identity, namespace handling, readiness, Jobs, deletion, and hook cleanup. |
 | [M5: OCI and Provenance](https://github.com/GaTTGeng/HelmSharp/milestone/4) | Planned | Registry authentication, chart pull/push, signing, and verification. |
 | [M6: Public SDK Hardening](https://github.com/GaTTGeng/HelmSharp/milestone/3) | Ongoing | Better docs, examples, nullable correctness, package quality, and API polish. |

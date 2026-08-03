@@ -7,7 +7,7 @@ Release workflows combine rendering, Kubernetes apply/delete/wait, hooks, and re
 ## Packages to install
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.2.0
+dotnet add package HelmSharp.Action --version 1.3.0
 ```
 
 ## Minimal complete code

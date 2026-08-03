@@ -11,14 +11,14 @@ HelmSharp 运行时不需要 `helm` 可执行文件。只有发布、提交、�
 大多数应用从高层客户端开始：
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.2.0
+dotnet add package HelmSharp.Action --version 1.3.0
 ```
 
 只做渲染时安装低层包：
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.2.0
-dotnet add package HelmSharp.Engine --version 1.2.0
+dotnet add package HelmSharp.Chart --version 1.3.0
+dotnet add package HelmSharp.Engine --version 1.3.0
 ```
 
 ## 完整最小代码

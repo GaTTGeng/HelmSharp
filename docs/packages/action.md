@@ -9,11 +9,11 @@
 Install this package when your product thinks in release workflows or command-style results:
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.2.0
+dotnet add package HelmSharp.Action --version 1.3.0
 ```
 
 ::: warning Version availability
-1.2.0 is the latest published package. The M2 request types and package, pull, repository-index, and dependency workflows below are available from this 1.2.0 install command.
+1.3.0 is the latest published package. The M2 request types and distribution workflows, plus the M3 install, upgrade, rollback, uninstall, inspection, and hook APIs below, are available from this install command.
 :::
 
 ## Dependencies
