@@ -530,6 +530,106 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task ReleaseLifecycle_ControlledKubernetesDependencyTracksResourceAndRevisionTransitions()
+    {
+        var chartDir = await CreateMinimalChartAsync("controlled-lifecycle-chart");
+        var configMapPath = Path.Combine(chartDir, "templates", "configmap.yaml");
+        await File.WriteAllTextAsync(configMapPath, """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: controlled-lifecycle
+            data:
+              marker: first
+            """);
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "NOTES.txt"), "controlled lifecycle note\n");
+
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "controlled-lifecycle",
+            Chart = chartDir,
+            Wait = true
+        }));
+
+        Assert.Contains(releaseState.AppliedConfigMapNames, name => name == "controlled-lifecycle");
+        Assert.Contains(releaseState.ConfigMapWrites, write =>
+            write.Method == HttpMethod.Post && write.Content.Contains("\"marker\":\"first\"", StringComparison.Ordinal));
+        var installed = Assert.Single(releaseState.Records("controlled-lifecycle"));
+        Assert.Equal((1, "deployed"), (installed.Revision, installed.Status));
+        Assert.Equal("controlled lifecycle note", installed.Notes);
+        Assert.Contains("marker: first", installed.Manifest);
+
+        await File.WriteAllTextAsync(configMapPath, """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: controlled-lifecycle
+            data:
+              marker: second
+            """);
+        releaseState.AppliedConfigMapNames.Clear();
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "controlled-lifecycle",
+            Chart = chartDir,
+            Wait = true
+        }));
+
+        Assert.Contains(releaseState.AppliedConfigMapNames, name => name == "controlled-lifecycle");
+        Assert.Contains(releaseState.ConfigMapWrites, write =>
+            write.Method == HttpMethod.Put && write.Content.Contains("\"marker\":\"second\"", StringComparison.Ordinal));
+        Assert.Collection(
+            releaseState.Records("controlled-lifecycle"),
+            record => Assert.Equal((1, "superseded"), (record.Revision, record.Status)),
+            record => Assert.Equal((2, "deployed"), (record.Revision, record.Status)));
+
+        releaseState.AppliedConfigMapNames.Clear();
+        var rollback = await client.RollbackAsync(new HelmRollbackRequest
+        {
+            ReleaseName = "controlled-lifecycle",
+            Namespace = "test-ns",
+            Revision = 1,
+            Wait = true
+        });
+
+        Assert.Equal(0, rollback.ExitCode);
+        Assert.Contains(releaseState.AppliedConfigMapNames, name => name == "controlled-lifecycle");
+        Assert.Contains(releaseState.ConfigMapWrites, write =>
+            write.Method == HttpMethod.Put && write.Content.Contains("\"marker\":\"first\"", StringComparison.Ordinal));
+        var rolledBack = Assert.Single(releaseState.Records("controlled-lifecycle"), record => record.Revision == 3);
+        Assert.Equal("deployed", rolledBack.Status);
+        Assert.Contains("marker: first", rolledBack.Manifest);
+
+        releaseState.DeletedPaths.Clear();
+        var uninstall = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "controlled-lifecycle",
+            Namespace = "test-ns",
+            KeepHistory = true,
+            Wait = true
+        });
+
+        Assert.Equal(0, uninstall.ExitCode);
+        Assert.Contains(releaseState.DeletedPaths, path =>
+            path.EndsWith("/configmaps/controlled-lifecycle", StringComparison.Ordinal));
+        Assert.Collection(
+            releaseState.Records("controlled-lifecycle"),
+            record => Assert.Equal((1, "superseded"), (record.Revision, record.Status)),
+            record => Assert.Equal((2, "superseded"), (record.Revision, record.Status)),
+            record => Assert.Equal((3, "superseded"), (record.Revision, record.Status)),
+            record => Assert.Equal((4, "uninstalled"), (record.Revision, record.Status)));
+
+        var history = await client.HistoryAsync("controlled-lifecycle", "test-ns");
+        Assert.Equal(0, history.ExitCode);
+        using var historyJson = JsonDocument.Parse(history.StandardOutput);
+        Assert.Equal([1, 2, 3, 4], historyJson.RootElement.EnumerateArray()
+            .Select(record => record.GetProperty("revision").GetInt32()));
+    }
+
+    [Fact]
     public async Task ReleaseLifecycle_InstallDisabledDoesNotCreateMissingRelease()
     {
         var chartDir = await CreateMinimalChartAsync("install-disabled-chart");
@@ -1901,6 +2001,12 @@ public class ChartOperationsTests : IDisposable
                 return JsonResponse(request, HttpStatusCode.OK, "{}");
             }
 
+            if (request.Method == HttpMethod.Delete && path.Contains("/configmaps/", StringComparison.Ordinal))
+            {
+                _releaseState.ConfigMaps.Remove(path);
+                return JsonResponse(request, HttpStatusCode.OK, "{}");
+            }
+
             if ((request.Method == HttpMethod.Post || request.Method == HttpMethod.Put) &&
                 path.Contains("/configmaps", StringComparison.Ordinal))
             {
@@ -1919,8 +2025,11 @@ public class ChartOperationsTests : IDisposable
                 }
                 _releaseState.AppliedPaths.Add(path);
                 var configMap = await request.Content!.ReadAsStringAsync(cancellationToken);
-                _releaseState.AppliedConfigMapNames.Add(
-                    JsonDocument.Parse(configMap).RootElement.GetProperty("metadata").GetProperty("name").GetString()!);
+                var name = JsonDocument.Parse(configMap).RootElement.GetProperty("metadata").GetProperty("name").GetString()!;
+                var resourcePath = request.Method == HttpMethod.Post ? $"{path}/{name}" : path;
+                _releaseState.AppliedConfigMapNames.Add(name);
+                _releaseState.ConfigMapWrites.Add((request.Method, resourcePath, configMap));
+                _releaseState.ConfigMaps[resourcePath] = configMap;
                 return JsonResponse(request, request.Method == HttpMethod.Post ? HttpStatusCode.Created : HttpStatusCode.OK, configMap);
             }
 
@@ -1937,7 +2046,9 @@ public class ChartOperationsTests : IDisposable
             if (request.Method == HttpMethod.Get && path.Contains("/configmaps/", StringComparison.Ordinal))
             {
                 _releaseState.WaitedPaths.Add(path);
-                return JsonResponse(request, HttpStatusCode.NotFound, "{ \"code\": 404 }");
+                return _releaseState.ConfigMaps.TryGetValue(path, out var configMap)
+                    ? JsonResponse(request, HttpStatusCode.OK, configMap)
+                    : JsonResponse(request, HttpStatusCode.NotFound, "{ \"code\": 404 }");
             }
 
             return JsonResponse(request, HttpStatusCode.OK, "{}");
@@ -1960,6 +2071,8 @@ public class ChartOperationsTests : IDisposable
         internal List<string> WaitedPaths { get; } = [];
         internal List<string> AppliedPaths { get; } = [];
         internal List<string> AppliedConfigMapNames { get; } = [];
+        internal List<(HttpMethod Method, string Path, string Content)> ConfigMapWrites { get; } = [];
+        internal Dictionary<string, string> ConfigMaps { get; } = new(StringComparer.Ordinal);
         public bool FailNextSecretCreate { get; set; }
         public bool CreateNextSecretThenReturnConflict { get; set; }
         internal CancellationTokenSource? CancelOnNextReleaseSecretRead { get; set; }
