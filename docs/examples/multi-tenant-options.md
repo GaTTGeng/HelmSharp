@@ -1,6 +1,6 @@
 # Keep tenant defaults isolated
 
-An `IHelmOptionsProvider` is a policy boundary. Use it to derive allowed namespaces, field-manager names, Kubernetes capabilities, and repository/cache locations from a tenant identity. Do not let callers override those defaults by passing raw environment paths or cluster configuration.
+An `IHelmOptionsProvider` is a policy boundary for execution defaults. Use it to derive allowed namespaces, field-manager names, and Kubernetes capabilities from a tenant identity. Do not let callers override those defaults by passing raw environment paths or cluster configuration.
 
 ```csharp
 public sealed class TenantHelmOptionsProvider(TenantContext tenant) : IHelmOptionsProvider

@@ -1,6 +1,6 @@
 # 隔离租户默认配置
 
-`IHelmOptionsProvider` 是一条策略边界。用它从租户身份推导允许使用的命名空间、field manager、Kubernetes capabilities 和仓库/缓存目录；不要让调用方通过原始环境路径或集群配置覆盖这些默认值。
+`IHelmOptionsProvider` 是执行默认值的策略边界。用它从租户身份推导允许使用的命名空间、field manager 和 Kubernetes capabilities；不要让调用方通过原始环境路径或集群配置覆盖这些默认值。
 
 ```csharp
 public sealed class TenantHelmOptionsProvider(TenantContext tenant) : IHelmOptionsProvider

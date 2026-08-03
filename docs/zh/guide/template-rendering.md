@@ -41,4 +41,4 @@ var notes = renderer.RenderNotes();
 
 `NOTES.txt` 是 release 后给人的信息，因此 `RenderNotes()` 会单独返回它，而不是混入 Kubernetes YAML。可以将它与预览一起保存或显示，但绝不能把它交给清单提交器。
 
-高层的 `HelmTemplateRequest` 也提供 `KubeVersion`、`ApiVersions`、`IsUpgrade`、`ShowNotes` 和 `IncludeCRDs`。需要变更集群时，请继续阅读[安装和升级 Release](release-workflows.md)。
+高层的 `HelmTemplateRequest` 在客户端边界提供 `KubeVersion`、`ApiVersions` 和 `IsUpgrade`。需要 notes 时应单独渲染；模板输出不会包含 Chart `crds/` 目录中的 CRD。需要变更集群时，请继续阅读[安装和升级 Release](release-workflows.md)。

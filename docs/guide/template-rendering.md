@@ -41,4 +41,4 @@ Named templates, `include`, `tpl`, `required`, `.Files`, and the implemented Hel
 
 `NOTES.txt` is information for a person after a release. It is intentionally returned by `RenderNotes()` instead of being mixed into Kubernetes YAML. Store or display it beside a preview, but never pass it to a manifest applier.
 
-For release operations, `HelmTemplateRequest` provides the same `KubeVersion`, `ApiVersions`, `IsUpgrade`, `ShowNotes`, and `IncludeCRDs` controls at the high-level client boundary. See [Install and upgrade releases](release-workflows.md) for the mutation path.
+For high-level template operations, `HelmTemplateRequest` provides `KubeVersion`, `ApiVersions`, and `IsUpgrade` at the client boundary. Render notes separately when needed; template output does not include CRDs from a chart's `crds/` directory. See [Install and upgrade releases](release-workflows.md) for the mutation path.
