@@ -12,12 +12,6 @@ This project follows semantic versioning once stable releases begin.
 
 ## [1.3.0] - 2026-08-03
 
-### Fixed
-
-- Hardened chart-repository compatibility verification against ambient HTTP proxy configuration (#217).
-- Exclude Sprig's `env` and `expandenv` helpers from managed rendering, matching Helm's function map and retaining path-aware diagnostics (#203).
-- Preserve rollback release history when the caller's operation token is canceled during final persistence (#207).
-
 ### Added
 
 - Added deterministic lifecycle coverage that verifies Kubernetes resource operations and persisted release transitions through install, upgrade, rollback, and retained uninstall (#25).
@@ -34,6 +28,13 @@ This project follows semantic versioning once stable releases begin.
 - Persist failed install and upgrade revisions while preserving the previous deployed revision during recovery (#191).
 - Made status, history, manifest, values, notes, hooks, and combined inspection resolve one durable release revision with consistent missing-revision diagnostics (#193).
 - Validate packaged NuGet README files and require the Markdown HelmSharp wordmark before artifacts are uploaded or published.
+
+### Fixed
+
+- Hardened chart-repository compatibility verification against ambient HTTP proxy configuration (#217).
+- Exclude Sprig's `env` and `expandenv` helpers from managed rendering, matching Helm's function map and retaining path-aware diagnostics (#203).
+- Preserve rollback release history when the caller's operation token is canceled during final persistence (#207).
+
 ## [1.2.0] - 2026-07-16
 
 ### Added
@@ -239,7 +240,8 @@ This was achieved by fixing two parser bugs that blocked full-chart rendering (#
 - Open source project documentation.
 - GitHub Actions workflows for CI and NuGet release publishing.
 
-[Unreleased]: https://github.com/GaTTGeng/HelmSharp/compare/1.2.0...HEAD
+[Unreleased]: https://github.com/GaTTGeng/HelmSharp/compare/1.3.0...HEAD
+[1.3.0]: https://github.com/GaTTGeng/HelmSharp/compare/1.2.0...1.3.0
 [1.2.0]: https://github.com/GaTTGeng/HelmSharp/compare/1.1.1...1.2.0
 [1.1.1]: https://github.com/GaTTGeng/HelmSharp/compare/1.1.0...1.1.1
 [1.1.0]: https://github.com/GaTTGeng/HelmSharp/compare/1.0.4...1.1.0
