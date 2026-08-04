@@ -11,10 +11,8 @@ Install `HelmSharp.Chart` with it. The usual entry point is `HelmTemplateRendere
 | Type | Use |
 | --- | --- |
 | `HelmTemplateRenderer` | Evaluate templates and return manifests or notes. |
-| `TemplateContext` | The render-time context exposed to expressions. |
-| `ApiVersionSet` | Model `.Capabilities.APIVersions`. |
 | `TemplateParseException` | Diagnose malformed template input. |
 
-The `Functions` and `Utilities` namespaces are renderer internals that implement Helm/Sprig behavior. They are public for the generated reference but are not a general-purpose utility library. Use the renderer, and check the [template-function matrix](../template-function-compatibility.md) before a chart depends on a helper.
+`TemplateContext`, `ApiVersionSet`, and the `Functions` and `Utilities` namespaces are internal renderer implementation details. They are not supported public APIs and do not appear in the generated reference. Use the renderer, and check the [template-function matrix](../template-function-compatibility.md) before a chart depends on a helper.
 
 [Render for a target cluster](../guide/template-rendering.md) covers release and capabilities context. For member lookup, see the [generated Engine API](../api/generated/engine.md).
