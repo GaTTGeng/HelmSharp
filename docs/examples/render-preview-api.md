@@ -1,33 +1,28 @@
-# Render Preview API
+# Build a render-preview endpoint
 
-## What problem this solves
+A preview endpoint should render a chart and return the manifest. It should not create a release, reach a cluster, or accept an arbitrary file-system path from a caller.
 
-Many platforms need a preview endpoint: users choose a chart and values, then the product shows the manifest before anything touches the cluster.
-
-## Packages to install
-
-```powershell
-dotnet add package HelmSharp.Chart --version 1.3.1
-dotnet add package HelmSharp.Engine --version 1.3.1
-```
-
-## Minimal complete code
+Install `HelmSharp.Chart` and `HelmSharp.Engine`, then resolve the requested chart through an application-owned catalog before calling the renderer:
 
 ```csharp
 app.MapPost("/preview", async (
     PreviewRequest request,
+    ChartCatalog charts,
+    ValuesCatalog valuesCatalog,
     CancellationToken cancellationToken) =>
 {
-    var chart = await HelmChartLoader.LoadAsync(request.ChartPath, cancellationToken);
+    var chartPath = charts.GetPath(request.ChartId); // Enforces your allowlist.
+    var valuesFilePaths = valuesCatalog.GetPaths(request.ValuesFileIds); // Resolve IDs, never caller-provided paths.
+    var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
     var values = await HelmValues.BuildAsync(
         chart,
-        request.ValuesFiles,
-        request.ValuesContent,
-        request.SetValues,
+        valuesFiles: valuesFilePaths,
+        valuesContent: request.ValuesContent,
+        setValues: request.SetValues,
         setFileValues: null,
-        request.SetStringValues,
-        request.SetJsonValues,
-        cancellationToken);
+        setStringValues: request.SetStringValues,
+        setJsonValues: request.SetJsonValues,
+        cancellationToken: cancellationToken);
 
     var renderer = new HelmTemplateRenderer(
         chart,
@@ -35,22 +30,20 @@ app.MapPost("/preview", async (
         request.Namespace,
         values,
         kubeVersion: request.KubeVersion,
-        apiVersions: request.ApiVersions);
+        apiVersions: request.ApiVersions,
+        isUpgrade: false);
 
     return Results.Text(renderer.Render(), "text/yaml");
 });
 ```
 
-## Why these APIs
+`ChartCatalog` and `ValuesCatalog` are intentionally application-specific. They might resolve IDs to versioned directories, extracted archives, or a tenant's authorized catalog entries. Keeping path resolution outside the request prevents path traversal and unintended server-side file reads, and makes every preview traceable to exact inputs.
 
-This example avoids `HelmClient` because preview APIs usually should not own release state. The lower-level path makes it clear that the endpoint loads, merges, and renders only.
+For a production endpoint:
 
-## Production notes
+- accept values-file IDs rather than paths, limit uploaded/inline values size, and reject override paths your product does not support;
+- persist the chart version, effective input set, target capabilities, and rendered artifact for later approval;
+- keep manifest and values access-controlled because either can contain credentials;
+- call `RenderNotes()` only when the response has a separate field for human-facing notes.
 
-- Validate chart paths against an allowlist or internal chart registry.
-- Store the values inputs used for each preview so later apply actions are reproducible.
-- Add size limits for uploaded values content.
-
-## Next step
-
-Pair this with [Dry-run Deployment](dry-run-deployment.md) when the preview can become a release.
+The [review-to-deployment example](dry-run-deployment.md) shows how to turn the stored preview into a cluster-changing operation without replacing this render-only boundary.

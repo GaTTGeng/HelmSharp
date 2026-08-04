@@ -1,47 +1,37 @@
-# GitOps PR 生成器
+# 为 GitOps 生成清单
 
-## 你在解决什么问题
-
-GitOps 工作流可以在进程内渲染 Chart，把 YAML 写入仓库，再打开 PR 供审核。
-
-## 安装哪些包
-
-```powershell
-dotnet add package HelmSharp.Chart --version 1.3.1
-dotnet add package HelmSharp.Engine --version 1.3.1
-```
-
-## 完整最小代码
+在 GitOps 中，HelmSharp 的职责止于确定性的 YAML。仓库工作流负责创建提交或 PR；HelmSharp 不应再将同一份清单直接提交给集群。
 
 ```csharp
 var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
 var values = await HelmValues.BuildAsync(
     chart,
-    valuesFiles: ["values.yaml", "values.production.yaml"],
+    valuesFiles: [environmentValuesPath],
     valuesContent: null,
-    setValues: new Dictionary<string, string> { ["image.tag"] = imageTag },
+    setValues: new Dictionary<string, string>
+    {
+        ["image.tag"] = buildVersion
+    },
     setFileValues: null,
     setStringValues: null,
     setJsonValues: null,
-    cancellationToken);
+    cancellationToken: cancellationToken);
 
-var renderer = new HelmTemplateRenderer(chart, releaseName, "apps", values);
+var renderer = new HelmTemplateRenderer(
+    chart,
+    releaseName: applicationName,
+    releaseNamespace: targetNamespace,
+    values: values,
+    kubeVersion: targetKubeVersion,
+    apiVersions: targetApiVersions,
+    isUpgrade: false);
+
 var manifest = renderer.Render();
-
-var outputPath = Path.Combine(repoRoot, "apps", releaseName, "manifest.yaml");
 await File.WriteAllTextAsync(outputPath, manifest, cancellationToken);
 ```
 
-## 关键 API 为什么这样用
+将 Chart 版本、values 文件 revision、镜像标签、Kubernetes 版本和自定义 API 版本随生成文件一起提交。这些输入比渲染后的 YAML 更能解释一次 diff。
 
-GitOps 系统需要确定性的文件和可评审的差异，而不是直接修改集群。`HelmTemplateRenderer` 负责产出应提交的清单。
+如果仓库要求每个资源一个文件或要求不同顺序，请把它做成明确的后处理步骤，并独立测试。不要依赖部署控制器去猜测这个文件由哪个模板引擎生成。
 
-## 生产环境注意事项
-
-- 生成路径保持稳定。
-- 如果评审者需要理解输出变化，请把 values 一并提交。
-- 对关键内部 Chart 增加自己的基准输出测试。
-
-## 下一步
-
-阅读 [值配置（Values）](../guide/values.md)，明确环境覆盖策略。
+只有同一个服务也拥有直接变更集群的职责时，才使用 release 工作流。纯 GitOps 架构中，[渲染](../guide/first-render.md)加仓库自动化是更安全的边界。

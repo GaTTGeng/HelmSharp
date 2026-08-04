@@ -1,56 +1,59 @@
-# 试运行部署
+# 把评审结果变成部署
 
-## 你在解决什么问题
-
-部署产品应拆分预览和提交。HelmSharp 支持用同一个高层发布工作流先 `DryRun = true`，审批后再提交。
-
-## 安装哪些包
-
-```powershell
-dotnet add package HelmSharp.Action --version 1.3.1
-```
-
-## 完整最小代码
+评审和实际提交各使用一个 release 请求。渲染评审前，应从应用自己持久化的 release store 读取完整 release 历史，让预览和实际提交使用相同的安装/升级状态及下一 revision。审批后只能改变 `DryRun`；Chart 标识、values、命名空间、release 状态和 options provider 配置必须保持不变。
 
 ```csharp
-var dryRun = await client.UpgradeInstallAsync(new HelmUpgradeInstallRequest
+var releaseHistory = await releases.LoadHistoryForUpgradeInstallAsync(
+    releaseName,
+    targetNamespace,
+    createNamespace: true,
+    cancellationToken);
+var latestRelease = releaseHistory.MaxBy(release => release.Revision);
+var isUpgrade = latestRelease is not null &&
+    !string.Equals(latestRelease.Status, "uninstalled", StringComparison.OrdinalIgnoreCase);
+var nextRevision = latestRelease?.Revision + 1 ?? 1;
+
+var preview = new HelmUpgradeInstallRequest
 {
-    ReleaseName = "payments",
-    Namespace = "apps",
-    Chart = "/charts/payments",
-    ValuesFiles = ["values.production.yaml"],
+    ReleaseName = releaseName,
+    Namespace = targetNamespace,
+    Chart = approvedChartPath,
+    ValuesFiles = approvedValuesFiles,
+    SkipCRDs = true,
+    CreateNamespace = true,
     Wait = true,
     TimeoutSeconds = 300,
-    DryRun = true
-}, cancellationToken);
+    DryRun = true,
+    DryRunIsUpgrade = isUpgrade,
+    DryRunRevision = nextRevision
+};
 
-if (dryRun.ExitCode != 0)
-    return Results.BadRequest(dryRun.StandardError);
+var previewResult = await client.UpgradeInstallAsync(preview, cancellationToken);
+if (!previewResult.Succeeded)
+    return Results.BadRequest("Release 预览失败。");
 
-// 用户明确审批后：
-var apply = await client.UpgradeInstallAsync(new HelmUpgradeInstallRequest
-{
-    ReleaseName = "payments",
-    Namespace = "apps",
-    Chart = "/charts/payments",
-    ValuesFiles = ["values.production.yaml"],
-    Wait = true,
-    WaitForJobs = true,
-    TimeoutSeconds = 300,
-    DryRun = false
-}, cancellationToken);
+await approvals.SaveAsync(preview, previewResult.StandardOutput, cancellationToken);
 ```
 
-## 关键 API 为什么这样用
+审批服务校验该记录后，获取该 release 的应用自有锁；在持有锁时校验已持久化的 release 状态，再重建请求并提交，最后才释放锁：
 
-`UpgradeInstallAsync` 同时覆盖安装和升级。预览与提交使用相似请求，可以减少用户审核内容和实际部署内容之间的漂移。
+```csharp
+await using var releaseLock = await releaseLocks.AcquireAsync(
+    releaseName,
+    targetNamespace,
+    cancellationToken);
 
-## 生产环境注意事项
+var apply = await approvals.CreateApprovedRequestAsync(approvalId, cancellationToken);
+await approvals.VerifyReleaseStateAsync(apply, cancellationToken);
+apply.DryRun = false;
 
-- 审批记录应包含 Chart 版本、values 输入、发布名称、namespace 和试运行输出哈希。
-- 如果 Chart 或 values 可能变化，提交前重新渲染。
-- `DryRun = false` 是唯一会修改集群的步骤。
+var result = await client.UpgradeInstallAsync(apply, cancellationToken);
+if (!result.Succeeded)
+    return Results.Problem("已审批的 release 无法提交。", statusCode: 409);
 
-## 下一步
+return Results.Ok(new { result.StandardOutput });
+```
 
-阅读 [发布工作流](../guide/release-workflows.md)。
+不要相信浏览器第二次提交的 values 或 Chart 版本。执行提交的服务应当自己读取已评审记录。将内容寻址的不可变 Chart 归档和 values 内容快照（或其哈希校验）随审批记录保存；仅保存路径不是稳定输入。本示例在预览和 apply 中都设置 `SkipCRDs = true`：CRD 应作为单独、明确审批的操作来审查和安装。`LoadHistoryForUpgradeInstallAsync` 是应用自有的 `HistoryAsync` 适配器：启用 `CreateNamespace` 时，它会像 apply 路径一样将目标命名空间不存在视为零历史。必须从该完整历史中取最高 revision 来派生预览状态，其中包括失败和保留卸载的 revision，然后将解析出的状态和审批记录一起保存。状态校验和 apply 必须是原子的：先获取按 release 粒度的锁，再校验已持久化的状态，直到生命周期调用结束才释放该锁；所有 install、upgrade、rollback 和 uninstall 路径都必须使用同一把锁。若 release 状态已变化，就拒绝提交，否则重新渲染并要求新的审批。该工作流要求模板具有确定性：由于 apply 会再次渲染 Chart，审批服务必须拒绝使用 `now`、`uuidv4` 或 `randAlphaNum` 等非确定性函数的 Chart。若必须支持这类 Chart，应使用另一条部署路径来应用已审批的精确 manifest。把 `CommandResult.StandardError`、退出码和操作 ID 保存到受限的操作记录中；对不受信任的调用方只返回通用失败信息。
+
+`Wait`、`WaitForJobs`、`Atomic` 和 `TimeoutSeconds` 共同决定一次操作何时算完成。选择它们之前，请阅读[安装和升级 Release](../guide/release-workflows.md)。

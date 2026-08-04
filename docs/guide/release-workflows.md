@@ -1,41 +1,67 @@
-# Release Workflows
+# Install and upgrade releases
 
-## What problem this solves
-
-Release workflows combine rendering, Kubernetes apply/delete/wait, hooks, and release history. Use this path when your application owns a deployment action, not just a preview.
-
-## Packages to install
+Use `HelmSharp.Action` when a component owns a deployment, not just its YAML. `HelmClient.UpgradeInstallAsync` combines chart loading, values, rendering, hooks, Kubernetes apply, optional readiness waiting, and release-history persistence.
 
 ```powershell
 dotnet add package HelmSharp.Action --version 1.3.1
 ```
 
-## Minimal complete code
+## Start with a dry run
 
-Start with a dry run:
+Give `HelmClient` an `IHelmOptionsProvider` owned by your application. It is where you centralize defaults such as namespace, field manager, Kubernetes version, API versions, and timeout rather than letting each caller invent them.
 
-<<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#dry-run-release{csharp}
+```csharp
+var request = new HelmUpgradeInstallRequest
+{
+    ReleaseName = "demo",
+    Namespace = "default",
+    Chart = chartPath,
+    ValuesFiles = ["values.production.yaml"],
+    CreateNamespace = true,
+    Wait = true,
+    TimeoutSeconds = 300,
+    DryRun = true
+};
 
-Apply only after approval:
+var result = await client.UpgradeInstallAsync(request, cancellationToken);
 
-<<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#apply-release{csharp}
+if (!result.Succeeded)
+{
+    logger.LogWarning("Release preview failed: {Error}", result.StandardError);
+    return;
+}
 
-## Why these APIs
+Console.WriteLine(result.StandardOutput);
+```
 
-`HelmClient.UpgradeInstallAsync` is the primary install/upgrade entry point. It loads the chart, merges values, renders manifests, applies CRDs when needed, executes hooks unless disabled, waits for readiness when requested, and saves release history.
+A dry run renders and validates the request without applying resources or creating a release revision. This short example is suitable for a one-off preview. When the target release might have history, an approval preview must also derive `DryRunIsUpgrade` and `DryRunRevision` from the complete history; use the [state-aware review-to-deployment example](../examples/dry-run-deployment.md) before recording the approval. `ReuseValues` is not supported with `DryRun`; for an approval workflow, resolve and persist the stored effective values before rendering instead.
 
-## Production notes
+## Apply the approved request
 
-- Keep `DryRun = true` in preview flows and switch to `false` only in the approved apply step.
-- For non-dry-run operations, `Install = false` makes a missing release fail instead of silently creating it. Use it when an endpoint must be upgrade-only; dry runs do not look up stored releases.
-- `ReuseValues = true` starts an upgrade from the stored release values, then overlays the supplied values. The default and `ResetValues = true` start from chart defaults. `ReuseValues` and `ResetValues` cannot be combined.
-- `TimeoutSeconds` covers Kubernetes apply, hooks, readiness waiting, and cancellation. `Atomic` implies readiness waiting; use `WaitForJobs` only with `Wait` (or `Atomic`).
-- `Description`, `Labels`, and `MaxHistory` are stored with the resulting revision. `RollbackAsync(new HelmRollbackRequest { ... })` exposes the same timeout, wait, hook, description, label, and history controls for a rollback while retaining the original overload.
-- Each non-dry-run lifecycle attempt that reaches release persistence leaves durable Kubernetes Secret evidence; preflight and dry-run requests do not create a revision. Successful upgrade and rollback transitions supersede the prior deployed revision; failed install, upgrade, and rollback attempts retain a failed revision for inspection. A retained uninstall adds an `uninstalled` revision, while the default uninstall purges history.
-- Hooks run by weight and then name. Job and Pod hooks wait for completion within `TimeoutSeconds`; other hook resource kinds are applied without a completion observer. `before-hook-creation`, `hook-succeeded`, and `hook-failed` cleanup policies are supported, and `GetHooksAsync` shows each stored hook's latest run state.
-- Options without a managed implementation, such as `Force`, ownership takeover, repository TLS/authentication, provenance verification, or server-side apply selection, fail with a clear diagnostic before any cluster mutation.
-- Capture `CommandResult.StandardError` and `ExitCode` in product logs.
+After an explicit approval, rebuild the request from the recorded inputs and apply it through the [state-aware review-to-deployment example](../examples/dry-run-deployment.md). Do not silently change values, chart version, target namespace, capability inputs, or the resolved release state between preview and apply. `HelmUpgradeInstallRequest` is mutable, so do not share the preview request with the apply operation.
 
-## Next step
+## Set lifecycle behavior deliberately
 
-Read [Kubernetes Operations](kubernetes-operations.md) for lower-level apply/delete/wait behavior.
+| Setting | Meaning |
+| --- | --- |
+| `Install = false` | A missing release is an error; use this for upgrade-only endpoints. |
+| `ReuseValues = true` | Start from the stored release values, then overlay this request's values. It is incompatible with `DryRun`; resolve those values yourself before an approval preview. |
+| `ResetValues = true` | Start from chart defaults. It cannot be combined with `ReuseValues`. |
+| `Wait = true` | Wait for supported resource readiness after apply. |
+| `WaitForJobs = true` | Also wait for Jobs; it requires `Wait` or `Atomic`. |
+| `TimeoutSeconds` | One limit for applying resources, hooks, readiness waiting, and cancellation. |
+| `Atomic = true` | Wait and recover on failure. |
+| `DisableHooks = true` | Do not execute chart hooks. |
+| `MaxHistory` | Retain at most this many stored revisions; `0` means no limit. |
+
+HelmSharp stores successful, superseded, failed, and retained-uninstall revisions in Kubernetes Secrets. A default uninstall purges release history; a retained uninstall records an `uninstalled` revision. Use `StatusAsync`, `HistoryAsync`, `GetManifestAsync`, `GetValuesAsync`, and the revision-specific inspection methods to read what was actually stored; inspection does not re-render the current chart.
+
+## Hooks and readiness are part of the operation
+
+Hooks run in weight and then name order. Job and Pod hooks are observed for completion within the timeout; other hook kinds are applied without a completion observer. The supported cleanup policies are `before-hook-creation`, `hook-succeeded`, and `hook-failed`.
+
+The built-in readiness waiter covers common workload resources. A CRD can be applied, but its domain-specific readiness is not inferred. Add a product-specific health check when a deployment is not ready merely because Kubernetes accepted the object.
+
+## Permissions and error handling
+
+The Kubernetes identity needs permission for the rendered resource kinds, namespaces, CRDs where used, hooks, and the release Secret records. High-level operations can return `CommandResult` or throw; inspect `Succeeded`, `ExitCode`, `StandardOutput`, and `StandardError` when a result is returned, and catch/log exceptions at the service boundary. [Troubleshoot failures](error-handling.md) covers the two failure models and the diagnostic context worth retaining.

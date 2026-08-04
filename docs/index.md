@@ -3,115 +3,73 @@ layout: home
 
 hero:
   name: HelmSharp
-  text: Helm-compatible rendering for .NET
-  tagline: Load charts, merge values, render Kubernetes manifests, and run release workflows from managed .NET code without a Helm CLI dependency at runtime.
+  text: Use Helm charts from .NET
+  tagline: Render, inspect, and release Helm charts in managed code. HelmSharp does not start the Helm CLI at runtime.
   image:
     src: /logo.svg
     alt: HelmSharp logo
   actions:
     - theme: brand
-      text: Start the guide
+      text: Run the quickstart
       link: /getting-started
     - theme: alt
-      text: Examples
+      text: Browse examples
       link: /examples/render-preview-api
     - theme: alt
-      text: Live Compare
+      text: Compare output
       link: /compare
 
 features:
-  - title: Managed Helm workflows
-    details: Render, dry-run, install, upgrade, inspect release state, and package charts from a .NET SDK surface.
-  - title: Workflow-first docs
-    details: Learn install choices, render-only previews, values precedence, release dry-runs, Kubernetes apply/wait, and error handling.
-  - title: Package-by-package guidance
-    details: Each NuGet package has a role page with install advice, main types, common combinations, and compatibility boundaries.
-  - title: Compatibility evidence
-    details: Fixture charts and selected public-chart golden tests are tracked separately from API guidance so users can check current coverage and boundaries.
+  - title: Render in-process
+    details: Load a chart, merge values, and produce manifests without making the Helm executable part of your deployment.
+  - title: Deploy deliberately
+    details: Preview first, then use managed install, upgrade, rollback, and release-history operations when your application owns deployment.
+  - title: Know the boundary
+    details: The compatibility pages state what is tested, what is partial, and what still needs chart-specific verification.
 ---
 
-## See HelmSharp in Action
+## Start with the job you need to do
 
-Upload a Helm chart and compare HelmSharp output against the real Helm CLI side by side.
-
-<div class="compare-cta">
-  <a class="compare-cta-btn" href="./compare">
-    <span class="compare-cta-label">Launch Live Comparison</span>
-    <span class="compare-cta-arrow">→</span>
-  </a>
+<div class="docs-paths">
+  <a class="docs-path" href="./guide/first-render"><strong>Render a chart</strong><span>Generate manifests for a preview, policy check, or GitOps commit. No cluster access is required.</span></a>
+  <a class="docs-path" href="./guide/release-workflows"><strong>Run a release workflow</strong><span>Dry-run, apply, wait, inspect revisions, roll back, or uninstall from a service that owns the deployment.</span></a>
+  <a class="docs-path" href="./guide/chart-distribution"><strong>Manage chart delivery</strong><span>Package charts, generate an index, pull from an HTTP repository, and resolve dependencies in .NET.</span></a>
 </div>
 
-## What HelmSharp is for
+## The smallest useful render
 
-You have a .NET application that needs Helm chart output without a runtime dependency on the `helm` executable. Maybe the caller is a web service, an operator, a build agent, a GitOps generator, or a product feature that previews manifests before anything touches a cluster.
-
-HelmSharp gives that code a managed path: load charts, build values, render manifests, inspect NOTES, and optionally move into Kubernetes release operations.
-
-## Quick Example
-
-```csharp
-var chart = await HelmChartLoader.LoadAsync("/charts/my-chart", ct);
-var renderer = new HelmTemplateRenderer(chart, "demo", "default", values);
-var manifests = renderer.Render();
-```
-
-::: details Prefer a command-like client?
-
-Use `HelmSharp.Action` when you want a higher-level facade for template, dry-run, install, upgrade, uninstall, rollback, status, package, repository, and release history operations.
-
-```csharp
-using HelmSharp.Action;
-
-var client = new HelmClient(optionsProvider);
-
-var result = await client.TemplateAsync(new HelmTemplateRequest
-{
-    ReleaseName = "demo",
-    Namespace = "default",
-    Chart = "/charts/my-chart",
-    SetValues = new Dictionary<string, string>
-    {
-        ["image.tag"] = "1.2.3",
-        ["replicaCount"] = "2"
-    }
-});
-
-Console.WriteLine(result.StandardOutput);
-```
-
-:::
-
-## Documentation Paths
-
-| Path | Start here when... |
-| --- | --- |
-| [Getting Started](getting-started.md) | You want the shortest path to the first render or dry-run. |
-| [Guide](guide/installation.md) | You want step-by-step explanations of install, values, rendering, releases, Kubernetes operations, and errors. |
-| [Examples](examples/render-preview-api.md) | You want realistic integration patterns. |
-| [Packages](packages/action.md) | You need to choose the right NuGet package boundary. |
-| [API Reference](api/index.md) | You need public member lookup generated from source. |
-
-## Install
-
-Most applications start with the high-level package:
-
-```powershell
-dotnet add package HelmSharp.Action --version 1.3.1
-```
-
-Use narrower packages when your application only needs rendering:
+Install the chart and renderer packages:
 
 ```powershell
 dotnet add package HelmSharp.Chart --version 1.3.1
 dotnet add package HelmSharp.Engine --version 1.3.1
 ```
 
-::: warning Version availability
-1.3.1 is the latest published version. The M2 chart-distribution and M3 release-lifecycle APIs documented on this site are available in the 1.3.1 NuGet packages.
-:::
+Then load a chart directory, build its values, and render it. The [quickstart](getting-started.md) contains a copyable program and explains the three objects involved.
 
-## Current Scope
+```csharp
+var chart = await HelmChartLoader.LoadAsync(chartPath, CancellationToken.None);
+var values = await HelmValues.BuildAsync(chart, valuesFiles: null, null, null, null, null, null, CancellationToken.None);
+var renderer = new HelmTemplateRenderer(chart, "demo", "default", values);
 
-The current `master` branch covers chart loading, values merging, managed template rendering, chart packaging, repository helpers, Kubernetes apply/delete/wait helpers, and release history backed by Kubernetes Secrets. See the version warning above for capabilities that have not reached NuGet yet.
+var manifest = renderer.Render();
+```
 
-Compatibility is validated with focused fixtures and selected public-chart golden tests, but HelmSharp is still an SDK with explicit boundaries. Advanced plugin behavior, complete provenance verification, OCI authentication parity, and uncommon readiness cases remain planned or active work. Check [Helm Compatibility](helm-compatibility.md) before depending on a specific Helm edge case.
+<div class="key-point"><strong>Use the lower-level path for previews.</strong> It only reads chart inputs and returns strings. Use <code>HelmSharp.Action</code> when you intentionally need release state or Kubernetes mutation.</div>
+
+## Choose the right entry point
+
+| If you are building… | Start with | Read next |
+| --- | --- | --- |
+| A preview, validator, or GitOps generator | `HelmSharp.Chart` + `HelmSharp.Engine` | [Render a chart](guide/first-render.md) |
+| A deployment service or operator | `HelmSharp.Action` | [Install and upgrade releases](guide/release-workflows.md) |
+| A Kubernetes controller with existing YAML | `HelmSharp.Kube` | [Apply manifests directly](guide/kubernetes-operations.md) |
+| A chart repository or packaging pipeline | `HelmSharp.Action` + `HelmSharp.Repo` | [Chart delivery](guide/chart-distribution.md) |
+
+The [package decision guide](api-overview.md) explains these boundaries in more detail and links to each generated API surface.
+
+## Before using an existing chart
+
+HelmSharp follows Helm behavior where that behavior is implemented and tested; it is not a promise that every chart or plugin will work unchanged. Check the [compatibility contract](helm-compatibility.md) and the [template-function matrix](template-function-compatibility.md) before treating a Helm edge case as a production dependency.
+
+[HelmCompare](compare.md) is also available for side-by-side output inspection.

@@ -1,32 +1,30 @@
-# Chart Packaging and Repository Workflows
+# Package charts and manage dependencies
 
-M2 covers the traditional HTTP chart workflow entirely in managed .NET: package a chart, generate an `index.yaml`, manage repository configuration and caches, pull an archive, and update or rebuild dependencies. Helm is used by the test suite as an oracle, but it is not a runtime dependency.
+HelmSharp supports the traditional HTTP chart-repository workflow in managed code: package a chart, produce `index.yaml`, manage isolated repository state, pull an archive, and resolve dependencies. It does not require the Helm CLI at runtime.
 
-::: warning Unreleased M2 APIs
-The workflows and request objects in this guide are available in HelmSharp 1.3.1.
+::: warning Scope of this guide
+OCI authentication and push/pull parity, provenance files, signing, and signature verification are not part of this workflow. See [Compatibility](../helm-compatibility.md) before building a production repository service around those capabilities.
 :::
 
 ## Package a chart
 
-Use the request overload when you need metadata overrides or want dependencies refreshed before packaging:
+Use the request overload when the build needs metadata overrides or a dependency refresh:
 
 <<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#package-chart{csharp}
 
-`Version` and `AppVersion` are written only into the packaged `Chart.yaml`; the source file is not modified. The archive is named `<chart-name>-<version>.tgz`, contains a single `<chart-name>/` root, preserves nested charts and CRDs, and skips symbolic links.
+`Version` and `AppVersion` change the packaged `Chart.yaml`, not the source file. The archive is named `<chart-name>-<version>.tgz`, has one chart root, includes nested charts and CRDs, and skips symbolic links. `.helmignore` supports file, directory, `*`, `?`, character-class, rooted, and `!` negation patterns; `**` is rejected explicitly.
 
-The packager reads `.helmignore` from the chart root. Blank lines and comments are ignored; file, directory, `*`, `?`, character-class, rooted, and `!` negation patterns are supported. Helm's `**` syntax is not supported and produces a clear error. If `DependencyUpdate` is `true`, dependency update must succeed before the archive is written.
+## Produce repository metadata
 
-## Generate a repository index
-
-Place one or more `.tgz` packages in a directory, then generate the repository metadata:
+Place the chart archives in a directory and create its index:
 
 <<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#repository-index{csharp}
 
-`Url` becomes the base URL for package entries. `MergeIndexPath` retains older versions that are not present in the current directory. Invalid packages are skipped by default and available through lower-level diagnostics; set `FailOnInvalidPackage` when publishing should be transactional. `OutputPath` defaults to `index.yaml` in `DirectoryPath`.
+`Url` is the package base URL. `MergeIndexPath` retains historical entries that are no longer in the directory. Set `FailOnInvalidPackage` when an invalid archive must stop a publish; otherwise inspect diagnostics for skipped packages. `OutputPath` defaults to `index.yaml` under `DirectoryPath`.
 
-## Isolate repository state
+## Isolate repository state in a service
 
-`HelmChartRepository` uses Helm-compatible configuration and cache locations. For services, tests, and tenants, set explicit paths so concurrent workloads do not share credentials or stale indexes:
+Do not let tenants, tests, or concurrent jobs share repository config and cache directories.
 
 ```csharp
 using var repository = new HelmChartRepository(new HelmRepositoryOptions
@@ -36,35 +34,17 @@ using var repository = new HelmChartRepository(new HelmRepositoryOptions
 });
 ```
 
-Definitions are stored in `repositories.yaml`; cached indexes use `<repository-name>-index.yaml`. When paths are not explicit, `HELM_REPOSITORY_CONFIG`, `HELM_CONFIG_HOME`, `HELM_REPOSITORY_CACHE`, `HELM_CACHE_HOME`, and the corresponding XDG locations are considered before platform defaults.
+The repository config stores definitions; cached indexes use `<repository-name>-index.yaml`. If paths are omitted, Helm-compatible environment variables and platform defaults are used. The keyword-only `SearchRepoAsync` overload searches those configured caches without a network request. The overload that accepts a repository URL fetches and caches that repository index before searching.
 
-A complete repository lifecycle uses these methods:
-
-1. `AddRepositoryAsync` writes a named repository definition.
-2. `ListRepositoriesAsync` reads configured definitions.
-3. `FetchRepoIndexAsync` refreshes the selected repository cache.
-4. `SearchRepoAsync(keyword)` searches configured caches offline.
-5. `RemoveRepositoryAsync` removes both the definition and its cached index.
-
-Repository search is deliberately cache-only. Refresh first when current remote results matter; a missing or damaged cache for one repository does not hide valid results from other repositories.
-
-## Pull a chart
-
-The following example adds a traditional repository, refreshes its index, selects a semantic version, verifies the advertised digest, and extracts the archive:
+## Pull a chart safely
 
 <<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#pull-chart{csharp}
 
-Supported pull forms are:
+The pull request accepts `repo/chart`, a chart name plus `RepositoryUrl`, or a direct `https://…tgz` URL. The downloaded archive is stored under `Destination`. When `Untar` is enabled, `UntarDirectory` selects the extraction root; otherwise `Destination` is the extraction root. Extraction rejects entries that escape the selected root. Credentials stay on the repository origin by default. Enable `PassCredentialsAll` only when a trusted repository intentionally redirects archives to another authenticated origin.
 
-- `repo/chart` for a configured repository and cached index;
-- a chart name plus `RepositoryUrl` for an explicit repository;
-- a direct `https://.../chart-version.tgz` archive URL.
+## Make dependency builds reproducible
 
-`Destination` controls where the archive is saved. `Untar` extracts it, and `UntarDirectory` selects the extraction parent. Extraction rejects entries that escape the destination. Repository credentials are sent only to the same origin by default; enable `PassCredentialsAll` only for a trusted cross-origin archive host.
-
-## Declare dependencies
-
-`Chart.yaml` may combine repository aliases, chart aliases, and local references:
+Declare aliases and local references in `Chart.yaml` as usual:
 
 ```yaml
 dependencies:
@@ -72,39 +52,15 @@ dependencies:
     alias: cache
     version: ~18.0.0
     repository: "@stable"
-  - name: redis
-    alias: session
-    version: ~18.0.0
-    repository: "alias:stable"
   - name: shared-templates
     version: 1.2.3
     repository: file://../shared-templates
 ```
 
-`@stable` and `alias:stable` resolve through the named entry in `repositories.yaml`. A relative `file://` path is resolved from the parent chart directory and packaged into `charts/`. The lock keeps the original dependency name and repository reference. A chart alias changes the subchart identity and values key, so values for the first dependency above belong under `cache:`, not `redis:`.
-
-`condition`, `tags`, and `import-values` affect values and rendering. They do not remove a declared dependency from the update/download set.
-
-## Update dependencies
-
-Update resolves version constraints, downloads or packages every declared dependency, removes stale `.tgz` files, and writes a Helm-compatible `Chart.lock`:
+An alias changes both the subchart identity and its values key, so the first dependency receives values under `cache:`, not `redis:`. `DependencyUpdateAsync` resolves constraints, refreshes dependencies, and writes `Chart.lock`. `DependencyBuildAsync` is the CI path: it verifies the lock against `Chart.yaml`, restores the exact locked versions, and does not rewrite the lock.
 
 <<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#dependency-update{csharp}
 
-Keep `SkipRepositoryRefresh = false` for normal online updates. Set it to `true` only when the required named repository indexes already exist in `RepositoryCachePath`, such as a controlled offline build.
-
-## Build from `Chart.lock`
-
-Build is the reproducible path for CI and releases:
-
 <<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#dependency-build{csharp}
 
-The operation requires `Chart.lock`, verifies that its digest still matches `Chart.yaml`, restores the exact locked versions, and does not rewrite the lock. Configured repository dependencies require their cached indexes. A `file://` dependency also requires the referenced source chart to remain available at the locked version.
-
-Run `DependencyListAsync` to inspect `ok`, `missing`, `wrong version`, `unpacked`, and lock consistency states before packaging.
-
-## Compatibility boundary
-
-This guide covers traditional HTTP chart repositories and local file dependencies. OCI registry authentication and pull/push parity, provenance files, signing, and signature verification belong to the later OCI and provenance milestone. HelmSharp does not invoke the Helm CLI for any workflow described here.
-
-High-level `HelmClient` methods return `CommandResult`; check `Succeeded`, `ExitCode`, `StandardOutput`, and `StandardError`. Lower-level repository methods throw .NET exceptions. See [Error Handling](error-handling.md) for the shared model and [HelmSharp.Action](../packages/action.md), [HelmSharp.Chart](../packages/chart.md), and [HelmSharp.Repo](../packages/repo.md) for package ownership.
+Run `DependencyListAsync` before packaging when you need to surface missing, wrong-version, unpacked, or inconsistent dependencies to a user. High-level client methods return `CommandResult`; lower-level repository methods throw exceptions. [Troubleshoot failures](error-handling.md) explains how to preserve both kinds of diagnostics.

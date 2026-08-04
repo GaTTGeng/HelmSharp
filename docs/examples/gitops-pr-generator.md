@@ -1,47 +1,37 @@
-# GitOps PR Generator
+# Generate manifests for GitOps
 
-## What problem this solves
-
-A GitOps workflow can render a chart in-process, write the resulting YAML to a repository, and open a pull request for review.
-
-## Packages to install
-
-```powershell
-dotnet add package HelmSharp.Chart --version 1.3.1
-dotnet add package HelmSharp.Engine --version 1.3.1
-```
-
-## Minimal complete code
+For GitOps, HelmSharp's job ends at deterministic rendered YAML. Your repository workflow creates the commit or pull request; HelmSharp should not also apply the same manifest to a cluster.
 
 ```csharp
 var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
 var values = await HelmValues.BuildAsync(
     chart,
-    valuesFiles: ["values.yaml", "values.production.yaml"],
+    valuesFiles: [environmentValuesPath],
     valuesContent: null,
-    setValues: new Dictionary<string, string> { ["image.tag"] = imageTag },
+    setValues: new Dictionary<string, string>
+    {
+        ["image.tag"] = buildVersion
+    },
     setFileValues: null,
     setStringValues: null,
     setJsonValues: null,
-    cancellationToken);
+    cancellationToken: cancellationToken);
 
-var renderer = new HelmTemplateRenderer(chart, releaseName, "apps", values);
+var renderer = new HelmTemplateRenderer(
+    chart,
+    releaseName: applicationName,
+    releaseNamespace: targetNamespace,
+    values: values,
+    kubeVersion: targetKubeVersion,
+    apiVersions: targetApiVersions,
+    isUpgrade: false);
+
 var manifest = renderer.Render();
-
-var outputPath = Path.Combine(repoRoot, "apps", releaseName, "manifest.yaml");
 await File.WriteAllTextAsync(outputPath, manifest, cancellationToken);
 ```
 
-## Why these APIs
+Commit the generated file together with a record of the chart version, values-file revision, image tag, Kubernetes version, and custom API versions. Those inputs explain a diff far better than the rendered YAML alone.
 
-GitOps systems usually want deterministic files and reviewable diffs, not direct cluster mutation. `HelmTemplateRenderer` gives the exact manifest that should be committed.
+If the repository expects one file per resource or a different ordering, make that an explicit post-rendering step and test it independently. Do not rely on a deployment controller discovering which template engine happened to generate the file.
 
-## Production notes
-
-- Keep generated manifest paths stable.
-- Commit values alongside manifests when reviewers need to understand why output changed.
-- Use HelmSharp 1.1.0 compatibility results as the baseline, then add your own golden tests for critical internal charts.
-
-## Next step
-
-Use [Values](../guide/values.md) to model environment overlays explicitly.
+Use a release workflow only when this same service also owns direct cluster mutation. For a GitOps-only architecture, [rendering](../guide/first-render.md) plus repository automation is the safer boundary.

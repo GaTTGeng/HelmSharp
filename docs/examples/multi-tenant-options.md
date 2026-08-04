@@ -1,29 +1,23 @@
-# Multi-tenant Options
+# Keep tenant defaults isolated
 
-## What problem this solves
+An `IHelmOptionsProvider` is a policy boundary for execution defaults. Use it to derive allowed namespaces, field-manager names, and Kubernetes capabilities from a tenant identity. Do not let callers override those defaults by passing raw environment paths or cluster configuration.
 
-SaaS and internal platforms often need per-tenant namespace, kubeconfig, API version, and timeout defaults. `IHelmOptionsProvider` centralizes those decisions outside individual requests.
-
-## Packages to install
-
-```powershell
-dotnet add package HelmSharp.Action --version 1.3.1
+```csharp
+public sealed class TenantHelmOptionsProvider(TenantContext tenant) : IHelmOptionsProvider
+{
+    public ValueTask<HelmExecutionOptions> GetHelmAsync(
+        CancellationToken cancellationToken = default)
+        => ValueTask.FromResult(new HelmExecutionOptions
+        {
+            DefaultNamespace = $"tenant-{tenant.Slug}",
+            FieldManager = "my-platform",
+            TimeoutSeconds = 300,
+            KubeVersion = tenant.KubernetesVersion,
+            ApiVersions = tenant.ApiVersions
+        });
+}
 ```
 
-## Minimal complete code
+Build the client with the tenant-scoped provider, but still validate every request's release name, chart identity, allowed values paths, and namespace. A provider supplies defaults; it is not authorization by itself.
 
-<<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#options-provider{csharp}
-
-## Why these APIs
-
-Requests describe an operation. `HelmExecutionOptions` describes the environment policy used to run that operation: kubeconfig, default namespace, field manager, timeout, target Kubernetes version, and API versions.
-
-## Production notes
-
-- Resolve tenant identity before constructing the client or provider.
-- Do not let request bodies choose arbitrary kubeconfig paths.
-- Put audit fields such as tenant id and deployment id in your own logs; HelmSharp keeps release labels separate from product audit records.
-
-## Next step
-
-Review [Error Handling](../guide/error-handling.md) so tenant-specific failures are diagnosable.
+For repository workflows, create a tenant-specific `HelmRepositoryOptions` with explicit configuration and cache paths. This prevents repository credentials and stale index data from crossing tenant boundaries. The [distribution guide](../guide/chart-distribution.md) shows the pattern.

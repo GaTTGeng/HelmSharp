@@ -1,100 +1,49 @@
-# API 选择
+# 选择包和 API
 
-先看工作流，再选最小包。详细成员索引在 [API 参考](api/index.md)，本页用于决策。
+按应用需要执行的操作选择包。渲染会加载 Chart 和 values，并返回清单文本；发布操作还需要 Kubernetes 凭据，并维护生命周期历史。
 
-::: warning 版本可用性
-1.3.1 是最新发布版本。本页的 M2 请求对象、分发工作流和 M3 生命周期 API 已包含在 1.3.1 NuGet 包中。
-:::
+## 按任务选择
+| 目标 | 从这里开始 | 主要类型 | 以下情况不要选它 |
+| --- | --- | --- | --- |
+| 渲染 Chart | `HelmSharp.Chart` + `HelmSharp.Engine` | `HelmChartLoader`、`HelmValues`、`HelmTemplateRenderer` | 应用还必须提交资源并记录 release 历史。 |
+| 提供 Helm 风格操作 | `HelmSharp.Action` | `HelmClient`、`IHelmClient`、请求对象、`CommandResult` | 只需要 YAML 且不希望依赖 Kubernetes。 |
+| 提交现有 YAML | `HelmSharp.Kube` | `KubernetesManifestApplier`、`KubernetesResourceWaiter`、`ManifestIdentity` | 需要 Helm release 状态、hook 或 values 合并。 |
+| 直接处理 release | `HelmSharp.Release` | release 模型与 Kubernetes 存储 | `HelmClient` 已经拥有完整工作流。 |
+| 维护 HTTP Chart 仓库 | `HelmSharp.Repo` | `HelmChartRepository`、`HelmRepoIndexer`、`HelmPullRequest` | 需求是完整 OCI registry 对齐。 |
+| 转换清单文本 | `HelmSharp.PostRenderer` | `IPostRenderer` | 转换逻辑本就应该写在 Chart 模板中。 |
 
-## 包选择表
+## 使用高层客户端还是渲染器？
 
-| 你想做什么 | 起点 | 下一页 |
-| --- | --- | --- |
-| 只渲染清单 | `HelmSharp.Chart` + `HelmSharp.Engine` | [第一次渲染](guide/first-render.md) |
-| 构建预览 API | `HelmSharp.Chart` + `HelmSharp.Engine` | [渲染预览 API](examples/render-preview-api.md) |
-| 提供试运行和提交 | `HelmSharp.Action` | [发布工作流](guide/release-workflows.md) |
-| 提交已渲染 YAML | `HelmSharp.Kube` | [Kubernetes 操作](guide/kubernetes-operations.md) |
-| 直接管理发布历史 | `HelmSharp.Release` | [Release 包](packages/release.md) |
-| 搜索或拉取 Chart 仓库 | `HelmSharp.Repo` | [Repo 包](packages/repo.md) |
-| 打包、发布或恢复依赖 | `HelmSharp.Action` + `HelmSharp.Repo` | [Chart 分发](guide/chart-distribution.md) |
+应用提供渲染能力时，直接用 `HelmTemplateRenderer`。这样代码会清楚展示操作：加载 Chart、计算 values、配置 capabilities、返回字符串。
 
-## 核心工作流形态
-
-```mermaid
-flowchart LR
-    A["HelmChartLoader"] --> B["HelmValues.BuildAsync"]
-    B --> C["HelmTemplateRenderer"]
-    C --> D["清单预览"]
-    C --> E["HelmClient 试运行/提交"]
-```
-
-## 最常用公开类型
-
-| 类型 | 包 | 用途 |
-| --- | --- | --- |
-| `HelmClient` | `HelmSharp.Action` | 类命令门面，覆盖模板渲染和发布操作。 |
-| `HelmTemplateRequest` | `HelmSharp.Action` | 高层预览渲染请求。 |
-| `HelmUpgradeInstallRequest` | `HelmSharp.Action` | 安装/升级请求，包括试运行。 |
-| `IHelmOptionsProvider` | `HelmSharp.Action` | 集中管理环境默认值。 |
-| `HelmChartLoader` | `HelmSharp.Chart` | 加载 Chart 目录或归档。 |
-| `HelmValues` | `HelmSharp.Chart` | 合并 Chart 默认值和覆盖项。 |
-| `HelmTemplateRenderer` | `HelmSharp.Engine` | 渲染清单和 NOTES。 |
-| `KubernetesManifestApplier` | `HelmSharp.Kube` | 提交/删除渲染后的清单。 |
-
-## 操作请求对象
-
-新代码执行打包、拉取、仓库索引和依赖工作流时，建议使用请求对象重载。现有便捷重载会继续保留，并转发到相同实现。
+公共接口有意模拟 Helm 操作时，使用 `HelmClient`。它为 template、打包、仓库、依赖和生命周期操作统一返回 `CommandResult`，因此 HTTP 接口或 CLI 都能一致地处理标准输出、标准错误和退出码。
 
 ```csharp
-using HelmSharp.Action;
-using HelmSharp.Repo;
-
-await client.PackageAsync(new HelmPackageRequest
+var result = await client.TemplateAsync(new HelmTemplateRequest
 {
-    ChartPath = "./charts/app",
-    Destination = "./artifacts",
-    Version = "1.3.1"
-});
+    ReleaseName = "preview",
+    Namespace = "platform",
+    Chart = chartPath,
+    ValuesFiles = ["values.production.yaml"],
+    KubeVersion = "1.30.0"
+}, cancellationToken);
 
-await client.PullAsync(new HelmPullRequest
-{
-    ChartReference = "app",
-    Version = "~1.3.1",
-    RepositoryUrl = "https://charts.example.com"
-});
+if (!result.Succeeded)
+    return Results.BadRequest(result.StandardError);
 
-await client.RepoIndexAsync(new HelmRepoIndexRequest
-{
-    DirectoryPath = "./artifacts",
-    Url = "https://charts.example.com",
-    MergeIndexPath = "./previous-index.yaml"
-});
-
-await client.DependencyUpdateAsync(new HelmDependencyUpdateRequest
-{
-    ChartPath = "./charts/app",
-    RepositoryConfigPath = "./helm/repositories.yaml",
-    RepositoryCachePath = "./helm/cache"
-});
+return Results.Text(result.StandardOutput, "text/yaml");
 ```
 
-拉取凭据默认仅发送到仓库同源地址。只有当可信索引确实从另一个需要认证的来源提供 Chart 归档时，才设置 `PassCredentialsAll = true`。
+## 有效使用生成的 API 参考
 
-这些请求类型明确表达默认值，也为 M2 行为留出扩展空间，避免继续向 `IHelmClient` 增加可选参数。
+生成页从当前源码列出公开类型、属性和方法。先用包指南判断*应该把哪一层抽象放进代码*，再用生成参考查询参数级细节。
 
-完整的打包、索引、拉取、更新和构建示例见 [Chart 打包与仓库工作流](guide/chart-distribution.md)。
+| 包 | 指南 | 生成 API |
+| --- | --- | --- |
+| `HelmSharp.Action` | [指南](packages/action.md) | [API](api/generated/action.md) |
+| `HelmSharp.Chart` | [指南](packages/chart.md) | [API](api/generated/chart.md) |
+| `HelmSharp.Engine` | [指南](packages/engine.md) | [API](api/generated/engine.md) |
+| `HelmSharp.Kube` | [指南](packages/kube.md) | [API](api/generated/kube.md) |
+| 分发与扩展包 | [全部包指南](api/index.md) | [全部生成页](api/index.md) |
 
-## 生成 API 参考
-
-生成参考按包列出公开类型、属性和方法：
-
-- [Action API 参考](api/generated/action.md)
-- [Chart API 参考](api/generated/chart.md)
-- [Engine API 参考](api/generated/engine.md)
-- [Kube API 参考](api/generated/kube.md)
-- [Release API 参考](api/generated/release.md)
-- [Repo API 参考](api/generated/repo.md)
-
-## 错误处理模型
-
-高层 `HelmClient` 操作返回 `CommandResult`。低层加载、values 和渲染 API 在无法加载、解析或求值时抛出 .NET 异常。详见 [错误处理](guide/error-handling.md)。
+`HelmSharp.Engine.Functions` 和 `HelmSharp.Engine.Utilities` 下的模板 helper 类型主要用于实现 Helm/Sprig 行为。应用代码应将 `HelmTemplateRenderer` 视为渲染器 API；Chart 要依赖某个 helper 前，请查阅[函数矩阵](template-function-compatibility.md)。

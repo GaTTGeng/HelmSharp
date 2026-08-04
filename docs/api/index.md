@@ -1,10 +1,8 @@
-# API Reference
+# API reference
 
-Use the API reference after you have chosen a package and workflow. The generated pages list public types, properties, and methods from source so the reference can be refreshed as the SDK changes.
+Use this section as a name and source index after choosing a workflow. The generated pages list public type, property, and method names with their source files; they do not reproduce full C# signatures or teach a workflow a second time.
 
-::: warning Source and release versions
-Generated pages reflect the current `master` source tree. M2 request/distribution and M3 lifecycle APIs are available in the latest published 1.3.1 packages.
-:::
+The reference is generated from the current source branch and can differ from a published NuGet package. For a version-pinned application, use that package version's release notes and source.
 
 ## Start with the package guide
 
@@ -20,15 +18,17 @@ Generated pages reflect the current `master` source tree. M2 request/distributio
 | `HelmSharp.Storage` | [Package guide](../packages/storage.md) | [API](generated/storage.md) |
 | `HelmSharp.PostRenderer` | [Package guide](../packages/post-renderer.md) | [API](generated/postrenderer.md) |
 
-## Reading generated pages
+## Read a page in this order
 
-Generated pages intentionally stay factual: type kind, source file, properties, methods, and a short usage note. They do not replace the guide pages because raw member lists cannot explain workflow boundaries.
+1. Start with a [package guide](../api-overview.md) to confirm the abstraction belongs in your application.
+2. Use the generated page to find a member or property name and its source location; open the source declaration for types, parameters, and return values.
+3. Return to a guide or example when a member changes cluster state, values precedence, or compatibility behavior.
 
 ## Template function APIs
 
 Types under `HelmSharp.Engine.Functions` and `HelmSharp.Engine.Utilities` are documented as part of the engine reference, but they primarily support Helm/Sprig template execution. Application code should normally call `HelmTemplateRenderer`, not those helper functions directly.
 
-## Regenerating
+## Regenerate after public API changes
 
 ```powershell
 pwsh docs/scripts/generate-api-reference.ps1

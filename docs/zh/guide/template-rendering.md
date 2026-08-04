@@ -1,30 +1,44 @@
-# 模板渲染
+# 按目标集群渲染
 
-## 你在解决什么问题
+Chart 常会根据 `.Capabilities.KubeVersion` 或 `.Capabilities.APIVersions` 走不同分支。预览应描述目标集群，而不是恰好运行预览服务的机器。
 
-模板渲染把已加载的 Chart 和合并后的 values 转成 Kubernetes 清单。HelmSharp 在测试中用 Helm CLI 输出作为兼容性参照，而应用代码直接调用托管渲染器。
+## 显式提供 capabilities
 
-## 安装哪些包
+```csharp
+var renderer = new HelmTemplateRenderer(
+    chart,
+    releaseName: "preview",
+    releaseNamespace: "platform",
+    values: values,
+    kubeVersion: "1.30.0",
+    apiVersions:
+    [
+        "monitoring.coreos.com/v1",
+        "policy/v1"
+    ],
+    isUpgrade: false);
 
-```powershell
-dotnet add package HelmSharp.Chart --version 1.3.1
-dotnet add package HelmSharp.Engine --version 1.3.1
+var manifests = renderer.Render();
+var notes = renderer.RenderNotes();
 ```
 
-## 完整最小代码
+`kubeVersion` 决定模板中 `.Capabilities.KubeVersion` 的值；`apiVersions` 会将目标集群存在的 API（包括 CRD）加入 `.Capabilities.APIVersions`。需要让模板看到 `.Release.IsUpgrade` 而非 `.Release.IsInstall` 时，设置 `isUpgrade`。
 
-<<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#template-with-capabilities{csharp}
+## 渲染器提供给模板的对象
 
-## 关键 API 为什么这样用
+| 模板对象 | 来源 |
+| --- | --- |
+| `.Values` | `HelmValues.BuildAsync` 返回的字典。 |
+| `.Chart` | `Chart.yaml` 元数据与 Chart 依赖。 |
+| `.Release` | 构造渲染器时传入的 release 名称、命名空间、revision、服务和安装/升级状态。 |
+| `.Capabilities` | Kubernetes 版本与已知 API 版本。 |
+| `.Files` | Chart 中打包的非模板文件。 |
+| `.Template` | 当前模板名称和基础路径。 |
 
-`HelmTemplateRenderer` 向模板暴露 `.Release`、`.Chart`、`.Values`、`.Capabilities`、`.Files`、`.Template`、命名模板、`include`、`tpl` 和常见 Helm/Sprig 函数。`kubeVersion` 和 `apiVersions` 用于预览目标集群的输出。
+命名模板、`include`、`tpl`、`required`、`.Files` 以及已实现的 Helm/Sprig 函数都在进程内执行。单个 helper 是否可用，应以[函数矩阵](../template-function-compatibility.md)为准；不能因为别的 Helm 环境支持它，就假定这里也支持。
 
-## 生产环境注意事项
+## 清单与 notes 分开处理
 
-- 已知目标集群时显式传入 `kubeVersion` 和 `apiVersions`。
-- 用户可见的说明用 `RenderNotes()` 单独渲染。
-- 使用 `HelmClient.TemplateAsync` 且 `IncludeCRDs = true` 可获得类命令输出。
+`NOTES.txt` 是 release 后给人的信息，因此 `RenderNotes()` 会单独返回它，而不是混入 Kubernetes YAML。可以将它与预览一起保存或显示，但绝不能把它交给清单提交器。
 
-## 下一步
-
-需要安装、升级、历史或回滚行为时阅读 [发布工作流](release-workflows.md)。
+高层的 `HelmTemplateRequest` 在客户端边界提供 `KubeVersion`、`ApiVersions` 和 `IsUpgrade`。需要 notes 时应单独渲染；模板输出不会包含 Chart `crds/` 目录中的 CRD。需要变更集群时，请继续阅读[安装和升级 Release](release-workflows.md)。

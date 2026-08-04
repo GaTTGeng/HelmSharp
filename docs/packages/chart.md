@@ -1,42 +1,25 @@
 # HelmSharp.Chart
 
-## Package responsibility
-
-`HelmSharp.Chart` loads chart directories and `.tgz` archives, exposes chart metadata, merges values, and provides YAML helpers.
-
-## When to install
-
-Install this package for any render-only integration:
+`HelmSharp.Chart` owns chart inputs. It loads a directory or `.tgz` archive, exposes chart metadata and files, resolves packaged subcharts, and builds the values dictionary used by a renderer.
 
 ```powershell
 dotnet add package HelmSharp.Chart --version 1.3.1
 ```
 
-::: warning Version availability
-1.3.1 is the latest published package. The M2 lock-file, dependency-alias, and local-dependency behavior described below is available in 1.3.1.
-:::
+## Use this package for the input half of rendering
 
-## Dependencies
-
-This package depends on `YamlDotNet` and has no Kubernetes dependency.
-
-## Main types
-
-| Type | Use it for |
+| Type | Role |
 | --- | --- |
-| `HelmChartLoader` | Load a chart from a directory or archive. |
-| `HelmChart` | Inspect chart metadata, templates, files, CRDs, and subcharts. |
-| `HelmValues` | Build merged values with Helm precedence. |
-| `HelmYaml` | Serialize and deserialize YAML-compatible objects. |
-| `HelmChartDependency` | Inspect dependency metadata from `Chart.yaml`. |
-| `HelmChartLockEntry` | Inspect entries from `Chart.lock`. |
+| `HelmChartLoader` | Load `Chart.yaml`, templates, files, CRDs, values, dependencies, and archives. |
+| `HelmChart` | The loaded chart object passed to values and rendering APIs. |
+| `HelmValues` | Merge defaults, values files, inline YAML, and set-style overrides. |
+| `HelmYaml` | Read or write YAML-compatible values. |
+| `HelmChartDependency` / `HelmChartLockEntry` | Inspect dependency and lock metadata. |
 
-## Common combinations
+The package has no Kubernetes dependency and does not render templates. Pair it with `HelmSharp.Engine` for preview work, or install `HelmSharp.Action` for a full lifecycle.
 
-Use `HelmChartLoader` with `HelmValues`, then pass both into `HelmTemplateRenderer` from `HelmSharp.Engine`.
+## Dependency detail that affects values
 
-Packaged dependencies under `charts/` are loaded as subcharts. When `Chart.lock` selects an exact version, the loader uses that identity to map multiple versions or aliases of the same chart. Alias-scoped defaults and overrides use the alias key. See [Chart Packaging and Repository Workflows](../guide/chart-distribution.md) for `Chart.yaml` examples.
+Packaged charts under `charts/` are loaded as subcharts. A `Chart.lock` entry identifies the selected version when multiple aliases or versions exist. An alias changes the values key: a dependency named `redis` with alias `cache` receives values under `cache:`.
 
-## Current boundaries
-
-This package does not render templates or mutate Kubernetes resources. It is intentionally the chart and values layer.
+See [Values and overrides](../guide/values.md) for merge semantics and [Chart delivery](../guide/chart-distribution.md) for update/build behavior. The [generated Chart API](../api/generated/chart.md) lists all members.

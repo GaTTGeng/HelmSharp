@@ -1,32 +1,13 @@
 # HelmSharp.Release
 
-## 包职责
+`HelmSharp.Release` 包含 release 模型及其基于 Kubernetes Secret 的存储，生命周期操作会使用它。应用代码通常经由 `HelmSharp.Action` 间接使用。
 
-`HelmSharp.Release` 使用 Kubernetes Secrets 保存 Helm 风格发布记录。
-
-## 何时安装
-
-大多数应用通过 `HelmSharp.Action` 间接使用。只有自定义 release storage 工作流才需要直接安装。
+只有在 `HelmClient` 外部实现或检查 release 持久化时，才直接安装：
 
 ```powershell
 dotnet add package HelmSharp.Release --version 1.3.1
 ```
 
-## 依赖关系
+存储 revision 是 deployed、superseded、failed 和保留卸载等生命周期结果的证据。失败 revision 即使没有资源被应用、或只有部分资源被应用，也可能保留完整的尝试清单；因此它不是实际集群状态的记录，也不是让系统重新渲染当前 Chart 的请求。
 
-该包依赖 Kubernetes .NET 客户端，并引用 Chart 和 Kube 辅助包。
-
-## 主要类型
-
-| 类型 | 用途 |
-| --- | --- |
-| `HelmReleaseStore` | 保存、列出、读取和更新发布记录。 |
-| `HelmReleaseRecord` | 表示发布修订、清单、values 和状态。 |
-
-## 常见组合
-
-`HelmClient` 在安装、升级、卸载、状态、历史和 get 操作中使用 `HelmReleaseStore`。
-
-## 当前边界
-
-发布存储遵循 Helm 风格 Secret 记录，但不是通用审计数据库。
+在让应用代码直接依赖 release 存储前，先看 `HelmSharp.Action` 包指南。成员级细节以[生成的 Release API](../api/generated/release.md)为准。

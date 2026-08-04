@@ -1,48 +1,33 @@
-# Public Chart Rendering
+# Render a public chart
 
-## What problem this solves
+Treat a public chart as an input you must pin, inspect, and validate. The fact that it works with one Helm installation does not establish compatibility with every managed renderer.
 
-Public charts are useful integration checks because they exercise helpers, nested values, capabilities, CRDs, and formatting patterns that small sample charts often miss. Use this workflow when you want to preview a pinned public chart and inspect the generated manifests before a release.
-
-## Packages to install
-
-```powershell
-dotnet add package HelmSharp.Action --version 1.3.1
-```
-
-## Minimal complete code
+First use `HelmSharp.Repo` or your artifact pipeline to pull a specific chart version into a controlled directory. Then render that extracted chart exactly as you would an internal chart:
 
 ```csharp
-var result = await client.TemplateAsync(new HelmTemplateRequest
-{
-    ReleaseName = "ingress-nginx",
-    Namespace = "ingress-system",
-    Chart = "/charts/ingress-nginx",
-    ValuesFiles = ["ci/controller-deployment-values.yaml"],
-    KubeVersion = "1.30.0",
-    ApiVersions =
-    [
-        "networking.k8s.io/v1",
-        "policy/v1",
-        "monitoring.coreos.com/v1"
-    ],
-    IncludeCRDs = true,
-    ShowNotes = true
-}, cancellationToken);
+var chart = await HelmChartLoader.LoadAsync(extractedChartPath, cancellationToken);
+var values = await HelmValues.BuildAsync(
+    chart,
+    valuesFiles: ["values.organization.yaml"],
+    valuesContent: null,
+    setValues: null,
+    setFileValues: null,
+    setStringValues: null,
+    setJsonValues: null,
+    cancellationToken: cancellationToken);
 
-Console.WriteLine(result.StandardOutput);
+var renderer = new HelmTemplateRenderer(
+    chart,
+    releaseName: "external-dns",
+    releaseNamespace: "platform",
+    values: values,
+    kubeVersion: "1.30.0",
+    apiVersions: ["externaldns.k8s.io/v1alpha1"],
+    isUpgrade: false);
+
+var manifest = renderer.Render();
 ```
 
-## Why these APIs
+Before rolling this into a product, pin the archive digest and test the exact chart version with the exact values and capabilities you will use. If output differs from Helm, reduce the difference to a small chart/template, then compare the effective values, target capabilities, and the [function matrix](../template-function-compatibility.md). [HelmCompare](../compare.md) is useful for the side-by-side part of that investigation.
 
-`HelmTemplateRequest` maps to the preview shape many Helm users already know: release, namespace, chart, values, kube version, API versions, CRDs, and notes.
-
-## Production notes
-
-- Pin chart versions when rendering public charts.
-- Keep the chart copy or chart provenance tied to the preview output.
-- Use the compatibility page for current public-chart test coverage and known boundaries.
-
-## Next step
-
-Open [Helm Compatibility](../helm-compatibility.md) for the full 1.1.0 matrix.
+The public-chart golden tests in this repository are regression evidence, not a certification that every version of every public chart is supported.

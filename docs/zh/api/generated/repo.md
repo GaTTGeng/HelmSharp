@@ -4,7 +4,6 @@
 
 此页列出公开类型和成员，便于查找。使用建议、边界和示例请先阅读对应包文档。
 
-> **版本说明：** 本页反映当前 `master` 源码树。M2 API 已包含在最新发布的 1.3.1 包中。
 
 ## HelmChartRepository
 
@@ -23,9 +22,6 @@
 - `RemoveRepositoryAsync(...)`
 - `SearchRepoAsync(...)`
 
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
-
 ## HelmChartSearchResult
 
 | 字段 | 值 |
@@ -38,9 +34,6 @@
 - `Description`
 - `Name`
 - `Version`
-
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
 ## HelmChartVersion
 
@@ -57,9 +50,6 @@
 - `Name`
 - `Urls`
 - `Version`
-
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
 ## HelmPullRequest
 
@@ -80,9 +70,6 @@
 - `VerifyDigest`
 - `Version`
 
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
-
 ## HelmRepoIndex
 
 | 字段 | 值 |
@@ -95,18 +82,12 @@
 - `Entries`
 - `Generated`
 
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
-
 ## HelmRepoIndexDiagnostic
 
 | 字段 | 值 |
 | --- | --- |
 | 类型类别 | `record` |
 | 源文件 | `src/HelmSharp.Repo/HelmRepoIndexer.cs` |
-
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
 ## HelmRepoIndexer
 
@@ -119,18 +100,12 @@
 - `GenerateIndexAsync(...)`
 - `GenerateIndexWithDiagnosticsAsync(...)`
 
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
-
 ## HelmRepoIndexGenerationResult
 
 | 字段 | 值 |
 | --- | --- |
 | 类型类别 | `record` |
 | 源文件 | `src/HelmSharp.Repo/HelmRepoIndexer.cs` |
-
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
 ## HelmRepoIndexRequest
 
@@ -145,9 +120,6 @@
 - `MergeIndexPath`
 - `OutputPath`
 - `Url`
-
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
 ## HelmRepository
 
@@ -167,9 +139,6 @@
 - `Url`
 - `Username`
 
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
-
 ## HelmRepositoryOptions
 
 | 字段 | 值 |
@@ -181,6 +150,3 @@
 - `CacheDirectory`
 - `ConfigDirectory`
 - `RepositoryConfigPath`
-
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。

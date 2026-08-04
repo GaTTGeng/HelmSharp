@@ -1,32 +1,30 @@
-# Chart 打包与仓库工作流
+# 打包 Chart 与管理依赖
 
-M2 使用纯托管 .NET 覆盖传统 HTTP Chart 工作流：打包 Chart、生成 `index.yaml`、管理仓库配置与缓存、拉取归档，以及更新或按锁文件重建依赖。测试套件把 Helm 作为参照，但运行时不依赖 Helm。
+HelmSharp 以托管代码支持传统 HTTP Chart 仓库工作流：打包 Chart、生成 `index.yaml`、管理隔离的仓库状态、拉取归档和解析依赖。运行时不需要 Helm CLI。
 
-::: warning M2 API 尚未发布
-本指南的工作流和请求对象已包含在 HelmSharp 1.3.1 中。
+::: warning 本文范围
+OCI 认证和推拉对齐、provenance 文件、签名和签名验证不属于本文工作流。在此基础上建设生产 Chart 仓库服务前，请先查看[兼容性](../helm-compatibility.md)。
 :::
 
 ## 打包 Chart
 
-需要覆盖元数据或希望打包前刷新依赖时，使用请求对象重载：
+需要覆盖元数据或在打包前刷新依赖时，使用请求对象重载：
 
 <<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#package-chart{csharp}
 
-`Version` 与 `AppVersion` 只写入归档内的 `Chart.yaml`，不会修改源文件。归档命名为 `<chart-name>-<version>.tgz`，只有一个 `<chart-name>/` 根目录，并保留嵌套 Chart 与 CRD；符号链接会被跳过。
+`Version` 和 `AppVersion` 只改变归档内的 `Chart.yaml`，不修改源文件。归档名是 `<chart-name>-<version>.tgz`，只含一个 Chart 根目录，包含嵌套 Chart 和 CRD，并跳过符号链接。`.helmignore` 支持文件、目录、`*`、`?`、字符类、根路径和 `!` 反选模式；`**` 会被明确拒绝。
 
-打包器读取 Chart 根目录的 `.helmignore`。空行和注释会被忽略；支持文件、目录、`*`、`?`、字符集、根路径和 `!` 取反规则。Helm 的 `**` 语法目前不支持，并会返回明确错误。`DependencyUpdate` 为 `true` 时，只有依赖更新成功才会写出归档。
+## 生成仓库元数据
 
-## 生成仓库索引
-
-把一个或多个 `.tgz` 包放到同一目录，再生成仓库元数据：
+将 Chart 归档放入一个目录后，生成索引：
 
 <<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#repository-index{csharp}
 
-`Url` 会成为包条目的基础 URL。`MergeIndexPath` 可保留当前目录中不存在的旧版本。默认跳过无效包，并可通过低层诊断读取原因；发布流程需要事务性失败时设置 `FailOnInvalidPackage`。未设置 `OutputPath` 时，会写到 `DirectoryPath` 下的 `index.yaml`。
+`Url` 是包的基础 URL。`MergeIndexPath` 会保留当前目录中已不再出现的历史条目。无效归档必须阻止发布时，设置 `FailOnInvalidPackage`；否则检查被跳过包的诊断。`OutputPath` 默认是 `DirectoryPath` 下的 `index.yaml`。
 
-## 隔离仓库状态
+## 服务中隔离仓库状态
 
-`HelmChartRepository` 使用兼容 Helm 的配置与缓存位置。服务、测试和多租户场景应显式指定路径，避免并发工作负载共享凭据或过期索引：
+不要让租户、测试或并发任务共享仓库配置和缓存目录。
 
 ```csharp
 using var repository = new HelmChartRepository(new HelmRepositoryOptions
@@ -36,35 +34,17 @@ using var repository = new HelmChartRepository(new HelmRepositoryOptions
 });
 ```
 
-仓库定义保存在 `repositories.yaml`，缓存索引使用 `<repository-name>-index.yaml`。未显式指定路径时，会依次考虑 `HELM_REPOSITORY_CONFIG`、`HELM_CONFIG_HOME`、`HELM_REPOSITORY_CACHE`、`HELM_CACHE_HOME`、对应的 XDG 位置和平台默认目录。
+仓库配置保存定义，缓存索引使用 `<repository-name>-index.yaml`。未显式指定路径时，会采用 Helm 兼容环境变量和平台默认路径。仅传关键词的 `SearchRepoAsync` 重载只搜索这些已配置的缓存，不发起网络请求；传入仓库 URL 的重载会先获取并缓存该仓库索引，再执行搜索。
 
-完整仓库生命周期使用以下方法：
-
-1. `AddRepositoryAsync` 写入命名仓库定义。
-2. `ListRepositoriesAsync` 读取已配置定义。
-3. `FetchRepoIndexAsync` 刷新选定仓库的缓存。
-4. `SearchRepoAsync(keyword)` 离线搜索已配置缓存。
-5. `RemoveRepositoryAsync` 同时删除定义和对应缓存索引。
-
-仓库搜索有意保持为纯缓存操作。需要远端最新结果时应先刷新；某个仓库的缓存缺失或损坏，不会遮蔽其他仓库的有效结果。
-
-## 拉取 Chart
-
-下例添加传统仓库、刷新索引、按语义版本选择包、校验索引中的摘要并解压归档：
+## 安全拉取 Chart
 
 <<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#pull-chart{csharp}
 
-支持以下拉取形式：
+请求可接受 `repo/chart`、Chart 名加 `RepositoryUrl`，或直接的 `https://…tgz` URL。下载的归档存放在 `Destination` 下。启用 `Untar` 时，`UntarDirectory` 选择解压根目录；未设置时才以 `Destination` 为解压根目录。任何逃逸出所选根目录的条目都会被拒绝。凭据默认只发送给仓库源站；只有可信仓库有意将归档跳转到另一个受认证源站时，才启用 `PassCredentialsAll`。
 
-- 使用已配置仓库和缓存索引的 `repo/chart`；
-- Chart 名称配合 `RepositoryUrl` 指定仓库；
-- 直接使用 `https://.../chart-version.tgz` 归档 URL。
+## 让依赖构建可复现
 
-`Destination` 控制归档保存位置。`Untar` 启用解压，`UntarDirectory` 指定解压父目录。解压会拒绝逃逸目标目录的条目。仓库凭据默认只发送到同源地址；仅当跨域归档主机可信时才启用 `PassCredentialsAll`。
-
-## 声明依赖
-
-`Chart.yaml` 可以组合仓库别名、Chart 别名与本地引用：
+和 Helm 一样在 `Chart.yaml` 中声明别名和本地引用：
 
 ```yaml
 dependencies:
@@ -72,39 +52,15 @@ dependencies:
     alias: cache
     version: ~18.0.0
     repository: "@stable"
-  - name: redis
-    alias: session
-    version: ~18.0.0
-    repository: "alias:stable"
   - name: shared-templates
     version: 1.2.3
     repository: file://../shared-templates
 ```
 
-`@stable` 与 `alias:stable` 通过 `repositories.yaml` 中的同名条目解析。相对 `file://` 路径以父 Chart 目录为基准，并打包到 `charts/`。锁文件保留原始依赖名称和仓库引用。Chart 别名会改变子 Chart 身份与 values 键，因此上面第一个依赖的 values 应放在 `cache:` 下，而不是 `redis:` 下。
-
-`condition`、`tags` 与 `import-values` 影响 values 和渲染，不会把声明的依赖从更新或下载集合中移除。
-
-## 更新依赖
-
-更新操作会解析版本约束，下载或打包所有声明的依赖，删除过期 `.tgz`，并写出兼容 Helm 的 `Chart.lock`：
+别名会改变子 Chart 标识和对应的 values 键，因此第一个依赖应从 `cache:` 而不是 `redis:` 读取 values。`DependencyUpdateAsync` 解析约束、刷新依赖并写入 `Chart.lock`；CI 应使用 `DependencyBuildAsync`：它验证 lock 与 `Chart.yaml` 的一致性、还原精确锁定版本，且不重写 lock。
 
 <<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#dependency-update{csharp}
 
-普通在线更新应保持 `SkipRepositoryRefresh = false`。只有 `RepositoryCachePath` 已包含所需命名仓库索引时才设为 `true`，例如受控离线构建。
-
-## 按 `Chart.lock` 重建
-
-CI 与发布应使用可复现的 build 路径：
-
 <<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#dependency-build{csharp}
 
-该操作要求存在 `Chart.lock`，会校验其摘要仍与 `Chart.yaml` 一致，恢复精确锁定版本，并且不重写锁文件。已配置仓库依赖需要对应缓存索引；`file://` 依赖也要求引用的源 Chart 仍可访问且版本与锁一致。
-
-打包前可运行 `DependencyListAsync`，检查 `ok`、缺失、版本错误、未打包目录和锁一致性状态。
-
-## 兼容性边界
-
-本指南覆盖传统 HTTP Chart 仓库和本地文件依赖。OCI 注册表认证与拉取/推送对齐、provenance 文件、签名和签名校验属于后续 OCI 与来源证明里程碑。这里描述的工作流都不会调用 Helm CLI。
-
-高层 `HelmClient` 方法返回 `CommandResult`，应检查 `Succeeded`、`ExitCode`、`StandardOutput` 与 `StandardError`；低层仓库方法抛出 .NET 异常。共享模型见[错误处理](error-handling.md)，包职责见 [HelmSharp.Action](../packages/action.md)、[HelmSharp.Chart](../packages/chart.md) 与 [HelmSharp.Repo](../packages/repo.md)。
+要向用户报告缺失、错误版本、解包或 lock 不一致的依赖时，打包前运行 `DependencyListAsync`。高层客户端方法返回 `CommandResult`，低层仓库方法抛出异常；两种诊断如何保留，见[排查失败](error-handling.md)。

@@ -4,7 +4,6 @@
 
 Use this page as a member index. Start with the package guide for usage recommendations, boundaries, and examples.
 
-> **Version note:** This page reflects the current `master` source tree. M2 APIs are available in the latest published 1.3.1 packages.
 
 ## CommandResult
 
@@ -17,9 +16,6 @@ Use this page as a member index. Start with the package guide for usage recommen
 - `ExitCode`
 - `StandardError`
 - `StandardOutput`
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
 
 ## HelmClient
 
@@ -74,18 +70,12 @@ Read the corresponding package page first, then use this member index to locate 
 - `UpgradeInstallStreamAsync(...)`
 - `VersionAsync(...)`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## HelmDeletionPropagation
 
 | Field | Value |
 | --- | --- |
 | Kind | `enum` |
 | Source | `src/HelmSharp.Action/HelmUninstallRequest.cs` |
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
 
 ## HelmDependencyBuildRequest
 
@@ -100,9 +90,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `RepositoryConfigPath`
 - `VerifyDigests`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## HelmDependencyListRequest
 
 | Field | Value |
@@ -113,9 +100,6 @@ Read the corresponding package page first, then use this member index to locate 
 ### Properties
 - `ChartPath`
 - `IncludeDiagnostics`
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
 
 ## HelmDependencyUpdateRequest
 
@@ -129,9 +113,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `RepositoryCachePath`
 - `RepositoryConfigPath`
 - `SkipRepositoryRefresh`
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
 
 ## HelmExecutionOptions
 
@@ -153,9 +134,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `TimeoutSeconds`
 - `WorkingDirectory`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## HelmHookDeletePolicy
 
 | Field | Value |
@@ -167,9 +145,13 @@ Read the corresponding package page first, then use this member index to locate 
 - `DeletePolicies`
 - `Events`
 - `Kind`
+- `LastRunCompletedAt`
+- `LastRunPhase`
+- `LastRunStartedAt`
 - `Manifest`
 - `Name`
 - `Namespace`
+- `OutputLogPolicies`
 - `Path`
 - `Weight`
 
@@ -177,18 +159,12 @@ Read the corresponding package page first, then use this member index to locate 
 - `ExecuteHooksAsync(...)`
 - `ExecuteHooksWithFailureHandlingAsync(...)`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## HelmHookEvent
 
 | Field | Value |
 | --- | --- |
 | Kind | `enum` |
 | Source | `src/HelmSharp.Action/HelmHookExecutor.cs` |
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
 
 ## HelmPackageRequest
 
@@ -205,9 +181,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `SkipSchemaValidation`
 - `Version`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## HelmPluginInfo
 
 | Field | Value |
@@ -220,9 +193,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `Name`
 - `Path`
 - `Version`
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
 
 ## HelmPluginManager
 
@@ -237,9 +207,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `RunAsync(...)`
 - `Uninstall(...)`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## HelmProvenance
 
 | Field | Value |
@@ -252,9 +219,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `ExtractSha256(...)`
 - `GenerateProvFileAsync(...)`
 - `VerifyAsync(...)`
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
 
 ## HelmRollbackRequest
 
@@ -276,9 +240,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `TimeoutSeconds`
 - `Wait`
 - `WaitForJobs`
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
 
 ## HelmTemplateRequest
 
@@ -306,9 +267,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `ValuesFile`
 - `ValuesFiles`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## HelmUninstallRequest
 
 | Field | Value |
@@ -326,9 +284,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `ReleaseName`
 - `TimeoutSeconds`
 - `Wait`
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
 
 ## HelmUpgradeInstallRequest
 
@@ -393,9 +348,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `Wait`
 - `WaitForJobs`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## IHelmClient
 
 | Field | Value |
@@ -403,18 +355,12 @@ Read the corresponding package page first, then use this member index to locate 
 | Kind | `interface` |
 | Source | `src/HelmSharp.Action/IHelmClient.cs` |
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## IHelmOptionsProvider
 
 | Field | Value |
 | --- | --- |
 | Kind | `interface` |
 | Source | `src/HelmSharp.Action/IHelmOptionsProvider.cs` |
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
 
 ## KubeVersionValidator
 
@@ -425,6 +371,3 @@ Read the corresponding package page first, then use this member index to locate 
 
 ### Methods
 - `IsCompatible(...)`
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.

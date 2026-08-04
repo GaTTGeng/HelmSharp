@@ -4,7 +4,6 @@
 
 Use this page as a member index. Start with the package guide for usage recommendations, boundaries, and examples.
 
-> **Version note:** This page reflects the current `master` source tree. M2 APIs are available in the latest published 1.3.1 packages.
 
 ## KubernetesManifestApplier
 
@@ -19,9 +18,6 @@ Use this page as a member index. Start with the package guide for usage recommen
 - `EnsureNamespaceAsync(...)`
 - `SplitDocumentsPublic(...)`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## KubernetesResourceWaiter
 
 | Field | Value |
@@ -33,9 +29,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `WaitForDeletedAsync(...)`
 - `WaitForReadyAsync(...)`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## ManifestIdentity
 
 | Field | Value |
@@ -45,6 +38,3 @@ Read the corresponding package page first, then use this member index to locate 
 
 ### Methods
 - `Parse(...)`
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.

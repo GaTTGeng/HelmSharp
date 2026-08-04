@@ -71,7 +71,6 @@ function Write-PackageReference(
         [void]$builder.AppendLine()
         [void]$builder.AppendLine("此页列出公开类型和成员，便于查找。使用建议、边界和示例请先阅读对应包文档。")
         [void]$builder.AppendLine()
-        [void]$builder.AppendLine("> **版本说明：** 本页反映当前 ``master`` 源码树。M2 API 已包含在最新发布的 1.3.1 包中。")
     }
     else {
         [void]$builder.AppendLine("# $packageName API")
@@ -80,7 +79,6 @@ function Write-PackageReference(
         [void]$builder.AppendLine()
         [void]$builder.AppendLine("Use this page as a member index. Start with the package guide for usage recommendations, boundaries, and examples.")
         [void]$builder.AppendLine()
-        [void]$builder.AppendLine("> **Version note:** This page reflects the current ``master`` source tree. M2 APIs are available in the latest published 1.3.1 packages.")
     }
 
     foreach ($type in $types) {
@@ -117,16 +115,6 @@ function Write-PackageReference(
             foreach ($method in ($type.Methods | Sort-Object -Unique)) {
                 [void]$builder.AppendLine("- ``$(Escape-Markdown $method)(...)``")
             }
-        }
-
-        [void]$builder.AppendLine()
-        if ($language -eq 'zh') {
-            [void]$builder.AppendLine("### 使用提示")
-            [void]$builder.AppendLine("先查看对应包页面的场景示例，再使用此成员索引定位具体类型。")
-        }
-        else {
-            [void]$builder.AppendLine("### Usage note")
-            [void]$builder.AppendLine("Read the corresponding package page first, then use this member index to locate the concrete type.")
         }
     }
 

@@ -1,42 +1,25 @@
 # HelmSharp.Chart
 
-## 包职责
-
-`HelmSharp.Chart` 负责加载 Chart 目录和 `.tgz` 归档，暴露 Chart 元数据，合并 values，并提供 YAML 辅助方法。
-
-## 何时安装
-
-任何只渲染集成都会用到：
+`HelmSharp.Chart` 负责 Chart 输入。它加载目录或 `.tgz` 归档，提供 Chart 元数据和文件，解析已打包子 Chart，并构建渲染器使用的 values 字典。
 
 ```powershell
 dotnet add package HelmSharp.Chart --version 1.3.1
 ```
 
-::: warning 版本可用性
-1.3.1 是最新发布包。下文的 M2 锁文件、依赖别名和本地依赖行为已包含在 1.3.1 中。
-:::
+## 用它完成渲染的输入部分
 
-## 依赖关系
-
-该包依赖 `YamlDotNet`，不依赖 Kubernetes。
-
-## 主要类型
-
-| 类型 | 用途 |
+| 类型 | 作用 |
 | --- | --- |
-| `HelmChartLoader` | 从目录或归档加载 Chart。 |
-| `HelmChart` | 查看 Chart 元数据、模板、文件、CRDs 和子 Chart。 |
-| `HelmValues` | 按 Helm 优先级构建合并后的 values。 |
-| `HelmYaml` | 序列化和反序列化 YAML 对象。 |
-| `HelmChartDependency` | 查看 `Chart.yaml` 依赖元数据。 |
-| `HelmChartLockEntry` | 查看 `Chart.lock` 条目。 |
+| `HelmChartLoader` | 加载 `Chart.yaml`、模板、文件、CRD、values、依赖和归档。 |
+| `HelmChart` | 传给 values 与渲染 API 的已加载 Chart 对象。 |
+| `HelmValues` | 合并默认值、values 文件、内联 YAML 和 set 风格覆盖项。 |
+| `HelmYaml` | 读写 YAML 兼容对象。 |
+| `HelmChartDependency` / `HelmChartLockEntry` | 检查依赖和 lock 元数据。 |
 
-## 常见组合
+本包不依赖 Kubernetes，也不执行模板。预览场景将它与 `HelmSharp.Engine` 配对；需要完整生命周期时则安装 `HelmSharp.Action`。
 
-用 `HelmChartLoader` 加载，用 `HelmValues` 合并，然后传给 `HelmSharp.Engine` 的 `HelmTemplateRenderer`。
+## 会影响 values 的依赖细节
 
-`charts/` 下的已打包依赖会作为子 Chart 加载。`Chart.lock` 选定精确版本时，加载器使用该身份映射同一 Chart 的多个版本或别名。别名作用域的默认值和覆盖值使用别名键。`Chart.yaml` 示例见 [Chart 打包与仓库工作流](../guide/chart-distribution.md)。
+`charts/` 下的已打包 Chart 会被加载为子 Chart。多个别名或版本存在时，`Chart.lock` 条目确定被选中的版本。别名也会改变 values 键：名为 `redis`、别名为 `cache` 的依赖从 `cache:` 接收 values。
 
-## 当前边界
-
-该包不渲染模板，也不修改 Kubernetes 资源。
+合并语义请看[Values 与覆盖项](../guide/values.md)，update/build 行为请看[Chart 交付](../guide/chart-distribution.md)。全部成员见[生成的 Chart API](../api/generated/chart.md)。

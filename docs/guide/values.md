@@ -1,40 +1,54 @@
-# Values
+# Values and overrides
 
-## What problem this solves
+Values are the boundary between your application and a chart. Build them once, keep the inputs that produced them, and use the same result for every preview or deployment decision that must be reproducible.
 
-Values are usually the integration boundary between your product model and a Helm chart. HelmSharp keeps the familiar Helm precedence model so operators can bring existing values files and `--set`-style overrides.
+## Precedence
 
-## Packages to install
+`HelmValues.BuildAsync` merges sources from top to bottom; a source later in the table overrides an earlier value at the same path.
 
-```powershell
-dotnet add package HelmSharp.Chart --version 1.3.1
+| Order | Source | Typical use |
+| ---: | --- | --- |
+| 1 | Chart and subchart defaults | The chart's `values.yaml` files. |
+| 2 | `valuesFiles` | Environment or product defaults, applied left to right. |
+| 3 | `valuesContent` | YAML held by a database, API request, or generated configuration. |
+| 4 | `setFileValues` | File content assigned to a value path. |
+| 5 | `setStringValues` | A value that must remain a string. |
+| 6 | `setValues` | Helm `--set`-style scalar overrides. |
+| 7 | `setJsonValues` | A JSON object or array assigned to a path. |
+
+For example, this preserves an image tag with leading zeroes while passing a structured service-port list:
+
+```csharp
+var license = await File.ReadAllTextAsync(licensePath, cancellationToken);
+
+var values = await HelmValues.BuildAsync(
+    chart,
+    valuesFiles: ["values.base.yaml", "values.production.yaml"],
+    valuesContent: """
+        global:
+          environment: production
+        """,
+    setValues: new Dictionary<string, string> { ["replicaCount"] = "3" },
+    setFileValues: new Dictionary<string, string> { ["license.text"] = license },
+    setStringValues: new Dictionary<string, string> { ["image.tag"] = "001" },
+    setJsonValues: new Dictionary<string, string>
+    {
+        ["service.ports"] = """[{"name":"http","port":80}]"""
+    },
+    cancellationToken: cancellationToken);
 ```
 
-## Minimal complete code
+## Choose the right override form
 
-<<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#values-precedence{csharp}
+| Input | Use it when | Avoid it when |
+| --- | --- | --- |
+| `setValues` | You have simple scalar input such as `replicaCount=3`. | The value's type or leading zeroes matter. |
+| `setStringValues` | A tag, ID, or code must remain text. | You intend the chart to receive a boolean or number. |
+| `setJsonValues` | The caller owns a list or object and can validate JSON. | A human is editing YAML; use a values file instead. |
+| `setFileValues` | The value is the contents of a certificate, license, or other file. | You only have a path. Read the file first. |
 
-## Why these APIs
+## Keep input handling safe
 
-`HelmValues.BuildAsync` merges inputs from lowest to highest precedence:
+Treat values as untrusted configuration when they come from a user or tenant. Limit inline YAML size, validate allowed override paths, and retain the values-file names and explicit overrides alongside any rendered artifact. Secrets may appear in values and rendered YAML; do not put either in general-purpose logs.
 
-| Input | Meaning |
-| --- | --- |
-| Chart defaults | `values.yaml` bundled with the chart. |
-| Subchart defaults | Dependency defaults under dependency name or alias. |
-| `valuesFiles` | One or more values files, applied in order. |
-| `valuesContent` | Inline YAML from a database, request, or generated config. |
-| `setFileValues` | File content assigned to a values path. |
-| `setStringValues` | String-preserving overrides. |
-| `setValues` | Scalar-coercing `--set` style overrides. |
-| `setJsonValues` | JSON object or array overrides. |
-
-## Production notes
-
-- Keep the precedence order visible in code reviews.
-- Read file content before passing `SetFileValues`; the value is content, not a file path.
-- Use `SetStringValues` for tags such as `"001"` that must not become numbers.
-
-## Next step
-
-Use [Template Rendering](template-rendering.md) when values must influence Capabilities, NOTES, or CRD output.
+To render conditionals for a real cluster version, see [Render for a target cluster](template-rendering.md). To send the result to a cluster, use [Install and upgrade releases](release-workflows.md).

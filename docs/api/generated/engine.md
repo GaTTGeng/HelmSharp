@@ -4,7 +4,6 @@
 
 Use this page as a member index. Start with the package guide for usage recommendations, boundaries, and examples.
 
-> **Version note:** This page reflects the current `master` source tree. M2 APIs are available in the latest published 1.3.1 packages.
 
 ## ActionNode
 
@@ -17,9 +16,6 @@ Use this page as a member index. Start with the package guide for usage recommen
 - `Expression`
 - `LeftTrim`
 - `RightTrim`
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
 
 ## BlockNode
 
@@ -38,9 +34,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `RightTrim`
 - `TrueBody`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## CommentNode
 
 | Field | Value |
@@ -52,9 +45,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `Content`
 - `LeftTrim`
 - `RightTrim`
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
 
 ## DefineNode
 
@@ -69,9 +59,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `Name`
 - `RightTrim`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## ElseIfBranch
 
 | Field | Value |
@@ -83,9 +70,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `Body`
 - `Condition`
 - `TrimMarker`
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
 
 ## HelmTemplateRenderer
 
@@ -101,9 +85,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `Render(...)`
 - `RenderNotes(...)`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## TemplateDocumentNode
 
 | Field | Value |
@@ -116,9 +97,6 @@ Read the corresponding package page first, then use this member index to locate 
 
 ### Methods
 - `SerializeToText(...)`
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
 
 ## TemplateNode
 
@@ -133,9 +111,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `StartLine`
 - `StartOffset`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## TemplateParseException
 
 | Field | Value |
@@ -148,9 +123,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `Line`
 - `Offset`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## TemplateParser
 
 | Field | Value |
@@ -160,9 +132,6 @@ Read the corresponding package page first, then use this member index to locate 
 
 ### Methods
 - `Parse(...)`
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
 
 ## TemplateTokenizer
 
@@ -174,9 +143,6 @@ Read the corresponding package page first, then use this member index to locate 
 ### Methods
 - `TokenizeFlat(...)`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## TextNode
 
 | Field | Value |
@@ -186,9 +152,6 @@ Read the corresponding package page first, then use this member index to locate 
 
 ### Properties
 - `Content`
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
 
 ## Token
 
@@ -209,9 +172,6 @@ Read the corresponding package page first, then use this member index to locate 
 ### Methods
 - `ToString(...)`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## TokenKind
 
 | Field | Value |
@@ -219,15 +179,9 @@ Read the corresponding package page first, then use this member index to locate 
 | Kind | `enum` |
 | Source | `src/HelmSharp.Engine/TemplateTokenizer.cs` |
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## UnsupportedTemplateFeatureException
 
 | Field | Value |
 | --- | --- |
 | Kind | `class` |
 | Source | `src/HelmSharp.Engine/UnsupportedTemplateFeatureException.cs` |
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
