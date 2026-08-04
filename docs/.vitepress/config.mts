@@ -68,9 +68,9 @@ const englishSidebar = [
     ]
   },
   {
-    text: 'API reference',
+    text: 'Public API index',
     items: [
-      { text: 'About the API reference', link: '/api/' },
+      { text: 'About the public API index', link: '/api/' },
       { text: 'Action API', link: '/api/generated/action' },
       { text: 'Chart API', link: '/api/generated/chart' },
       { text: 'Engine API', link: '/api/generated/engine' },
@@ -161,9 +161,9 @@ const chineseSidebar = [
     ]
   },
   {
-    text: 'API 参考',
+    text: '公共 API 索引',
     items: [
-      { text: '如何使用 API 参考', link: '/zh/api/' },
+      { text: '如何使用公共 API 索引', link: '/zh/api/' },
       { text: 'Action API', link: '/zh/api/generated/action' },
       { text: 'Chart API', link: '/zh/api/generated/chart' },
       { text: 'Engine API', link: '/zh/api/generated/engine' },

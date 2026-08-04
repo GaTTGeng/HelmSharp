@@ -1,6 +1,6 @@
-# API reference
+# Public API index
 
-Use this section as a name and source index after choosing a workflow. The generated pages list public type, property, and method names with their source files; they do not reproduce full C# signatures or teach a workflow a second time.
+Use this section as a name and source index after choosing a workflow. The generated pages list public type, property, and method names with their source files; they are not complete API reference documentation and do not reproduce full C# signatures or teach a workflow a second time.
 
 The reference is generated from the current source branch and can differ from a published NuGet package. For a version-pinned application, use that package version's release notes and source.
 
