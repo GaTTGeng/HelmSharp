@@ -34,7 +34,7 @@ using var repository = new HelmChartRepository(new HelmRepositoryOptions
 });
 ```
 
-仓库配置保存定义，缓存索引使用 `<repository-name>-index.yaml`。未显式指定路径时，会采用 Helm 兼容环境变量和平台默认路径。仓库搜索仅查询缓存：需要最新远端结果时，先刷新索引。
+仓库配置保存定义，缓存索引使用 `<repository-name>-index.yaml`。未显式指定路径时，会采用 Helm 兼容环境变量和平台默认路径。仅传关键词的 `SearchRepoAsync` 重载只搜索这些已配置的缓存，不发起网络请求；传入仓库 URL 的重载会先获取并缓存该仓库索引，再执行搜索。
 
 ## 安全拉取 Chart
 

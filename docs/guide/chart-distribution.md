@@ -34,7 +34,7 @@ using var repository = new HelmChartRepository(new HelmRepositoryOptions
 });
 ```
 
-The repository config stores definitions; cached indexes use `<repository-name>-index.yaml`. If paths are omitted, Helm-compatible environment variables and platform defaults are used. Repository search is cache-only: refresh an index before you need current remote results.
+The repository config stores definitions; cached indexes use `<repository-name>-index.yaml`. If paths are omitted, Helm-compatible environment variables and platform defaults are used. The keyword-only `SearchRepoAsync` overload searches those configured caches without a network request. The overload that accepts a repository URL fetches and caches that repository index before searching.
 
 ## Pull a chart safely
 

@@ -1,6 +1,6 @@
 # API reference
 
-Use this section for parameter and member lookup after choosing a workflow. The generated pages are deliberately factual: they mirror public types, properties, and methods from source rather than trying to teach a workflow a second time.
+Use this section as a name and source index after choosing a workflow. The generated pages list public type, property, and method names with their source files; they do not reproduce full C# signatures or teach a workflow a second time.
 
 The reference is generated from the current source branch and can differ from a published NuGet package. For a version-pinned application, use that package version's release notes and source.
 
@@ -21,7 +21,7 @@ The reference is generated from the current source branch and can differ from a 
 ## Read a page in this order
 
 1. Start with a [package guide](../api-overview.md) to confirm the abstraction belongs in your application.
-2. Use the generated page to find the exact member, request property, return type, and source location.
+2. Use the generated page to find a member or property name and its source location; open the source declaration for types, parameters, and return values.
 3. Return to a guide or example when a member changes cluster state, values precedence, or compatibility behavior.
 
 ## Template function APIs
