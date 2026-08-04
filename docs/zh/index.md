@@ -49,7 +49,7 @@ dotnet add package HelmSharp.Engine --version 1.3.1
 
 ```csharp
 var chart = await HelmChartLoader.LoadAsync(chartPath, CancellationToken.None);
-var values = await HelmValues.BuildAsync(chart, null, null, null, null, null, null, CancellationToken.None);
+var values = await HelmValues.BuildAsync(chart, valuesFiles: null, null, null, null, null, null, CancellationToken.None);
 var renderer = new HelmTemplateRenderer(chart, "demo", "default", values);
 
 var manifest = renderer.Render();
