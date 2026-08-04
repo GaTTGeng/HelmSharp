@@ -4,7 +4,6 @@
 
 Use this page as a member index. Start with the package guide for usage recommendations, boundaries, and examples.
 
-> **Version note:** This page reflects the current `master` source tree. M2 APIs are available in the latest published 1.3.1 packages.
 
 ## HelmReleaseHookRecord
 
@@ -25,9 +24,6 @@ Use this page as a member index. Start with the package guide for usage recommen
 - `OutputLogPolicies`
 - `Path`
 - `Weight`
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
 
 ## HelmReleaseRecord
 
@@ -61,9 +57,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `UpdatedAt`
 - `ValuesYaml`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## HelmReleaseStore
 
 | Field | Value |
@@ -84,9 +77,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `TryCreateAsync(...)`
 - `TryMarkPendingRollbackFailedAsync(...)`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## HelmReleaseStoreException
 
 | Field | Value |
@@ -98,6 +88,3 @@ Read the corresponding package page first, then use this member index to locate 
 - `Format`
 - `NamespaceName`
 - `SecretName`
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.

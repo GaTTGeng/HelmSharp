@@ -4,7 +4,6 @@
 
 此页列出公开类型和成员，便于查找。使用建议、边界和示例请先阅读对应包文档。
 
-> **版本说明：** 本页反映当前 `master` 源码树。M2 API 已包含在最新发布的 1.3.1 包中。
 
 ## CommandResult
 
@@ -17,9 +16,6 @@
 - `ExitCode`
 - `StandardError`
 - `StandardOutput`
-
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
 ## HelmClient
 
@@ -74,18 +70,12 @@
 - `UpgradeInstallStreamAsync(...)`
 - `VersionAsync(...)`
 
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
-
 ## HelmDeletionPropagation
 
 | 字段 | 值 |
 | --- | --- |
 | 类型类别 | `enum` |
 | 源文件 | `src/HelmSharp.Action/HelmUninstallRequest.cs` |
-
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
 ## HelmDependencyBuildRequest
 
@@ -100,9 +90,6 @@
 - `RepositoryConfigPath`
 - `VerifyDigests`
 
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
-
 ## HelmDependencyListRequest
 
 | 字段 | 值 |
@@ -113,9 +100,6 @@
 ### 属性
 - `ChartPath`
 - `IncludeDiagnostics`
-
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
 ## HelmDependencyUpdateRequest
 
@@ -129,9 +113,6 @@
 - `RepositoryCachePath`
 - `RepositoryConfigPath`
 - `SkipRepositoryRefresh`
-
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
 ## HelmExecutionOptions
 
@@ -153,9 +134,6 @@
 - `TimeoutSeconds`
 - `WorkingDirectory`
 
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
-
 ## HelmHookDeletePolicy
 
 | 字段 | 值 |
@@ -167,9 +145,13 @@
 - `DeletePolicies`
 - `Events`
 - `Kind`
+- `LastRunCompletedAt`
+- `LastRunPhase`
+- `LastRunStartedAt`
 - `Manifest`
 - `Name`
 - `Namespace`
+- `OutputLogPolicies`
 - `Path`
 - `Weight`
 
@@ -177,18 +159,12 @@
 - `ExecuteHooksAsync(...)`
 - `ExecuteHooksWithFailureHandlingAsync(...)`
 
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
-
 ## HelmHookEvent
 
 | 字段 | 值 |
 | --- | --- |
 | 类型类别 | `enum` |
 | 源文件 | `src/HelmSharp.Action/HelmHookExecutor.cs` |
-
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
 ## HelmPackageRequest
 
@@ -205,9 +181,6 @@
 - `SkipSchemaValidation`
 - `Version`
 
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
-
 ## HelmPluginInfo
 
 | 字段 | 值 |
@@ -220,9 +193,6 @@
 - `Name`
 - `Path`
 - `Version`
-
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
 ## HelmPluginManager
 
@@ -237,9 +207,6 @@
 - `RunAsync(...)`
 - `Uninstall(...)`
 
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
-
 ## HelmProvenance
 
 | 字段 | 值 |
@@ -252,9 +219,6 @@
 - `ExtractSha256(...)`
 - `GenerateProvFileAsync(...)`
 - `VerifyAsync(...)`
-
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
 ## HelmRollbackRequest
 
@@ -276,9 +240,6 @@
 - `TimeoutSeconds`
 - `Wait`
 - `WaitForJobs`
-
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
 ## HelmTemplateRequest
 
@@ -306,9 +267,6 @@
 - `ValuesFile`
 - `ValuesFiles`
 
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
-
 ## HelmUninstallRequest
 
 | 字段 | 值 |
@@ -326,9 +284,6 @@
 - `ReleaseName`
 - `TimeoutSeconds`
 - `Wait`
-
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
 ## HelmUpgradeInstallRequest
 
@@ -393,9 +348,6 @@
 - `Wait`
 - `WaitForJobs`
 
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
-
 ## IHelmClient
 
 | 字段 | 值 |
@@ -403,18 +355,12 @@
 | 类型类别 | `interface` |
 | 源文件 | `src/HelmSharp.Action/IHelmClient.cs` |
 
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
-
 ## IHelmOptionsProvider
 
 | 字段 | 值 |
 | --- | --- |
 | 类型类别 | `interface` |
 | 源文件 | `src/HelmSharp.Action/IHelmOptionsProvider.cs` |
-
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
 ## KubeVersionValidator
 
@@ -425,6 +371,3 @@
 
 ### 方法
 - `IsCompatible(...)`
-
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。

@@ -4,7 +4,6 @@
 
 此页列出公开类型和成员，便于查找。使用建议、边界和示例请先阅读对应包文档。
 
-> **版本说明：** 本页反映当前 `master` 源码树。M2 API 已包含在最新发布的 1.3.1 包中。
 
 ## ActionNode
 
@@ -17,9 +16,6 @@
 - `Expression`
 - `LeftTrim`
 - `RightTrim`
-
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
 ## BlockNode
 
@@ -38,9 +34,6 @@
 - `RightTrim`
 - `TrueBody`
 
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
-
 ## CommentNode
 
 | 字段 | 值 |
@@ -52,9 +45,6 @@
 - `Content`
 - `LeftTrim`
 - `RightTrim`
-
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
 ## DefineNode
 
@@ -69,9 +59,6 @@
 - `Name`
 - `RightTrim`
 
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
-
 ## ElseIfBranch
 
 | 字段 | 值 |
@@ -83,9 +70,6 @@
 - `Body`
 - `Condition`
 - `TrimMarker`
-
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
 ## HelmTemplateRenderer
 
@@ -101,9 +85,6 @@
 - `Render(...)`
 - `RenderNotes(...)`
 
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
-
 ## TemplateDocumentNode
 
 | 字段 | 值 |
@@ -116,9 +97,6 @@
 
 ### 方法
 - `SerializeToText(...)`
-
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
 ## TemplateNode
 
@@ -133,9 +111,6 @@
 - `StartLine`
 - `StartOffset`
 
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
-
 ## TemplateParseException
 
 | 字段 | 值 |
@@ -148,9 +123,6 @@
 - `Line`
 - `Offset`
 
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
-
 ## TemplateParser
 
 | 字段 | 值 |
@@ -160,9 +132,6 @@
 
 ### 方法
 - `Parse(...)`
-
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
 ## TemplateTokenizer
 
@@ -174,9 +143,6 @@
 ### 方法
 - `TokenizeFlat(...)`
 
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
-
 ## TextNode
 
 | 字段 | 值 |
@@ -186,9 +152,6 @@
 
 ### 属性
 - `Content`
-
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
 
 ## Token
 
@@ -209,9 +172,6 @@
 ### 方法
 - `ToString(...)`
 
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
-
 ## TokenKind
 
 | 字段 | 值 |
@@ -219,15 +179,9 @@
 | 类型类别 | `enum` |
 | 源文件 | `src/HelmSharp.Engine/TemplateTokenizer.cs` |
 
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。
-
 ## UnsupportedTemplateFeatureException
 
 | 字段 | 值 |
 | --- | --- |
 | 类型类别 | `class` |
 | 源文件 | `src/HelmSharp.Engine/UnsupportedTemplateFeatureException.cs` |
-
-### 使用提示
-先查看对应包页面的场景示例，再使用此成员索引定位具体类型。

@@ -4,7 +4,6 @@
 
 Use this page as a member index. Start with the package guide for usage recommendations, boundaries, and examples.
 
-> **Version note:** This page reflects the current `master` source tree. M2 APIs are available in the latest published 1.3.1 packages.
 
 ## HelmChartRepository
 
@@ -23,9 +22,6 @@ Use this page as a member index. Start with the package guide for usage recommen
 - `RemoveRepositoryAsync(...)`
 - `SearchRepoAsync(...)`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## HelmChartSearchResult
 
 | Field | Value |
@@ -38,9 +34,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `Description`
 - `Name`
 - `Version`
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
 
 ## HelmChartVersion
 
@@ -57,9 +50,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `Name`
 - `Urls`
 - `Version`
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
 
 ## HelmPullRequest
 
@@ -80,9 +70,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `VerifyDigest`
 - `Version`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## HelmRepoIndex
 
 | Field | Value |
@@ -95,18 +82,12 @@ Read the corresponding package page first, then use this member index to locate 
 - `Entries`
 - `Generated`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## HelmRepoIndexDiagnostic
 
 | Field | Value |
 | --- | --- |
 | Kind | `record` |
 | Source | `src/HelmSharp.Repo/HelmRepoIndexer.cs` |
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
 
 ## HelmRepoIndexer
 
@@ -119,18 +100,12 @@ Read the corresponding package page first, then use this member index to locate 
 - `GenerateIndexAsync(...)`
 - `GenerateIndexWithDiagnosticsAsync(...)`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## HelmRepoIndexGenerationResult
 
 | Field | Value |
 | --- | --- |
 | Kind | `record` |
 | Source | `src/HelmSharp.Repo/HelmRepoIndexer.cs` |
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
 
 ## HelmRepoIndexRequest
 
@@ -145,9 +120,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `MergeIndexPath`
 - `OutputPath`
 - `Url`
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
 
 ## HelmRepository
 
@@ -167,9 +139,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `Url`
 - `Username`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## HelmRepositoryOptions
 
 | Field | Value |
@@ -181,6 +150,3 @@ Read the corresponding package page first, then use this member index to locate 
 - `CacheDirectory`
 - `ConfigDirectory`
 - `RepositoryConfigPath`
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.

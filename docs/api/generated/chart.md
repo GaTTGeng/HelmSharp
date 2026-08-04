@@ -4,7 +4,6 @@
 
 Use this page as a member index. Start with the package guide for usage recommendations, boundaries, and examples.
 
-> **Version note:** This page reflects the current `master` source tree. M2 APIs are available in the latest published 1.3.1 packages.
 
 ## HelmChart
 
@@ -38,9 +37,6 @@ Use this page as a member index. Start with the package guide for usage recommen
 - `ValuesYaml`
 - `Version`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## HelmChartDependency
 
 | Field | Value |
@@ -58,9 +54,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `Tags`
 - `Version`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## HelmChartLoader
 
 | Field | Value |
@@ -70,9 +63,6 @@ Read the corresponding package page first, then use this member index to locate 
 
 ### Methods
 - `LoadAsync(...)`
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
 
 ## HelmChartLockEntry
 
@@ -87,9 +77,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `Repository`
 - `Version`
 
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
-
 ## HelmValues
 
 | Field | Value |
@@ -101,9 +88,6 @@ Read the corresponding package page first, then use this member index to locate 
 - `BuildAsync(...)`
 - `BuildSubchartValues(...)`
 - `ToYaml(...)`
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.
 
 ## HelmYaml
 
@@ -121,6 +105,3 @@ Read the corresponding package page first, then use this member index to locate 
 - `ReadYaml(...)`
 - `Serialize(...)`
 - `WriteYaml(...)`
-
-### Usage note
-Read the corresponding package page first, then use this member index to locate the concrete type.

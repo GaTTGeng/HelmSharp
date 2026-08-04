@@ -2,9 +2,7 @@
 
 Use this section for parameter and member lookup after choosing a workflow. The generated pages are deliberately factual: they mirror public types, properties, and methods from source rather than trying to teach a workflow a second time.
 
-::: tip Source versus package version
-Generated pages follow the current source tree. Check the package guide and release notes when an application must stay on a specific published version; the current package examples on this site use `1.3.1`.
-:::
+The reference is generated from the current source branch and can differ from a published NuGet package. For a version-pinned application, use that package version's release notes and source.
 
 ## Start with the package guide
 
