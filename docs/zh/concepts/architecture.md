@@ -10,7 +10,8 @@ HelmSharp 是对部分 Helm 行为的托管 .NET 实现。它加载 Chart 输入
 | `HelmSharp.Engine` | 将模板渲染为清单文本。 | 应用需要预览、校验或提交 YAML。 |
 | `HelmSharp.Action` | 协调渲染、hook、Kubernetes 变更和 release 历史。 | 服务负责安装、升级、回滚或卸载。 |
 | `HelmSharp.Kube` | 提交、删除和等待已有清单文本。 | 已经拥有 YAML，不需要 Helm 生命周期行为。 |
-| `HelmSharp.Release` | 建模和持久化 release revision。 | 需要检查或扩展 release 存储。 |
+| `HelmSharp.Release` | 建模 release revision，并使用内置的 Secret 存储实现。 | 需要 release 记录或默认 Kubernetes 持久化。 |
+| `HelmSharp.Storage` | 定义 release 存储扩展契约。 | 要为自定义持久化实现 `IHelmReleaseStore` 或 `IHelmReleasePurgeStore`。 |
 
 ## 数据流
 

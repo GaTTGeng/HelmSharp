@@ -10,7 +10,8 @@ HelmSharp is a managed .NET implementation of selected Helm behavior. It loads c
 | `HelmSharp.Engine` | Render templates into manifest text. | Your application previews, validates, or commits YAML. |
 | `HelmSharp.Action` | Coordinate rendering, hooks, Kubernetes changes, and release history. | Your service owns install, upgrade, rollback, or uninstall. |
 | `HelmSharp.Kube` | Apply, delete, and wait for existing manifest text. | You already have YAML and do not need Helm lifecycle behavior. |
-| `HelmSharp.Release` | Model and persist release revisions. | You need to inspect or extend release storage. |
+| `HelmSharp.Release` | Model release revisions and use the built-in Secret-backed store. | You need release records or the default Kubernetes persistence. |
+| `HelmSharp.Storage` | Define release-store extension contracts. | You are implementing `IHelmReleaseStore` or `IHelmReleasePurgeStore` for custom persistence. |
 
 ## Data flow
 
