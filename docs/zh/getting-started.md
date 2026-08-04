@@ -55,4 +55,4 @@ dotnet run -- ../charts/my-chart
 | 提交 Chart 并保存 release 历史 | [安装和升级 Release](guide/release-workflows.md) |
 | 选择其他包 | [选择包和 API](api-overview.md) |
 
-将某项 Chart 功能作为生产依赖前，请阅读[兼容性约定](helm-compatibility.md)。它描述的是已验证行为和边界，而非对全部 Helm 能力的一揽子承诺。
+将某项 Helm 行为作为生产依赖前，请查看[兼容性约定](helm-compatibility.md)和[模板函数矩阵](template-function-compatibility.md)，了解已支持的行为与已知限制。

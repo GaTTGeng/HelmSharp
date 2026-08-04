@@ -1,19 +1,8 @@
 # 选择包和 API
 
-根据应用允许自己持有的状态选择 API。对应用而言，渲染路径是纯粹的：输入 Chart，输出文本。发布路径则引入 Kubernetes 凭据、集群变更、hook 和持久化历史。
+按应用需要执行的操作选择包。渲染会加载 Chart 和 values，并返回清单文本；发布操作还需要 Kubernetes 凭据，并维护生命周期历史。
 
-```mermaid
-flowchart LR
-    A["Chart 文件"] --> B["HelmSharp.Chart\n加载 + values"]
-    B --> C["HelmSharp.Engine\n渲染"]
-    C --> D["预览 / 策略 / GitOps"]
-    C --> E["HelmSharp.Action\n发布工作流"]
-    E --> F["HelmSharp.Kube\n集群资源"]
-    E --> G["HelmSharp.Release\nrevision 历史"]
-```
-
-## 常见起点
-
+## 按任务选择
 | 目标 | 从这里开始 | 主要类型 | 以下情况不要选它 |
 | --- | --- | --- | --- |
 | 渲染 Chart | `HelmSharp.Chart` + `HelmSharp.Engine` | `HelmChartLoader`、`HelmValues`、`HelmTemplateRenderer` | 应用还必须提交资源并记录 release 历史。 |

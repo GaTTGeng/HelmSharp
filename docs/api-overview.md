@@ -1,19 +1,8 @@
 # Choose a package and API
 
-Choose an API by the state your application is allowed to own. The rendering path is pure from the application's point of view: chart inputs in, text out. The release path introduces Kubernetes credentials, mutation, hooks, and persisted history.
+Choose packages by the operation your application needs to perform. Rendering loads chart content and values, then returns manifest text. Release operations also require Kubernetes credentials and maintain lifecycle history.
 
-```mermaid
-flowchart LR
-    A["Chart files"] --> B["HelmSharp.Chart\nload + values"]
-    B --> C["HelmSharp.Engine\nrender"]
-    C --> D["Preview / policy / GitOps"]
-    C --> E["HelmSharp.Action\nrelease workflow"]
-    E --> F["HelmSharp.Kube\ncluster resources"]
-    E --> G["HelmSharp.Release\nrevision history"]
-```
-
-## Common starting points
-
+## Choose by task
 | Goal | Start with | Main types | Do not choose it when… |
 | --- | --- | --- | --- |
 | Render a chart | `HelmSharp.Chart` + `HelmSharp.Engine` | `HelmChartLoader`, `HelmValues`, `HelmTemplateRenderer` | The application must apply resources and record release history. |

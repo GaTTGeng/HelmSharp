@@ -55,4 +55,4 @@ The manifest is written to standard output. Redirect it to a file, return it fro
 | Apply a chart and save release history | [Install and upgrade releases](guide/release-workflows.md) |
 | Choose another package | [Choose a package](api-overview.md) |
 
-Before relying on a chart feature in production, read the [compatibility contract](helm-compatibility.md). It is a description of verified behavior and boundaries, not a blanket claim of Helm parity.
+Before relying on a chart feature in production, see the [compatibility contract](helm-compatibility.md) and [template-function matrix](template-function-compatibility.md) for supported behavior and known limits.
