@@ -36,7 +36,7 @@ return Results.Text(result.StandardOutput, "text/yaml");
 
 ## Use the generated public API index
 
-The generated pages list public types, properties, and methods from the current source tree. They are a name and source index, not full API reference documentation. Use the package guide to decide *which* abstraction belongs in your code, then open the linked source declaration for parameter-level detail.
+The generated pages list public types, properties, and methods from the current source tree. They are a name and source index, not full API reference documentation. Use the package guide to decide *which* abstraction belongs in your code, then use the listed source-file path to find the declaration in the repository for parameter-level detail.
 
 | Package | Guide | Generated API |
 | --- | --- | --- |
