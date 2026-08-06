@@ -17,7 +17,9 @@ const englishSidebar = [
     items: [
       { text: 'Overview', link: '/' },
       { text: 'Quickstart', link: '/getting-started' },
-      { text: 'Choose a package', link: '/api-overview' }
+      { text: 'Choose a package', link: '/api-overview' },
+      { text: 'Architecture', link: '/concepts/architecture' },
+      { text: 'Release storage', link: '/concepts/release-storage' }
     ]
   },
   {
@@ -31,6 +33,14 @@ const englishSidebar = [
       { text: 'Apply manifests directly', link: '/guide/kubernetes-operations' },
       { text: 'Package charts and manage dependencies', link: '/guide/chart-distribution' },
       { text: 'Troubleshoot failures', link: '/guide/error-handling' }
+    ]
+  },
+  {
+    text: 'Scenarios',
+    items: [
+      { text: 'ASP.NET Core chart preview', link: '/scenarios/aspnet-core-preview' },
+      { text: 'Kubernetes deployment service', link: '/scenarios/deployment-service' },
+      { text: 'GitOps manifests', link: '/examples/gitops-pr-generator' }
     ]
   },
   {
@@ -58,9 +68,9 @@ const englishSidebar = [
     ]
   },
   {
-    text: 'API reference',
+    text: 'Public API index',
     items: [
-      { text: 'About the API reference', link: '/api/' },
+      { text: 'About the public API index', link: '/api/' },
       { text: 'Action API', link: '/api/generated/action' },
       { text: 'Chart API', link: '/api/generated/chart' },
       { text: 'Engine API', link: '/api/generated/engine' },
@@ -79,6 +89,7 @@ const englishSidebar = [
       { text: 'Template-function matrix', link: '/template-function-compatibility' },
       { text: 'HelmCompare', link: '/compare' },
       { text: 'Roadmap', link: '/roadmap' },
+      { text: 'Migrate from Helm CLI', link: '/migration/from-helm-cli' },
       { text: 'Changelog', link: 'https://github.com/GaTTGeng/HelmSharp/blob/master/CHANGELOG.md' }
     ]
   }
@@ -99,7 +110,9 @@ const chineseSidebar = [
     items: [
       { text: '概览', link: '/zh/' },
       { text: '快速开始', link: '/zh/getting-started' },
-      { text: '选择包和 API', link: '/zh/api-overview' }
+      { text: '选择包和 API', link: '/zh/api-overview' },
+      { text: '架构', link: '/zh/concepts/architecture' },
+      { text: 'Release 存储', link: '/zh/concepts/release-storage' }
     ]
   },
   {
@@ -113,6 +126,14 @@ const chineseSidebar = [
       { text: '直接提交清单', link: '/zh/guide/kubernetes-operations' },
       { text: '打包 Chart 与管理依赖', link: '/zh/guide/chart-distribution' },
       { text: '排查失败', link: '/zh/guide/error-handling' }
+    ]
+  },
+  {
+    text: '场景',
+    items: [
+      { text: 'ASP.NET Core Chart 预览', link: '/zh/scenarios/aspnet-core-preview' },
+      { text: 'Kubernetes 部署服务', link: '/zh/scenarios/deployment-service' },
+      { text: 'GitOps 清单', link: '/zh/examples/gitops-pr-generator' }
     ]
   },
   {
@@ -140,9 +161,9 @@ const chineseSidebar = [
     ]
   },
   {
-    text: 'API 参考',
+    text: '公共 API 索引',
     items: [
-      { text: '如何使用 API 参考', link: '/zh/api/' },
+      { text: '如何使用公共 API 索引', link: '/zh/api/' },
       { text: 'Action API', link: '/zh/api/generated/action' },
       { text: 'Chart API', link: '/zh/api/generated/chart' },
       { text: 'Engine API', link: '/zh/api/generated/engine' },
@@ -161,6 +182,7 @@ const chineseSidebar = [
       { text: '模板函数矩阵', link: '/zh/template-function-compatibility' },
       { text: 'HelmCompare', link: '/zh/compare' },
       { text: '路线图', link: '/zh/roadmap' },
+      { text: '从 Helm CLI 迁移', link: '/zh/migration/from-helm-cli' },
       { text: '更新日志', link: 'https://github.com/GaTTGeng/HelmSharp/blob/master/CHANGELOG.md' }
     ]
   }
