@@ -13,12 +13,25 @@ public sealed class KubernetesResourceWaiter
 {
     private readonly k8s.Kubernetes _client;
     private readonly int _timeoutSeconds;
+    private readonly TimeProvider _timeProvider;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
     private readonly Dictionary<(string ApiVersion, string Kind), DeletionResource> _deletionResources = new();
 
     public KubernetesResourceWaiter(k8s.Kubernetes client, int timeoutSeconds = 300)
+        : this(client, timeoutSeconds, TimeProvider.System, Task.Delay)
+    {
+    }
+
+    internal KubernetesResourceWaiter(
+        k8s.Kubernetes client,
+        int timeoutSeconds,
+        TimeProvider timeProvider,
+        Func<TimeSpan, CancellationToken, Task> delayAsync)
     {
         _client = client;
         _timeoutSeconds = timeoutSeconds;
+        _timeProvider = timeProvider;
+        _delayAsync = delayAsync;
     }
 
     /// <summary>
@@ -30,7 +43,7 @@ public sealed class KubernetesResourceWaiter
         bool waitForJobs = false,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(_timeoutSeconds);
+        var deadline = _timeProvider.GetUtcNow().AddSeconds(_timeoutSeconds);
         var identities = new List<ManifestIdentity>();
 
         foreach (var doc in KubernetesManifestApplier.SplitDocumentsPublic(manifest))
@@ -57,7 +70,7 @@ public sealed class KubernetesResourceWaiter
         var pollInterval = TimeSpan.FromSeconds(3);
         var consecutiveErrors = 0;
 
-        while (pending.Count > 0 && DateTime.UtcNow < deadline)
+        while (pending.Count > 0 && _timeProvider.GetUtcNow() < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -77,10 +90,15 @@ public sealed class KubernetesResourceWaiter
                     consecutiveErrors = 0;
                     continue;
                 }
-                catch (Exception)
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
                 {
                     consecutiveErrors++;
-                    if (consecutiveErrors > 10) throw;
+                    if (consecutiveErrors > 10)
+                        throw new KubernetesResourceOperationException(id, ex);
                     continue;
                 }
 
@@ -119,7 +137,7 @@ public sealed class KubernetesResourceWaiter
                 var interval = consecutiveErrors > 0
                     ? TimeSpan.FromSeconds(Math.Min(30, 3 * consecutiveErrors))
                     : pollInterval;
-                await Task.Delay(interval, cancellationToken);
+                await _delayAsync(interval, cancellationToken);
             }
         }
 
@@ -152,10 +170,10 @@ public sealed class KubernetesResourceWaiter
         if (identities.Count == 0)
             yield break;
 
-        var deadline = DateTime.UtcNow.AddSeconds(_timeoutSeconds);
+        var deadline = _timeProvider.GetUtcNow().AddSeconds(_timeoutSeconds);
         var pending = new HashSet<string>(identities.Select(DeletionWaitKey), StringComparer.Ordinal);
         yield return $"Waiting for {pending.Count} resources to be deleted...";
-        while (pending.Count > 0 && DateTime.UtcNow < deadline)
+        while (pending.Count > 0 && _timeProvider.GetUtcNow() < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var deleted = new List<string>();
@@ -176,11 +194,19 @@ public sealed class KubernetesResourceWaiter
                     pending.Remove(key);
                     deleted.Add(identity.DisplayName);
                 }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    throw new KubernetesResourceOperationException(identity, ex);
+                }
             }
             foreach (var displayName in deleted)
                 yield return $"  {displayName} deleted";
             if (pending.Count > 0)
-                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+                await _delayAsync(TimeSpan.FromSeconds(1), cancellationToken);
         }
         if (pending.Count > 0)
             throw new TimeoutException($"Timed out after {_timeoutSeconds}s waiting for deletion of: {string.Join(", ", pending)}");
