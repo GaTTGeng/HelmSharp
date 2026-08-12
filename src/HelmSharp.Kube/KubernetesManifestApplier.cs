@@ -49,7 +49,18 @@ public sealed class KubernetesManifestApplier
             if (identity is null)
                 continue;
 
-            await ApplyOneAsync(identity, doc, cancellationToken);
+            try
+            {
+                await ApplyOneAsync(identity, doc, cancellationToken);
+            }
+            catch (KubernetesResourceOperationException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new KubernetesResourceOperationException(identity, ex);
+            }
             yield return identity.DisplayName;
         }
     }
@@ -77,7 +88,18 @@ public sealed class KubernetesManifestApplier
             if (identity is null)
                 continue;
 
-            await DeleteOneAsync(identity, propagationPolicy, cancellationToken);
+            try
+            {
+                await DeleteOneAsync(identity, propagationPolicy, cancellationToken);
+            }
+            catch (KubernetesResourceOperationException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new KubernetesResourceOperationException(identity, ex);
+            }
             yield return identity.DisplayName;
         }
     }
@@ -942,6 +964,14 @@ internal sealed class KubernetesApiResourceUnsupportedException : InvalidOperati
 {
     public KubernetesApiResourceUnsupportedException(string apiVersion, string kind)
         : base($"Kubernetes core resource {apiVersion}/{kind} is not supported by the typed manifest applier.")
+    {
+    }
+}
+
+internal sealed class KubernetesResourceOperationException : InvalidOperationException
+{
+    public KubernetesResourceOperationException(ManifestIdentity identity, Exception innerException)
+        : base($"Kubernetes operation failed for {identity.ApiVersion} {identity.DisplayName}.", innerException)
     {
     }
 }

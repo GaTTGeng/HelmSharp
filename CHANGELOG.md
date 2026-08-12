@@ -6,6 +6,10 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+### Added
+
+- Added direct, cluster-independent component coverage for Kubernetes manifest application and resource waiting, including deterministic polling and HTTP endpoint assertions (#26).
+
 ### Changed
 
 - Rebuilt the VitePress documentation around concrete developer tasks, copyable workflows, package boundaries, troubleshooting, and independently written English and Simplified Chinese guidance.
