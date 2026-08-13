@@ -237,7 +237,10 @@ public class HelmPluginManager
 
     private static bool IsPortablePluginName(string name)
     {
-        if (name.Length == 0 || !IsAsciiLetterOrDigit(name[0]) || !IsAsciiLetterOrDigit(name[^1]))
+        if (name.Length == 0 ||
+            !IsAsciiLetterOrDigit(name[0]) ||
+            !IsAsciiLetterOrDigit(name[^1]) ||
+            IsWindowsDeviceName(name))
             return false;
 
         foreach (var character in name)
@@ -247,6 +250,25 @@ public class HelmPluginManager
         }
 
         return true;
+    }
+
+    private static bool IsWindowsDeviceName(string name)
+    {
+        var dotIndex = name.IndexOf('.');
+        var stem = dotIndex >= 0 ? name[..dotIndex] : name;
+
+        if (stem.Equals("CON", StringComparison.OrdinalIgnoreCase) ||
+            stem.Equals("PRN", StringComparison.OrdinalIgnoreCase) ||
+            stem.Equals("AUX", StringComparison.OrdinalIgnoreCase) ||
+            stem.Equals("NUL", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return stem.Length == 4 &&
+               stem[3] is >= '1' and <= '9' &&
+               (stem.StartsWith("COM", StringComparison.OrdinalIgnoreCase) ||
+                stem.StartsWith("LPT", StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool IsAsciiLetterOrDigit(char character) =>

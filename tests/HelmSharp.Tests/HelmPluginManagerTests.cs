@@ -31,6 +31,10 @@ public sealed class HelmPluginManagerTests : IDisposable
     [InlineData("plugin:name")]
     [InlineData("plugin name")]
     [InlineData("插件")]
+    [InlineData("CON")]
+    [InlineData("nul.txt")]
+    [InlineData("Com1")]
+    [InlineData("lPt9.log")]
     public async Task PluginOperations_RejectNonPortableNamesWithoutAccessingOutsideRoot(string name)
     {
         var pluginRoot = Path.Combine(_tempDir, "plugins");

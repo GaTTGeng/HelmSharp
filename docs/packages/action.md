@@ -30,6 +30,6 @@ Traditional HTTP repositories and local dependencies are supported. Full OCI aut
 
 ## Plugin names and storage boundaries
 
-`HelmPluginManager` treats its configured plugin directory as a security boundary. Pass a single portable plugin name, not a path: names may contain ASCII letters, digits, dots, underscores, and hyphens, and must begin and end with a letter or digit. Absolute paths, directory separators, `.` and `..`, whitespace, and linked plugin directories are rejected by install, uninstall, and run operations.
+`HelmPluginManager` treats its configured plugin directory as a security boundary. Pass a single portable plugin name, not a path: names may contain ASCII letters, digits, dots, underscores, and hyphens, and must begin and end with a letter or digit. Absolute paths, directory separators, `.` and `..`, whitespace, Windows device names such as `CON` or `NUL`, and linked plugin directories are rejected by install, uninstall, and run operations.
 
 For all public members, use the [generated Action API](../api/generated/action.md).
