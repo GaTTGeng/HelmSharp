@@ -195,7 +195,7 @@ public sealed class KubernetesManifestApplierTests
     }
 
     [Fact]
-    public async Task ApplyAsync_PreservesKubernetesAssignedServiceNetworkingFieldsOnReplace()
+    public async Task ApplyAsync_PreservesAssignedServiceNetworkingFieldsAndHonorsExplicitUpdates()
     {
         var handler = new KubernetesApiHandler()
             .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/services/api", HttpStatusCode.OK, """
@@ -224,13 +224,15 @@ public sealed class KubernetesManifestApplierTests
                 app: api
               ports:
                 - port: 80
+              ipFamilyPolicy: RequireDualStack
+              healthCheckNodePort: 30002
             """, "release-ns"));
 
         var replace = Assert.Single(handler.Requests, request => request.Method == HttpMethod.Put);
         Assert.Contains("\"resourceVersion\":\"42\"", replace.Content);
         Assert.Contains("\"clusterIP\":\"10.0.0.10\"", replace.Content);
-        Assert.Contains("\"ipFamilyPolicy\":\"SingleStack\"", replace.Content);
-        Assert.Contains("\"healthCheckNodePort\":30001", replace.Content);
+        Assert.Contains("\"ipFamilyPolicy\":\"RequireDualStack\"", replace.Content);
+        Assert.Contains("\"healthCheckNodePort\":30002", replace.Content);
     }
 
     [Fact]

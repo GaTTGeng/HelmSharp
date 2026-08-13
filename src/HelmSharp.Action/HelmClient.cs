@@ -910,6 +910,7 @@ public class HelmClient : IHelmClient
     {
         ValidateRollbackRequest(request);
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
+        ValidateServerSideApplyOption(options);
         var timeout = request.TimeoutSeconds ?? options.TimeoutSeconds;
         using var timeoutSource = new CancellationTokenSource(TimeSpan.FromSeconds(timeout));
         using var operationSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);

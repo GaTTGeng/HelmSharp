@@ -155,8 +155,10 @@ public sealed class KubernetesManifestApplier
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         item.Spec.ClusterIP = existing.Spec.ClusterIP;
                         item.Spec.ClusterIPs = existing.Spec.ClusterIPs;
-                        item.Spec.IpFamilyPolicy = existing.Spec.IpFamilyPolicy;
-                        item.Spec.HealthCheckNodePort = existing.Spec.HealthCheckNodePort;
+                        if (item.Spec.IpFamilyPolicy is null)
+                            item.Spec.IpFamilyPolicy = existing.Spec.IpFamilyPolicy;
+                        if (item.Spec.HealthCheckNodePort is null)
+                            item.Spec.HealthCheckNodePort = existing.Spec.HealthCheckNodePort;
                         return _client.CoreV1.ReplaceNamespacedServiceAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
                     });
                 break;

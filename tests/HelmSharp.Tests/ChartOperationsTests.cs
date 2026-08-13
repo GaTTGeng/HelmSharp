@@ -1136,6 +1136,16 @@ public class ChartOperationsTests : IDisposable
 
         Assert.Contains("ServerSideApply", exception.Message);
         Assert.False(kubernetesClientCreated);
+
+        var rollbackException = await Assert.ThrowsAsync<NotSupportedException>(() =>
+            client.RollbackAsync(new HelmRollbackRequest
+            {
+                ReleaseName = "server-side-apply",
+                Revision = 1
+            }));
+
+        Assert.Contains("ServerSideApply", rollbackException.Message);
+        Assert.False(kubernetesClientCreated);
     }
 
     [Fact]
