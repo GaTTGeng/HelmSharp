@@ -176,11 +176,12 @@ public sealed class KubernetesManifestApplierTests
             .Respond(HttpMethod.Post, "/apis/example.com/v1/clustersettings?fieldManager=helmsharp-test", HttpStatusCode.Created, "{}");
         var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
 
-        await AsyncEnumerableTestExtensions.DrainAsync(applier.ApplyAsync("""
+        var applied = await AsyncEnumerableTestExtensions.CollectAsync(applier.ApplyAsync("""
             apiVersion: example.com/v1
             kind: ClusterSetting
             metadata:
               name: shared
+              namespace: ignored
             """, "release-ns"));
 
         Assert.Contains(handler.Requests, request =>
@@ -188,6 +189,48 @@ public sealed class KubernetesManifestApplierTests
         Assert.Contains(handler.Requests, request =>
             request.Method == HttpMethod.Post && request.PathAndQuery == "/apis/example.com/v1/clustersettings?fieldManager=helmsharp-test");
         Assert.DoesNotContain(handler.Requests, request => request.PathAndQuery.Contains("/namespaces/", StringComparison.Ordinal));
+        Assert.Equal(["ClusterSetting/shared"], applied);
+        var create = handler.Requests.Last(request => request.Method == HttpMethod.Post);
+        Assert.DoesNotContain("namespace", create.Content, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ApplyAsync_PreservesKubernetesAssignedServiceNetworkingFieldsOnReplace()
+    {
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/services/api", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Service",
+                  "metadata": { "name": "api", "resourceVersion": "42" },
+                  "spec": {
+                    "clusterIP": "10.0.0.10",
+                    "clusterIPs": ["10.0.0.10"],
+                    "ipFamilyPolicy": "SingleStack",
+                    "healthCheckNodePort": 30001
+                  }
+                }
+                """)
+            .Respond(HttpMethod.Put, "/api/v1/namespaces/release-ns/services/api", HttpStatusCode.OK, "{}");
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await AsyncEnumerableTestExtensions.DrainAsync(applier.ApplyAsync("""
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: api
+            spec:
+              selector:
+                app: api
+              ports:
+                - port: 80
+            """, "release-ns"));
+
+        var replace = Assert.Single(handler.Requests, request => request.Method == HttpMethod.Put);
+        Assert.Contains("\"resourceVersion\":\"42\"", replace.Content);
+        Assert.Contains("\"clusterIP\":\"10.0.0.10\"", replace.Content);
+        Assert.Contains("\"ipFamilyPolicy\":\"SingleStack\"", replace.Content);
+        Assert.Contains("\"healthCheckNodePort\":30001", replace.Content);
     }
 
     [Fact]

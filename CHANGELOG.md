@@ -13,6 +13,7 @@ This project follows semantic versioning once stable releases begin.
 ### Changed
 
 - Rebuilt the VitePress documentation around concrete developer tasks, copyable workflows, package boundaries, troubleshooting, and independently written English and Simplified Chinese guidance.
+- Hardened Kubernetes manifest application so discovered cluster-scoped resources never carry a namespace, Service-assigned networking fields survive replacement, and unsupported server-side apply is rejected before mutation (#231).
 
 ## [1.3.1] - 2026-08-03
 

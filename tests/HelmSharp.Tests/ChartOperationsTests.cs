@@ -1111,6 +1111,34 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task ReleaseLifecycle_RejectsConfiguredServerSideApplyBeforeCreatingAKubernetesClient()
+    {
+        var chartDir = await CreateMinimalChartAsync("server-side-apply-chart");
+        var kubernetesClientCreated = false;
+        var client = new HelmClient(
+            new StaticHelmOptionsProvider(new HelmExecutionOptions
+            {
+                DefaultNamespace = "test-ns",
+                ServerSideApply = true
+            }),
+            (_, _, _, _) =>
+            {
+                kubernetesClientCreated = true;
+                throw new InvalidOperationException("Kubernetes client should not be created.");
+            });
+
+        var exception = await Assert.ThrowsAsync<NotSupportedException>(async () =>
+            await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+            {
+                ReleaseName = "server-side-apply",
+                Chart = chartDir
+            })));
+
+        Assert.Contains("ServerSideApply", exception.Message);
+        Assert.False(kubernetesClientCreated);
+    }
+
+    [Fact]
     public async Task ReleaseLifecycle_ReinstallAfterRetainedUninstallStartsAnInstallAtTheNextRevision()
     {
         var chartDir = await CreateMinimalChartAsync("reinstall-chart");

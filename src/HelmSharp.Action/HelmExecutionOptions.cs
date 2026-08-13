@@ -22,7 +22,8 @@ public class HelmExecutionOptions
     public int MaxHistory { get; set; }
 
     /// <summary>
-    /// If true, use server-side apply for resource updates.
+    /// Requests server-side apply for resource updates. Server-side apply is not currently
+    /// supported; lifecycle operations reject this option before creating or mutating Kubernetes resources.
     /// </summary>
     public bool ServerSideApply { get; set; }
 

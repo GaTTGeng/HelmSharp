@@ -151,6 +151,7 @@ public class HelmClient : IHelmClient
     {
         ValidateUpgradeRequest(request);
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
+        ValidateServerSideApplyOption(options);
         var timeout = request.TimeoutSeconds ?? options.TimeoutSeconds;
         using var timeoutSource = new CancellationTokenSource(TimeSpan.FromSeconds(timeout));
         using var operationSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
@@ -2478,6 +2479,16 @@ public class HelmClient : IHelmClient
         {
             throw new NotSupportedException(
                 $"The managed lifecycle API does not support: {string.Join(", ", unsupported)}.");
+        }
+    }
+
+    private static void ValidateServerSideApplyOption(HelmExecutionOptions options)
+    {
+        if (options.ServerSideApply)
+        {
+            throw new NotSupportedException(
+                "HelmExecutionOptions.ServerSideApply is not supported by the managed lifecycle API. " +
+                "Set it to false before applying resources.");
         }
     }
 
