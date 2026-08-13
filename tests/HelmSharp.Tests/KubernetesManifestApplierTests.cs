@@ -236,6 +236,44 @@ public sealed class KubernetesManifestApplierTests
     }
 
     [Fact]
+    public async Task ApplyAsync_DoesNotRetainHealthCheckNodePortForServicesThatDoNotSupportIt()
+    {
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/services/api", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Service",
+                  "metadata": { "name": "api", "resourceVersion": "42" },
+                  "spec": {
+                    "clusterIP": "10.0.0.10",
+                    "clusterIPs": ["10.0.0.10"],
+                    "type": "LoadBalancer",
+                    "externalTrafficPolicy": "Local",
+                    "healthCheckNodePort": 30001
+                  }
+                }
+                """)
+            .Respond(HttpMethod.Put, "/api/v1/namespaces/release-ns/services/api", HttpStatusCode.OK, "{}");
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await AsyncEnumerableTestExtensions.DrainAsync(applier.ApplyAsync("""
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: api
+            spec:
+              type: ClusterIP
+              selector:
+                app: api
+              ports:
+                - port: 80
+            """, "release-ns"));
+
+        var replace = Assert.Single(handler.Requests, request => request.Method == HttpMethod.Put);
+        Assert.DoesNotContain("healthCheckNodePort", replace.Content, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task DeleteAsync_DeletesResourcesInReverseManifestOrderWithPropagationPolicy()
     {
         var handler = new KubernetesApiHandler()

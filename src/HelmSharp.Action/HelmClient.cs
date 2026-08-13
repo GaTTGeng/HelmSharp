@@ -743,6 +743,7 @@ public class HelmClient : IHelmClient
         var operationToken = operationSource?.Token ?? cancellationToken;
 
         var options = await _optionsProvider.GetHelmAsync(operationToken);
+        ValidateServerSideApplyOption(options);
         var ns = request.Namespace ?? options.DefaultNamespace ?? "default";
         using var client = await _createKubernetesClientAsync(options, request.KubeConfigPath, request.KubeConfigContent, operationToken);
         var store = new HelmReleaseStore(client);
@@ -1328,6 +1329,7 @@ public class HelmClient : IHelmClient
         CancellationToken cancellationToken = default)
     {
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
+        ValidateServerSideApplyOption(options);
         var ns = @namespace ?? options.DefaultNamespace ?? "default";
         var timeout = timeoutSeconds ?? options.TimeoutSeconds;
         using var timeoutSource = timeout > 0

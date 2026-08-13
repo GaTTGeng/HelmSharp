@@ -157,7 +157,7 @@ public sealed class KubernetesManifestApplier
                         item.Spec.ClusterIPs = existing.Spec.ClusterIPs;
                         if (item.Spec.IpFamilyPolicy is null)
                             item.Spec.IpFamilyPolicy = existing.Spec.IpFamilyPolicy;
-                        if (item.Spec.HealthCheckNodePort is null)
+                        if (item.Spec.HealthCheckNodePort is null && SupportsHealthCheckNodePort(item.Spec))
                             item.Spec.HealthCheckNodePort = existing.Spec.HealthCheckNodePort;
                         return _client.CoreV1.ReplaceNamespacedServiceAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
                     });
@@ -730,6 +730,10 @@ public sealed class KubernetesManifestApplier
         else
             metadata["namespace"] = namespaceName;
     }
+
+    private static bool SupportsHealthCheckNodePort(V1ServiceSpec spec)
+        => string.Equals(spec.Type, "LoadBalancer", StringComparison.OrdinalIgnoreCase) &&
+           string.Equals(spec.ExternalTrafficPolicy, "Local", StringComparison.OrdinalIgnoreCase);
 
     private async Task DeleteOneAsync(ManifestIdentity identity, string? propagationPolicy, CancellationToken ct)
     {

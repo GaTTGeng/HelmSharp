@@ -1146,6 +1146,15 @@ public class ChartOperationsTests : IDisposable
 
         Assert.Contains("ServerSideApply", rollbackException.Message);
         Assert.False(kubernetesClientCreated);
+
+        var uninstallException = await Assert.ThrowsAsync<NotSupportedException>(() =>
+            client.UninstallAsync(new HelmUninstallRequest { ReleaseName = "server-side-apply" }));
+        var testException = await Assert.ThrowsAsync<NotSupportedException>(() =>
+            client.TestAsync("server-side-apply"));
+
+        Assert.Contains("ServerSideApply", uninstallException.Message);
+        Assert.Contains("ServerSideApply", testException.Message);
+        Assert.False(kubernetesClientCreated);
     }
 
     [Fact]
