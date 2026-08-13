@@ -151,6 +151,7 @@ public class HelmClient : IHelmClient
     {
         ValidateUpgradeRequest(request);
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
+        ValidateServerSideApplyOption(options);
         var timeout = request.TimeoutSeconds ?? options.TimeoutSeconds;
         using var timeoutSource = new CancellationTokenSource(TimeSpan.FromSeconds(timeout));
         using var operationSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
@@ -742,6 +743,7 @@ public class HelmClient : IHelmClient
         var operationToken = operationSource?.Token ?? cancellationToken;
 
         var options = await _optionsProvider.GetHelmAsync(operationToken);
+        ValidateServerSideApplyOption(options);
         var ns = request.Namespace ?? options.DefaultNamespace ?? "default";
         using var client = await _createKubernetesClientAsync(options, request.KubeConfigPath, request.KubeConfigContent, operationToken);
         var store = new HelmReleaseStore(client);
@@ -909,6 +911,7 @@ public class HelmClient : IHelmClient
     {
         ValidateRollbackRequest(request);
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
+        ValidateServerSideApplyOption(options);
         var timeout = request.TimeoutSeconds ?? options.TimeoutSeconds;
         using var timeoutSource = new CancellationTokenSource(TimeSpan.FromSeconds(timeout));
         using var operationSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
@@ -1326,6 +1329,7 @@ public class HelmClient : IHelmClient
         CancellationToken cancellationToken = default)
     {
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
+        ValidateServerSideApplyOption(options);
         var ns = @namespace ?? options.DefaultNamespace ?? "default";
         var timeout = timeoutSeconds ?? options.TimeoutSeconds;
         using var timeoutSource = timeout > 0
@@ -2478,6 +2482,16 @@ public class HelmClient : IHelmClient
         {
             throw new NotSupportedException(
                 $"The managed lifecycle API does not support: {string.Join(", ", unsupported)}.");
+        }
+    }
+
+    private static void ValidateServerSideApplyOption(HelmExecutionOptions options)
+    {
+        if (options.ServerSideApply)
+        {
+            throw new NotSupportedException(
+                "HelmExecutionOptions.ServerSideApply is not supported by the managed lifecycle API. " +
+                "Set it to false before applying resources.");
         }
     }
 

@@ -51,7 +51,7 @@ public sealed class KubernetesManifestApplier
 
             try
             {
-                await ApplyOneAsync(identity, doc, cancellationToken);
+                identity = await ApplyOneAsync(identity, doc, cancellationToken);
             }
             catch (KubernetesResourceOperationException)
             {
@@ -104,7 +104,7 @@ public sealed class KubernetesManifestApplier
         }
     }
 
-    private async Task ApplyOneAsync(ManifestIdentity identity, string yaml, CancellationToken ct)
+    private async Task<ManifestIdentity> ApplyOneAsync(ManifestIdentity identity, string yaml, CancellationToken ct)
     {
         switch (identity.ApiVersion, identity.Kind)
         {
@@ -155,6 +155,10 @@ public sealed class KubernetesManifestApplier
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         item.Spec.ClusterIP = existing.Spec.ClusterIP;
                         item.Spec.ClusterIPs = existing.Spec.ClusterIPs;
+                        if (item.Spec.IpFamilyPolicy is null)
+                            item.Spec.IpFamilyPolicy = existing.Spec.IpFamilyPolicy;
+                        if (item.Spec.HealthCheckNodePort is null && SupportsHealthCheckNodePort(item.Spec))
+                            item.Spec.HealthCheckNodePort = existing.Spec.HealthCheckNodePort;
                         return _client.CoreV1.ReplaceNamespacedServiceAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
                     });
                 break;
@@ -632,18 +636,20 @@ public sealed class KubernetesManifestApplier
                 break;
 
             default:
-                await ApplyDiscoveredResourceAsync(identity, yaml, ct);
-                break;
+                return await ApplyDiscoveredResourceAsync(identity, yaml, ct);
         }
+
+        return identity;
     }
 
-    private async Task ApplyDiscoveredResourceAsync(ManifestIdentity identity, string yaml, CancellationToken ct)
+    private async Task<ManifestIdentity> ApplyDiscoveredResourceAsync(ManifestIdentity identity, string yaml, CancellationToken ct)
     {
         var resource = await DiscoverResourceAsync(identity, ct);
         var item = HelmYaml.DeserializeDictionary(yaml);
 
         if (resource.Namespaced)
         {
+            SetNamespace(item, identity.Namespace);
             await UpsertNamespacedAsync(
                 () => _client.CustomObjects.GetNamespacedCustomObjectAsync(resource.Group, resource.Version, identity.Namespace, resource.Plural, identity.Name, ct),
                 () => _client.CustomObjects.CreateNamespacedCustomObjectAsync(item, resource.Group, resource.Version, identity.Namespace, resource.Plural, null, _fieldManager, null, null, ct),
@@ -652,9 +658,11 @@ public sealed class KubernetesManifestApplier
                     SetResourceVersion(item, existing);
                     return _client.CustomObjects.ReplaceNamespacedCustomObjectAsync(item, resource.Group, resource.Version, identity.Namespace, resource.Plural, identity.Name, null, _fieldManager, null, ct);
                 });
-            return;
+            return identity;
         }
 
+        identity = identity with { Namespace = string.Empty };
+        SetNamespace(item, namespaceName: null);
         await UpsertClusterAsync(
             () => _client.CustomObjects.GetClusterCustomObjectAsync(resource.Group, resource.Version, resource.Plural, identity.Name, ct),
             () => _client.CustomObjects.CreateClusterCustomObjectAsync(item, resource.Group, resource.Version, resource.Plural, null, _fieldManager, null, null, ct),
@@ -663,6 +671,7 @@ public sealed class KubernetesManifestApplier
                 SetResourceVersion(item, existing);
                 return _client.CustomObjects.ReplaceClusterCustomObjectAsync(item, resource.Group, resource.Version, resource.Plural, identity.Name, null, _fieldManager, null, ct);
             });
+        return identity;
     }
 
     private async Task<DiscoveredResource> DiscoverResourceAsync(ManifestIdentity identity, CancellationToken ct)
@@ -709,6 +718,22 @@ public sealed class KubernetesManifestApplier
 
         itemMetadata["resourceVersion"] = resourceVersion.GetString();
     }
+
+    private static void SetNamespace(Dictionary<string, object?> item, string? namespaceName)
+    {
+        if (!item.TryGetValue("metadata", out var metadataObject) ||
+            metadataObject is not Dictionary<string, object?> metadata)
+            return;
+
+        if (string.IsNullOrWhiteSpace(namespaceName))
+            metadata.Remove("namespace");
+        else
+            metadata["namespace"] = namespaceName;
+    }
+
+    private static bool SupportsHealthCheckNodePort(V1ServiceSpec spec)
+        => string.Equals(spec.Type, "LoadBalancer", StringComparison.OrdinalIgnoreCase) &&
+           string.Equals(spec.ExternalTrafficPolicy, "Local", StringComparison.OrdinalIgnoreCase);
 
     private async Task DeleteOneAsync(ManifestIdentity identity, string? propagationPolicy, CancellationToken ct)
     {

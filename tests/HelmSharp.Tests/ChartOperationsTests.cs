@@ -1111,6 +1111,53 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task ReleaseLifecycle_RejectsConfiguredServerSideApplyBeforeCreatingAKubernetesClient()
+    {
+        var chartDir = await CreateMinimalChartAsync("server-side-apply-chart");
+        var kubernetesClientCreated = false;
+        var client = new HelmClient(
+            new StaticHelmOptionsProvider(new HelmExecutionOptions
+            {
+                DefaultNamespace = "test-ns",
+                ServerSideApply = true
+            }),
+            (_, _, _, _) =>
+            {
+                kubernetesClientCreated = true;
+                throw new InvalidOperationException("Kubernetes client should not be created.");
+            });
+
+        var exception = await Assert.ThrowsAsync<NotSupportedException>(async () =>
+            await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+            {
+                ReleaseName = "server-side-apply",
+                Chart = chartDir
+            })));
+
+        Assert.Contains("ServerSideApply", exception.Message);
+        Assert.False(kubernetesClientCreated);
+
+        var rollbackException = await Assert.ThrowsAsync<NotSupportedException>(() =>
+            client.RollbackAsync(new HelmRollbackRequest
+            {
+                ReleaseName = "server-side-apply",
+                Revision = 1
+            }));
+
+        Assert.Contains("ServerSideApply", rollbackException.Message);
+        Assert.False(kubernetesClientCreated);
+
+        var uninstallException = await Assert.ThrowsAsync<NotSupportedException>(() =>
+            client.UninstallAsync(new HelmUninstallRequest { ReleaseName = "server-side-apply" }));
+        var testException = await Assert.ThrowsAsync<NotSupportedException>(() =>
+            client.TestAsync("server-side-apply"));
+
+        Assert.Contains("ServerSideApply", uninstallException.Message);
+        Assert.Contains("ServerSideApply", testException.Message);
+        Assert.False(kubernetesClientCreated);
+    }
+
+    [Fact]
     public async Task ReleaseLifecycle_ReinstallAfterRetainedUninstallStartsAnInstallAtTheNextRevision()
     {
         var chartDir = await CreateMinimalChartAsync("reinstall-chart");
