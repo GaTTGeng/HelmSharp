@@ -28,4 +28,8 @@ Use dry run for review. Install, upgrade, rollback, and retained uninstalls leav
 
 Traditional HTTP repositories and local dependencies are supported. Full OCI authentication, provenance verification, and every Helm CLI switch are not `1.3.1` guarantees; check [Compatibility](../helm-compatibility.md) for the current boundary.
 
+## Plugin names and storage boundaries
+
+`HelmPluginManager` treats its configured plugin directory as a security boundary. Pass a single portable plugin name, not a path: names may contain ASCII letters, digits, dots, underscores, and hyphens, and must begin and end with a letter or digit. Absolute paths, directory separators, `.` and `..`, whitespace, and linked plugin directories are rejected by install, uninstall, and run operations.
+
 For all public members, use the [generated Action API](../api/generated/action.md).

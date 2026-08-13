@@ -12,22 +12,26 @@ public class HelmPluginManager
 
     public HelmPluginManager(string? pluginsDir = null)
     {
-        _pluginsDir = pluginsDir ?? Path.Combine(
+        _pluginsDir = Path.GetFullPath(pluginsDir ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".helmsharp", "plugins");
+            ".helmsharp", "plugins"));
         Directory.CreateDirectory(_pluginsDir);
     }
 
     /// <summary>
-    /// Installs a plugin from a URL or local directory.
+    /// Installs a plugin from a URL or local directory. Plugin names must use only ASCII letters,
+    /// digits, dots, underscores, and hyphens, and must begin and end with a letter or digit.
     /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is not a portable plugin name.</exception>
     public async Task<string> InstallAsync(string name, string source, CancellationToken ct = default)
     {
-        var pluginDir = Path.Combine(_pluginsDir, name);
+        var pluginDir = ResolvePluginDirectory(name);
+        EnsurePluginDirectoryIsNotLink(pluginDir, name);
         if (Directory.Exists(pluginDir))
             throw new InvalidOperationException($"Plugin '{name}' is already installed");
 
         Directory.CreateDirectory(pluginDir);
+        EnsurePluginDirectoryIsNotLink(pluginDir, name);
 
         if (Directory.Exists(source))
         {
@@ -88,6 +92,9 @@ public class HelmPluginManager
 
         foreach (var dir in Directory.GetDirectories(_pluginsDir))
         {
+            if (IsLink(new DirectoryInfo(dir)))
+                continue;
+
             var name = Path.GetFileName(dir);
             var metadataFile = Path.Combine(dir, "plugin.json");
             var version = "unknown";
@@ -117,11 +124,14 @@ public class HelmPluginManager
     }
 
     /// <summary>
-    /// Uninstalls a plugin.
+    /// Uninstalls a plugin. Plugin names must use only ASCII letters, digits, dots, underscores,
+    /// and hyphens, and must begin and end with a letter or digit.
     /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is not a portable plugin name.</exception>
     public void Uninstall(string name)
     {
-        var pluginDir = Path.Combine(_pluginsDir, name);
+        var pluginDir = ResolvePluginDirectory(name);
+        EnsurePluginDirectoryIsNotLink(pluginDir, name);
         if (!Directory.Exists(pluginDir))
             throw new InvalidOperationException($"Plugin '{name}' is not installed");
 
@@ -129,11 +139,14 @@ public class HelmPluginManager
     }
 
     /// <summary>
-    /// Runs a plugin command.
+    /// Runs a plugin command. Plugin names must use only ASCII letters, digits, dots, underscores,
+    /// and hyphens, and must begin and end with a letter or digit.
     /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is not a portable plugin name.</exception>
     public async Task<CommandResult> RunAsync(string name, string[] args, CancellationToken ct = default)
     {
-        var pluginDir = Path.Combine(_pluginsDir, name);
+        var pluginDir = ResolvePluginDirectory(name);
+        EnsurePluginDirectoryIsNotLink(pluginDir, name);
         if (!Directory.Exists(pluginDir))
             return new CommandResult { ExitCode = 1, StandardError = $"Plugin '{name}' is not installed" };
 
@@ -176,19 +189,78 @@ public class HelmPluginManager
         foreach (var candidate in candidates)
         {
             var path = Path.Combine(pluginDir, candidate);
-            if (File.Exists(path))
+            if (File.Exists(path) && !IsLink(new FileInfo(path)))
                 return path;
         }
 
         // Check for any executable file
         foreach (var file in Directory.GetFiles(pluginDir))
         {
-            if (Path.GetFileName(file).StartsWith("plugin.") || Path.GetFileName(file).StartsWith("run."))
+            if (!IsLink(new FileInfo(file)) &&
+                (Path.GetFileName(file).StartsWith("plugin.") || Path.GetFileName(file).StartsWith("run.")))
                 return file;
         }
 
         return null;
     }
+
+    private string ResolvePluginDirectory(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+
+        if (!IsPortablePluginName(name) ||
+            Path.IsPathRooted(name) ||
+            name.Contains(Path.DirectorySeparatorChar) ||
+            name.Contains(Path.AltDirectorySeparatorChar) ||
+            name.Contains('/') ||
+            name.Contains('\\'))
+        {
+            throw new ArgumentException(
+                "Plugin names must use only ASCII letters, digits, dots, underscores, and hyphens, and must begin and end with a letter or digit.",
+                nameof(name));
+        }
+
+        var pluginDir = Path.GetFullPath(Path.Combine(_pluginsDir, name));
+        var root = Path.TrimEndingDirectorySeparator(_pluginsDir);
+        var rootPrefix = Path.EndsInDirectorySeparator(root)
+            ? root
+            : root + Path.DirectorySeparatorChar;
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        if (!pluginDir.StartsWith(rootPrefix, comparison))
+            throw new ArgumentException("Plugin name resolves outside the configured plugin directory.", nameof(name));
+
+        return pluginDir;
+    }
+
+    private static bool IsPortablePluginName(string name)
+    {
+        if (name.Length == 0 || !IsAsciiLetterOrDigit(name[0]) || !IsAsciiLetterOrDigit(name[^1]))
+            return false;
+
+        foreach (var character in name)
+        {
+            if (!IsAsciiLetterOrDigit(character) && character is not ('.' or '_' or '-'))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsAsciiLetterOrDigit(char character) =>
+        character is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9';
+
+    private static void EnsurePluginDirectoryIsNotLink(string pluginDir, string name)
+    {
+        var directory = new DirectoryInfo(pluginDir);
+        if (directory.Exists && IsLink(directory))
+            throw new InvalidOperationException($"Plugin '{name}' directory cannot be a symbolic link or reparse point");
+    }
+
+    private static bool IsLink(FileSystemInfo entry) =>
+        entry.LinkTarget is not null || (entry.Attributes & FileAttributes.ReparsePoint) != 0;
 }
 
 public class HelmPluginInfo
