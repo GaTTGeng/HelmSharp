@@ -28,4 +28,8 @@ dotnet add package HelmSharp.Action --version 1.3.1
 
 传统 HTTP 仓库和本地依赖已支持。完整 OCI 认证、provenance 验证和全部 Helm CLI 开关并不是 `1.3.1` 的保证；当前边界请看[兼容性](../helm-compatibility.md)。
 
+## 插件名称与存储边界
+
+`HelmPluginManager` 将配置的插件目录视为安全边界。请传入一个可移植的插件名称，而不是路径：名称可包含 ASCII 字母、数字、点、下划线和连字符，且必须以字母或数字开头和结尾。安装、卸载和运行操作都会拒绝绝对路径、目录分隔符、`.`、`..`、空白字符、`CON` 或 `NUL` 等 Windows 设备名，以及链接形式的插件目录。
+
 成员级信息请看[生成的 Action API](../api/generated/action.md)。
