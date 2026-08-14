@@ -5,7 +5,7 @@
 只有在 `HelmClient` 外部实现或检查 release 持久化时，才直接安装：
 
 ```powershell
-dotnet add package HelmSharp.Release --version 1.3.1
+dotnet add package HelmSharp.Release --version 1.3.2
 ```
 
 存储 revision 是 deployed、superseded、failed 和保留卸载等生命周期结果的证据。失败 revision 即使没有资源被应用、或只有部分资源被应用，也可能保留完整的尝试清单；因此它不是实际集群状态的记录，也不是让系统重新渲染当前 Chart 的请求。

@@ -41,8 +41,8 @@ features:
 先安装 Chart 与渲染器包：
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.3.1
-dotnet add package HelmSharp.Engine --version 1.3.1
+dotnet add package HelmSharp.Chart --version 1.3.2
+dotnet add package HelmSharp.Engine --version 1.3.2
 ```
 
 然后加载 Chart 目录、构造 values 并渲染。可直接复制运行的程序和这三个对象的职责见[快速开始](getting-started.md)。

@@ -1,6 +1,6 @@
 # Install HelmSharp
 
-HelmSharp targets `net8.0`, `net9.0`, and `net10.0`. Every package in an application should use the same HelmSharp version; the examples below use the current package release, `1.3.1`.
+HelmSharp targets `net8.0`, `net9.0`, and `net10.0`. Every package in an application should use the same HelmSharp version; the examples below use the current package release, `1.3.2`.
 
 ## Pick the smallest package for the job
 
@@ -14,14 +14,14 @@ HelmSharp targets `net8.0`, `net9.0`, and `net10.0`. Every package in an applica
 Most services that own a deployment start with `HelmSharp.Action`:
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.3.1
+dotnet add package HelmSharp.Action --version 1.3.2
 ```
 
 A preview tool should depend on the smaller rendering pair instead:
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.3.1
-dotnet add package HelmSharp.Engine --version 1.3.1
+dotnet add package HelmSharp.Chart --version 1.3.2
+dotnet add package HelmSharp.Engine --version 1.3.2
 ```
 
 `HelmSharp.Action` already references the rendering, Kubernetes, release, repository, storage, registry, and post-renderer packages. Do not add those packages separately unless your code needs their lower-level APIs.

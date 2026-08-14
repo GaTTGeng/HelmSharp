@@ -3,7 +3,7 @@
 `HelmSharp.Action` is the application-facing package for Helm-style operations. Install it for an API, worker, operator, or CLI that owns more than manifest text.
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.3.1
+dotnet add package HelmSharp.Action --version 1.3.2
 ```
 
 It brings in the chart, renderer, Kubernetes, release, repository, registry, storage, and post-renderer layers. Use `HelmSharp.Chart` plus `HelmSharp.Engine` instead when an application only renders YAML.
@@ -26,7 +26,7 @@ Inspection reads stored revisions; it does not re-render today's version of a ch
 
 Use dry run for review. Install, upgrade, rollback, and retained uninstalls leave Secret-backed lifecycle evidence for later inspection; a default uninstall purges its history. Successful upgrades and rollbacks supersede the prior deployed revision. Once a lifecycle record has been constructed and persistence handling is active, a failure retains a failed revision; validation, chart loading or rendering, client/history initialization, and namespace-creation failures can occur earlier and leave no revision. Unsupported options fail before cluster mutation rather than being silently ignored.
 
-Traditional HTTP repositories and local dependencies are supported. Full OCI authentication, provenance verification, and every Helm CLI switch are not `1.3.1` guarantees; check [Compatibility](../helm-compatibility.md) for the current boundary.
+Traditional HTTP repositories and local dependencies are supported. Full OCI authentication, provenance verification, and every Helm CLI switch are not `1.3.2` guarantees; check [Compatibility](../helm-compatibility.md) for the current boundary.
 
 ## Plugin names and storage boundaries
 

@@ -3,7 +3,7 @@
 当应用已经有多文档 Kubernetes YAML，只需要更低层的提交、删除、资源标识或就绪等待能力时，使用 `HelmSharp.Kube`。它不会创建 Helm release 历史；这属于高层发布工作流的职责。
 
 ```powershell
-dotnet add package HelmSharp.Kube --version 1.3.1
+dotnet add package HelmSharp.Kube --version 1.3.2
 ```
 
 ## 提交已经渲染的 YAML

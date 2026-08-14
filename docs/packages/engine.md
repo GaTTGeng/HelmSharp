@@ -3,7 +3,7 @@
 `HelmSharp.Engine` evaluates Helm-style templates in managed code. It is the package for applications that need manifest text but do not need a Kubernetes lifecycle client.
 
 ```powershell
-dotnet add package HelmSharp.Engine --version 1.3.1
+dotnet add package HelmSharp.Engine --version 1.3.2
 ```
 
 Install `HelmSharp.Chart` with it. The usual entry point is `HelmTemplateRenderer`: give it a loaded chart, a merged values dictionary, release identity, and optional Kubernetes capabilities, then call `Render()` or `RenderNotes()`.

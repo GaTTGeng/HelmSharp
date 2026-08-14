@@ -5,8 +5,8 @@
 ## 1. 安装渲染器
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.3.1
-dotnet add package HelmSharp.Engine --version 1.3.1
+dotnet add package HelmSharp.Chart --version 1.3.2
+dotnet add package HelmSharp.Engine --version 1.3.2
 ```
 
 传给加载器的路径必须是包含 `Chart.yaml` 的 Chart 目录，或一个已打包的 Chart 归档。

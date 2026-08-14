@@ -3,7 +3,7 @@
 当一个组件既拥有部署动作、又不能只停留在 YAML 预览时，使用 `HelmSharp.Action`。`HelmClient.UpgradeInstallAsync` 会组合 Chart 加载、values、渲染、hook、Kubernetes 提交、可选的就绪等待，以及 release 历史持久化。
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.3.1
+dotnet add package HelmSharp.Action --version 1.3.2
 ```
 
 ## 先从试运行开始

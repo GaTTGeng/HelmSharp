@@ -3,7 +3,7 @@
 `HelmSharp.Engine` 在托管代码中执行 Helm 风格模板。应用需要清单文本、但不需要 Kubernetes 生命周期客户端时，使用这个包。
 
 ```powershell
-dotnet add package HelmSharp.Engine --version 1.3.1
+dotnet add package HelmSharp.Engine --version 1.3.2
 ```
 
 它需要与 `HelmSharp.Chart` 一起安装。常用入口是 `HelmTemplateRenderer`：传入已加载 Chart、合并后的 values、release 标识和可选 Kubernetes capabilities，再调用 `Render()` 或 `RenderNotes()`。
