@@ -3,7 +3,7 @@
 `HelmSharp.Chart` 负责 Chart 输入。它加载目录或 `.tgz` 归档，提供 Chart 元数据和文件，解析已打包子 Chart，并构建渲染器使用的 values 字典。
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.3.1
+dotnet add package HelmSharp.Chart --version 1.3.2
 ```
 
 ## 用它完成渲染的输入部分

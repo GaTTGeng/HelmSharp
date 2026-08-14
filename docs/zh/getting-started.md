@@ -7,8 +7,8 @@
 ```powershell
 dotnet new console --name RenderChart
 cd RenderChart
-dotnet add package HelmSharp.Chart --version 1.3.1
-dotnet add package HelmSharp.Engine --version 1.3.1
+dotnet add package HelmSharp.Chart --version 1.3.2
+dotnet add package HelmSharp.Engine --version 1.3.2
 ```
 
 ## 渲染 Chart 目录

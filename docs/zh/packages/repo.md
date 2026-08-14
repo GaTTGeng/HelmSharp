@@ -3,7 +3,7 @@
 `HelmSharp.Repo` 管理传统 HTTP Chart 仓库：本地仓库定义、缓存索引、搜索、带摘要校验的拉取，以及 `index.yaml` 生成。
 
 ```powershell
-dotnet add package HelmSharp.Repo --version 1.3.1
+dotnet add package HelmSharp.Repo --version 1.3.2
 ```
 
 主要 API 是 `HelmChartRepository`。长期运行的服务应传入明确的 `HelmRepositoryOptions` 路径，避免租户或并发任务共享仓库、凭据和缓存索引。仅传关键词的 `SearchRepoAsync` 重载只读取已配置仓库的缓存索引，不访问网络；传入仓库 URL 的重载会先获取并缓存该仓库索引，再执行搜索。

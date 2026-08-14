@@ -3,7 +3,7 @@
 `HelmSharp.Kube` 是较低层的 Kubernetes 层。当 YAML 已经存在，代码只需要托管的提交、删除、资源标识或选择性的就绪等待时，安装它。
 
 ```powershell
-dotnet add package HelmSharp.Kube --version 1.3.1
+dotnet add package HelmSharp.Kube --version 1.3.2
 ```
 
 | 类型 | 用途 |

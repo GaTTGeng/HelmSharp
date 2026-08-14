@@ -3,7 +3,7 @@
 `HelmSharp.Chart` owns chart inputs. It loads a directory or `.tgz` archive, exposes chart metadata and files, resolves packaged subcharts, and builds the values dictionary used by a renderer.
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.3.1
+dotnet add package HelmSharp.Chart --version 1.3.2
 ```
 
 ## Use this package for the input half of rendering

@@ -1,6 +1,6 @@
 # 安装 HelmSharp
 
-HelmSharp 支持 `net8.0`、`net9.0` 和 `net10.0`。同一个应用中的 HelmSharp 包应保持同一版本；下面以当前发布版 `1.3.1` 为例。
+HelmSharp 支持 `net8.0`、`net9.0` 和 `net10.0`。同一个应用中的 HelmSharp 包应保持同一版本；下面以当前发布版 `1.3.2` 为例。
 
 ## 按任务选择最小包
 
@@ -14,14 +14,14 @@ HelmSharp 支持 `net8.0`、`net9.0` 和 `net10.0`。同一个应用中的 HelmS
 多数拥有部署职责的服务从 `HelmSharp.Action` 开始：
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.3.1
+dotnet add package HelmSharp.Action --version 1.3.2
 ```
 
 预览工具则应只依赖渲染所需的两个包：
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.3.1
-dotnet add package HelmSharp.Engine --version 1.3.1
+dotnet add package HelmSharp.Chart --version 1.3.2
+dotnet add package HelmSharp.Engine --version 1.3.2
 ```
 
 `HelmSharp.Action` 已引用渲染、Kubernetes、release、仓库、存储、registry 和 post-renderer 包。除非代码确实需要低层 API，否则无需再逐一安装它们。

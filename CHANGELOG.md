@@ -6,6 +6,8 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-08-13
+
 ### Added
 
 - Added direct, cluster-independent component coverage for Kubernetes manifest application and resource waiting, including deterministic polling and HTTP endpoint assertions (#26).
@@ -17,7 +19,8 @@ This project follows semantic versioning once stable releases begin.
 
 ### Security
 
-- Enforced portable plugin names and plugin-directory boundaries across install, uninstall, listing, and execution operations.
+- Enforced portable plugin names and plugin-directory boundaries across install, uninstall, listing, and execution operations ([GHSA-2rh6-8xhh-mjqm](https://github.com/GaTTGeng/HelmSharp/security/advisories/GHSA-2rh6-8xhh-mjqm)).
+- Updated the documentation build's transitive Nano ID dependency to resolve [GHSA-2v37-7h3g-55p8](https://github.com/advisories/GHSA-2v37-7h3g-55p8).
 
 ## [1.3.1] - 2026-08-03
 
@@ -255,7 +258,8 @@ This was achieved by fixing two parser bugs that blocked full-chart rendering (#
 - Open source project documentation.
 - GitHub Actions workflows for CI and NuGet release publishing.
 
-[Unreleased]: https://github.com/GaTTGeng/HelmSharp/compare/1.3.1...HEAD
+[Unreleased]: https://github.com/GaTTGeng/HelmSharp/compare/1.3.2...HEAD
+[1.3.2]: https://github.com/GaTTGeng/HelmSharp/compare/1.3.1...1.3.2
 [1.3.1]: https://github.com/GaTTGeng/HelmSharp/compare/1.3.0...1.3.1
 [1.3.0]: https://github.com/GaTTGeng/HelmSharp/compare/1.2.0...1.3.0
 [1.2.0]: https://github.com/GaTTGeng/HelmSharp/compare/1.1.1...1.2.0

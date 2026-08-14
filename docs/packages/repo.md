@@ -3,7 +3,7 @@
 `HelmSharp.Repo` manages traditional HTTP chart repositories: local repository definitions, cached indexes, search, digest-checked pull, and `index.yaml` generation.
 
 ```powershell
-dotnet add package HelmSharp.Repo --version 1.3.1
+dotnet add package HelmSharp.Repo --version 1.3.2
 ```
 
 `HelmChartRepository` is the primary API. Give long-running services explicit `HelmRepositoryOptions` paths so repositories, credentials, and cached indexes are not shared between tenants or concurrent jobs. The keyword-only `SearchRepoAsync` overload reads configured cached indexes and does not access the network. The overload that accepts a repository URL fetches and caches that repository index before searching.

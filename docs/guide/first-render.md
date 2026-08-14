@@ -5,8 +5,8 @@ Use this path for a preview endpoint, policy check, CI artifact, or GitOps gener
 ## 1. Install the renderer
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.3.1
-dotnet add package HelmSharp.Engine --version 1.3.1
+dotnet add package HelmSharp.Chart --version 1.3.2
+dotnet add package HelmSharp.Engine --version 1.3.2
 ```
 
 The path passed to the loader must point at a chart directory containing `Chart.yaml`, or at a packaged chart archive.

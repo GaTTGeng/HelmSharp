@@ -5,7 +5,7 @@
 Install it directly only when implementing or inspecting release persistence outside `HelmClient`:
 
 ```powershell
-dotnet add package HelmSharp.Release --version 1.3.1
+dotnet add package HelmSharp.Release --version 1.3.2
 ```
 
 Stored revisions are lifecycle evidence for outcomes such as deployed, superseded, failed, and retained-uninstalled. A failed revision can retain the complete attempted manifest even when resources were not, or were only partly, applied; the store is not a record of actual cluster state or a request to re-render the current chart.

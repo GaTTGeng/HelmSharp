@@ -3,7 +3,7 @@
 Use `HelmSharp.Kube` when your application already has multi-document Kubernetes YAML and needs lower-level apply, delete, identity, or readiness behavior. It does not create Helm release history; that is the responsibility of the higher-level release workflow.
 
 ```powershell
-dotnet add package HelmSharp.Kube --version 1.3.1
+dotnet add package HelmSharp.Kube --version 1.3.2
 ```
 
 ## Apply rendered YAML
