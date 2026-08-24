@@ -381,7 +381,7 @@ internal sealed class HelmHookExecutor
             }
         }
 
-        foreach (var hook in hooks)
+        foreach (var hook in hooks.Reverse())
         {
             if (!string.Equals(hook.LastRunPhase, "Succeeded", StringComparison.Ordinal) ||
                 !hook.DeletePolicies.Contains(HelmHookDeletePolicy.HookSucceeded) ||

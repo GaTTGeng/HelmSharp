@@ -901,8 +901,8 @@ public class HelmHookTests
         Assert.Equal(
             [
                 "/apis/batch/v1/namespaces/test-ns/jobs/migration",
-                "/api/v1/namespaces/test-ns/configmaps/first-completed-hook",
-                "/api/v1/namespaces/test-ns/configmaps/second-completed-hook"
+                "/api/v1/namespaces/test-ns/configmaps/second-completed-hook",
+                "/api/v1/namespaces/test-ns/configmaps/first-completed-hook"
             ],
             handler.Requests
                 .Where(request => request.Method == HttpMethod.Delete)
