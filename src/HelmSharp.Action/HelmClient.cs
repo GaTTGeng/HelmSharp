@@ -715,23 +715,92 @@ public class HelmClient : IHelmClient
         string defaultNamespace,
         CancellationToken cancellationToken)
     {
-        var previousIdentities = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var document in KubernetesManifestApplier.SplitDocumentsPublic(previousManifest))
-        {
-            var identity = await applier.ResolveIdentityAsync(document, defaultNamespace, cancellationToken);
-            if (identity is not null)
-                previousIdentities.Add(ManifestIdentityKey(identity));
-        }
+        var previousDocuments = KubernetesManifestApplier.SplitDocumentsPublic(previousManifest)
+            .Select(document => (Document: document, Identity: ManifestIdentity.Parse(document, defaultNamespace)))
+            .Where(item => item.Identity is not null)
+            .Select(item => (item.Document, Identity: item.Identity!))
+            .ToList();
+        var scopeCache = new Dictionary<string, bool>(StringComparer.Ordinal);
 
         var attemptedOnly = new List<string>();
         foreach (var document in KubernetesManifestApplier.SplitDocumentsPublic(attemptedManifest))
         {
-            var identity = await applier.ResolveIdentityAsync(document, defaultNamespace, cancellationToken);
-            if (identity is not null && !previousIdentities.Contains(ManifestIdentityKey(identity)))
+            var identity = ManifestIdentity.Parse(document, defaultNamespace);
+            if (identity is null)
+                continue;
+
+            var candidates = previousDocuments
+                .Where(item => string.Equals(
+                    ManifestResourceKey(item.Identity),
+                    ManifestResourceKey(identity),
+                    StringComparison.Ordinal))
+                .ToList();
+            if (candidates.Count == 0)
+            {
+                attemptedOnly.Add(document);
+                continue;
+            }
+
+            if (candidates.Any(candidate => string.Equals(
+                    ManifestIdentityKey(candidate.Identity),
+                    ManifestIdentityKey(identity),
+                    StringComparison.Ordinal)))
+            {
+                continue;
+            }
+
+            var namespaced = await ResolveResourceScopeAsync(
+                applier,
+                candidates.Append((document, identity)),
+                defaultNamespace,
+                scopeCache,
+                cancellationToken);
+            if (namespaced is not false)
                 attemptedOnly.Add(document);
         }
 
         return string.Join(Environment.NewLine + "---" + Environment.NewLine, attemptedOnly);
+    }
+
+    private static async Task<bool?> ResolveResourceScopeAsync(
+        KubernetesManifestApplier applier,
+        IEnumerable<(string Document, ManifestIdentity Identity)> documents,
+        string defaultNamespace,
+        Dictionary<string, bool> scopeCache,
+        CancellationToken cancellationToken)
+    {
+        foreach (var (document, identity) in documents)
+        {
+            var resourceKey = ManifestResourceTypeKey(identity);
+            if (scopeCache.TryGetValue(resourceKey, out var cachedScope))
+                return cachedScope;
+
+            if (KubernetesManifestApplier.TryGetTypedResourceScope(identity, out var typedScope))
+            {
+                scopeCache[resourceKey] = typedScope;
+                return typedScope;
+            }
+
+            try
+            {
+                var resolved = await applier.ResolveIdentityAsync(document, defaultNamespace, cancellationToken);
+                if (resolved is null)
+                    continue;
+
+                var namespaced = !string.IsNullOrWhiteSpace(resolved.Namespace);
+                scopeCache[resourceKey] = namespaced;
+                return namespaced;
+            }
+            catch (KubernetesResourceOperationException ex)
+                when (ex.InnerException is KubernetesApiResourceNotFoundException ||
+                      ex.InnerException is HttpOperationException { Response.StatusCode: System.Net.HttpStatusCode.NotFound })
+            {
+                // A stored revision can reference an API version that its current CRD no longer serves.
+                // Resource scope is invariant across versions, so try another document for this type.
+            }
+        }
+
+        return null;
     }
 
     internal static (string Manifest, IReadOnlyList<string> KeptResources) FilterManifestForDeletion(
@@ -768,9 +837,17 @@ public class HelmClient : IHelmClient
 
     private static string ManifestIdentityKey(ManifestIdentity identity)
     {
+        return $"{ManifestResourceTypeKey(identity)}/{identity.Namespace}/{identity.Name}";
+    }
+
+    private static string ManifestResourceKey(ManifestIdentity identity)
+        => $"{ManifestResourceTypeKey(identity)}/{identity.Name}";
+
+    private static string ManifestResourceTypeKey(ManifestIdentity identity)
+    {
         var separator = identity.ApiVersion.IndexOf('/');
         var apiGroup = separator < 0 ? string.Empty : identity.ApiVersion[..separator];
-        return $"{apiGroup}/{identity.Namespace}/{identity.Kind}/{identity.Name}";
+        return $"{apiGroup}/{identity.Kind}";
     }
 
     private static async Task<List<HelmReleaseRecord>> LoadReleaseHistoryForUpgradeInstallAsync(

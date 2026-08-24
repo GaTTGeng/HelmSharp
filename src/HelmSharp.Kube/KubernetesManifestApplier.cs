@@ -1002,15 +1002,16 @@ public sealed class KubernetesManifestApplier
         DiscoveredResource resource;
         try
         {
-            resource = await DiscoverResourceAsync(identity, ct);
+            resource = await DiscoverResourceForDeletionAsync(_client, identity, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             throw new KubernetesResourceOperationException(identity, ex);
         }
+        var resolvedApiVersion = $"{resource.Group}/{resource.Version}";
         var resolvedIdentity = resource.Namespaced
-            ? identity
-            : identity with { Namespace = string.Empty };
+            ? identity with { ApiVersion = resolvedApiVersion }
+            : identity with { ApiVersion = resolvedApiVersion, Namespace = string.Empty };
 
         try
         {
@@ -1037,6 +1038,75 @@ public sealed class KubernetesManifestApplier
         }
 
         return resolvedIdentity;
+    }
+
+    internal static async Task<DiscoveredResource> DiscoverResourceForDeletionAsync(
+        k8s.Kubernetes client,
+        ManifestIdentity identity,
+        CancellationToken cancellationToken)
+    {
+        var (group, declaredVersion) = SplitApiVersion(identity.ApiVersion);
+        if (string.IsNullOrEmpty(group))
+            throw new KubernetesApiResourceUnsupportedException(identity.ApiVersion, identity.Kind);
+
+        var declared = await TryDiscoverResourceVersionAsync(
+            client,
+            group,
+            declaredVersion,
+            identity.Kind,
+            cancellationToken);
+        if (declared is not null)
+            return declared;
+
+        var groups = await client.Apis.GetAPIVersionsAsync(cancellationToken);
+        var apiGroup = groups.Groups?.SingleOrDefault(candidate =>
+            string.Equals(candidate.Name, group, StringComparison.Ordinal));
+        if (apiGroup is not null)
+        {
+            var versions = new[] { apiGroup.PreferredVersion?.Version }
+                .Concat(apiGroup.Versions?.Select(version => version.Version) ?? [])
+                .Where(version => !string.IsNullOrWhiteSpace(version) &&
+                                  !string.Equals(version, declaredVersion, StringComparison.Ordinal))
+                .Distinct(StringComparer.Ordinal);
+            foreach (var version in versions)
+            {
+                var alternate = await TryDiscoverResourceVersionAsync(
+                    client,
+                    group,
+                    version!,
+                    identity.Kind,
+                    cancellationToken);
+                if (alternate is not null)
+                    return alternate;
+            }
+        }
+
+        throw new KubernetesApiResourceNotFoundException(identity.ApiVersion, identity.Kind);
+    }
+
+    private static async Task<DiscoveredResource?> TryDiscoverResourceVersionAsync(
+        k8s.Kubernetes client,
+        string group,
+        string version,
+        string kind,
+        CancellationToken cancellationToken)
+    {
+        V1APIResourceList resources;
+        try
+        {
+            resources = await client.CustomObjects.GetAPIResourcesAsync(group, version, cancellationToken);
+        }
+        catch (HttpOperationException ex) when ((int)ex.Response.StatusCode == 404)
+        {
+            return null;
+        }
+
+        var match = resources.Resources?.SingleOrDefault(resource =>
+            string.Equals(resource.Kind, kind, StringComparison.Ordinal) &&
+            !resource.Name.Contains('/', StringComparison.Ordinal));
+        return match is null || string.IsNullOrWhiteSpace(match.Name)
+            ? null
+            : new DiscoveredResource(group, version, match.Name, match.Namespaced == true);
     }
 
     private static async Task UpsertNamespacedAsync<T>(

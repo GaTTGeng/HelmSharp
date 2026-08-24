@@ -189,7 +189,8 @@ public sealed class KubernetesResourceWaiter
                     pending.Remove(state);
                     deleted.Add(state.Identity.DisplayName);
                 }
-                catch (DeletedApiResourceException)
+                catch (Exception ex) when (ex is KubernetesApiResourceNotFoundException or
+                                           KubernetesApiResourceUnsupportedException)
                 {
                     pending.Remove(state);
                     deleted.Add(state.Identity.DisplayName);
@@ -226,8 +227,10 @@ public sealed class KubernetesResourceWaiter
         }
 
         state.Resource = await DiscoverDeletionResourceAsync(state.Identity, ct);
-        if (!state.Resource.Namespaced)
-            state.Identity = state.Identity with { Namespace = string.Empty };
+        var resolvedApiVersion = $"{state.Resource.Group}/{state.Resource.Version}";
+        state.Identity = state.Resource.Namespaced
+            ? state.Identity with { ApiVersion = resolvedApiVersion }
+            : state.Identity with { ApiVersion = resolvedApiVersion, Namespace = string.Empty };
         state.ScopeResolved = true;
     }
 
@@ -309,20 +312,12 @@ public sealed class KubernetesResourceWaiter
         if (_deletionResources.TryGetValue(key, out var cached))
             return cached;
 
-        var separator = identity.ApiVersion.IndexOf('/');
-        var group = separator < 0 ? string.Empty : identity.ApiVersion[..separator];
-        var version = separator < 0 ? identity.ApiVersion : identity.ApiVersion[(separator + 1)..];
-        if (string.IsNullOrEmpty(group))
-            throw new DeletedApiResourceException(identity.ApiVersion, identity.Kind);
-
-        var resources = await _client.CustomObjects.GetAPIResourcesAsync(group, version, ct);
-        var match = resources.Resources?.SingleOrDefault(resource =>
-            string.Equals(resource.Kind, identity.Kind, StringComparison.Ordinal) &&
-            !resource.Name.Contains('/', StringComparison.Ordinal));
-        if (match is null || string.IsNullOrWhiteSpace(match.Name))
-            throw new DeletedApiResourceException(identity.ApiVersion, identity.Kind);
-
-        var discovered = new DeletionResource(group, version, match.Name, match.Namespaced == true);
+        var resource = await KubernetesManifestApplier.DiscoverResourceForDeletionAsync(_client, identity, ct);
+        var discovered = new DeletionResource(
+            resource.Group,
+            resource.Version,
+            resource.Plural,
+            resource.Namespaced);
         _deletionResources.Add(key, discovered);
         return discovered;
     }
@@ -538,11 +533,3 @@ public sealed class KubernetesResourceWaiter
 }
 
 internal sealed record DeletionResource(string Group, string Version, string Plural, bool Namespaced);
-
-internal sealed class DeletedApiResourceException : Exception
-{
-    public DeletedApiResourceException(string apiVersion, string kind)
-        : base($"Kubernetes API discovery did not find resource {apiVersion}/{kind}.")
-    {
-    }
-}

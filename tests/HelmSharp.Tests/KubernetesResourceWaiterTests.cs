@@ -313,6 +313,9 @@ public sealed class KubernetesResourceWaiterTests
         var handler = new KubernetesApiHandler()
             .Respond(HttpMethod.Get, "/apis/example.com/v1", HttpStatusCode.OK, """
                 { "kind": "APIResourceList", "apiVersion": "v1", "groupVersion": "example.com/v1", "resources": [] }
+                """)
+            .Respond(HttpMethod.Get, "/apis/", HttpStatusCode.OK, """
+                { "kind": "APIGroupList", "apiVersion": "v1", "groups": [] }
                 """);
         var waiter = new KubernetesResourceWaiter(KubernetesTestClientBuilder.Create(handler));
 
@@ -325,7 +328,49 @@ public sealed class KubernetesResourceWaiterTests
 
         Assert.Collection(
             handler.Requests,
-            request => Assert.Equal((HttpMethod.Get, "/apis/example.com/v1"), (request.Method, request.PathAndQuery)));
+            request => Assert.Equal((HttpMethod.Get, "/apis/example.com/v1"), (request.Method, request.PathAndQuery)),
+            request => Assert.Equal((HttpMethod.Get, "/apis/"), (request.Method, request.PathAndQuery)));
+    }
+
+    [Fact]
+    public async Task WaitForDeletedAsync_UsesAlternateServedVersionForObsoleteManifestApi()
+    {
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/example.com/v1", HttpStatusCode.NotFound, "{ \"code\": 404 }")
+            .Respond(HttpMethod.Get, "/apis/", HttpStatusCode.OK, """
+                {
+                  "kind": "APIGroupList",
+                  "apiVersion": "v1",
+                  "groups": [{
+                    "name": "example.com",
+                    "versions": [{ "groupVersion": "example.com/v2", "version": "v2" }],
+                    "preferredVersion": { "groupVersion": "example.com/v2", "version": "v2" }
+                  }]
+                }
+                """)
+            .Respond(HttpMethod.Get, "/apis/example.com/v2", HttpStatusCode.OK, """
+                {
+                  "kind": "APIResourceList",
+                  "apiVersion": "v1",
+                  "groupVersion": "example.com/v2",
+                  "resources": [{ "name": "widgets", "kind": "Widget", "namespaced": true }]
+                }
+                """)
+            .Respond(
+                HttpMethod.Get,
+                "/apis/example.com/v2/namespaces/release-ns/widgets/sample",
+                HttpStatusCode.NotFound);
+        var waiter = new KubernetesResourceWaiter(KubernetesTestClientBuilder.Create(handler));
+
+        await AsyncEnumerableTestExtensions.DrainAsync(waiter.WaitForDeletedAsync("""
+            apiVersion: example.com/v1
+            kind: Widget
+            metadata:
+              name: sample
+            """, "release-ns"));
+
+        Assert.Contains(handler.Requests, request => request.Method == HttpMethod.Get &&
+            request.PathAndQuery == "/apis/example.com/v2/namespaces/release-ns/widgets/sample");
     }
 
     [Fact]

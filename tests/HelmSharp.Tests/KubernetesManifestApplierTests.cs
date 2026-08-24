@@ -398,6 +398,9 @@ public sealed class KubernetesManifestApplierTests
         var handler = new KubernetesApiHandler()
             .Respond(HttpMethod.Get, "/apis/example.com/v1", HttpStatusCode.OK, """
                 { "kind": "APIResourceList", "apiVersion": "v1", "groupVersion": "example.com/v1", "resources": [] }
+                """)
+            .Respond(HttpMethod.Get, "/apis/", HttpStatusCode.OK, """
+                { "kind": "APIGroupList", "apiVersion": "v1", "groups": [] }
                 """);
         var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
 
@@ -413,7 +416,50 @@ public sealed class KubernetesManifestApplierTests
         Assert.IsType<KubernetesApiResourceNotFoundException>(exception.InnerException);
         Assert.Collection(
             handler.Requests,
-            request => Assert.Equal((HttpMethod.Get, "/apis/example.com/v1"), (request.Method, request.PathAndQuery)));
+            request => Assert.Equal((HttpMethod.Get, "/apis/example.com/v1"), (request.Method, request.PathAndQuery)),
+            request => Assert.Equal((HttpMethod.Get, "/apis/"), (request.Method, request.PathAndQuery)));
+    }
+
+    [Fact]
+    public async Task DeleteAsync_UsesAlternateServedVersionWhenDeclaredVersionIsObsolete()
+    {
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/example.com/v1", HttpStatusCode.NotFound, "{ \"code\": 404 }")
+            .Respond(HttpMethod.Get, "/apis/", HttpStatusCode.OK, """
+                {
+                  "kind": "APIGroupList",
+                  "apiVersion": "v1",
+                  "groups": [{
+                    "name": "example.com",
+                    "versions": [{ "groupVersion": "example.com/v2", "version": "v2" }],
+                    "preferredVersion": { "groupVersion": "example.com/v2", "version": "v2" }
+                  }]
+                }
+                """)
+            .Respond(HttpMethod.Get, "/apis/example.com/v2", HttpStatusCode.OK, """
+                {
+                  "kind": "APIResourceList",
+                  "apiVersion": "v1",
+                  "groupVersion": "example.com/v2",
+                  "resources": [{ "name": "widgets", "kind": "Widget", "namespaced": true }]
+                }
+                """)
+            .Respond(
+                HttpMethod.Delete,
+                "/apis/example.com/v2/namespaces/release-ns/widgets/sample",
+                HttpStatusCode.OK);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        var deleted = await AsyncEnumerableTestExtensions.CollectAsync(applier.DeleteAsync("""
+            apiVersion: example.com/v1
+            kind: Widget
+            metadata:
+              name: sample
+            """, "release-ns"));
+
+        Assert.Equal(["Widget/release-ns/sample"], deleted);
+        Assert.Contains(handler.Requests, request => request.Method == HttpMethod.Delete &&
+            request.PathAndQuery == "/apis/example.com/v2/namespaces/release-ns/widgets/sample");
     }
 
     [Fact]

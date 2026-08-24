@@ -559,6 +559,51 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task GetAttemptedOnlyManifestAsync_UsesServedVersionWhenOtherVersionIsUnavailable()
+    {
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/example.com/v1", HttpStatusCode.NotFound, "{ \"code\": 404 }")
+            .Respond(HttpMethod.Get, "/apis/example.com/v2", HttpStatusCode.OK, """
+                {
+                  "kind": "APIResourceList",
+                  "apiVersion": "v1",
+                  "groupVersion": "example.com/v2",
+                  "resources": [{ "name": "clustersettings", "kind": "ClusterSetting", "namespaced": false }]
+                }
+                """);
+        var applier = new KubernetesManifestApplier(
+            KubernetesTestClientBuilder.Create(handler),
+            "helmsharp-test");
+        const string previous = """
+            apiVersion: example.com/v1
+            kind: ClusterSetting
+            metadata:
+              name: shared
+              namespace: target-version-ignored
+            """;
+        const string attempted = """
+            apiVersion: example.com/v2
+            kind: ClusterSetting
+            metadata:
+              name: shared
+              namespace: current-version-ignored
+            """;
+
+        var attemptedOnly = await HelmClient.GetAttemptedOnlyManifestAsync(
+            applier,
+            previous,
+            attempted,
+            "test-ns",
+            CancellationToken.None);
+
+        Assert.True(string.IsNullOrWhiteSpace(attemptedOnly));
+        Assert.Contains(handler.Requests, request =>
+            request.Method == HttpMethod.Get && request.PathAndQuery == "/apis/example.com/v1");
+        Assert.Contains(handler.Requests, request =>
+            request.Method == HttpMethod.Get && request.PathAndQuery == "/apis/example.com/v2");
+    }
+
+    [Fact]
     public async Task ReleaseLifecycle_RollbackDoesNotDeleteSameResourceThroughAnotherApiVersion()
     {
         var chartDir = await CreateMinimalChartAsync("rollback-api-version-chart");
@@ -1874,13 +1919,20 @@ public class ChartOperationsTests : IDisposable
         }));
 
         await File.WriteAllTextAsync(templatePath, """
+            apiVersion: example.com/v1
+            kind: Widget
+            metadata:
+              name: attempted-widget
+            spec:
+              value: attempted
+            ---
             apiVersion: v1
             kind: ConfigMap
             metadata:
               name: failing-upgrade-resource
             """);
         releaseState.FailNextConfigMapWrite = true;
-        releaseState.FailNextWidgetDiscovery = true;
+        releaseState.FailWidgetDiscoveryRequestNumber = 2;
 
         await Assert.ThrowsAsync<KubernetesResourceOperationException>(() =>
             DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
@@ -2339,6 +2391,7 @@ public class ChartOperationsTests : IDisposable
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+            _releaseState.RequestedPaths.Add(path);
             if (request.Method == HttpMethod.Delete && request.Content is not null)
                 _releaseState.DeleteRequestBodies.Add(await request.Content.ReadAsStringAsync(cancellationToken));
             if (request.Method == HttpMethod.Delete)
@@ -2429,9 +2482,9 @@ public class ChartOperationsTests : IDisposable
 
             if (request.Method == HttpMethod.Get && path == "/apis/example.com/v1")
             {
-                if (_releaseState.FailNextWidgetDiscovery)
+                _releaseState.WidgetDiscoveryRequestCount++;
+                if (_releaseState.WidgetDiscoveryRequestCount == _releaseState.FailWidgetDiscoveryRequestNumber)
                 {
-                    _releaseState.FailNextWidgetDiscovery = false;
                     return JsonResponse(request, HttpStatusCode.InternalServerError, "{ \"code\": 500 }");
                 }
                 return JsonResponse(request, HttpStatusCode.OK, """
@@ -2443,6 +2496,9 @@ public class ChartOperationsTests : IDisposable
                     }
                     """);
             }
+
+            if (request.Method == HttpMethod.Get && path == "/apis/example.com/v2")
+                return JsonResponse(request, HttpStatusCode.NotFound, "{ \"code\": 404 }");
 
             if (request.Method == HttpMethod.Get && path.Contains("/widgets/", StringComparison.Ordinal))
                 return JsonResponse(request, HttpStatusCode.NotFound, "{ \"code\": 404 }");
@@ -2535,6 +2591,7 @@ public class ChartOperationsTests : IDisposable
         internal List<string> AppliedPaths { get; } = [];
         internal List<string> AppliedConfigMapNames { get; } = [];
         internal List<string> AppliedWidgetNames { get; } = [];
+        internal List<string> RequestedPaths { get; } = [];
         internal List<(HttpMethod Method, string Path, string Content)> ConfigMapWrites { get; } = [];
         internal Dictionary<string, string> ConfigMaps { get; } = new(StringComparer.Ordinal);
         public bool FailNextSecretCreate { get; set; }
@@ -2545,7 +2602,8 @@ public class ChartOperationsTests : IDisposable
         internal bool StallNextConfigMapWrite { get; set; }
         internal bool ConfigMapWriteWasCanceled { get; set; }
         internal bool FailNextConfigMapWrite { get; set; }
-        internal bool FailNextWidgetDiscovery { get; set; }
+        internal int FailWidgetDiscoveryRequestNumber { get; set; }
+        internal int WidgetDiscoveryRequestCount { get; set; }
 
         public IReadOnlyList<HelmReleaseRecord> Records(string releaseName)
             => Secrets.Values
@@ -2648,6 +2706,59 @@ public class ChartOperationsTests : IDisposable
         Assert.Equal(0, uninstall.ExitCode);
         Assert.Contains(releaseState.DeletedPaths, path =>
             path.EndsWith("/configmaps/introduced-by-failed-revision", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_UninstallIgnoresObsoleteFailedRevisionApisThatNeedNoDelete()
+    {
+        var chartDir = await CreateMinimalChartAsync("obsolete-failed-api-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "widget.yaml"), """
+            apiVersion: example.com/v1
+            kind: Widget
+            metadata:
+              name: shared-widget
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "obsolete-failed-api",
+            Chart = chartDir,
+            Wait = false
+        }));
+        var deployed = Assert.Single(releaseState.Records("obsolete-failed-api"));
+        releaseState.AddRecord(deployed with
+        {
+            Revision = 2,
+            Status = "failed",
+            Manifest = """
+                apiVersion: example.com/v2
+                kind: Widget
+                metadata:
+                  name: shared-widget
+                ---
+                apiVersion: example.com/v2
+                kind: Widget
+                metadata:
+                  name: retained-obsolete-widget
+                  annotations:
+                    helm.sh/resource-policy: keep
+                """
+        });
+        releaseState.RequestedPaths.Clear();
+
+        var uninstall = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "obsolete-failed-api",
+            Namespace = "test-ns"
+        });
+
+        Assert.Equal(0, uninstall.ExitCode);
+        Assert.Contains("Kept Widget/test-ns/retained-obsolete-widget", uninstall.StandardOutput);
+        Assert.DoesNotContain(releaseState.RequestedPaths, path =>
+            string.Equals(path, "/apis/example.com/v2", StringComparison.Ordinal));
+        Assert.Equal(1, releaseState.DeletedPaths.Count(path =>
+            path.EndsWith("/widgets/shared-widget", StringComparison.Ordinal)));
     }
 
     [Fact]
