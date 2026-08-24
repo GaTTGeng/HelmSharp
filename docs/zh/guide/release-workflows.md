@@ -76,7 +76,7 @@ Rollback 会先提交目标 revision，再以 background propagation 逆序删�
 
 ## Hook 和就绪等待属于一次操作
 
-Hook 先按 weight、再按名称运行。Job 和 Pod hook 会在超时内观察完成状态，其他 hook 类型会被提交但不会有完成状态观察。支持的清理策略是 `before-hook-creation`、`hook-succeeded` 和 `hook-failed`；未声明策略时默认使用 `before-hook-creation`。清理会等待 Kubernetes 确认 hook 对象已不存在后再继续。同一事件批次中，带 `hook-succeeded` 的资源会保留给后续 hook 使用；整批全部成功后才按执行顺序的逆序删除。如果后续 hook 失败或操作被取消，HelmSharp 会先终结清理此前已成功的 hook，再返回原始失败。若 `before-hook-creation` 删除失败，将阻止可能冲突的 hook 创建；若 `hook-succeeded` 清理失败，本次操作也会失败。失败或取消后的终结清理会使用独立且有界的时间窗口；若该清理也失败，HelmSharp 会保留原始 hook 异常，并把清理异常附加到 `Exception.Data["HelmSharp.HookCleanupError"]`。`DisableHooks = true` 会同时跳过 hook 执行和 hook 清理。Hook 清理使用 background propagation，且不会删除 release 的常规清单。为保持 Helm 兼容并避免级联删除自定义资源，删除策略永远不会删除 `CustomResourceDefinition` hook。
+Hook 先按 weight、再按名称运行。Job 和 Pod hook 会在超时内观察完成状态，其他 hook 类型会被提交但不会有完成状态观察。支持的清理策略是 `before-hook-creation`、`hook-succeeded` 和 `hook-failed`；未声明策略时默认使用 `before-hook-creation`。清理会等待 Kubernetes 确认 hook 对象已不存在后再继续。同一事件批次中，带 `hook-succeeded` 的资源会保留给后续 hook 使用；整批全部成功后才按执行顺序的逆序删除。如果后续 hook 失败或操作被取消，HelmSharp 会先终结清理此前已成功的 hook，再返回原始失败。若 `before-hook-creation` 删除失败，将阻止可能冲突的 hook 创建；若 `hook-succeeded` 清理失败，本次操作也会失败。失败或取消后的整批终结清理共享一个独立且有界的时间窗口，并会在单个删除失败后继续尝试其余 hook；若清理失败，HelmSharp 会保留原始 hook 异常，并把单个或聚合清理异常附加到 `Exception.Data["HelmSharp.HookCleanupError"]`。`DisableHooks = true` 会同时跳过 hook 执行和 hook 清理。Hook 清理使用 background propagation，且不会删除 release 的常规清单。为保持 Helm 兼容并避免级联删除自定义资源，删除策略永远不会删除 `CustomResourceDefinition` hook。
 
 内置就绪等待器覆盖常见工作负载。CRD 可以被提交，但不会自动推导其领域就绪语义。当 Kubernetes 接受对象还不足以说明部署可用时，应添加产品自己的健康检查。
 

@@ -1,5 +1,6 @@
 using HelmSharp.Action;
 using HelmSharp.Kube;
+using System.Diagnostics;
 using System.Net;
 using System.Text;
 using k8s;
@@ -884,6 +885,56 @@ public class HelmHookTests
     }
 
     [Fact]
+    public async Task ExecuteHooks_FailureFinalizationContinuesAfterIndividualCleanupErrors()
+    {
+        var (_, hooks) = HelmHookExecutor.ExtractHooks(FailureFinalizationBatchManifest, "test-ns");
+        var handler = new HookKubernetesHandler(
+            failJob: true,
+            deleteStatusCode: HttpStatusCode.InternalServerError);
+        using var client = CreateClient(handler);
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 1);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
+                hooks, HelmHookEvent.PreUpgrade, "test-ns", CancellationToken.None)));
+
+        Assert.Equal(
+            [
+                "/apis/batch/v1/namespaces/test-ns/jobs/migration",
+                "/api/v1/namespaces/test-ns/configmaps/first-completed-hook",
+                "/api/v1/namespaces/test-ns/configmaps/second-completed-hook"
+            ],
+            handler.Requests
+                .Where(request => request.Method == HttpMethod.Delete)
+                .Select(request => request.Path));
+        var cleanupErrors = Assert.IsType<AggregateException>(
+            exception.Data[HelmHookExecutor.CleanupErrorDataKey]);
+        Assert.Equal(3, cleanupErrors.InnerExceptions.Count);
+    }
+
+    [Fact]
+    public async Task ExecuteHooks_FailureFinalizationUsesOneBatchWideTimeout()
+    {
+        var (_, hooks) = HelmHookExecutor.ExtractHooks(FailureFinalizationBatchManifest, "test-ns");
+        var handler = new HookKubernetesHandler(
+            failJob: true,
+            deleteDelay: TimeSpan.FromSeconds(5));
+        using var client = CreateClient(handler);
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 1);
+        var stopwatch = Stopwatch.StartNew();
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
+                hooks, HelmHookEvent.PreUpgrade, "test-ns", CancellationToken.None)));
+        stopwatch.Stop();
+
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(5),
+            $"Batch finalization took {stopwatch.Elapsed} instead of one bounded cleanup window.");
+        Assert.IsType<AggregateException>(exception.Data[HelmHookExecutor.CleanupErrorDataKey]);
+    }
+
+    [Fact]
     public async Task ExecuteHooks_WaitsForPodTerminationInsteadOfReadiness()
     {
         var (_, hooks) = HelmHookExecutor.ExtractHooks("""
@@ -926,6 +977,42 @@ public class HelmHookTests
             collected.Add(line);
         return collected;
     }
+
+    private const string FailureFinalizationBatchManifest = """
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: first-completed-hook
+          annotations:
+            helm.sh/hook: pre-upgrade
+            helm.sh/hook-weight: "0"
+            helm.sh/hook-delete-policy: hook-succeeded
+        ---
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: second-completed-hook
+          annotations:
+            helm.sh/hook: pre-upgrade
+            helm.sh/hook-weight: "1"
+            helm.sh/hook-delete-policy: hook-succeeded
+        ---
+        apiVersion: batch/v1
+        kind: Job
+        metadata:
+          name: migration
+          annotations:
+            helm.sh/hook: pre-upgrade
+            helm.sh/hook-weight: "2"
+            helm.sh/hook-delete-policy: hook-failed
+        spec:
+          template:
+            spec:
+              restartPolicy: Never
+              containers:
+              - name: migration
+                image: example.invalid/migration
+        """;
 
     private sealed class HookKubernetesHandler(
         bool failJob = false,
