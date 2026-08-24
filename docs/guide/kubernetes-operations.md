@@ -36,6 +36,23 @@ The namespace argument supplies a default for namespaced documents that do not d
 
 The client resolves common resource kinds directly and discovers other API resources from the target cluster for apply and delete. If an API version has been removed or a custom resource kind is not discoverable, the operation fails with that identity in the diagnostic.
 
+## Delete rendered YAML deterministically
+
+```csharp
+await foreach (var resource in applier.DeleteAsync(
+    manifest,
+    defaultNamespace: "platform",
+    propagationPolicy: "Foreground",
+    cancellationToken))
+{
+    Console.WriteLine($"Deleted {resource}");
+}
+```
+
+Delete processes documents in reverse manifest order. The overload without a propagation value uses `Background`; explicit values are `Background`, `Foreground`, and `Orphan`, and the selected value is sent to typed and dynamically discovered delete endpoints. A Kubernetes object `404` is an idempotent success. Discovery failures, unsupported core kinds, and non-`404` API failures stop the operation with the affected API version, kind, namespace, and name; cancellation stops before the next request.
+
+The direct applier deletes every valid resource document it receives. It does not interpret Helm lifecycle annotations. `HelmClient` filters `helm.sh/resource-policy: keep` before uninstall and rollback cleanup, which suppresses a direct delete request but cannot prevent namespace or owner cascading deletion by Kubernetes.
+
 ## Wait only for the readiness you need
 
 `KubernetesResourceWaiter` observes common workload kinds: Deployments, StatefulSets, DaemonSets, ReplicaSets, Jobs, Pods, PVCs, Endpoints, and v2 HPAs. Jobs are only waited on when the caller requests it. Objects outside this set are accepted as applied; they are not proof that an operator-managed resource is ready.

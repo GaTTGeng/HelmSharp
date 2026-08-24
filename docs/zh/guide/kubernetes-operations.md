@@ -36,6 +36,23 @@ await foreach (var resource in applier.ApplyAsync(
 
 客户端会直接处理常见资源类型，其他 API 资源则通过目标集群发现后提交或删除。如果 API 版本已移除，或找不到自定义资源类型，诊断中会包含对应资源标识。
 
+## 确定性地删除已渲染 YAML
+
+```csharp
+await foreach (var resource in applier.DeleteAsync(
+    manifest,
+    defaultNamespace: "platform",
+    propagationPolicy: "Foreground",
+    cancellationToken))
+{
+    Console.WriteLine($"Deleted {resource}");
+}
+```
+
+删除会按清单文档的逆序执行。不传 propagation 的重载使用 `Background`；可显式选择 `Background`、`Foreground` 或 `Orphan`，该值会传给强类型和动态发现的删除 endpoint。Kubernetes 对象返回 `404` 时视为幂等成功。发现失败、不支持的 core 类型及其他非 `404` API 失败会停止操作，并在异常中给出受影响资源的 API version、kind、namespace 和 name；取消会阻止下一个请求发出。
+
+直接 applier 会删除传入的每个有效资源文档，不解释 Helm 生命周期注解。`HelmClient` 会在卸载和 rollback 清理前过滤带有 `helm.sh/resource-policy: keep` 的资源；这会阻止直接删除请求，但无法阻止 Kubernetes 因命名空间或 owner 被删除而执行级联删除。
+
 ## 只等待你真正需要的就绪状态
 
 `KubernetesResourceWaiter` 会观察常见工作负载：Deployment、StatefulSet、DaemonSet、ReplicaSet、Job、Pod、PVC、Endpoints 和 v2 HPA。仅在调用方明确请求时才等待 Job。这个集合之外的对象只表示已被接受，不能证明 operator 管理的资源已经就绪。

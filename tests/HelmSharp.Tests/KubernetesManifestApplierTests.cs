@@ -47,6 +47,22 @@ public sealed class KubernetesManifestApplierTests
     }
 
     [Fact]
+    public void ManifestIdentity_ParseRetainsNamespaceForCustomKindMatchingClusterScopedBuiltIn()
+    {
+        var identity = ManifestIdentity.Parse("""
+            apiVersion: example.com/v1
+            kind: ClusterRole
+            metadata:
+              name: custom-reader
+              namespace: tenant-a
+            """, "release-ns");
+
+        Assert.NotNull(identity);
+        Assert.Equal("tenant-a", identity.Namespace);
+        Assert.Equal("ClusterRole/tenant-a/custom-reader", identity.DisplayName);
+    }
+
+    [Fact]
     public async Task EnsureNamespaceAsync_CreatesNamespaceWhenReadReturnsNotFound()
     {
         var handler = new KubernetesApiHandler()
@@ -162,6 +178,42 @@ public sealed class KubernetesManifestApplierTests
     }
 
     [Fact]
+    public async Task ApplyAsync_UsesNamespacedEndpointForCustomKindMatchingClusterScopedBuiltIn()
+    {
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/example.com/v1", HttpStatusCode.OK, """
+                {
+                  "kind": "APIResourceList",
+                  "apiVersion": "v1",
+                  "groupVersion": "example.com/v1",
+                  "resources": [{ "name": "customroles", "kind": "ClusterRole", "namespaced": true }]
+                }
+                """)
+            .Respond(
+                HttpMethod.Post,
+                "/apis/example.com/v1/namespaces/tenant-a/customroles?fieldManager=helmsharp-test",
+                HttpStatusCode.Created,
+                "{}");
+        var applier = new KubernetesManifestApplier(
+            KubernetesTestClientBuilder.Create(handler),
+            "helmsharp-test");
+
+        var applied = await AsyncEnumerableTestExtensions.CollectAsync(applier.ApplyAsync("""
+            apiVersion: example.com/v1
+            kind: ClusterRole
+            metadata:
+              name: custom-reader
+              namespace: tenant-a
+            """, "release-ns"));
+
+        Assert.Contains(handler.Requests, request => request.Method == HttpMethod.Get &&
+            request.PathAndQuery == "/apis/example.com/v1/namespaces/tenant-a/customroles/custom-reader");
+        Assert.Contains(handler.Requests, request => request.Method == HttpMethod.Post &&
+            request.PathAndQuery == "/apis/example.com/v1/namespaces/tenant-a/customroles?fieldManager=helmsharp-test");
+        Assert.Equal(["ClusterRole/tenant-a/custom-reader"], applied);
+    }
+
+    [Fact]
     public async Task ApplyAsync_UsesClusterEndpointForClusterScopedCustomResources()
     {
         var handler = new KubernetesApiHandler()
@@ -192,6 +244,42 @@ public sealed class KubernetesManifestApplierTests
         Assert.Equal(["ClusterSetting/shared"], applied);
         var create = handler.Requests.Last(request => request.Method == HttpMethod.Post);
         Assert.DoesNotContain("namespace", create.Content, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ApplyAsync_UsesDeclaredV2Beta2EndpointThroughDiscovery()
+    {
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/autoscaling/v2beta2", HttpStatusCode.OK, """
+                {
+                  "kind": "APIResourceList",
+                  "apiVersion": "v1",
+                  "groupVersion": "autoscaling/v2beta2",
+                  "resources": [{ "name": "horizontalpodautoscalers", "kind": "HorizontalPodAutoscaler", "namespaced": true }]
+                }
+                """)
+            .Respond(
+                HttpMethod.Post,
+                "/apis/autoscaling/v2beta2/namespaces/release-ns/horizontalpodautoscalers?fieldManager=helmsharp-test",
+                HttpStatusCode.Created);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await AsyncEnumerableTestExtensions.DrainAsync(applier.ApplyAsync("""
+            apiVersion: autoscaling/v2beta2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 2
+            """, "release-ns"));
+
+        Assert.Contains(handler.Requests, request => request.Method == HttpMethod.Get &&
+            request.PathAndQuery == "/apis/autoscaling/v2beta2/namespaces/release-ns/horizontalpodautoscalers/scaler");
+        Assert.Contains(handler.Requests, request => request.Method == HttpMethod.Post &&
+            request.PathAndQuery == "/apis/autoscaling/v2beta2/namespaces/release-ns/horizontalpodautoscalers?fieldManager=helmsharp-test");
+        Assert.DoesNotContain(handler.Requests, request =>
+            request.PathAndQuery.StartsWith("/apis/autoscaling/v2/", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -273,8 +361,11 @@ public sealed class KubernetesManifestApplierTests
         Assert.DoesNotContain("healthCheckNodePort", replace.Content, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public async Task DeleteAsync_DeletesResourcesInReverseManifestOrderWithPropagationPolicy()
+    [Theory]
+    [InlineData("Background")]
+    [InlineData("Foreground")]
+    [InlineData("Orphan")]
+    public async Task DeleteAsync_DeletesResourcesInReverseManifestOrderWithPropagationPolicy(string propagationPolicy)
     {
         var handler = new KubernetesApiHandler()
             .Respond(HttpMethod.Delete, "/api/v1/namespaces/release-ns/secrets/credentials", HttpStatusCode.OK)
@@ -291,18 +382,18 @@ public sealed class KubernetesManifestApplierTests
             kind: Secret
             metadata:
               name: credentials
-            """, "release-ns", "Foreground"));
+            """, "release-ns", propagationPolicy));
 
         Assert.Equal(["Secret/release-ns/credentials", "ConfigMap/release-ns/settings"], deleted);
         var deleteRequests = handler.Requests.Where(request => request.Method == HttpMethod.Delete).ToList();
         Assert.Equal(
             ["/api/v1/namespaces/release-ns/secrets/credentials", "/api/v1/namespaces/release-ns/configmaps/settings"],
             deleteRequests.Select(request => request.PathAndQuery));
-        Assert.All(deleteRequests, request => Assert.Contains("Foreground", request.Content));
+        Assert.All(deleteRequests, request => Assert.Contains(propagationPolicy, request.Content));
     }
 
     [Fact]
-    public async Task DeleteAsync_TreatsMissingDiscoveredResourcesAsAlreadyGone()
+    public async Task DeleteAsync_ReportsMissingDiscoveredResourceIdentity()
     {
         var handler = new KubernetesApiHandler()
             .Respond(HttpMethod.Get, "/apis/example.com/v1", HttpStatusCode.OK, """
@@ -310,31 +401,235 @@ public sealed class KubernetesManifestApplierTests
                 """);
         var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
 
-        await AsyncEnumerableTestExtensions.DrainAsync(applier.DeleteAsync("""
+        var exception = await Assert.ThrowsAsync<KubernetesResourceOperationException>(() =>
+            AsyncEnumerableTestExtensions.DrainAsync(applier.DeleteAsync("""
             apiVersion: example.com/v1
             kind: Widget
             metadata:
               name: sample
-            """, "release-ns"));
+            """, "release-ns")));
 
+        Assert.Contains("example.com/v1 Widget/release-ns/sample", exception.Message);
+        Assert.IsType<KubernetesApiResourceNotFoundException>(exception.InnerException);
         Assert.Collection(
             handler.Requests,
             request => Assert.Equal((HttpMethod.Get, "/apis/example.com/v1"), (request.Method, request.PathAndQuery)));
     }
 
     [Fact]
-    public async Task DeleteAsync_DoesNotUseCustomObjectEndpointsForUnsupportedCoreResources()
+    public async Task DeleteAsync_RejectsUnsupportedCoreResourcesWithoutUsingCustomObjectEndpoints()
     {
         var handler = new KubernetesApiHandler();
         var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
 
-        await AsyncEnumerableTestExtensions.DrainAsync(applier.DeleteAsync("""
+        var exception = await Assert.ThrowsAsync<KubernetesResourceOperationException>(() =>
+            AsyncEnumerableTestExtensions.DrainAsync(applier.DeleteAsync("""
             apiVersion: v1
             kind: Event
             metadata:
               name: sample
+            """, "release-ns")));
+
+        Assert.Contains("v1 Event/release-ns/sample", exception.Message);
+        Assert.IsType<KubernetesApiResourceUnsupportedException>(exception.InnerException);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_UsesClusterEndpointForNamespaceAndTreatsNotFoundAsSuccess()
+    {
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Delete, "/api/v1/namespaces/tenant", HttpStatusCode.NotFound);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        var deleted = await AsyncEnumerableTestExtensions.CollectAsync(applier.DeleteAsync("""
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: tenant
+              namespace: ignored
             """, "release-ns"));
 
+        Assert.Equal(["Namespace/tenant"], deleted);
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal((HttpMethod.Delete, "/api/v1/namespaces/tenant"), (request.Method, request.PathAndQuery));
+        Assert.Contains("Background", request.Content);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_DiscoversNamespacedAndClusterScopedCustomResourceEndpoints()
+    {
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/example.com/v1", HttpStatusCode.OK, """
+                {
+                  "kind": "APIResourceList",
+                  "apiVersion": "v1",
+                  "groupVersion": "example.com/v1",
+                  "resources": [
+                    { "name": "widgets", "kind": "Widget", "namespaced": true },
+                    { "name": "clustersettings", "kind": "ClusterSetting", "namespaced": false }
+                  ]
+                }
+                """)
+            .Respond(HttpMethod.Get, "/apis/example.com/v1", HttpStatusCode.OK, """
+                {
+                  "kind": "APIResourceList",
+                  "apiVersion": "v1",
+                  "groupVersion": "example.com/v1",
+                  "resources": [
+                    { "name": "widgets", "kind": "Widget", "namespaced": true },
+                    { "name": "clustersettings", "kind": "ClusterSetting", "namespaced": false }
+                  ]
+                }
+                """)
+            .Respond(HttpMethod.Delete, "/apis/example.com/v1/clustersettings/shared", HttpStatusCode.OK)
+            .Respond(HttpMethod.Delete, "/apis/example.com/v1/namespaces/chart-ns/widgets/sample", HttpStatusCode.NotFound);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        var deleted = await AsyncEnumerableTestExtensions.CollectAsync(applier.DeleteAsync("""
+            apiVersion: example.com/v1
+            kind: Widget
+            metadata:
+              name: sample
+              namespace: chart-ns
+            ---
+            apiVersion: example.com/v1
+            kind: ClusterSetting
+            metadata:
+              name: shared
+              namespace: ignored
+            """, "release-ns", "Orphan"));
+
+        Assert.Equal(["ClusterSetting/shared", "Widget/chart-ns/sample"], deleted);
+        Assert.Equal(2, handler.Requests.Count(request =>
+            request.Method == HttpMethod.Get && request.PathAndQuery == "/apis/example.com/v1"));
+        var deleteRequests = handler.Requests.Where(request => request.Method == HttpMethod.Delete).ToList();
+        Assert.Equal(
+            ["/apis/example.com/v1/clustersettings/shared", "/apis/example.com/v1/namespaces/chart-ns/widgets/sample"],
+            deleteRequests.Select(request => request.PathAndQuery));
+        Assert.All(deleteRequests, request => Assert.Contains("Orphan", request.Content));
+    }
+
+    [Fact]
+    public async Task DeleteAsync_ReportsResolvedClusterScopedCustomResourceIdentityOnApiFailure()
+    {
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/example.com/v1", HttpStatusCode.OK, """
+                {
+                  "kind": "APIResourceList",
+                  "apiVersion": "v1",
+                  "groupVersion": "example.com/v1",
+                  "resources": [{ "name": "clustersettings", "kind": "ClusterSetting", "namespaced": false }]
+                }
+                """)
+            .Respond(HttpMethod.Delete, "/apis/example.com/v1/clustersettings/shared", HttpStatusCode.InternalServerError, """
+                { "kind": "Status", "apiVersion": "v1", "status": "Failure", "code": 500 }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        var exception = await Assert.ThrowsAsync<KubernetesResourceOperationException>(() =>
+            AsyncEnumerableTestExtensions.DrainAsync(applier.DeleteAsync("""
+                apiVersion: example.com/v1
+                kind: ClusterSetting
+                metadata:
+                  name: shared
+                  namespace: ignored
+                """, "release-ns")));
+
+        Assert.Contains("example.com/v1 ClusterSetting/shared", exception.Message);
+        Assert.DoesNotContain("release-ns", exception.Message);
+        Assert.IsType<HttpOperationException>(exception.InnerException);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_UsesDeclaredV2Beta2EndpointThroughDiscovery()
+    {
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/autoscaling/v2beta2", HttpStatusCode.OK, """
+                {
+                  "kind": "APIResourceList",
+                  "apiVersion": "v1",
+                  "groupVersion": "autoscaling/v2beta2",
+                  "resources": [{ "name": "horizontalpodautoscalers", "kind": "HorizontalPodAutoscaler", "namespaced": true }]
+                }
+                """)
+            .Respond(
+                HttpMethod.Delete,
+                "/apis/autoscaling/v2beta2/namespaces/release-ns/horizontalpodautoscalers/scaler",
+                HttpStatusCode.OK);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await AsyncEnumerableTestExtensions.DrainAsync(applier.DeleteAsync("""
+            apiVersion: autoscaling/v2beta2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            """, "release-ns"));
+
+        Assert.Contains(handler.Requests, request => request.Method == HttpMethod.Delete &&
+            request.PathAndQuery == "/apis/autoscaling/v2beta2/namespaces/release-ns/horizontalpodautoscalers/scaler");
+        Assert.DoesNotContain(handler.Requests, request =>
+            request.PathAndQuery.StartsWith("/apis/autoscaling/v2/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task DeleteAsync_ThrowsCancellationBeforeSendingARequest()
+    {
+        var handler = new KubernetesApiHandler();
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        using var cancellationSource = new CancellationTokenSource();
+        cancellationSource.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            AsyncEnumerableTestExtensions.DrainAsync(applier.DeleteAsync("""
+                apiVersion: v1
+                kind: ConfigMap
+                metadata:
+                  name: settings
+                """, "release-ns", cancellationSource.Token)));
+
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_ReportsKubernetesApiFailureForAffectedResource()
+    {
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Delete, "/api/v1/namespaces/release-ns/configmaps/settings", HttpStatusCode.InternalServerError, """
+                { "kind": "Status", "apiVersion": "v1", "status": "Failure", "code": 500 }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        var exception = await Assert.ThrowsAsync<KubernetesResourceOperationException>(() =>
+            AsyncEnumerableTestExtensions.DrainAsync(applier.DeleteAsync("""
+                apiVersion: v1
+                kind: ConfigMap
+                metadata:
+                  name: settings
+                """, "release-ns")));
+
+        Assert.Contains("v1 ConfigMap/release-ns/settings", exception.Message);
+        Assert.IsType<HttpOperationException>(exception.InnerException);
+        Assert.Equal(
+            "/api/v1/namespaces/release-ns/configmaps/settings",
+            Assert.Single(handler.Requests).PathAndQuery);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_RejectsInvalidPropagationBeforeMutation()
+    {
+        var handler = new KubernetesApiHandler();
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+            AsyncEnumerableTestExtensions.DrainAsync(applier.DeleteAsync("""
+                apiVersion: v1
+                kind: ConfigMap
+                metadata:
+                  name: settings
+                """, "release-ns", "Cascade")));
+
+        Assert.Contains("Background, Foreground, and Orphan", exception.Message);
         Assert.Empty(handler.Requests);
     }
 

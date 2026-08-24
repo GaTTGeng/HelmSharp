@@ -56,9 +56,27 @@ After an explicit approval, rebuild the request from the recorded inputs and app
 
 HelmSharp stores successful, superseded, failed, and retained-uninstall revisions in Kubernetes Secrets. A default uninstall purges release history; a retained uninstall records an `uninstalled` revision. Use `StatusAsync`, `HistoryAsync`, `GetManifestAsync`, `GetValuesAsync`, and the revision-specific inspection methods to read what was actually stored; inspection does not re-render the current chart.
 
+## Control uninstall and rollback cleanup
+
+```csharp
+var result = await client.UninstallAsync(new HelmUninstallRequest
+{
+    ReleaseName = "demo",
+    Namespace = "default",
+    KeepHistory = true,
+    Wait = true,
+    TimeoutSeconds = 300,
+    DeletionPropagation = HelmDeletionPropagation.Foreground
+}, cancellationToken);
+```
+
+Uninstall deletes regular manifest resources in reverse order. `DeletionPropagation` defaults to `Background`; `Foreground` asks Kubernetes to retain each owner until blocking dependents are gone, while `Orphan` leaves dependents behind. `Wait = true` additionally polls until every requested resource is absent. An object already absent is successful. A discovery, permission, or other API failure stops cleanup and identifies the affected resource. Resources annotated with `helm.sh/resource-policy: keep` are not sent a direct delete request, and release history is then either purged or marked uninstalled according to `KeepHistory`. As with Helm, this annotation cannot prevent Kubernetes from cascading deletion when the resource's namespace or owner is deleted.
+
+Rollback applies the target revision and then deletes resources that exist only in the current revision, also in reverse order with background propagation. It does not directly delete resources annotated with `helm.sh/resource-policy: keep`, subject to the same namespace and owner-cascade limitation. Post-rollback hooks run only after that cleanup succeeds.
+
 ## Hooks and readiness are part of the operation
 
-Hooks run in weight and then name order. Job and Pod hooks are observed for completion within the timeout; other hook kinds are applied without a completion observer. The supported cleanup policies are `before-hook-creation`, `hook-succeeded`, and `hook-failed`.
+Hooks run in weight and then name order. Job and Pod hooks are observed for completion within the timeout; other hook kinds are applied without a completion observer. The supported cleanup policies are `before-hook-creation`, `hook-succeeded`, and `hook-failed`; when no policy is declared, `before-hook-creation` is used. Cleanup waits until Kubernetes reports the hook object absent before continuing. `hook-succeeded` resources remain available to later hooks in the same event batch, then are deleted in reverse execution order after the whole batch succeeds; if a later hook fails or the operation is canceled, previously successful hooks are finalized before the original failure is returned. A failed `before-hook-creation` delete prevents a conflicting hook create, and a failed `hook-succeeded` cleanup fails the operation. Failure/cancellation finalization uses an independent bounded window; if that cleanup also fails, HelmSharp preserves the original hook exception and attaches the cleanup exception at `Exception.Data["HelmSharp.HookCleanupError"]`. `DisableHooks = true` skips hook execution and hook cleanup. Hook cleanup uses background propagation and never deletes the release's regular manifest. For Helm parity and to avoid cascading deletion of custom resources, delete policies never delete `CustomResourceDefinition` hooks.
 
 The built-in readiness waiter covers common workload resources. A CRD can be applied, but its domain-specific readiness is not inferred. Add a product-specific health check when a deployment is not ready merely because Kubernetes accepted the object.
 

@@ -473,7 +473,7 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
-    public void GetAttemptedOnlyManifest_UsesApiVersionInResourceIdentity()
+    public void GetAttemptedOnlyManifest_DistinguishesApiGroups()
     {
         const string previous = """
             apiVersion: apps/v1
@@ -493,6 +493,225 @@ public class ChartOperationsTests : IDisposable
         Assert.Contains("apiVersion: example.com/v1", attemptedOnly);
         Assert.Contains("kind: Deployment", attemptedOnly);
         Assert.Contains("name: same-name", attemptedOnly);
+    }
+
+    [Fact]
+    public void GetAttemptedOnlyManifest_TreatsVersionsWithinOneApiGroupAsTheSameResource()
+    {
+        const string previous = """
+            apiVersion: autoscaling/v1
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            """;
+        const string attempted = """
+            apiVersion: autoscaling/v2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            """;
+
+        var attemptedOnly = HelmClient.GetAttemptedOnlyManifest(previous, attempted, "test-ns");
+
+        Assert.True(string.IsNullOrWhiteSpace(attemptedOnly));
+    }
+
+    [Fact]
+    public async Task GetAttemptedOnlyManifestAsync_UsesDiscoveredClusterScope()
+    {
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/example.com/v1", HttpStatusCode.OK, """
+                {
+                  "kind": "APIResourceList",
+                  "apiVersion": "v1",
+                  "groupVersion": "example.com/v1",
+                  "resources": [{ "name": "clustersettings", "kind": "ClusterSetting", "namespaced": false }]
+                }
+                """);
+        var applier = new KubernetesManifestApplier(
+            KubernetesTestClientBuilder.Create(handler),
+            "helmsharp-test");
+        const string previous = """
+            apiVersion: example.com/v1
+            kind: ClusterSetting
+            metadata:
+              name: shared
+              namespace: first-ignored
+            """;
+        const string attempted = """
+            apiVersion: example.com/v1
+            kind: ClusterSetting
+            metadata:
+              name: shared
+              namespace: second-ignored
+            """;
+
+        var attemptedOnly = await HelmClient.GetAttemptedOnlyManifestAsync(
+            applier,
+            previous,
+            attempted,
+            "test-ns",
+            CancellationToken.None);
+
+        Assert.True(string.IsNullOrWhiteSpace(attemptedOnly));
+        Assert.Equal(1, handler.Requests.Count(request =>
+            request.Method == HttpMethod.Get && request.PathAndQuery == "/apis/example.com/v1"));
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_RollbackDoesNotDeleteSameResourceThroughAnotherApiVersion()
+    {
+        var chartDir = await CreateMinimalChartAsync("rollback-api-version-chart");
+        var templatePath = Path.Combine(chartDir, "templates", "hpa.yaml");
+        await File.WriteAllTextAsync(templatePath, """
+            apiVersion: autoscaling/v1
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 2
+              targetCPUUtilizationPercentage: 80
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-api-version",
+            Chart = chartDir,
+            Wait = false
+        }));
+
+        await File.WriteAllTextAsync(templatePath, """
+            apiVersion: autoscaling/v2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 2
+              scaleTargetRef:
+                apiVersion: apps/v1
+                kind: Deployment
+                name: app
+              metrics: []
+            """);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-api-version",
+            Chart = chartDir,
+            Wait = false
+        }));
+        releaseState.DeletedPaths.Clear();
+
+        var rollback = await client.RollbackAsync(new HelmRollbackRequest
+        {
+            ReleaseName = "rollback-api-version",
+            Namespace = "test-ns",
+            Revision = 1,
+            Wait = false
+        });
+
+        Assert.Equal(0, rollback.ExitCode);
+        Assert.DoesNotContain(releaseState.DeletedPaths, path =>
+            path.Contains("horizontalpodautoscalers/scaler", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void FilterManifestForDeletion_SeparatesHelmKeepResources()
+    {
+        const string manifest = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: delete-me
+            ---
+            apiVersion: v1
+            kind: Secret
+            metadata:
+              name: retain-me
+              annotations:
+                helm.sh/resource-policy: keep
+            """;
+
+        var filtered = HelmClient.FilterManifestForDeletion(manifest, "test-ns");
+
+        Assert.Contains("name: delete-me", filtered.Manifest);
+        Assert.DoesNotContain("name: retain-me", filtered.Manifest);
+        Assert.Equal(["Secret/test-ns/retain-me"], filtered.KeptResources);
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_RollbackDeletesOnlyCurrentRevisionResourcesAndHonorsKeepPolicy()
+    {
+        var chartDir = await CreateMinimalChartAsync("rollback-cleanup-chart");
+        var templatePath = Path.Combine(chartDir, "templates", "configmaps.yaml");
+        await File.WriteAllTextAsync(templatePath, """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: shared
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: post-rollback-hook
+              annotations:
+                helm.sh/hook: post-rollback
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-cleanup",
+            Chart = chartDir
+        }));
+
+        await File.WriteAllTextAsync(templatePath, """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: shared
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: remove-on-rollback
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: retain-on-rollback
+              annotations:
+                helm.sh/resource-policy: keep
+            """);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-cleanup",
+            Chart = chartDir
+        }));
+        releaseState.DeletedPaths.Clear();
+
+        var rollback = await client.RollbackAsync(new HelmRollbackRequest
+        {
+            ReleaseName = "rollback-cleanup",
+            Namespace = "test-ns",
+            Revision = 1,
+            Wait = false
+        });
+
+        Assert.Equal(0, rollback.ExitCode);
+        Assert.Contains("Removed rollback resource ConfigMap/test-ns/remove-on-rollback", rollback.StandardOutput);
+        Assert.Contains("Kept rollback resource ConfigMap/test-ns/retain-on-rollback", rollback.StandardOutput);
+        Assert.True(
+            rollback.StandardOutput.IndexOf("Removed rollback resource", StringComparison.Ordinal) <
+            rollback.StandardOutput.IndexOf("Applying hook PostRollback", StringComparison.Ordinal));
+        Assert.Contains(releaseState.DeletedPaths, path =>
+            path.EndsWith("/configmaps/remove-on-rollback", StringComparison.Ordinal));
+        Assert.DoesNotContain(releaseState.DeletedPaths, path =>
+            path.EndsWith("/configmaps/shared", StringComparison.Ordinal));
+        Assert.DoesNotContain(releaseState.DeletedPaths, path =>
+            path.EndsWith("/configmaps/retain-on-rollback", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1369,6 +1588,89 @@ public class ChartOperationsTests : IDisposable
         Assert.Empty(releaseState.Records("retained-uninstall"));
     }
 
+    [Fact]
+    public async Task ReleaseLifecycle_UninstallHonorsKeepPolicyAndDeletesOtherResources()
+    {
+        var chartDir = await CreateMinimalChartAsync("uninstall-keep-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmaps.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: delete-on-uninstall
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: retain-on-uninstall
+              annotations:
+                helm.sh/resource-policy: keep
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "uninstall-keep",
+            Chart = chartDir
+        }));
+        releaseState.DeletedPaths.Clear();
+
+        var uninstall = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "uninstall-keep",
+            Namespace = "test-ns"
+        });
+
+        Assert.Equal(0, uninstall.ExitCode);
+        Assert.Contains("Kept ConfigMap/test-ns/retain-on-uninstall", uninstall.StandardOutput);
+        Assert.Contains(releaseState.DeletedPaths, path =>
+            path.EndsWith("/configmaps/delete-on-uninstall", StringComparison.Ordinal));
+        Assert.DoesNotContain(releaseState.DeletedPaths, path =>
+            path.EndsWith("/configmaps/retain-on-uninstall", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_DisableHooksSkipsDeleteHooksAndTheirCleanup()
+    {
+        var chartDir = await CreateMinimalChartAsync("uninstall-no-hooks-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "resources.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: uninstall-main
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: uninstall-hook
+              annotations:
+                helm.sh/hook: pre-delete,post-delete
+                helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "uninstall-no-hooks",
+            Chart = chartDir
+        }));
+        releaseState.DeletedPaths.Clear();
+        releaseState.AppliedConfigMapNames.Clear();
+
+        var uninstall = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "uninstall-no-hooks",
+            Namespace = "test-ns",
+            DisableHooks = true
+        });
+
+        Assert.Equal(0, uninstall.ExitCode);
+        Assert.Contains(releaseState.DeletedPaths, path =>
+            path.EndsWith("/configmaps/uninstall-main", StringComparison.Ordinal));
+        Assert.DoesNotContain(releaseState.DeletedPaths, path =>
+            path.EndsWith("/configmaps/uninstall-hook", StringComparison.Ordinal));
+        Assert.DoesNotContain("uninstall-hook", releaseState.AppliedConfigMapNames);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -1493,6 +1795,29 @@ public class ChartOperationsTests : IDisposable
 
         Assert.Equal(0, uninstall.ExitCode);
         Assert.Contains(releaseState.DeleteRequestBodies, body => body.Contains("Foreground", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_UninstallRejectsUndefinedDeletionPropagationBeforeCreatingClient()
+    {
+        var kubernetesClientCreated = false;
+        var client = new HelmClient(
+            new StaticHelmOptionsProvider(new HelmExecutionOptions { DefaultNamespace = "test-ns" }),
+            (_, _, _, _) =>
+            {
+                kubernetesClientCreated = true;
+                throw new InvalidOperationException("Kubernetes client should not be created.");
+            });
+
+        var result = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "invalid-propagation",
+            DeletionPropagation = (HelmDeletionPropagation)99
+        });
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("unsupported Kubernetes deletion propagation value: 99", result.StandardError);
+        Assert.False(kubernetesClientCreated);
     }
 
     [Fact]
@@ -2089,6 +2414,16 @@ public class ChartOperationsTests : IDisposable
 
             if (request.Method == HttpMethod.Get && path.Contains("/deployments/", StringComparison.Ordinal))
                 return JsonResponse(request, HttpStatusCode.NotFound, "{ \"code\": 404 }");
+
+            if (request.Method == HttpMethod.Get && path.Contains("/horizontalpodautoscalers/", StringComparison.Ordinal))
+                return JsonResponse(request, HttpStatusCode.NotFound, "{ \"code\": 404 }");
+
+            if ((request.Method == HttpMethod.Post || request.Method == HttpMethod.Put) &&
+                path.Contains("/horizontalpodautoscalers", StringComparison.Ordinal))
+            {
+                var hpa = await request.Content!.ReadAsStringAsync(cancellationToken);
+                return JsonResponse(request, request.Method == HttpMethod.Post ? HttpStatusCode.Created : HttpStatusCode.OK, hpa);
+            }
 
             if (request.Method == HttpMethod.Get && path.Contains("/configmaps/", StringComparison.Ordinal))
             {

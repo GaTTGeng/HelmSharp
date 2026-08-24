@@ -29,7 +29,10 @@ public class HelmUninstallRequest
     /// <summary>Gets or sets the optional operation timeout in seconds.</summary>
     public int? TimeoutSeconds { get; set; }
 
-    /// <summary>Gets or sets the Kubernetes deletion propagation preference.</summary>
+    /// <summary>
+    /// Gets or sets how Kubernetes handles dependents of every release resource deleted by uninstall.
+    /// Defaults to <see cref="HelmDeletionPropagation.Background"/>. Hook cleanup uses background propagation.
+    /// </summary>
     public HelmDeletionPropagation DeletionPropagation { get; set; } = HelmDeletionPropagation.Background;
 
     public string? KubeConfigPath { get; set; }
@@ -40,7 +43,12 @@ public class HelmUninstallRequest
 /// <summary>Kubernetes owner-reference propagation preference for release deletion.</summary>
 public enum HelmDeletionPropagation
 {
+    /// <summary>Delete the owner immediately and let Kubernetes remove dependents asynchronously.</summary>
     Background,
+
+    /// <summary>Keep the owner until Kubernetes has removed blocking dependents.</summary>
     Foreground,
+
+    /// <summary>Delete the owner while leaving dependents orphaned.</summary>
     Orphan
 }
