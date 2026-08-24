@@ -1852,6 +1852,54 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task ReleaseLifecycle_AtomicUpgradeRestoresPreviousManifestAfterCleanupDiscoveryFailure()
+    {
+        var chartDir = await CreateMinimalChartAsync("atomic-discovery-recovery-chart");
+        var templatePath = Path.Combine(chartDir, "templates", "resource.yaml");
+        await File.WriteAllTextAsync(templatePath, """
+            apiVersion: example.com/v1
+            kind: Widget
+            metadata:
+              name: restorable-widget
+            spec:
+              value: previous
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "atomic-discovery-recovery",
+            Chart = chartDir,
+            Wait = false
+        }));
+
+        await File.WriteAllTextAsync(templatePath, """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: failing-upgrade-resource
+            """);
+        releaseState.FailNextConfigMapWrite = true;
+        releaseState.FailNextWidgetDiscovery = true;
+
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(() =>
+            DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+            {
+                ReleaseName = "atomic-discovery-recovery",
+                Chart = chartDir,
+                Atomic = true
+            })));
+
+        Assert.Equal(
+            ["restorable-widget", "restorable-widget"],
+            releaseState.AppliedWidgetNames);
+        Assert.Collection(
+            releaseState.Records("atomic-discovery-recovery"),
+            record => Assert.Equal((1, "deployed"), (record.Revision, record.Status)),
+            record => Assert.Equal((2, "failed"), (record.Revision, record.Status)));
+    }
+
+    [Fact]
     public async Task ReleaseInspection_UsesDurableRevisionRecordsAcrossUpgradeRollbackAndUninstall()
     {
         var chartDir = await CreateMinimalChartAsync("revision-inspection-chart");
@@ -2379,9 +2427,42 @@ public class ChartOperationsTests : IDisposable
                 return JsonResponse(request, HttpStatusCode.OK, "{}");
             }
 
+            if (request.Method == HttpMethod.Get && path == "/apis/example.com/v1")
+            {
+                if (_releaseState.FailNextWidgetDiscovery)
+                {
+                    _releaseState.FailNextWidgetDiscovery = false;
+                    return JsonResponse(request, HttpStatusCode.InternalServerError, "{ \"code\": 500 }");
+                }
+                return JsonResponse(request, HttpStatusCode.OK, """
+                    {
+                      "kind": "APIResourceList",
+                      "apiVersion": "v1",
+                      "groupVersion": "example.com/v1",
+                      "resources": [{ "name": "widgets", "kind": "Widget", "namespaced": true }]
+                    }
+                    """);
+            }
+
+            if (request.Method == HttpMethod.Get && path.Contains("/widgets/", StringComparison.Ordinal))
+                return JsonResponse(request, HttpStatusCode.NotFound, "{ \"code\": 404 }");
+
+            if (request.Method == HttpMethod.Post && path.EndsWith("/widgets", StringComparison.Ordinal))
+            {
+                var widget = await request.Content!.ReadAsStringAsync(cancellationToken);
+                var name = JsonDocument.Parse(widget).RootElement.GetProperty("metadata").GetProperty("name").GetString()!;
+                _releaseState.AppliedWidgetNames.Add(name);
+                return JsonResponse(request, HttpStatusCode.Created, widget);
+            }
+
             if ((request.Method == HttpMethod.Post || request.Method == HttpMethod.Put) &&
                 path.Contains("/configmaps", StringComparison.Ordinal))
             {
+                if (_releaseState.FailNextConfigMapWrite)
+                {
+                    _releaseState.FailNextConfigMapWrite = false;
+                    return JsonResponse(request, HttpStatusCode.InternalServerError, "{ \"code\": 500 }");
+                }
                 if (_releaseState.StallNextConfigMapWrite)
                 {
                     _releaseState.StallNextConfigMapWrite = false;
@@ -2453,6 +2534,7 @@ public class ChartOperationsTests : IDisposable
         internal List<string> WaitedPaths { get; } = [];
         internal List<string> AppliedPaths { get; } = [];
         internal List<string> AppliedConfigMapNames { get; } = [];
+        internal List<string> AppliedWidgetNames { get; } = [];
         internal List<(HttpMethod Method, string Path, string Content)> ConfigMapWrites { get; } = [];
         internal Dictionary<string, string> ConfigMaps { get; } = new(StringComparer.Ordinal);
         public bool FailNextSecretCreate { get; set; }
@@ -2462,6 +2544,8 @@ public class ChartOperationsTests : IDisposable
         internal CancellationTokenSource? CancelNextSecretCreateBeforePersisting { get; set; }
         internal bool StallNextConfigMapWrite { get; set; }
         internal bool ConfigMapWriteWasCanceled { get; set; }
+        internal bool FailNextConfigMapWrite { get; set; }
+        internal bool FailNextWidgetDiscovery { get; set; }
 
         public IReadOnlyList<HelmReleaseRecord> Records(string releaseName)
             => Secrets.Values

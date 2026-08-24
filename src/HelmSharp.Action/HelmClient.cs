@@ -600,15 +600,26 @@ public class HelmClient : IHelmClient
                         await foreach (var resource in applier.DeleteAsync(attemptedOnlyManifest, ns, cancellationToken: CancellationToken.None))
                             output.Add($"Removed failed-upgrade resource {resource}");
                     }
-                    if (request.Atomic)
+                }
+                catch
+                {
+                    output.Add("Unable to fully clean up resources from the failed upgrade.");
+                }
+
+                // Restoration is independent of failed-upgrade cleanup. In particular,
+                // discovery for an API version removed by the attempted revision may
+                // fail before re-applying the previous CRD can make that API available.
+                if (request.Atomic)
+                {
+                    try
                     {
                         await foreach (var resource in applier.ApplyAsync(previous.Manifest, ns, CancellationToken.None))
                             output.Add($"Restored {resource}");
                     }
-                }
-                catch
-                {
-                    output.Add("Unable to fully restore the previous deployed revision.");
+                    catch
+                    {
+                        output.Add("Unable to fully restore the previous deployed revision.");
+                    }
                 }
             }
             else
