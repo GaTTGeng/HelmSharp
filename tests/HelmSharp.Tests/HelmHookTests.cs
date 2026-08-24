@@ -1,4 +1,6 @@
 using HelmSharp.Action;
+using HelmSharp.Kube;
+using System.Diagnostics;
 using System.Net;
 using System.Text;
 using k8s;
@@ -376,6 +378,137 @@ public class HelmHookTests
     }
 
     [Fact]
+    public async Task ExecuteHooks_DefaultBeforeCreationPolicyDeletesOnlyExecutingHookBeforeApply()
+    {
+        var (remainingManifest, hooks) = HelmHookExecutor.ExtractHooks("""
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: main-resource
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: current-hook
+              annotations:
+                helm.sh/hook: pre-install
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: other-event-hook
+              annotations:
+                helm.sh/hook: post-install
+            """, "test-ns");
+        var handler = new HookKubernetesHandler();
+        using var client = CreateClient(handler);
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 1);
+
+        await CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
+            hooks, HelmHookEvent.PreInstall, "test-ns", CancellationToken.None));
+
+        Assert.Contains("name: main-resource", remainingManifest);
+        var deleteRequest = Assert.Single(handler.Requests, request => request.Method == HttpMethod.Delete);
+        Assert.Equal("/api/v1/namespaces/test-ns/configmaps/current-hook", deleteRequest.Path);
+        Assert.DoesNotContain(handler.Requests, request =>
+            request.Method == HttpMethod.Delete && request.Path.Contains("main-resource", StringComparison.Ordinal));
+        Assert.DoesNotContain(handler.Requests, request =>
+            request.Method == HttpMethod.Delete && request.Path.Contains("other-event-hook", StringComparison.Ordinal));
+        Assert.True(handler.Requests.FindIndex(request => request.Method == HttpMethod.Delete) <
+                    handler.Requests.FindIndex(request => request.Method == HttpMethod.Post));
+    }
+
+    [Fact]
+    public async Task ExecuteHooks_BeforeCreationCleanupFailurePreventsHookApply()
+    {
+        var (_, hooks) = HelmHookExecutor.ExtractHooks("""
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: guarded-hook
+              annotations:
+                helm.sh/hook: pre-install
+            """, "test-ns");
+        var handler = new HookKubernetesHandler(deleteStatusCode: HttpStatusCode.InternalServerError);
+        using var client = CreateClient(handler);
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 1);
+
+        var exception = await Assert.ThrowsAsync<KubernetesResourceOperationException>(() =>
+            CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
+                hooks, HelmHookEvent.PreInstall, "test-ns", CancellationToken.None)));
+
+        Assert.Contains("ConfigMap/test-ns/guarded-hook", exception.Message);
+        Assert.Collection(
+            handler.Requests,
+            request => Assert.Equal((HttpMethod.Delete, "/api/v1/namespaces/test-ns/configmaps/guarded-hook"), request));
+    }
+
+    [Fact]
+    public async Task ExecuteHooks_BeforeCreationWaitsUntilOldHookIsAbsentBeforeApply()
+    {
+        var (_, hooks) = HelmHookExecutor.ExtractHooks("""
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: replacing-hook
+              annotations:
+                helm.sh/hook: pre-install
+            """, "test-ns");
+        var handler = new HookKubernetesHandler(deletionReadsBeforeGone: 1);
+        using var client = CreateClient(handler);
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 3);
+
+        await CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
+            hooks, HelmHookEvent.PreInstall, "test-ns", CancellationToken.None));
+
+        Assert.Collection(
+            handler.Requests,
+            request => Assert.Equal((HttpMethod.Delete, "/api/v1/namespaces/test-ns/configmaps/replacing-hook"), request),
+            request => Assert.Equal((HttpMethod.Get, "/api/v1/namespaces/test-ns/configmaps/replacing-hook"), request),
+            request => Assert.Equal((HttpMethod.Get, "/api/v1/namespaces/test-ns/configmaps/replacing-hook"), request),
+            request => Assert.Equal((HttpMethod.Get, "/api/v1/namespaces/test-ns/configmaps/replacing-hook"), request),
+            request => Assert.Equal((HttpMethod.Post, "/api/v1/namespaces/test-ns/configmaps"), request));
+    }
+
+    [Fact]
+    public async Task ExecuteHooks_DoesNotDeleteCustomResourceDefinitionHooksByPolicy()
+    {
+        var (_, hooks) = HelmHookExecutor.ExtractHooks("""
+            apiVersion: apiextensions.k8s.io/v1
+            kind: CustomResourceDefinition
+            metadata:
+              name: widgets.example.com
+              annotations:
+                helm.sh/hook: pre-install
+            spec:
+              group: example.com
+              scope: Namespaced
+              names:
+                plural: widgets
+                singular: widget
+                kind: Widget
+              versions:
+              - name: v1
+                served: true
+                storage: true
+                schema:
+                  openAPIV3Schema:
+                    type: object
+            """, "test-ns");
+        var handler = new HookKubernetesHandler();
+        using var client = CreateClient(handler);
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 1);
+
+        await CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
+            hooks, HelmHookEvent.PreInstall, "test-ns", CancellationToken.None));
+
+        Assert.DoesNotContain(handler.Requests, request => request.Method == HttpMethod.Delete);
+        Assert.Contains(handler.Requests, request =>
+            request.Method == HttpMethod.Post &&
+            request.Path == "/apis/apiextensions.k8s.io/v1/customresourcedefinitions");
+    }
+
+    [Fact]
     public async Task ExecuteHooks_WaitsForJobAndCleansUpAfterSuccess()
     {
         var (_, hooks) = HelmHookExecutor.ExtractHooks("""
@@ -410,6 +543,97 @@ public class HelmHookTests
     }
 
     [Fact]
+    public async Task ExecuteHooks_CleansSuccessfulHookBatchInReverseAfterAllHooksRun()
+    {
+        var (_, hooks) = HelmHookExecutor.ExtractHooks("""
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: producer
+              annotations:
+                helm.sh/hook: pre-upgrade
+                helm.sh/hook-weight: "0"
+                helm.sh/hook-delete-policy: hook-succeeded
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: consumer
+              annotations:
+                helm.sh/hook: pre-upgrade
+                helm.sh/hook-weight: "1"
+                helm.sh/hook-delete-policy: hook-succeeded
+            """, "test-ns");
+        var handler = new HookKubernetesHandler();
+        using var client = CreateClient(handler);
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 1);
+
+        await CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
+            hooks, HelmHookEvent.PreUpgrade, "test-ns", CancellationToken.None));
+
+        var lastApply = handler.Requests.FindLastIndex(request => request.Method == HttpMethod.Post);
+        var firstDelete = handler.Requests.FindIndex(request => request.Method == HttpMethod.Delete);
+        Assert.True(lastApply < firstDelete);
+        Assert.Equal(
+            [
+                "/api/v1/namespaces/test-ns/configmaps/consumer",
+                "/api/v1/namespaces/test-ns/configmaps/producer"
+            ],
+            handler.Requests
+                .Where(request => request.Method == HttpMethod.Delete)
+                .Select(request => request.Path));
+    }
+
+    [Fact]
+    public async Task ExecuteHooks_LaterFailureCleansFailedHookThenEarlierSuccessfulHooks()
+    {
+        var (_, hooks) = HelmHookExecutor.ExtractHooks("""
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: completed-hook
+              annotations:
+                helm.sh/hook: pre-upgrade
+                helm.sh/hook-weight: "0"
+                helm.sh/hook-delete-policy: hook-succeeded
+            ---
+            apiVersion: batch/v1
+            kind: Job
+            metadata:
+              name: migration
+              annotations:
+                helm.sh/hook: pre-upgrade
+                helm.sh/hook-weight: "1"
+                helm.sh/hook-delete-policy: hook-failed
+            spec:
+              template:
+                spec:
+                  restartPolicy: Never
+                  containers:
+                  - name: migration
+                    image: example.invalid/migration
+            """, "test-ns");
+        var handler = new HookKubernetesHandler(failJob: true);
+        using var client = CreateClient(handler);
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 1);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
+                hooks, HelmHookEvent.PreUpgrade, "test-ns", CancellationToken.None)));
+
+        Assert.Equal(
+            [
+                "/apis/batch/v1/namespaces/test-ns/jobs/migration",
+                "/api/v1/namespaces/test-ns/configmaps/completed-hook"
+            ],
+            handler.Requests
+                .Where(request => request.Method == HttpMethod.Delete)
+                .Select(request => request.Path));
+        Assert.Equal("Succeeded", hooks[0].LastRunPhase);
+        Assert.Equal("Failed", hooks[1].LastRunPhase);
+    }
+
+    [Fact]
     public async Task ExecuteHooks_AllowsCleanupWithinConfiguredTimeout()
     {
         var (_, hooks) = HelmHookExecutor.ExtractHooks("""
@@ -434,6 +658,36 @@ public class HelmHookTests
     }
 
     [Fact]
+    public async Task ExecuteHooks_SucceededCleanupFailureIsReportedWithHookIdentity()
+    {
+        var (_, hooks) = HelmHookExecutor.ExtractHooks("""
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: cleanup-failure-hook
+              annotations:
+                helm.sh/hook: pre-upgrade
+                helm.sh/hook-delete-policy: hook-succeeded
+            data:
+              key: value
+            """, "test-ns");
+        var handler = new HookKubernetesHandler(deleteStatusCode: HttpStatusCode.InternalServerError);
+        using var client = CreateClient(handler);
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 1);
+
+        var exception = await Assert.ThrowsAsync<KubernetesResourceOperationException>(() =>
+            CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
+                hooks, HelmHookEvent.PreUpgrade, "test-ns", CancellationToken.None)));
+
+        Assert.Contains("ConfigMap/test-ns/cleanup-failure-hook", exception.Message);
+        Assert.Equal("Succeeded", Assert.Single(hooks).LastRunPhase);
+        Assert.Contains(handler.Requests, request => request.Method == HttpMethod.Post &&
+            request.Path == "/api/v1/namespaces/test-ns/configmaps");
+        Assert.Contains(handler.Requests, request => request.Method == HttpMethod.Delete &&
+            request.Path == "/api/v1/namespaces/test-ns/configmaps/cleanup-failure-hook");
+    }
+
+    [Fact]
     public async Task ExecuteHooks_WaitsForZeroBackoffJobBeforeDeclaringFailure()
     {
         var (_, hooks) = HelmHookExecutor.ExtractHooks("""
@@ -454,7 +708,7 @@ public class HelmHookTests
             """, "test-ns");
         var handler = new HookKubernetesHandler(pendingZeroBackoffJob: true);
         using var client = CreateClient(handler);
-        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 3);
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 4);
 
         await CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
             hooks, HelmHookEvent.PreUpgrade, "test-ns", CancellationToken.None));
@@ -526,6 +780,161 @@ public class HelmHookTests
     }
 
     [Fact]
+    public async Task ExecuteHooks_CancellationStillRunsBoundedFailureCleanupAndPreservesCancellation()
+    {
+        var (_, hooks) = HelmHookExecutor.ExtractHooks("""
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: canceled-hook
+              annotations:
+                helm.sh/hook: pre-upgrade
+                helm.sh/hook-delete-policy: hook-failed
+            data:
+              key: value
+            """, "test-ns");
+        using var cancellationSource = new CancellationTokenSource();
+        var handler = new HookKubernetesHandler(cancelOnConfigMapApply: cancellationSource);
+        using var client = CreateClient(handler);
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 1);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
+                hooks, HelmHookEvent.PreUpgrade, "test-ns", cancellationSource.Token)));
+
+        Assert.True(cancellationSource.IsCancellationRequested);
+        Assert.Equal("Failed", Assert.Single(hooks).LastRunPhase);
+        Assert.Contains(handler.Requests, request => request.Method == HttpMethod.Delete &&
+            request.Path == "/api/v1/namespaces/test-ns/configmaps/canceled-hook");
+    }
+
+    [Fact]
+    public async Task ExecuteHooks_CancellationAfterSuccessfulOutputFinalizesSucceededHooks()
+    {
+        var (_, hooks) = HelmHookExecutor.ExtractHooks("""
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: successful-before-cancel
+              annotations:
+                helm.sh/hook: pre-upgrade
+                helm.sh/hook-delete-policy: hook-succeeded
+            data:
+              key: value
+            """, "test-ns");
+        using var cancellationSource = new CancellationTokenSource();
+        var handler = new HookKubernetesHandler();
+        using var client = CreateClient(handler);
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 1);
+        await using var enumerator = executor.ExecuteHooksWithFailureHandlingAsync(
+                hooks,
+                HelmHookEvent.PreUpgrade,
+                "test-ns",
+                cancellationSource.Token)
+            .GetAsyncEnumerator();
+
+        Assert.True(await enumerator.MoveNextAsync());
+        Assert.StartsWith("Applying hook", enumerator.Current, StringComparison.Ordinal);
+        Assert.True(await enumerator.MoveNextAsync());
+        Assert.Contains("Hook resource applied", enumerator.Current, StringComparison.Ordinal);
+        cancellationSource.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => enumerator.MoveNextAsync().AsTask());
+
+        Assert.Equal("Succeeded", Assert.Single(hooks).LastRunPhase);
+        Assert.Contains(handler.Requests, request => request.Method == HttpMethod.Delete &&
+            request.Path == "/api/v1/namespaces/test-ns/configmaps/successful-before-cancel");
+    }
+
+    [Fact]
+    public async Task ExecuteHooks_FailureCleanupErrorDoesNotReplaceOriginalHookFailure()
+    {
+        var (_, hooks) = HelmHookExecutor.ExtractHooks("""
+            apiVersion: batch/v1
+            kind: Job
+            metadata:
+              name: migration
+              annotations:
+                helm.sh/hook: pre-upgrade
+                helm.sh/hook-delete-policy: hook-failed
+            spec:
+              template:
+                spec:
+                  restartPolicy: Never
+                  containers:
+                  - name: migration
+                    image: example.invalid/migration
+            """, "test-ns");
+        var handler = new HookKubernetesHandler(
+            failJob: true,
+            deleteStatusCode: HttpStatusCode.InternalServerError);
+        using var client = CreateClient(handler);
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 1);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
+                hooks, HelmHookEvent.PreUpgrade, "test-ns", CancellationToken.None)));
+
+        Assert.Contains("Job", exception.Message);
+        Assert.DoesNotContain("Kubernetes operation failed", exception.Message);
+        var cleanupError = Assert.IsType<KubernetesResourceOperationException>(
+            exception.Data[HelmHookExecutor.CleanupErrorDataKey]);
+        Assert.Contains("Job/test-ns/migration", cleanupError.Message);
+        Assert.Contains(handler.Requests, request => request.Method == HttpMethod.Delete &&
+            request.Path == "/apis/batch/v1/namespaces/test-ns/jobs/migration");
+    }
+
+    [Fact]
+    public async Task ExecuteHooks_FailureFinalizationContinuesAfterIndividualCleanupErrors()
+    {
+        var (_, hooks) = HelmHookExecutor.ExtractHooks(FailureFinalizationBatchManifest, "test-ns");
+        var handler = new HookKubernetesHandler(
+            failJob: true,
+            deleteStatusCode: HttpStatusCode.InternalServerError);
+        using var client = CreateClient(handler);
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 1);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
+                hooks, HelmHookEvent.PreUpgrade, "test-ns", CancellationToken.None)));
+
+        Assert.Equal(
+            [
+                "/apis/batch/v1/namespaces/test-ns/jobs/migration",
+                "/api/v1/namespaces/test-ns/configmaps/second-completed-hook",
+                "/api/v1/namespaces/test-ns/configmaps/first-completed-hook"
+            ],
+            handler.Requests
+                .Where(request => request.Method == HttpMethod.Delete)
+                .Select(request => request.Path));
+        var cleanupErrors = Assert.IsType<AggregateException>(
+            exception.Data[HelmHookExecutor.CleanupErrorDataKey]);
+        Assert.Equal(3, cleanupErrors.InnerExceptions.Count);
+    }
+
+    [Fact]
+    public async Task ExecuteHooks_FailureFinalizationUsesOneBatchWideTimeout()
+    {
+        var (_, hooks) = HelmHookExecutor.ExtractHooks(FailureFinalizationBatchManifest, "test-ns");
+        var handler = new HookKubernetesHandler(
+            failJob: true,
+            deleteDelay: TimeSpan.FromSeconds(5));
+        using var client = CreateClient(handler);
+        var executor = new HelmHookExecutor(client, "helmsharp-test", timeoutSeconds: 1);
+        var stopwatch = Stopwatch.StartNew();
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CollectAsync(executor.ExecuteHooksWithFailureHandlingAsync(
+                hooks, HelmHookEvent.PreUpgrade, "test-ns", CancellationToken.None)));
+        stopwatch.Stop();
+
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(5),
+            $"Batch finalization took {stopwatch.Elapsed} instead of one bounded cleanup window.");
+        Assert.IsType<AggregateException>(exception.Data[HelmHookExecutor.CleanupErrorDataKey]);
+    }
+
+    [Fact]
     public async Task ExecuteHooks_WaitsForPodTerminationInsteadOfReadiness()
     {
         var (_, hooks) = HelmHookExecutor.ExtractHooks("""
@@ -569,12 +978,53 @@ public class HelmHookTests
         return collected;
     }
 
+    private const string FailureFinalizationBatchManifest = """
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: first-completed-hook
+          annotations:
+            helm.sh/hook: pre-upgrade
+            helm.sh/hook-weight: "0"
+            helm.sh/hook-delete-policy: hook-succeeded
+        ---
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: second-completed-hook
+          annotations:
+            helm.sh/hook: pre-upgrade
+            helm.sh/hook-weight: "1"
+            helm.sh/hook-delete-policy: hook-succeeded
+        ---
+        apiVersion: batch/v1
+        kind: Job
+        metadata:
+          name: migration
+          annotations:
+            helm.sh/hook: pre-upgrade
+            helm.sh/hook-weight: "2"
+            helm.sh/hook-delete-policy: hook-failed
+        spec:
+          template:
+            spec:
+              restartPolicy: Never
+              containers:
+              - name: migration
+                image: example.invalid/migration
+        """;
+
     private sealed class HookKubernetesHandler(
         bool failJob = false,
         bool pendingZeroBackoffJob = false,
         bool failedZeroBackoffJob = false,
-        TimeSpan? deleteDelay = null) : DelegatingHandler
+        TimeSpan? deleteDelay = null,
+        HttpStatusCode? deleteStatusCode = null,
+        CancellationTokenSource? cancelOnConfigMapApply = null,
+        int deletionReadsBeforeGone = 0) : DelegatingHandler
     {
+        private readonly Dictionary<string, int> _deletedResources = new(StringComparer.Ordinal);
+
         public List<(HttpMethod Method, string Path)> Requests { get; } = [];
         public int ZeroBackoffJobReadCount { get; private set; }
 
@@ -585,6 +1035,49 @@ public class HelmHookTests
 
             if (request.Method == HttpMethod.Delete && deleteDelay is { } delay)
                 await Task.Delay(delay, cancellationToken);
+
+            if (request.Method == HttpMethod.Delete && deleteStatusCode is { } statusCode)
+                return JsonResponse(request, statusCode, $$"""
+                    { "kind": "Status", "apiVersion": "v1", "status": "Failure", "code": {{(int)statusCode}} }
+                    """);
+
+            if (request.Method == HttpMethod.Delete)
+                _deletedResources[path] = deletionReadsBeforeGone;
+
+            if (request.Method == HttpMethod.Post &&
+                path.EndsWith("/configmaps", StringComparison.Ordinal) &&
+                cancelOnConfigMapApply is not null)
+            {
+                cancelOnConfigMapApply.Cancel();
+                return await Task.FromCanceled<HttpResponseMessage>(cancellationToken);
+            }
+
+            if (request.Method == HttpMethod.Post)
+            {
+                foreach (var deletedPath in _deletedResources.Keys
+                             .Where(candidate => candidate.StartsWith($"{path}/", StringComparison.Ordinal))
+                             .ToList())
+                    _deletedResources.Remove(deletedPath);
+            }
+
+            if (request.Method == HttpMethod.Get && _deletedResources.TryGetValue(path, out var remainingReads))
+            {
+                if (remainingReads > 0)
+                {
+                    _deletedResources[path] = remainingReads - 1;
+                    return JsonResponse(request, HttpStatusCode.OK, """
+                        {
+                          "apiVersion": "v1",
+                          "kind": "ConfigMap",
+                          "metadata": { "name": "deleting-hook", "resourceVersion": "1" }
+                        }
+                        """);
+                }
+
+                return JsonResponse(request, HttpStatusCode.NotFound, """
+                    { "kind": "Status", "apiVersion": "v1", "status": "Failure", "code": 404 }
+                    """);
+            }
 
             if (request.Method == HttpMethod.Get && path.EndsWith("/jobs/migration", StringComparison.Ordinal))
             {
@@ -640,6 +1133,14 @@ public class HelmHookTests
             }
 
             if (request.Method == HttpMethod.Get && path.Contains("/configmaps/", StringComparison.Ordinal))
+            {
+                return JsonResponse(request, HttpStatusCode.NotFound, """
+                    { "kind": "Status", "apiVersion": "v1", "status": "Failure", "code": 404 }
+                    """);
+            }
+
+            if (request.Method == HttpMethod.Get &&
+                path.Contains("/customresourcedefinitions/", StringComparison.Ordinal))
             {
                 return JsonResponse(request, HttpStatusCode.NotFound, """
                     { "kind": "Status", "apiVersion": "v1", "status": "Failure", "code": 404 }

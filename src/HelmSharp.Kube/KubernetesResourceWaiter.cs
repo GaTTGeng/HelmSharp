@@ -161,38 +161,39 @@ public sealed class KubernetesResourceWaiter
         string defaultNamespace,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var allIdentities = KubernetesManifestApplier.SplitDocumentsPublic(manifest)
+        var identities = KubernetesManifestApplier.SplitDocumentsPublic(manifest)
             .Select(doc => ManifestIdentity.Parse(doc, defaultNamespace))
             .Where(identity => identity is not null)
             .Cast<ManifestIdentity>()
+            .Select(identity => new DeletionWaitState(identity))
             .ToList();
-        var identities = allIdentities;
         if (identities.Count == 0)
             yield break;
 
         var deadline = _timeProvider.GetUtcNow().AddSeconds(_timeoutSeconds);
-        var pending = new HashSet<string>(identities.Select(DeletionWaitKey), StringComparer.Ordinal);
+        var pending = identities.ToList();
         yield return $"Waiting for {pending.Count} resources to be deleted...";
         while (pending.Count > 0 && _timeProvider.GetUtcNow() < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var deleted = new List<string>();
-            foreach (var identity in identities.Where(identity => pending.Contains(DeletionWaitKey(identity))))
+            foreach (var state in pending.ToList())
             {
-                var key = DeletionWaitKey(identity);
                 try
                 {
-                    await ReadForDeletionAsync(identity, cancellationToken);
+                    await ResolveDeletionScopeAsync(state, cancellationToken);
+                    await ReadForDeletionAsync(state.Identity, state.Resource, cancellationToken);
                 }
                 catch (HttpOperationException ex) when ((int)ex.Response.StatusCode == 404)
                 {
-                    pending.Remove(key);
-                    deleted.Add(identity.DisplayName);
+                    pending.Remove(state);
+                    deleted.Add(state.Identity.DisplayName);
                 }
-                catch (DeletedApiResourceException)
+                catch (Exception ex) when (ex is KubernetesApiResourceNotFoundException or
+                                           KubernetesApiResourceUnsupportedException)
                 {
-                    pending.Remove(key);
-                    deleted.Add(identity.DisplayName);
+                    pending.Remove(state);
+                    deleted.Add(state.Identity.DisplayName);
                 }
                 catch (OperationCanceledException)
                 {
@@ -200,7 +201,7 @@ public sealed class KubernetesResourceWaiter
                 }
                 catch (Exception ex)
                 {
-                    throw new KubernetesResourceOperationException(identity, ex);
+                    throw new KubernetesResourceOperationException(state.Identity, ex);
                 }
             }
             foreach (var displayName in deleted)
@@ -209,16 +210,38 @@ public sealed class KubernetesResourceWaiter
                 await _delayAsync(TimeSpan.FromSeconds(1), cancellationToken);
         }
         if (pending.Count > 0)
-            throw new TimeoutException($"Timed out after {_timeoutSeconds}s waiting for deletion of: {string.Join(", ", pending)}");
+            throw new TimeoutException(
+                $"Timed out after {_timeoutSeconds}s waiting for deletion of: " +
+                string.Join(", ", pending.Select(state => state.Identity.DisplayName)));
     }
 
-    private static string DeletionWaitKey(ManifestIdentity identity)
-        => $"{identity.ApiVersion}/{identity.DisplayName}";
+    private async Task ResolveDeletionScopeAsync(DeletionWaitState state, CancellationToken ct)
+    {
+        if (state.ScopeResolved)
+            return;
+        if (KubernetesManifestApplier.TryGetTypedResourceScope(state.Identity, out _))
+        {
+            state.Identity = KubernetesManifestApplier.NormalizeTypedIdentity(state.Identity);
+            state.ScopeResolved = true;
+            return;
+        }
 
-    private async Task ReadForDeletionAsync(ManifestIdentity identity, CancellationToken ct)
+        state.Resource = await DiscoverDeletionResourceAsync(state.Identity, ct);
+        var resolvedApiVersion = $"{state.Resource.Group}/{state.Resource.Version}";
+        state.Identity = state.Resource.Namespaced
+            ? state.Identity with { ApiVersion = resolvedApiVersion }
+            : state.Identity with { ApiVersion = resolvedApiVersion, Namespace = string.Empty };
+        state.ScopeResolved = true;
+    }
+
+    private async Task ReadForDeletionAsync(
+        ManifestIdentity identity,
+        DeletionResource? discoveredResource,
+        CancellationToken ct)
     {
         switch (identity.ApiVersion, identity.Kind)
         {
+            case ("v1", "Namespace"): _ = await _client.CoreV1.ReadNamespaceAsync(identity.Name, cancellationToken: ct); break;
             case ("v1", "ConfigMap"): _ = await _client.CoreV1.ReadNamespacedConfigMapAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
             case ("v1", "Secret"): _ = await _client.CoreV1.ReadNamespacedSecretAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
             case ("v1", "Service"): _ = await _client.CoreV1.ReadNamespacedServiceAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
@@ -243,8 +266,7 @@ public sealed class KubernetesResourceWaiter
             case ("rbac.authorization.k8s.io/v1", "RoleBinding"): _ = await _client.RbacAuthorizationV1.ReadNamespacedRoleBindingAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
             case ("rbac.authorization.k8s.io/v1", "ClusterRole"): _ = await _client.RbacAuthorizationV1.ReadClusterRoleAsync(identity.Name, cancellationToken: ct); break;
             case ("rbac.authorization.k8s.io/v1", "ClusterRoleBinding"): _ = await _client.RbacAuthorizationV1.ReadClusterRoleBindingAsync(identity.Name, cancellationToken: ct); break;
-            case ("autoscaling/v2", "HorizontalPodAutoscaler"):
-            case ("autoscaling/v2beta2", "HorizontalPodAutoscaler"): _ = await _client.AutoscalingV2.ReadNamespacedHorizontalPodAutoscalerAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
+            case ("autoscaling/v2", "HorizontalPodAutoscaler"): _ = await _client.AutoscalingV2.ReadNamespacedHorizontalPodAutoscalerAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
             case ("autoscaling/v1", "HorizontalPodAutoscaler"): _ = await _client.AutoscalingV1.ReadNamespacedHorizontalPodAutoscalerAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
             case ("policy/v1", "PodDisruptionBudget"): _ = await _client.PolicyV1.ReadNamespacedPodDisruptionBudgetAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
             case ("storage.k8s.io/v1", "StorageClass"): _ = await _client.StorageV1.ReadStorageClassAsync(identity.Name, cancellationToken: ct); break;
@@ -261,13 +283,18 @@ public sealed class KubernetesResourceWaiter
             case ("discovery.k8s.io/v1", "EndpointSlice"): _ = await _client.DiscoveryV1.ReadNamespacedEndpointSliceAsync(identity.Name, identity.Namespace, cancellationToken: ct); break;
             case ("flowcontrol.apiserver.k8s.io/v1", "FlowSchema"): _ = await _client.FlowcontrolApiserverV1.ReadFlowSchemaAsync(identity.Name, cancellationToken: ct); break;
             case ("flowcontrol.apiserver.k8s.io/v1", "PriorityLevelConfiguration"): _ = await _client.FlowcontrolApiserverV1.ReadPriorityLevelConfigurationAsync(identity.Name, cancellationToken: ct); break;
-            default: await ReadDiscoveredResourceAsync(identity, ct); break;
+            default:
+                var resource = discoveredResource ?? await DiscoverDeletionResourceAsync(identity, ct);
+                await ReadDiscoveredResourceAsync(identity, resource, ct);
+                break;
         }
     }
 
-    private async Task ReadDiscoveredResourceAsync(ManifestIdentity identity, CancellationToken ct)
+    private async Task ReadDiscoveredResourceAsync(
+        ManifestIdentity identity,
+        DeletionResource resource,
+        CancellationToken ct)
     {
-        var resource = await DiscoverDeletionResourceAsync(identity, ct);
         if (resource.Namespaced)
         {
             _ = await _client.CustomObjects.GetNamespacedCustomObjectAsync(
@@ -285,22 +312,21 @@ public sealed class KubernetesResourceWaiter
         if (_deletionResources.TryGetValue(key, out var cached))
             return cached;
 
-        var separator = identity.ApiVersion.IndexOf('/');
-        var group = separator < 0 ? string.Empty : identity.ApiVersion[..separator];
-        var version = separator < 0 ? identity.ApiVersion : identity.ApiVersion[(separator + 1)..];
-        if (string.IsNullOrEmpty(group))
-            throw new DeletedApiResourceException(identity.ApiVersion, identity.Kind);
-
-        var resources = await _client.CustomObjects.GetAPIResourcesAsync(group, version, ct);
-        var match = resources.Resources?.SingleOrDefault(resource =>
-            string.Equals(resource.Kind, identity.Kind, StringComparison.Ordinal) &&
-            !resource.Name.Contains('/', StringComparison.Ordinal));
-        if (match is null || string.IsNullOrWhiteSpace(match.Name))
-            throw new DeletedApiResourceException(identity.ApiVersion, identity.Kind);
-
-        var discovered = new DeletionResource(group, version, match.Name, match.Namespaced == true);
+        var resource = await KubernetesManifestApplier.DiscoverResourceForDeletionAsync(_client, identity, ct);
+        var discovered = new DeletionResource(
+            resource.Group,
+            resource.Version,
+            resource.Plural,
+            resource.Namespaced);
         _deletionResources.Add(key, discovered);
         return discovered;
+    }
+
+    private sealed class DeletionWaitState(ManifestIdentity identity)
+    {
+        internal ManifestIdentity Identity { get; set; } = identity;
+        internal DeletionResource? Resource { get; set; }
+        internal bool ScopeResolved { get; set; }
     }
 
     private async Task<(bool Ready, bool Failed, string Status)> CheckResourceStatusAsync(
@@ -507,11 +533,3 @@ public sealed class KubernetesResourceWaiter
 }
 
 internal sealed record DeletionResource(string Group, string Version, string Plural, bool Namespaced);
-
-internal sealed class DeletedApiResourceException : Exception
-{
-    public DeletedApiResourceException(string apiVersion, string kind)
-        : base($"Kubernetes API discovery did not find resource {apiVersion}/{kind}.")
-    {
-    }
-}

@@ -188,6 +188,36 @@ public sealed class KubernetesResourceWaiterTests
     }
 
     [Fact]
+    public async Task WaitForDeletedAsync_PollsNamespaceUntilItIsAbsent()
+    {
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/tenant", HttpStatusCode.OK, """
+                { "apiVersion": "v1", "kind": "Namespace", "metadata": { "name": "tenant" } }
+                """)
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/tenant", HttpStatusCode.NotFound);
+        var timeProvider = new DeterministicTimeProvider(DateTimeOffset.UnixEpoch);
+        var polling = new DeterministicPolling(timeProvider);
+        var waiter = new KubernetesResourceWaiter(
+            KubernetesTestClientBuilder.Create(handler),
+            timeoutSeconds: 30,
+            timeProvider,
+            polling.DelayAsync);
+
+        var messages = await AsyncEnumerableTestExtensions.CollectAsync(waiter.WaitForDeletedAsync("""
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: tenant
+            """, "release-ns"));
+
+        Assert.Contains("  Namespace/tenant deleted", messages);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.All(handler.Requests, request =>
+            Assert.Equal((HttpMethod.Get, "/api/v1/namespaces/tenant"), (request.Method, request.PathAndQuery)));
+        Assert.Equal([TimeSpan.FromSeconds(1)], polling.Delays);
+    }
+
+    [Fact]
     public async Task WaitForDeletedAsync_UsesDiscoveryAndTheNamespacedCustomResourceEndpoint()
     {
         var handler = new KubernetesApiHandler()
@@ -216,11 +246,76 @@ public sealed class KubernetesResourceWaiterTests
     }
 
     [Fact]
+    public async Task WaitForDeletedAsync_NormalizesClusterScopedCustomResourceIdentity()
+    {
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/example.com/v1", HttpStatusCode.OK, """
+                {
+                  "kind": "APIResourceList",
+                  "apiVersion": "v1",
+                  "groupVersion": "example.com/v1",
+                  "resources": [{ "name": "clustersettings", "kind": "ClusterSetting", "namespaced": false }]
+                }
+                """)
+            .Respond(HttpMethod.Get, "/apis/example.com/v1/clustersettings/shared", HttpStatusCode.NotFound);
+        var waiter = new KubernetesResourceWaiter(KubernetesTestClientBuilder.Create(handler));
+
+        var messages = await AsyncEnumerableTestExtensions.CollectAsync(waiter.WaitForDeletedAsync("""
+            apiVersion: example.com/v1
+            kind: ClusterSetting
+            metadata:
+              name: shared
+              namespace: ignored
+            """, "release-ns"));
+
+        Assert.Contains("  ClusterSetting/shared deleted", messages);
+        Assert.DoesNotContain(messages, line => line.Contains("release-ns", StringComparison.Ordinal));
+        Assert.Contains(handler.Requests, request => request.Method == HttpMethod.Get &&
+            request.PathAndQuery == "/apis/example.com/v1/clustersettings/shared");
+        Assert.DoesNotContain(handler.Requests, request =>
+            request.PathAndQuery.Contains("/namespaces/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task WaitForDeletedAsync_UsesDeclaredV2Beta2EndpointThroughDiscovery()
+    {
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/autoscaling/v2beta2", HttpStatusCode.OK, """
+                {
+                  "kind": "APIResourceList",
+                  "apiVersion": "v1",
+                  "groupVersion": "autoscaling/v2beta2",
+                  "resources": [{ "name": "horizontalpodautoscalers", "kind": "HorizontalPodAutoscaler", "namespaced": true }]
+                }
+                """)
+            .Respond(
+                HttpMethod.Get,
+                "/apis/autoscaling/v2beta2/namespaces/release-ns/horizontalpodautoscalers/scaler",
+                HttpStatusCode.NotFound);
+        var waiter = new KubernetesResourceWaiter(KubernetesTestClientBuilder.Create(handler));
+
+        await AsyncEnumerableTestExtensions.DrainAsync(waiter.WaitForDeletedAsync("""
+            apiVersion: autoscaling/v2beta2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            """, "release-ns"));
+
+        Assert.Contains(handler.Requests, request => request.Method == HttpMethod.Get &&
+            request.PathAndQuery == "/apis/autoscaling/v2beta2/namespaces/release-ns/horizontalpodautoscalers/scaler");
+        Assert.DoesNotContain(handler.Requests, request =>
+            request.PathAndQuery.StartsWith("/apis/autoscaling/v2/", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task WaitForDeletedAsync_TreatsRemovedDiscoveredApiAsDeleted()
     {
         var handler = new KubernetesApiHandler()
             .Respond(HttpMethod.Get, "/apis/example.com/v1", HttpStatusCode.OK, """
                 { "kind": "APIResourceList", "apiVersion": "v1", "groupVersion": "example.com/v1", "resources": [] }
+                """)
+            .Respond(HttpMethod.Get, "/apis/", HttpStatusCode.OK, """
+                { "kind": "APIGroupList", "apiVersion": "v1", "groups": [] }
                 """);
         var waiter = new KubernetesResourceWaiter(KubernetesTestClientBuilder.Create(handler));
 
@@ -233,7 +328,49 @@ public sealed class KubernetesResourceWaiterTests
 
         Assert.Collection(
             handler.Requests,
-            request => Assert.Equal((HttpMethod.Get, "/apis/example.com/v1"), (request.Method, request.PathAndQuery)));
+            request => Assert.Equal((HttpMethod.Get, "/apis/example.com/v1"), (request.Method, request.PathAndQuery)),
+            request => Assert.Equal((HttpMethod.Get, "/apis/"), (request.Method, request.PathAndQuery)));
+    }
+
+    [Fact]
+    public async Task WaitForDeletedAsync_UsesAlternateServedVersionForObsoleteManifestApi()
+    {
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/example.com/v1", HttpStatusCode.NotFound, "{ \"code\": 404 }")
+            .Respond(HttpMethod.Get, "/apis/", HttpStatusCode.OK, """
+                {
+                  "kind": "APIGroupList",
+                  "apiVersion": "v1",
+                  "groups": [{
+                    "name": "example.com",
+                    "versions": [{ "groupVersion": "example.com/v2", "version": "v2" }],
+                    "preferredVersion": { "groupVersion": "example.com/v2", "version": "v2" }
+                  }]
+                }
+                """)
+            .Respond(HttpMethod.Get, "/apis/example.com/v2", HttpStatusCode.OK, """
+                {
+                  "kind": "APIResourceList",
+                  "apiVersion": "v1",
+                  "groupVersion": "example.com/v2",
+                  "resources": [{ "name": "widgets", "kind": "Widget", "namespaced": true }]
+                }
+                """)
+            .Respond(
+                HttpMethod.Get,
+                "/apis/example.com/v2/namespaces/release-ns/widgets/sample",
+                HttpStatusCode.NotFound);
+        var waiter = new KubernetesResourceWaiter(KubernetesTestClientBuilder.Create(handler));
+
+        await AsyncEnumerableTestExtensions.DrainAsync(waiter.WaitForDeletedAsync("""
+            apiVersion: example.com/v1
+            kind: Widget
+            metadata:
+              name: sample
+            """, "release-ns"));
+
+        Assert.Contains(handler.Requests, request => request.Method == HttpMethod.Get &&
+            request.PathAndQuery == "/apis/example.com/v2/namespaces/release-ns/widgets/sample");
     }
 
     [Fact]

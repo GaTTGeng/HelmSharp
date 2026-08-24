@@ -34,7 +34,24 @@ await foreach (var resource in applier.ApplyAsync(
 
 命名空间参数只为没有声明 `metadata.namespace` 的命名空间级文档提供默认值。清单中明确的命名空间优先；集群级资源不会被赋予命名空间。
 
-客户端会直接处理常见资源类型，其他 API 资源则通过目标集群发现后提交或删除。如果 API 版本已移除，或找不到自定义资源类型，诊断中会包含对应资源标识。
+客户端会直接处理常见资源类型，其他 API 资源则通过目标集群发现。提交要求清单声明的 API version 可用；删除及删除等待遇到已退役的自定义资源版本时，会在同一 API group 中查找仍提供相同 kind 的版本并改用该 endpoint。若没有任何版本提供该 kind，直接删除会在诊断中包含清单资源标识；删除等待则把已从整个 group 移除的 kind 视为不存在。
+
+## 确定性地删除已渲染 YAML
+
+```csharp
+await foreach (var resource in applier.DeleteAsync(
+    manifest,
+    defaultNamespace: "platform",
+    propagationPolicy: "Foreground",
+    cancellationToken))
+{
+    Console.WriteLine($"Deleted {resource}");
+}
+```
+
+删除会按清单文档的逆序执行。不传 propagation 的重载使用 `Background`；可显式选择 `Background`、`Foreground` 或 `Orphan`，该值会传给强类型和动态发现的删除 endpoint。Kubernetes 对象返回 `404` 时视为幂等成功；动态 API version endpoint 已移除时，会先尝试同 group 的其他 served version。鉴权失败、传输失败、不支持的 core 类型、直接删除穷尽发现仍无对应 kind 及其他非 `404` API 失败会停止操作，并在异常中给出受影响资源的 API version、kind、namespace 和 name；取消会阻止下一个请求发出。
+
+直接 applier 会删除传入的每个有效资源文档，不解释 Helm 生命周期注解。`HelmClient` 会在卸载和 rollback 清理前过滤带有 `helm.sh/resource-policy: keep` 的资源；这会阻止直接删除请求，但无法阻止 Kubernetes 因命名空间或 owner 被删除而执行级联删除。
 
 ## 只等待你真正需要的就绪状态
 

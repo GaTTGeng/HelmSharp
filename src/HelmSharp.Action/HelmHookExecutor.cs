@@ -30,8 +30,13 @@ public enum HelmHookEvent
 /// </summary>
 public enum HelmHookDeletePolicy
 {
+    /// <summary>Delete an earlier instance before creating the hook. This is the default policy.</summary>
     BeforeHookCreation,
+
+    /// <summary>Delete the hook after its execution succeeds.</summary>
     HookSucceeded,
+
+    /// <summary>Attempt bounded cleanup after hook failure or operation cancellation.</summary>
     HookFailed
 }
 
@@ -59,6 +64,7 @@ internal sealed class HelmHook
 /// </summary>
 internal sealed class HelmHookExecutor
 {
+    internal const string CleanupErrorDataKey = "HelmSharp.HookCleanupError";
     private readonly k8s.Kubernetes _client;
     private readonly string _fieldManager;
     private readonly int _timeoutSeconds;
@@ -180,13 +186,31 @@ internal sealed class HelmHookExecutor
             .ThenBy(h => h.Path, StringComparer.Ordinal)
             .ToList();
 
-        foreach (var hook in executing)
+        for (var hookIndex = 0; hookIndex < executing.Count; hookIndex++)
         {
+            var hook = executing[hookIndex];
             var ns = string.IsNullOrWhiteSpace(hook.Namespace) ? releaseNamespace : hook.Namespace;
 
             if (hook.DeletePolicies.Contains(HelmHookDeletePolicy.BeforeHookCreation))
             {
-                await DeleteHookResourceAsync(hook, ns, cancellationToken);
+                Exception? beforeCreationError = null;
+                try
+                {
+                    await DeleteHookResourceAsync(hook, ns, _timeoutSeconds, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    beforeCreationError = ex;
+                }
+
+                if (beforeCreationError is not null)
+                {
+                    var finalization = await CleanupSucceededHooksDuringFinalizationAsync(
+                        executing.Take(hookIndex),
+                        releaseNamespace);
+                    AttachCleanupErrors(beforeCreationError, finalization.Errors);
+                    throw beforeCreationError;
+                }
             }
 
             hook.LastRunStartedAt = DateTimeOffset.UtcNow;
@@ -220,6 +244,8 @@ internal sealed class HelmHookExecutor
                     await foreach (var line in WaitForPodCompletionAsync(hook, ns, cancellationToken))
                         hookApplied.Add($"  {line}");
                 }
+
+                cancellationToken.ThrowIfCancellationRequested();
             }
             catch (Exception ex)
             {
@@ -233,22 +259,158 @@ internal sealed class HelmHookExecutor
                 hook.LastRunCompletedAt = DateTimeOffset.UtcNow;
                 hook.LastRunPhase = "Failed";
                 yield return $"  Hook failed: {hookError.Message}";
-                if (hook.DeletePolicies.Contains(HelmHookDeletePolicy.HookFailed))
-                {
-                    if (await DeleteHookResourceDuringFinalizationAsync(hook, ns))
-                        yield return $"  Deleted failed hook: {hook.Kind}/{hook.Name}";
-                }
+                // Helm cleans previously successful hooks only after the whole hook
+                // batch has either completed or a later hook has failed.
+                var finalization = await CleanupSucceededHooksDuringFinalizationAsync(
+                    executing.Take(hookIndex),
+                    releaseNamespace,
+                    failedHook: hook);
+                foreach (var line in finalization.Lines)
+                    yield return line;
+
+                AttachCleanupErrors(hookError, finalization.Errors);
                 throw hookError;
             }
 
             hook.LastRunCompletedAt = DateTimeOffset.UtcNow;
             hook.LastRunPhase = "Succeeded";
-            if (hook.DeletePolicies.Contains(HelmHookDeletePolicy.HookSucceeded))
+            Exception? boundaryError = null;
+            try
             {
-                if (await DeleteHookResourceDuringFinalizationAsync(hook, ns))
-                    yield return $"  Deleted hook (succeeded policy): {hook.Kind}/{hook.Name}";
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            catch (Exception ex)
+            {
+                boundaryError = ex;
+            }
+            if (boundaryError is not null)
+            {
+                var finalization = await CleanupSucceededHooksDuringFinalizationAsync(
+                    executing.Take(hookIndex + 1),
+                    releaseNamespace);
+                AttachCleanupErrors(boundaryError, finalization.Errors);
+                throw boundaryError;
             }
         }
+
+        // Match Helm's batch contract: successful hooks remain available to later
+        // hooks and are cleaned in reverse execution order only after all succeed.
+        var finalizedHooks = new HashSet<HelmHook>(ReferenceEqualityComparer.Instance);
+        for (var hookIndex = executing.Count - 1; hookIndex >= 0; hookIndex--)
+        {
+            var hook = executing[hookIndex];
+            if (!hook.DeletePolicies.Contains(HelmHookDeletePolicy.HookSucceeded))
+                continue;
+            var ns = string.IsNullOrWhiteSpace(hook.Namespace) ? releaseNamespace : hook.Namespace;
+            bool deleted = false;
+            Exception? cleanupError = null;
+            try
+            {
+                deleted = await DeleteHookResourceAsync(
+                    hook,
+                    ns,
+                    _timeoutSeconds,
+                    cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                cleanupError = ex;
+            }
+            if (cleanupError is not null)
+            {
+                var finalization = await CleanupSucceededHooksDuringFinalizationAsync(
+                    executing,
+                    releaseNamespace,
+                    finalizedHooks);
+                AttachCleanupErrors(cleanupError, finalization.Errors);
+                throw cleanupError;
+            }
+            finalizedHooks.Add(hook);
+            if (deleted)
+                yield return $"  Deleted hook (succeeded policy): {hook.Kind}/{hook.Name}";
+            Exception? boundaryError = null;
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            catch (Exception ex)
+            {
+                boundaryError = ex;
+            }
+            if (boundaryError is not null)
+            {
+                var finalization = await CleanupSucceededHooksDuringFinalizationAsync(
+                    executing,
+                    releaseNamespace,
+                    finalizedHooks);
+                AttachCleanupErrors(boundaryError, finalization.Errors);
+                throw boundaryError;
+            }
+        }
+    }
+
+    private async Task<(List<string> Lines, List<Exception> Errors)> CleanupSucceededHooksDuringFinalizationAsync(
+        IEnumerable<HelmHook> hooks,
+        string releaseNamespace,
+        IReadOnlySet<HelmHook>? finalizedHooks = null,
+        HelmHook? failedHook = null)
+    {
+        var lines = new List<string>();
+        var errors = new List<Exception>();
+        var cleanupSeconds = Math.Clamp(_timeoutSeconds, 2, 10);
+        using var cleanupSource = new CancellationTokenSource(TimeSpan.FromSeconds(cleanupSeconds));
+
+        if (failedHook?.DeletePolicies.Contains(HelmHookDeletePolicy.HookFailed) == true)
+        {
+            var failedNs = string.IsNullOrWhiteSpace(failedHook.Namespace)
+                ? releaseNamespace
+                : failedHook.Namespace;
+            var cleanup = await TryDeleteHookResourceAsync(
+                failedHook,
+                failedNs,
+                cleanupSeconds,
+                cleanupSource.Token);
+            if (cleanup.Error is not null)
+            {
+                errors.Add(cleanup.Error);
+                lines.Add($"  Hook cleanup failed for {failedHook.Kind}/{failedHook.Name}: {cleanup.Error.Message}");
+            }
+            else if (cleanup.Deleted)
+            {
+                lines.Add($"  Deleted failed hook: {failedHook.Kind}/{failedHook.Name}");
+            }
+        }
+
+        foreach (var hook in hooks.Reverse())
+        {
+            if (!string.Equals(hook.LastRunPhase, "Succeeded", StringComparison.Ordinal) ||
+                !hook.DeletePolicies.Contains(HelmHookDeletePolicy.HookSucceeded) ||
+                finalizedHooks?.Contains(hook) == true)
+                continue;
+            var ns = string.IsNullOrWhiteSpace(hook.Namespace) ? releaseNamespace : hook.Namespace;
+            var cleanup = await TryDeleteHookResourceAsync(
+                hook,
+                ns,
+                cleanupSeconds,
+                cleanupSource.Token);
+            if (cleanup.Error is not null)
+            {
+                errors.Add(cleanup.Error);
+                lines.Add($"  Hook cleanup failed for {hook.Kind}/{hook.Name}: {cleanup.Error.Message}");
+                continue;
+            }
+            if (cleanup.Deleted)
+                lines.Add($"  Deleted previously succeeded hook: {hook.Kind}/{hook.Name}");
+        }
+        return (lines, errors);
+    }
+
+    private static void AttachCleanupErrors(Exception hookError, List<Exception> cleanupErrors)
+    {
+        if (cleanupErrors.Count == 1)
+            hookError.Data[CleanupErrorDataKey] = cleanupErrors[0];
+        else if (cleanupErrors.Count > 1)
+            hookError.Data[CleanupErrorDataKey] = new AggregateException(cleanupErrors);
     }
 
     private async IAsyncEnumerable<string> WaitForPodCompletionAsync(
@@ -278,32 +440,46 @@ internal sealed class HelmHookExecutor
         throw new TimeoutException($"Timed out after {_timeoutSeconds}s waiting for Pod/{hook.Name} to complete.");
     }
 
-    private async Task<bool> DeleteHookResourceDuringFinalizationAsync(HelmHook hook, string ns)
-    {
-        // A failed operation's token may already be canceled, but cleanup must not keep
-        // the caller waiting for another full lifecycle timeout. Allow a meaningful
-        // cleanup window for slow API servers while retaining an independent bound.
-        var cleanupSeconds = Math.Clamp(_timeoutSeconds, 2, 10);
-        using var cleanupSource = new CancellationTokenSource(TimeSpan.FromSeconds(cleanupSeconds));
-        return await DeleteHookResourceAsync(hook, ns, cleanupSource.Token);
-    }
-
-    private async Task<bool> DeleteHookResourceAsync(HelmHook hook, string ns, CancellationToken ct)
+    private async Task<(bool Deleted, Exception? Error)> TryDeleteHookResourceAsync(
+        HelmHook hook,
+        string ns,
+        int timeoutSeconds,
+        CancellationToken cancellationToken)
     {
         try
         {
-            var applier = new KubernetesManifestApplier(_client, _fieldManager);
-            await foreach (var _ in applier.DeleteAsync(hook.Manifest, ns, cancellationToken: ct))
-            {
-                // drain the async enumerable
-            }
-            return true;
+            var deleted = await DeleteHookResourceAsync(hook, ns, timeoutSeconds, cancellationToken);
+            return (deleted, null);
         }
-        catch
+        catch (Exception ex)
         {
-            // Ignore errors during hook cleanup
-            return false;
+            return (false, ex);
         }
+    }
+
+    private async Task<bool> DeleteHookResourceAsync(
+        HelmHook hook,
+        string ns,
+        int timeoutSeconds,
+        CancellationToken ct)
+    {
+        // Helm never deletes CRD hooks by policy because that could cascade-delete
+        // every custom resource instance owned by the definition.
+        if (string.Equals(hook.Kind, "CustomResourceDefinition", StringComparison.Ordinal))
+            return false;
+
+        var applier = new KubernetesManifestApplier(_client, _fieldManager);
+        await foreach (var _ in applier.DeleteAsync(hook.Manifest, ns, cancellationToken: ct))
+        {
+            // Drain the async enumerable.
+        }
+
+        var waiter = new KubernetesResourceWaiter(_client, timeoutSeconds);
+        await foreach (var _ in waiter.WaitForDeletedAsync(hook.Manifest, ns, ct))
+        {
+            // Wait until the old hook object is actually absent before recreating it.
+        }
+        return true;
     }
 
     private static bool TryParseHookEvent(string value, out HelmHookEvent result)

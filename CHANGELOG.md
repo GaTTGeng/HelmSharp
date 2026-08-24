@@ -6,6 +6,10 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+### Changed
+
+- Made Kubernetes deletion deterministic across uninstall, rollback, and hook cleanup, including reverse ordering, propagation policies, keep annotations, discovered resource identity, and actionable failure diagnostics (#232).
+
 ## [1.3.2] - 2026-08-13
 
 ### Added

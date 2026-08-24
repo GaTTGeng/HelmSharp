@@ -7,8 +7,10 @@ using k8s.Models;
 
 namespace HelmSharp.Kube;
 
+/// <summary>Applies and deletes Kubernetes resources described by multi-document YAML manifests.</summary>
 public sealed class KubernetesManifestApplier
 {
+    private const string DefaultDeletionPropagationPolicy = "Background";
     private readonly k8s.Kubernetes _client;
     private readonly string _fieldManager;
     private readonly Dictionary<(string ApiVersion, string Kind), DiscoveredResource> _discoveredResources = new();
@@ -65,22 +67,36 @@ public sealed class KubernetesManifestApplier
         }
     }
 
+    /// <summary>
+    /// Deletes resources in reverse manifest order using background dependent-resource propagation.
+    /// Resources already absent are treated as successfully deleted.
+    /// </summary>
     public async IAsyncEnumerable<string> DeleteAsync(
         string manifest,
         string defaultNamespace,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        await foreach (var resource in DeleteAsync(manifest, defaultNamespace, propagationPolicy: null, cancellationToken))
+        await foreach (var resource in DeleteAsync(
+                           manifest,
+                           defaultNamespace,
+                           DefaultDeletionPropagationPolicy,
+                           cancellationToken))
             yield return resource;
     }
 
-    /// <summary>Deletes resources in reverse manifest order with the requested dependent-resource propagation policy.</summary>
+    /// <summary>
+    /// Deletes resources in reverse manifest order with the requested dependent-resource propagation policy.
+    /// Supported values are <c>Background</c>, <c>Foreground</c>, and <c>Orphan</c>. A missing value uses
+    /// <c>Background</c>. Resources already absent are treated as successfully deleted; discovery and other
+    /// Kubernetes API failures include the affected resource identity.
+    /// </summary>
     public async IAsyncEnumerable<string> DeleteAsync(
         string manifest,
         string defaultNamespace,
         string? propagationPolicy,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        var normalizedPropagationPolicy = NormalizeDeletionPropagationPolicy(propagationPolicy);
         foreach (var doc in SplitDocuments(manifest).Reverse())
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -90,7 +106,7 @@ public sealed class KubernetesManifestApplier
 
             try
             {
-                await DeleteOneAsync(identity, propagationPolicy, cancellationToken);
+                identity = await DeleteOneAsync(identity, normalizedPropagationPolicy, cancellationToken);
             }
             catch (KubernetesResourceOperationException)
             {
@@ -103,6 +119,86 @@ public sealed class KubernetesManifestApplier
             yield return identity.DisplayName;
         }
     }
+
+    private static string NormalizeDeletionPropagationPolicy(string? propagationPolicy)
+    {
+        if (string.IsNullOrWhiteSpace(propagationPolicy))
+            return DefaultDeletionPropagationPolicy;
+
+        if (string.Equals(propagationPolicy, "Background", StringComparison.OrdinalIgnoreCase))
+            return "Background";
+        if (string.Equals(propagationPolicy, "Foreground", StringComparison.OrdinalIgnoreCase))
+            return "Foreground";
+        if (string.Equals(propagationPolicy, "Orphan", StringComparison.OrdinalIgnoreCase))
+            return "Orphan";
+
+        throw new ArgumentException(
+            $"Unsupported Kubernetes deletion propagation policy '{propagationPolicy}'. " +
+            "Supported values are Background, Foreground, and Orphan.",
+            nameof(propagationPolicy));
+    }
+
+    internal async Task<ManifestIdentity?> ResolveIdentityAsync(
+        string manifestDocument,
+        string defaultNamespace,
+        CancellationToken cancellationToken)
+    {
+        var identity = ManifestIdentity.Parse(manifestDocument, defaultNamespace);
+        if (identity is null)
+            return null;
+
+        if (TryGetTypedResourceScope(identity, out _))
+            return NormalizeTypedIdentity(identity);
+
+        DiscoveredResource resource;
+        try
+        {
+            resource = await DiscoverResourceAsync(identity, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new KubernetesResourceOperationException(identity, ex);
+        }
+        return resource.Namespaced
+            ? identity
+            : identity with { Namespace = string.Empty };
+    }
+
+    internal static bool TryGetTypedResourceScope(ManifestIdentity identity, out bool namespaced)
+    {
+        bool? scope = (identity.ApiVersion, identity.Kind) switch
+        {
+            ("v1", "Namespace" or "PersistentVolume") => false,
+            ("v1", "ConfigMap" or "Secret" or "Service" or "ServiceAccount"
+                or "PersistentVolumeClaim" or "LimitRange" or "ResourceQuota"
+                or "Pod" or "Endpoints" or "ReplicationController") => true,
+            ("apps/v1", "Deployment" or "StatefulSet" or "DaemonSet" or "ReplicaSet") => true,
+            ("batch/v1", "Job" or "CronJob") => true,
+            ("networking.k8s.io/v1", "Ingress" or "NetworkPolicy") => true,
+            ("networking.k8s.io/v1", "IngressClass") => false,
+            ("rbac.authorization.k8s.io/v1", "Role" or "RoleBinding") => true,
+            ("rbac.authorization.k8s.io/v1", "ClusterRole" or "ClusterRoleBinding") => false,
+            ("autoscaling/v1" or "autoscaling/v2", "HorizontalPodAutoscaler") => true,
+            ("policy/v1", "PodDisruptionBudget") => true,
+            ("storage.k8s.io/v1", "StorageClass" or "CSIDriver" or "CSINode" or "VolumeAttachment") => false,
+            ("scheduling.k8s.io/v1", "PriorityClass") => false,
+            ("apiextensions.k8s.io/v1", "CustomResourceDefinition") => false,
+            ("admissionregistration.k8s.io/v1", "MutatingWebhookConfiguration" or "ValidatingWebhookConfiguration") => false,
+            ("apiregistration.k8s.io/v1", "APIService") => false,
+            ("coordination.k8s.io/v1", "Lease") => true,
+            ("node.k8s.io/v1", "RuntimeClass") => false,
+            ("discovery.k8s.io/v1", "EndpointSlice") => true,
+            ("flowcontrol.apiserver.k8s.io/v1", "FlowSchema" or "PriorityLevelConfiguration") => false,
+            _ => null
+        };
+        namespaced = scope ?? false;
+        return scope.HasValue;
+    }
+
+    internal static ManifestIdentity NormalizeTypedIdentity(ManifestIdentity identity)
+        => TryGetTypedResourceScope(identity, out var namespaced) && !namespaced
+            ? identity with { Namespace = string.Empty }
+            : identity;
 
     private async Task<ManifestIdentity> ApplyOneAsync(ManifestIdentity identity, string yaml, CancellationToken ct)
     {
@@ -422,7 +518,6 @@ public sealed class KubernetesManifestApplier
 
             // ─── autoscaling/v2 ───
             case ("autoscaling/v2", "HorizontalPodAutoscaler"):
-            case ("autoscaling/v2beta2", "HorizontalPodAutoscaler"):
                 await UpsertNamespacedAsync(
                     () => _client.AutoscalingV2.ReadNamespacedHorizontalPodAutoscalerAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.AutoscalingV2.CreateNamespacedHorizontalPodAutoscalerAsync(KubernetesYaml.Deserialize<V2HorizontalPodAutoscaler>(yaml, false), identity.Namespace, cancellationToken: ct),
@@ -735,16 +830,20 @@ public sealed class KubernetesManifestApplier
         => string.Equals(spec.Type, "LoadBalancer", StringComparison.OrdinalIgnoreCase) &&
            string.Equals(spec.ExternalTrafficPolicy, "Local", StringComparison.OrdinalIgnoreCase);
 
-    private async Task DeleteOneAsync(ManifestIdentity identity, string? propagationPolicy, CancellationToken ct)
+    private async Task<ManifestIdentity> DeleteOneAsync(
+        ManifestIdentity identity,
+        string propagationPolicy,
+        CancellationToken ct)
     {
         try
         {
-            var deleteOptions = string.IsNullOrWhiteSpace(propagationPolicy)
-                ? null
-                : new V1DeleteOptions { PropagationPolicy = propagationPolicy };
+            var deleteOptions = new V1DeleteOptions { PropagationPolicy = propagationPolicy };
             switch (identity.ApiVersion, identity.Kind)
             {
                 // Core v1
+                case ("v1", "Namespace"):
+                    await _client.CoreV1.DeleteNamespaceAsync(identity.Name, body: deleteOptions, cancellationToken: ct);
+                    break;
                 case ("v1", "ConfigMap"):
                     await _client.CoreV1.DeleteNamespacedConfigMapAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
@@ -823,7 +922,6 @@ public sealed class KubernetesManifestApplier
                     break;
                 // autoscaling
                 case ("autoscaling/v2", "HorizontalPodAutoscaler"):
-                case ("autoscaling/v2beta2", "HorizontalPodAutoscaler"):
                     await _client.AutoscalingV2.DeleteNamespacedHorizontalPodAutoscalerAsync(identity.Name, identity.Namespace, body: deleteOptions, cancellationToken: ct);
                     break;
                 case ("autoscaling/v1", "HorizontalPodAutoscaler"):
@@ -885,47 +983,130 @@ public sealed class KubernetesManifestApplier
                     await _client.FlowcontrolApiserverV1.DeletePriorityLevelConfigurationAsync(identity.Name, body: deleteOptions, cancellationToken: ct);
                     break;
                 default:
-                    await DeleteDiscoveredResourceAsync(identity, deleteOptions, ct);
-                    break;
+                    return await DeleteDiscoveredResourceAsync(identity, deleteOptions, ct);
             }
         }
         catch (HttpOperationException ex) when ((int)ex.Response.StatusCode == 404)
         {
             // Already gone.
         }
+
+        return identity;
     }
 
-    private async Task DeleteDiscoveredResourceAsync(ManifestIdentity identity, V1DeleteOptions? deleteOptions, CancellationToken ct)
+    private async Task<ManifestIdentity> DeleteDiscoveredResourceAsync(
+        ManifestIdentity identity,
+        V1DeleteOptions deleteOptions,
+        CancellationToken ct)
     {
         DiscoveredResource resource;
         try
         {
-            resource = await DiscoverResourceAsync(identity, ct);
+            resource = await DiscoverResourceForDeletionAsync(_client, identity, ct);
         }
-        catch (KubernetesApiResourceNotFoundException)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // A removed CRD can remove its resource kind before uninstall reaches
-            // an older stored manifest. The object is no longer addressable.
-            return;
+            throw new KubernetesResourceOperationException(identity, ex);
         }
-        catch (KubernetesApiResourceUnsupportedException)
+        var resolvedApiVersion = $"{resource.Group}/{resource.Version}";
+        var resolvedIdentity = resource.Namespaced
+            ? identity with { ApiVersion = resolvedApiVersion }
+            : identity with { ApiVersion = resolvedApiVersion, Namespace = string.Empty };
+
+        try
         {
-            // Core API resources need typed client methods. If this kind is not in
-            // the typed switch above, the applier did not target it for deletion.
-            return;
+            if (resource.Namespaced)
+            {
+                await _client.CustomObjects.DeleteNamespacedCustomObjectAsync(
+                    resource.Group, resource.Version, resolvedIdentity.Namespace, resource.Plural, resolvedIdentity.Name,
+                    deleteOptions, null, null, null, null, ct);
+            }
+            else
+            {
+                await _client.CustomObjects.DeleteClusterCustomObjectAsync(
+                    resource.Group, resource.Version, resource.Plural, resolvedIdentity.Name,
+                    deleteOptions, null, null, null, null, ct);
+            }
+        }
+        catch (HttpOperationException ex) when ((int)ex.Response.StatusCode == 404)
+        {
+            // Already gone.
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new KubernetesResourceOperationException(resolvedIdentity, ex);
         }
 
-        if (resource.Namespaced)
+        return resolvedIdentity;
+    }
+
+    internal static async Task<DiscoveredResource> DiscoverResourceForDeletionAsync(
+        k8s.Kubernetes client,
+        ManifestIdentity identity,
+        CancellationToken cancellationToken)
+    {
+        var (group, declaredVersion) = SplitApiVersion(identity.ApiVersion);
+        if (string.IsNullOrEmpty(group))
+            throw new KubernetesApiResourceUnsupportedException(identity.ApiVersion, identity.Kind);
+
+        var declared = await TryDiscoverResourceVersionAsync(
+            client,
+            group,
+            declaredVersion,
+            identity.Kind,
+            cancellationToken);
+        if (declared is not null)
+            return declared;
+
+        var groups = await client.Apis.GetAPIVersionsAsync(cancellationToken);
+        var apiGroup = groups.Groups?.SingleOrDefault(candidate =>
+            string.Equals(candidate.Name, group, StringComparison.Ordinal));
+        if (apiGroup is not null)
         {
-            await _client.CustomObjects.DeleteNamespacedCustomObjectAsync(
-                resource.Group, resource.Version, identity.Namespace, resource.Plural, identity.Name,
-                deleteOptions, null, null, null, null, ct);
-            return;
+            var versions = new[] { apiGroup.PreferredVersion?.Version }
+                .Concat(apiGroup.Versions?.Select(version => version.Version) ?? [])
+                .Where(version => !string.IsNullOrWhiteSpace(version) &&
+                                  !string.Equals(version, declaredVersion, StringComparison.Ordinal))
+                .Distinct(StringComparer.Ordinal);
+            foreach (var version in versions)
+            {
+                var alternate = await TryDiscoverResourceVersionAsync(
+                    client,
+                    group,
+                    version!,
+                    identity.Kind,
+                    cancellationToken);
+                if (alternate is not null)
+                    return alternate;
+            }
         }
 
-        await _client.CustomObjects.DeleteClusterCustomObjectAsync(
-            resource.Group, resource.Version, resource.Plural, identity.Name,
-            deleteOptions, null, null, null, null, ct);
+        throw new KubernetesApiResourceNotFoundException(identity.ApiVersion, identity.Kind);
+    }
+
+    private static async Task<DiscoveredResource?> TryDiscoverResourceVersionAsync(
+        k8s.Kubernetes client,
+        string group,
+        string version,
+        string kind,
+        CancellationToken cancellationToken)
+    {
+        V1APIResourceList resources;
+        try
+        {
+            resources = await client.CustomObjects.GetAPIResourcesAsync(group, version, cancellationToken);
+        }
+        catch (HttpOperationException ex) when ((int)ex.Response.StatusCode == 404)
+        {
+            return null;
+        }
+
+        var match = resources.Resources?.SingleOrDefault(resource =>
+            string.Equals(resource.Kind, kind, StringComparison.Ordinal) &&
+            !resource.Name.Contains('/', StringComparison.Ordinal));
+        return match is null || string.IsNullOrWhiteSpace(match.Name)
+            ? null
+            : new DiscoveredResource(group, version, match.Name, match.Namespaced == true);
     }
 
     private static async Task UpsertNamespacedAsync<T>(
@@ -1024,14 +1205,8 @@ public sealed record ManifestIdentity(string ApiVersion, string Kind, string Nam
             return null;
 
         var ns = HelmYaml.GetString(metadata, "namespace") ?? defaultNamespace;
-        if (kind is "Namespace" or "ClusterRole" or "ClusterRoleBinding" or "PersistentVolume"
-            or "StorageClass" or "CSIDriver" or "CSINode" or "VolumeAttachment"
-            or "PriorityClass" or "CustomResourceDefinition" or "MutatingWebhookConfiguration"
-            or "ValidatingWebhookConfiguration" or "APIService" or "IngressClass"
-            or "RuntimeClass" or "FlowSchema" or "PriorityLevelConfiguration")
-            ns = string.Empty;
-
-        return new ManifestIdentity(apiVersion, kind, name, ns);
+        return KubernetesManifestApplier.NormalizeTypedIdentity(
+            new ManifestIdentity(apiVersion, kind, name, ns));
     }
 }
 

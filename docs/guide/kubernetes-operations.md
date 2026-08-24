@@ -34,7 +34,24 @@ The applier splits YAML documents, derives each resource identity, and applies i
 
 The namespace argument supplies a default for namespaced documents that do not declare `metadata.namespace`. An explicit namespace in the manifest wins. Cluster-scoped resources are not given a namespace.
 
-The client resolves common resource kinds directly and discovers other API resources from the target cluster for apply and delete. If an API version has been removed or a custom resource kind is not discoverable, the operation fails with that identity in the diagnostic.
+The client resolves common resource kinds directly and discovers other API resources from the target cluster. Apply requires the manifest's declared API version. Delete and deletion waiting can route an obsolete custom-resource version through another served version in the same API group when that version exposes the same kind. Direct deletion reports the manifest identity if no version exposes the kind; deletion waiting treats a kind removed from the entire group as absent.
+
+## Delete rendered YAML deterministically
+
+```csharp
+await foreach (var resource in applier.DeleteAsync(
+    manifest,
+    defaultNamespace: "platform",
+    propagationPolicy: "Foreground",
+    cancellationToken))
+{
+    Console.WriteLine($"Deleted {resource}");
+}
+```
+
+Delete processes documents in reverse manifest order. The overload without a propagation value uses `Background`; explicit values are `Background`, `Foreground`, and `Orphan`, and the selected value is sent to typed and dynamically discovered delete endpoints. A Kubernetes object `404` is an idempotent success. A removed dynamic API-version endpoint first triggers same-group served-version discovery; authorization, transport, unsupported core kinds, exhausted direct-delete discovery, and other non-`404` API failures stop the operation with the affected API version, kind, namespace, and name. Cancellation stops before the next request.
+
+The direct applier deletes every valid resource document it receives. It does not interpret Helm lifecycle annotations. `HelmClient` filters `helm.sh/resource-policy: keep` before uninstall and rollback cleanup, which suppresses a direct delete request but cannot prevent namespace or owner cascading deletion by Kubernetes.
 
 ## Wait only for the readiness you need
 

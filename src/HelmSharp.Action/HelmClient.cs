@@ -589,21 +589,37 @@ public class HelmClient : IHelmClient
             {
                 try
                 {
-                    var attemptedOnlyManifest = GetAttemptedOnlyManifest(previous.Manifest, mainManifest, ns);
+                    var attemptedOnlyManifest = await GetAttemptedOnlyManifestAsync(
+                        applier,
+                        previous.Manifest,
+                        mainManifest,
+                        ns,
+                        CancellationToken.None);
                     if (!string.IsNullOrWhiteSpace(attemptedOnlyManifest))
                     {
                         await foreach (var resource in applier.DeleteAsync(attemptedOnlyManifest, ns, cancellationToken: CancellationToken.None))
                             output.Add($"Removed failed-upgrade resource {resource}");
                     }
-                    if (request.Atomic)
+                }
+                catch
+                {
+                    output.Add("Unable to fully clean up resources from the failed upgrade.");
+                }
+
+                // Restoration is independent of failed-upgrade cleanup. In particular,
+                // discovery for an API version removed by the attempted revision may
+                // fail before re-applying the previous CRD can make that API available.
+                if (request.Atomic)
+                {
+                    try
                     {
                         await foreach (var resource in applier.ApplyAsync(previous.Manifest, ns, CancellationToken.None))
                             output.Add($"Restored {resource}");
                     }
-                }
-                catch
-                {
-                    output.Add("Unable to fully restore the previous deployed revision.");
+                    catch
+                    {
+                        output.Add("Unable to fully restore the previous deployed revision.");
+                    }
                 }
             }
             else
@@ -692,8 +708,147 @@ public class HelmClient : IHelmClient
         return string.Join(Environment.NewLine + "---" + Environment.NewLine, attemptedOnly);
     }
 
+    internal static async Task<string> GetAttemptedOnlyManifestAsync(
+        KubernetesManifestApplier applier,
+        string previousManifest,
+        string attemptedManifest,
+        string defaultNamespace,
+        CancellationToken cancellationToken)
+    {
+        var previousDocuments = KubernetesManifestApplier.SplitDocumentsPublic(previousManifest)
+            .Select(document => (Document: document, Identity: ManifestIdentity.Parse(document, defaultNamespace)))
+            .Where(item => item.Identity is not null)
+            .Select(item => (item.Document, Identity: item.Identity!))
+            .ToList();
+        var scopeCache = new Dictionary<string, bool>(StringComparer.Ordinal);
+
+        var attemptedOnly = new List<string>();
+        foreach (var document in KubernetesManifestApplier.SplitDocumentsPublic(attemptedManifest))
+        {
+            var identity = ManifestIdentity.Parse(document, defaultNamespace);
+            if (identity is null)
+                continue;
+
+            var candidates = previousDocuments
+                .Where(item => string.Equals(
+                    ManifestResourceKey(item.Identity),
+                    ManifestResourceKey(identity),
+                    StringComparison.Ordinal))
+                .ToList();
+            if (candidates.Count == 0)
+            {
+                attemptedOnly.Add(document);
+                continue;
+            }
+
+            if (candidates.Any(candidate => string.Equals(
+                    ManifestIdentityKey(candidate.Identity),
+                    ManifestIdentityKey(identity),
+                    StringComparison.Ordinal)))
+            {
+                continue;
+            }
+
+            var namespaced = await ResolveResourceScopeAsync(
+                applier,
+                candidates.Append((document, identity)),
+                defaultNamespace,
+                scopeCache,
+                cancellationToken);
+            if (namespaced is not false)
+                attemptedOnly.Add(document);
+        }
+
+        return string.Join(Environment.NewLine + "---" + Environment.NewLine, attemptedOnly);
+    }
+
+    private static async Task<bool?> ResolveResourceScopeAsync(
+        KubernetesManifestApplier applier,
+        IEnumerable<(string Document, ManifestIdentity Identity)> documents,
+        string defaultNamespace,
+        Dictionary<string, bool> scopeCache,
+        CancellationToken cancellationToken)
+    {
+        foreach (var (document, identity) in documents)
+        {
+            var resourceKey = ManifestResourceTypeKey(identity);
+            if (scopeCache.TryGetValue(resourceKey, out var cachedScope))
+                return cachedScope;
+
+            if (KubernetesManifestApplier.TryGetTypedResourceScope(identity, out var typedScope))
+            {
+                scopeCache[resourceKey] = typedScope;
+                return typedScope;
+            }
+
+            try
+            {
+                var resolved = await applier.ResolveIdentityAsync(document, defaultNamespace, cancellationToken);
+                if (resolved is null)
+                    continue;
+
+                var namespaced = !string.IsNullOrWhiteSpace(resolved.Namespace);
+                scopeCache[resourceKey] = namespaced;
+                return namespaced;
+            }
+            catch (KubernetesResourceOperationException ex)
+                when (ex.InnerException is KubernetesApiResourceNotFoundException ||
+                      ex.InnerException is HttpOperationException { Response.StatusCode: System.Net.HttpStatusCode.NotFound })
+            {
+                // A stored revision can reference an API version that its current CRD no longer serves.
+                // Resource scope is invariant across versions, so try another document for this type.
+            }
+        }
+
+        return null;
+    }
+
+    internal static (string Manifest, IReadOnlyList<string> KeptResources) FilterManifestForDeletion(
+        string manifest,
+        string defaultNamespace)
+    {
+        var keptResources = new List<string>();
+        var deletableDocuments = KubernetesManifestApplier.SplitDocumentsPublic(manifest)
+            .Where(document =>
+            {
+                var identity = ManifestIdentity.Parse(document, defaultNamespace);
+                if (identity is null)
+                    return true;
+
+                var parsed = HelmYaml.DeserializeDictionary(document);
+                if (!parsed.TryGetValue("metadata", out var metadataObject) ||
+                    metadataObject is not IDictionary<string, object?> metadata ||
+                    !metadata.TryGetValue("annotations", out var annotationsObject) ||
+                    annotationsObject is not IDictionary<string, object?> annotations ||
+                    !annotations.TryGetValue("helm.sh/resource-policy", out var policy) ||
+                    !string.Equals(Convert.ToString(policy), "keep", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                keptResources.Add(identity.DisplayName);
+                return false;
+            });
+
+        return (
+            string.Join(Environment.NewLine + "---" + Environment.NewLine, deletableDocuments),
+            keptResources);
+    }
+
     private static string ManifestIdentityKey(ManifestIdentity identity)
-        => $"{identity.ApiVersion}/{identity.Namespace}/{identity.Kind}/{identity.Name}";
+    {
+        return $"{ManifestResourceTypeKey(identity)}/{identity.Namespace}/{identity.Name}";
+    }
+
+    private static string ManifestResourceKey(ManifestIdentity identity)
+        => $"{ManifestResourceTypeKey(identity)}/{identity.Name}";
+
+    private static string ManifestResourceTypeKey(ManifestIdentity identity)
+    {
+        var separator = identity.ApiVersion.IndexOf('/');
+        var apiGroup = separator < 0 ? string.Empty : identity.ApiVersion[..separator];
+        return $"{apiGroup}/{identity.Kind}";
+    }
 
     private static async Task<List<HelmReleaseRecord>> LoadReleaseHistoryForUpgradeInstallAsync(
         HelmReleaseStore store,
@@ -733,6 +888,8 @@ public class HelmClient : IHelmClient
     {
         if (string.IsNullOrWhiteSpace(request.ReleaseName))
             return Fail("release name is required");
+        if (!Enum.IsDefined(request.DeletionPropagation))
+            return Fail($"unsupported Kubernetes deletion propagation value: {(int)request.DeletionPropagation}");
 
         using var timeoutSource = request.TimeoutSeconds is > 0
             ? new CancellationTokenSource(TimeSpan.FromSeconds(request.TimeoutSeconds.Value))
@@ -789,26 +946,37 @@ public class HelmClient : IHelmClient
         foreach (var failedRevision in history.Where(record =>
                      string.Equals(record.Status, "failed", StringComparison.OrdinalIgnoreCase)))
         {
-            var failedOnlyManifest = GetAttemptedOnlyManifest(mainManifest, failedRevision.Manifest, ns);
+            var failedOnlyManifest = await GetAttemptedOnlyManifestAsync(
+                applier,
+                mainManifest,
+                failedRevision.Manifest,
+                ns,
+                operationToken);
+            var failedDeletion = FilterManifestForDeletion(failedOnlyManifest, ns);
+            foreach (var keptResource in failedDeletion.KeptResources)
+                output.AppendLine($"Kept {keptResource} (helm.sh/resource-policy: keep)");
             await foreach (var resource in applier.DeleteAsync(
-                               failedOnlyManifest,
+                               failedDeletion.Manifest,
                                ns,
                                propagationPolicy: request.DeletionPropagation.ToString(),
                                cancellationToken: operationToken))
             {
                 output.AppendLine($"Deleted {resource}");
             }
-            AppendManifestDocuments(deletedManifests, failedOnlyManifest);
+            AppendManifestDocuments(deletedManifests, failedDeletion.Manifest);
         }
+        var mainDeletion = FilterManifestForDeletion(mainManifest, ns);
+        foreach (var keptResource in mainDeletion.KeptResources)
+            output.AppendLine($"Kept {keptResource} (helm.sh/resource-policy: keep)");
         await foreach (var resource in applier.DeleteAsync(
-                           mainManifest,
+                           mainDeletion.Manifest,
                            ns,
                            propagationPolicy: request.DeletionPropagation.ToString(),
                            cancellationToken: operationToken))
         {
             output.AppendLine($"Deleted {resource}");
         }
-        AppendManifestDocuments(deletedManifests, mainManifest);
+        AppendManifestDocuments(deletedManifests, mainDeletion.Manifest);
 
         if (request.Wait)
         {
@@ -943,6 +1111,7 @@ public class HelmClient : IHelmClient
             return Fail($"release has no revision {request.Revision}");
 
         var (mainManifest, hooks) = ResolveStoredManifest(targetRecord, ns);
+        var (currentMainManifest, _) = ResolveStoredManifest(current, ns);
         var hookExecutor = new HelmHookExecutor(client, options.FieldManager, timeout);
         var newRevision = await store.NextRevisionAsync(request.ReleaseName, ns, operationToken);
         var rollbackRecord = new HelmReleaseRecord
@@ -999,10 +1168,28 @@ public class HelmClient : IHelmClient
             }
 
             var applier = new KubernetesManifestApplier(client, options.FieldManager);
+            var rollbackOnlyManifest = await GetAttemptedOnlyManifestAsync(
+                applier,
+                mainManifest,
+                currentMainManifest,
+                ns,
+                operationToken);
+            var rollbackDeletion = FilterManifestForDeletion(rollbackOnlyManifest, ns);
 
             await foreach (var resource in applier.ApplyAsync(mainManifest, ns, operationToken))
             {
                 output.AppendLine($"Rolled back {resource}");
+            }
+
+            foreach (var keptResource in rollbackDeletion.KeptResources)
+                output.AppendLine($"Kept rollback resource {keptResource} (helm.sh/resource-policy: keep)");
+            await foreach (var resource in applier.DeleteAsync(
+                               rollbackDeletion.Manifest,
+                               ns,
+                               propagationPolicy: "Background",
+                               cancellationToken: operationToken))
+            {
+                output.AppendLine($"Removed rollback resource {resource}");
             }
 
             // Execute post-rollback hooks

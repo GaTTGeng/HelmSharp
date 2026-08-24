@@ -15,6 +15,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="HelmSharp.Action" />
     <InternalsVisibleTo Include="HelmSharp.Tests" />
   </ItemGroup>
 
