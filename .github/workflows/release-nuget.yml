@@ -97,8 +97,9 @@ jobs:
             exit 1
           fi
 
-      - name: Restore
-        run: dotnet restore HelmSharp.sln
+      - name: Restore and audit exact release dependency graph
+        shell: pwsh
+        run: ./scripts/Invoke-NuGetAudit.ps1 -Configuration ${{ env.CONFIGURATION }}
 
       - name: Build
         run: dotnet build HelmSharp.sln --configuration ${{ env.CONFIGURATION }} --no-restore

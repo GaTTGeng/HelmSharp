@@ -10,6 +10,10 @@ This project follows semantic versioning once stable releases begin.
 
 - Made Kubernetes deletion deterministic across uninstall, rollback, and hook cleanup, including reverse ordering, propagation policies, keep annotations, discovered resource identity, and actionable failure diagnostics (#232).
 
+### Security
+
+- Added scheduled CodeQL analysis, pull-request dependency review, and a high/critical NuGet audit for direct and transitive dependencies. The audit also gates release restores before packages can be published (#240).
+
 ## [1.3.2] - 2026-08-13
 
 ### Added
