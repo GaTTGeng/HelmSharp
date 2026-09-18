@@ -49,8 +49,10 @@ After an explicit approval, rebuild the request from the recorded inputs and app
 | `ResetValues = true` | Start from chart defaults. It cannot be combined with `ReuseValues`. |
 | `Wait = true` | Wait for supported resource readiness after apply. |
 | `WaitForJobs = true` | Also wait for Jobs; it requires `Wait` or `Atomic`. |
-| `TimeoutSeconds` | One limit for applying resources, hooks, readiness waiting, and cancellation. |
-| `Atomic = true` | Wait and recover on failure. |
+| `TimeoutSeconds` | One positive-second limit for applying resources, hooks, readiness waiting, and cancellation. Zero and negative values are rejected. |
+| `Atomic = true` | Wait and recover on failure; `WaitForJobs` is honored during this wait. |
+| Wait strategy | HelmSharp uses deterministic polling with kind-specific readiness predicates. Helm's legacy status-watcher strategy is not exposed because it is not implemented. |
+| Cancellation | The caller token is passed to every Kubernetes read and polling delay; cancellation is propagated rather than reported as readiness success. |
 | `DisableHooks = true` | Do not execute chart hooks. |
 | `MaxHistory` | Retain at most this many stored revisions; `0` means no limit. |
 
@@ -78,7 +80,7 @@ Rollback applies the target revision and then deletes resources that exist only 
 
 Hooks run in weight and then name order. Job and Pod hooks are observed for completion within the timeout; other hook kinds are applied without a completion observer. The supported cleanup policies are `before-hook-creation`, `hook-succeeded`, and `hook-failed`; when no policy is declared, `before-hook-creation` is used. Cleanup waits until Kubernetes reports the hook object absent before continuing. `hook-succeeded` resources remain available to later hooks in the same event batch, then are deleted in reverse execution order after the whole batch succeeds; if a later hook fails or the operation is canceled, previously successful hooks are finalized before the original failure is returned. A failed `before-hook-creation` delete prevents a conflicting hook create, and a failed `hook-succeeded` cleanup fails the operation. Failure/cancellation finalization shares one independent bounded window across the whole cleanup batch and continues past individual delete errors; if cleanup fails, HelmSharp preserves the original hook exception and attaches the cleanup exception or aggregate at `Exception.Data["HelmSharp.HookCleanupError"]`. `DisableHooks = true` skips hook execution and hook cleanup. Hook cleanup uses background propagation and never deletes the release's regular manifest. For Helm parity and to avoid cascading deletion of custom resources, delete policies never delete `CustomResourceDefinition` hooks.
 
-The built-in readiness waiter covers common workload resources. A CRD can be applied, but its domain-specific readiness is not inferred. Add a product-specific health check when a deployment is not ready merely because Kubernetes accepted the object.
+The built-in readiness waiter covers common workload resources. It distinguishes terminal readiness failure, timeout, cancellation, and Kubernetes read errors; a resource that is not yet visible remains pending until it appears or the timeout expires. A CRD can be applied, but its domain-specific readiness is not inferred. Add a product-specific health check when a deployment is not ready merely because Kubernetes accepted the object.
 
 ## Permissions and error handling
 

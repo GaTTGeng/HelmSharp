@@ -42,13 +42,23 @@ public class HelmUpgradeInstallRequest
 
     public bool CreateNamespace { get; set; } = true;
 
+    /// <summary>
+    /// Wait for HelmSharp's supported readiness predicates after apply. This is the standard
+    /// polling strategy; Helm's legacy status-watcher strategy is not exposed because it is
+    /// not implemented by HelmSharp.
+    /// </summary>
     public bool Wait { get; set; } = true;
 
     /// <summary>
-    /// If true and Wait is true, wait for all Jobs to complete before marking release as successful.
+    /// If true and <see cref="Wait"/> is true, wait for all Jobs to complete before marking
+    /// the release successful. With <see cref="Atomic"/>, waiting is also enabled for recovery.
     /// </summary>
     public bool WaitForJobs { get; set; }
 
+    /// <summary>
+    /// Maximum duration for apply, hooks, readiness polling, and cancellation. Must be greater
+    /// than zero when specified; omitted uses <see cref="HelmExecutionOptions.TimeoutSeconds"/>.
+    /// </summary>
     public int? TimeoutSeconds { get; set; }
 
     /// <summary>
