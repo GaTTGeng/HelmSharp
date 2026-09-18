@@ -20,17 +20,7 @@ If the NuGet.org username differs from the GitHub repository owner, create a rep
 
 No `NUGET_API_KEY` repository secret is required.
 
-For branch protection, require the `CI / Build, test, and pack` and `Security / NuGet audit` status checks before merging to `master`. Keep conversation resolution required. On pull requests, also require dependency review and CodeQL checks when branch protection supports those checks.
-
-## Dependency and code security
-
-Every restore audits direct and transitive NuGet packages. High and critical advisories fail CI and the release workflow before packing or publishing. Reproduce the gate locally with:
-
-```powershell
-./scripts/Invoke-NuGetAudit.ps1 -Configuration Release
-```
-
-The scheduled `Security` workflow runs CodeQL and repeats the NuGet audit. Pull requests receive dependency-review findings. If a release is blocked, upgrade the package first. A temporary exception must follow the reviewed, expiring format in [`security/nuget-audit-exceptions.md`](../security/nuget-audit-exceptions.md); never hide an advisory with `NoWarn`.
+For branch protection, require the `CI / Build, test, and pack` status check before merging to `master`. Keep conversation resolution required.
 
 For Actions hardening, prefer allowing only GitHub-owned and verified Marketplace actions. If stricter supply-chain controls are required, pin third-party actions by full commit SHA and enable SHA pinning at the repository or organization level.
 
