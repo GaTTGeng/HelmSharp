@@ -1,4 +1,6 @@
 using System.Runtime.CompilerServices;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using k8s;
 using k8s.Autorest;
 using k8s.Models;
@@ -74,6 +76,7 @@ public sealed class KubernetesResourceWaiter
 
         var pending = new HashSet<string>(waitable.Select(id => id.DisplayName));
         var failed = new HashSet<string>();
+        var lastStatuses = new Dictionary<string, string>();
         var pollInterval = TimeSpan.FromSeconds(3);
         var consecutiveErrors = 0;
 
@@ -95,6 +98,7 @@ public sealed class KubernetesResourceWaiter
                 catch (HttpOperationException ex) when ((int)ex.Response.StatusCode == 404)
                 {
                     consecutiveErrors = 0;
+                    lastStatuses[id.DisplayName] = "Resource not found yet";
                     continue;
                 }
                 catch (OperationCanceledException)
@@ -104,6 +108,7 @@ public sealed class KubernetesResourceWaiter
                 catch (Exception ex)
                 {
                     consecutiveErrors++;
+                    lastStatuses[id.DisplayName] = "Kubernetes API read failed";
                     if (consecutiveErrors > 10)
                         throw new KubernetesResourceOperationException(id, ex);
                     continue;
@@ -118,6 +123,10 @@ public sealed class KubernetesResourceWaiter
                 {
                     newlyFailed.Add(id.DisplayName);
                     yield return $"  {id.DisplayName} failed: {result.Status}";
+                }
+                else
+                {
+                    lastStatuses[id.DisplayName] = result.Status;
                 }
                 consecutiveErrors = 0;
             }
@@ -156,6 +165,12 @@ public sealed class KubernetesResourceWaiter
         if (pending.Count > 0)
         {
             var timeoutMsg = $"Timed out after {_timeoutSeconds}s waiting for: {string.Join(", ", pending)}";
+            var statuses = pending
+                .Where(lastStatuses.ContainsKey)
+                .Select(resource => $"{resource}: {lastStatuses[resource]}")
+                .ToList();
+            if (statuses.Count > 0)
+                timeoutMsg += $" (last observed status: {string.Join("; ", statuses)})";
             throw new TimeoutException(timeoutMsg);
         }
 
@@ -353,6 +368,7 @@ public sealed class KubernetesResourceWaiter
                 : (true, false, ""),
             ("batch/v1", "CronJob") => (true, false, ""),
             ("v1", "Pod") => await CheckPodAsync(identity.Name, ns, ct),
+            ("v1", "ReplicationController") => await CheckReplicationControllerAsync(identity.Name, ns, ct),
             ("v1", "PersistentVolumeClaim") => await CheckPvcAsync(identity.Name, ns, ct),
             ("v1", "Service") => (true, false, ""),
             ("v1", "ConfigMap") => (true, false, ""),
@@ -370,22 +386,36 @@ public sealed class KubernetesResourceWaiter
         string name, string ns, CancellationToken ct)
     {
         var deploy = await _client.AppsV1.ReadNamespacedDeploymentAsync(name, ns, cancellationToken: ct);
-        var desired = deploy.Spec.Replicas ?? 1;
-        var ready = deploy.Status?.ReadyReplicas ?? 0;
-        var updated = deploy.Status?.UpdatedReplicas ?? 0;
-        var available = deploy.Status?.AvailableReplicas ?? 0;
-
-        if (ready >= desired && updated >= desired && available >= desired)
+        if (deploy.Spec.Paused == true)
             return (true, false, "");
 
-        // Check for failure conditions
-        var conditions = deploy.Status?.Conditions;
-        if (conditions is not null)
-        {
-            var progressing = conditions.FirstOrDefault(c => c.Type == "Progressing");
-            if (progressing?.Status == "False" && progressing.Reason == "ProgressDeadlineExceeded")
-                return (false, true, $"Deployment exceeded progress deadline");
-        }
+        if ((deploy.Status?.ObservedGeneration ?? 0) != (deploy.Metadata.Generation ?? 0))
+            return (false, false, "Deployment controller has not observed the current generation");
+
+        var selector = BuildLabelSelector(deploy.Spec.Selector);
+        var replicaSets = await _client.AppsV1.ListNamespacedReplicaSetAsync(
+            ns,
+            labelSelector: selector,
+            cancellationToken: ct);
+        var newReplicaSet = replicaSets.Items
+            .Where(replicaSet => replicaSet.Metadata.OwnerReferences?.Any(owner =>
+                owner.Uid == deploy.Metadata.Uid && owner.Kind == "Deployment" && owner.Controller == true) == true)
+            .Where(replicaSet => PodTemplatesMatch(replicaSet.Spec.Template, deploy.Spec.Template))
+            .OrderBy(replicaSet => replicaSet.Metadata.CreationTimestamp)
+            .ThenBy(replicaSet => replicaSet.Metadata.Name, StringComparer.Ordinal)
+            .FirstOrDefault();
+        if (newReplicaSet is null)
+            return (false, false, "Deployment has no new ReplicaSet");
+
+        if ((newReplicaSet.Status?.ObservedGeneration ?? 0) != (newReplicaSet.Metadata.Generation ?? 0))
+            return (false, false, "Deployment ReplicaSet controller has not observed the current generation");
+
+        var desired = deploy.Spec.Replicas ?? 1;
+        var maxUnavailable = ResolveDeploymentMaxUnavailable(deploy, desired);
+        var expectedReady = desired - maxUnavailable;
+        var ready = newReplicaSet.Status?.ReadyReplicas ?? 0;
+        if (ready >= expectedReady)
+            return (true, false, "");
 
         return (false, false, $"{ready}/{desired} replicas ready");
     }
@@ -394,11 +424,29 @@ public sealed class KubernetesResourceWaiter
         string name, string ns, CancellationToken ct)
     {
         var sts = await _client.AppsV1.ReadNamespacedStatefulSetAsync(name, ns, cancellationToken: ct);
+        if ((sts.Status?.ObservedGeneration ?? 0) != (sts.Metadata.Generation ?? 0))
+            return (false, false, "StatefulSet controller has not observed the current generation");
+
+        var updateStrategy = sts.Spec.UpdateStrategy;
+        if (updateStrategy?.Type != "RollingUpdate")
+            return (true, false, "");
+
         var desired = sts.Spec.Replicas ?? 1;
         var ready = sts.Status?.ReadyReplicas ?? 0;
         var updated = sts.Status?.UpdatedReplicas ?? 0;
+        var partition = updateStrategy.RollingUpdate?.Partition ?? 0;
+        var expectedUpdated = Math.Max(0, desired - partition);
 
-        if (ready >= desired && updated >= desired)
+        if (updated < expectedUpdated)
+            return (false, false, $"{updated}/{expectedUpdated} updated replicas");
+
+        if (ready != desired)
+            return (false, false, $"{ready}/{desired} replicas ready");
+
+        if (partition == 0 && sts.Status?.CurrentRevision != sts.Status?.UpdateRevision)
+            return (false, false, "StatefulSet revisions do not match");
+
+        if (ready == desired)
             return (true, false, "");
 
         return (false, false, $"{ready}/{desired} replicas ready");
@@ -408,27 +456,182 @@ public sealed class KubernetesResourceWaiter
         string name, string ns, CancellationToken ct)
     {
         var ds = await _client.AppsV1.ReadNamespacedDaemonSetAsync(name, ns, cancellationToken: ct);
-        var desired = ds.Status?.DesiredNumberScheduled ?? 0;
-        var ready = ds.Status?.NumberReady ?? 0;
-        var updated = ds.Status?.UpdatedNumberScheduled ?? 0;
+        if ((ds.Status?.ObservedGeneration ?? 0) != (ds.Metadata.Generation ?? 0))
+            return (false, false, "DaemonSet controller has not observed the current generation");
 
-        if (ready >= desired && updated >= desired)
+        var updateStrategy = ds.Spec.UpdateStrategy;
+        if (updateStrategy?.Type != "RollingUpdate")
             return (true, false, "");
 
-        return (false, false, $"{ready}/{desired} pods ready");
+        var desired = ds.Status?.DesiredNumberScheduled ?? 0;
+        var updated = ds.Status?.UpdatedNumberScheduled ?? 0;
+        if (updated != desired)
+            return (false, false, $"{updated}/{desired} updated pods scheduled");
+
+        var defaultUnavailable = desired == 0 ? 0 : 1;
+        var maxUnavailable = ResolveScaledValue(
+            updateStrategy.RollingUpdate?.MaxUnavailable,
+            desired,
+            roundUp: true,
+            defaultValue: defaultUnavailable,
+            invalidValueFallback: desired);
+        var expectedAvailable = desired - maxUnavailable;
+        var ready = ds.Status?.NumberReady ?? 0;
+
+        if (ready >= expectedAvailable)
+            return (true, false, "");
+
+        return (false, false, $"{ready}/{expectedAvailable} pods ready");
     }
 
     private async Task<(bool Ready, bool Failed, string Status)> CheckReplicaSetAsync(
         string name, string ns, CancellationToken ct)
     {
         var rs = await _client.AppsV1.ReadNamespacedReplicaSetAsync(name, ns, cancellationToken: ct);
-        var desired = rs.Spec.Replicas ?? 1;
-        var ready = rs.Status?.ReadyReplicas ?? 0;
+        if ((rs.Status?.ObservedGeneration ?? 0) != (rs.Metadata.Generation ?? 0))
+            return (false, false, "ReplicaSet controller has not observed the current generation");
 
-        if (ready >= desired)
-            return (true, false, "");
+        var podStatus = await CheckSelectedPodsAsync(
+            ns,
+            rs.Spec.Selector,
+            "ReplicaSet",
+            ct);
+        if (!podStatus.Ready)
+            return (false, false, podStatus.Status);
 
-        return (false, false, $"{ready}/{desired} replicas ready");
+        return (true, false, "");
+    }
+
+    private async Task<(bool Ready, bool Failed, string Status)> CheckReplicationControllerAsync(
+        string name, string ns, CancellationToken ct)
+    {
+        var controller = await _client.CoreV1.ReadNamespacedReplicationControllerAsync(name, ns, cancellationToken: ct);
+        if ((controller.Status?.ObservedGeneration ?? 0) != (controller.Metadata.Generation ?? 0))
+            return (false, false, "ReplicationController has not observed the current generation");
+
+        var podStatus = await CheckSelectedPodsAsync(
+            ns,
+            controller.Spec.Selector is null
+                ? null
+                : new V1LabelSelector { MatchLabels = controller.Spec.Selector },
+            "ReplicationController",
+            ct);
+        return podStatus.Ready
+            ? (true, false, "")
+            : (false, false, podStatus.Status);
+    }
+
+    private async Task<(bool Ready, string Status)> CheckSelectedPodsAsync(
+        string ns,
+        V1LabelSelector? selector,
+        string ownerKind,
+        CancellationToken ct)
+    {
+        var pods = await _client.CoreV1.ListNamespacedPodAsync(
+            ns,
+            labelSelector: BuildLabelSelector(selector),
+            cancellationToken: ct);
+        var unreadyPod = pods.Items.FirstOrDefault(pod =>
+            pod.Status?.Conditions?.Any(condition => condition.Type == "Ready" && condition.Status == "True") != true);
+        return unreadyPod is null
+            ? (true, "")
+            : (false, $"{ownerKind} pod {unreadyPod.Metadata.Name} is not ready");
+    }
+
+    private static string BuildLabelSelector(V1LabelSelector? selector)
+    {
+        if (selector is null)
+            throw new InvalidOperationException("A workload selector is required to check readiness");
+
+        var requirements = new List<string>();
+        if (selector.MatchLabels is not null)
+            requirements.AddRange(selector.MatchLabels.Select(label => $"{label.Key}={label.Value}"));
+
+        if (selector.MatchExpressions is not null)
+        {
+            foreach (var expression in selector.MatchExpressions)
+            {
+                var values = expression.Values ?? [];
+                requirements.Add(expression.OperatorProperty switch
+                {
+                    "In" when values.Count > 0 => $"{expression.Key} in ({string.Join(",", values)})",
+                    "NotIn" when values.Count > 0 => $"{expression.Key} notin ({string.Join(",", values)})",
+                    "Exists" when values.Count == 0 => expression.Key,
+                    "DoesNotExist" when values.Count == 0 => $"!{expression.Key}",
+                    _ => throw new InvalidOperationException(
+                        $"Unsupported workload label selector expression '{expression.OperatorProperty}' for '{expression.Key}'")
+                });
+            }
+        }
+
+        return string.Join(",", requirements);
+    }
+
+    private static bool PodTemplatesMatch(V1PodTemplateSpec? left, V1PodTemplateSpec? right)
+    {
+        var leftNode = JsonSerializer.SerializeToNode(left);
+        var rightNode = JsonSerializer.SerializeToNode(right);
+        RemovePodTemplateHash(leftNode);
+        RemovePodTemplateHash(rightNode);
+        return JsonNode.DeepEquals(leftNode, rightNode);
+    }
+
+    private static void RemovePodTemplateHash(JsonNode? podTemplate)
+    {
+        if (podTemplate?["metadata"]?["labels"] is JsonObject labels)
+            labels.Remove("pod-template-hash");
+    }
+
+    private static int ResolveDeploymentMaxUnavailable(V1Deployment deployment, int desired)
+    {
+        if (deployment.Spec.Strategy?.Type == "Recreate" || desired == 0)
+            return 0;
+
+        var rollingUpdate = deployment.Spec.Strategy?.RollingUpdate;
+        var maxSurge = ResolveScaledValue(
+            rollingUpdate?.MaxSurge,
+            desired,
+            roundUp: true,
+            defaultValue: (int)Math.Ceiling(desired * 0.25));
+        var maxUnavailable = ResolveScaledValue(
+            rollingUpdate?.MaxUnavailable,
+            desired,
+            roundUp: false,
+            defaultValue: (int)Math.Floor(desired * 0.25));
+
+        if (maxSurge == 0 && maxUnavailable == 0)
+            maxUnavailable = 1;
+
+        return Math.Min(maxUnavailable, desired);
+    }
+
+    private static int ResolveScaledValue(
+        object? value,
+        int total,
+        bool roundUp,
+        int defaultValue,
+        int? invalidValueFallback = null)
+    {
+        if (value is null)
+            return defaultValue;
+
+        var scalarValue = value.GetType().GetProperty("Value")?.GetValue(value);
+        if (scalarValue is int intValue)
+            return intValue;
+
+        if (scalarValue is string stringValue)
+        {
+            if (stringValue.EndsWith('%') &&
+                int.TryParse(stringValue.AsSpan(0, stringValue.Length - 1), out var percentage))
+            {
+                var scaled = total * percentage / 100.0;
+                return roundUp ? (int)Math.Ceiling(scaled) : (int)Math.Floor(scaled);
+            }
+
+            return int.TryParse(stringValue, out var parsedString) ? parsedString : invalidValueFallback ?? defaultValue;
+        }
+
+        return invalidValueFallback ?? defaultValue;
     }
 
     private async Task<(bool Ready, bool Failed, string Status)> CheckJobAsync(
@@ -463,13 +666,10 @@ public sealed class KubernetesResourceWaiter
         var pod = await _client.CoreV1.ReadNamespacedPodAsync(name, ns, cancellationToken: ct);
         var phase = pod.Status?.Phase;
 
-        if (phase == "Succeeded" || phase == "Running")
-        {
-            var conditions = pod.Status?.Conditions;
-            var readyCondition = conditions?.FirstOrDefault(c => c.Type == "Ready");
-            if (readyCondition?.Status == "True")
-                return (true, false, "");
-        }
+        var conditions = pod.Status?.Conditions;
+        var readyCondition = conditions?.FirstOrDefault(c => c.Type == "Ready");
+        if (readyCondition?.Status == "True")
+            return (true, false, "");
 
         if (phase == "Failed")
             return (false, true, $"Pod failed: {pod.Status?.Reason ?? "unknown"}");
@@ -535,7 +735,7 @@ public sealed class KubernetesResourceWaiter
     private static bool IsWaitableKind(string kind)
         => kind is "Deployment" or "StatefulSet" or "DaemonSet" or "ReplicaSet"
             or "Job" or "Pod" or "PersistentVolumeClaim" or "Endpoints"
-            or "HorizontalPodAutoscaler";
+            or "HorizontalPodAutoscaler" or "ReplicationController";
 
 }
 

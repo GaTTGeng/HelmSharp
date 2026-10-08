@@ -57,16 +57,21 @@ internal sealed class KubernetesApiHandler : DelegatingHandler
             : await request.Content.ReadAsStringAsync(cancellationToken);
         _requests.Add(new RecordedKubernetesRequest(request.Method, pathAndQuery, content));
 
+        var pathOnlyKey = (request.Method.Method, request.RequestUri?.AbsolutePath ?? string.Empty);
+        KubernetesResponse? response = null;
         var key = (request.Method.Method, pathAndQuery);
-        if (_responses.TryGetValue(key, out var responses) && responses.TryDequeue(out var response))
-            return response.ToHttpResponse(request);
+        if (_responses.TryGetValue(key, out var responses))
+            responses.TryDequeue(out response);
+        if (response is null && _responses.TryGetValue(pathOnlyKey, out responses))
+            responses.TryDequeue(out response);
 
-        if (_persistentResponses.TryGetValue(key, out var persistentResponse))
-            return persistentResponse.ToHttpResponse(request);
+        if (response is null && !_persistentResponses.TryGetValue(key, out response))
+            _persistentResponses.TryGetValue(pathOnlyKey, out response);
 
-        return new KubernetesResponse(HttpStatusCode.NotFound, """
+        response ??= new KubernetesResponse(HttpStatusCode.NotFound, """
             { "kind": "Status", "apiVersion": "v1", "status": "Failure", "code": 404 }
-            """).ToHttpResponse(request);
+            """);
+        return response.ToHttpResponse(request);
     }
 }
 
