@@ -36,8 +36,9 @@ public sealed class KubernetesResourceWaiterTests
     public async Task WaitForReadyAsync_ReadsOnlyWaitableResourcesInTheManifestNamespace()
     {
         var handler = new KubernetesApiHandler()
-            .Respond(HttpMethod.Get, "/apis/apps/v1/namespaces/chart-ns/deployments/web", HttpStatusCode.OK, ReadyDeployment("web"));
-        var waiter = new KubernetesResourceWaiter(KubernetesTestClientBuilder.Create(handler));
+            .Respond(HttpMethod.Get, "/apis/apps/v1/namespaces/chart-ns/deployments/web", HttpStatusCode.OK, ReadyDeployment("web"))
+            .RespondAlways(HttpMethod.Get, "/apis/apps/v1/namespaces/chart-ns/replicasets", HttpStatusCode.OK, ReadyReplicaSetList("web"));
+        var waiter = CreateDeterministicWaiter(handler);
 
         var messages = await AsyncEnumerableTestExtensions.CollectAsync(waiter.WaitForReadyAsync("""
             apiVersion: v1
@@ -56,7 +57,8 @@ public sealed class KubernetesResourceWaiterTests
         Assert.Contains("All 1 resources are ready", messages);
         Assert.Collection(
             handler.Requests,
-            request => Assert.Equal((HttpMethod.Get, "/apis/apps/v1/namespaces/chart-ns/deployments/web"), (request.Method, request.PathAndQuery)));
+            request => Assert.Equal((HttpMethod.Get, "/apis/apps/v1/namespaces/chart-ns/deployments/web"), (request.Method, request.PathAndQuery)),
+            request => Assert.StartsWith("/apis/apps/v1/namespaces/chart-ns/replicasets?", request.PathAndQuery));
     }
 
     [Fact]
@@ -108,7 +110,8 @@ public sealed class KubernetesResourceWaiterTests
     public async Task WaitForReadyAsync_ReportsDeterministicTimeoutWithResourceIdentity()
     {
         var handler = new KubernetesApiHandler()
-            .RespondAlways(HttpMethod.Get, "/apis/apps/v1/namespaces/release-ns/deployments/web", HttpStatusCode.OK, PendingDeployment("web"));
+            .RespondAlways(HttpMethod.Get, "/apis/apps/v1/namespaces/release-ns/deployments/web", HttpStatusCode.OK, PendingDeployment("web"))
+            .RespondAlways(HttpMethod.Get, "/apis/apps/v1/namespaces/release-ns/replicasets", HttpStatusCode.OK, PendingReplicaSetList("web"));
         var timeProvider = new DeterministicTimeProvider(DateTimeOffset.UnixEpoch);
         var polling = new DeterministicPolling(timeProvider);
         var waiter = new KubernetesResourceWaiter(
@@ -126,7 +129,7 @@ public sealed class KubernetesResourceWaiterTests
 
         Assert.Contains("Deployment/release-ns/web", exception.Message);
         Assert.Equal([TimeSpan.FromSeconds(3)], polling.Delays);
-        Assert.Single(handler.Requests);
+        Assert.Equal(2, handler.Requests.Count);
     }
 
     [Fact]
@@ -467,19 +470,64 @@ public sealed class KubernetesResourceWaiterTests
         {
           "apiVersion": "apps/v1",
           "kind": "Deployment",
-          "metadata": { "name": "{{name}}" },
-          "spec": { "replicas": 1 },
-          "status": { "readyReplicas": 1, "updatedReplicas": 1, "availableReplicas": 1 }
+          "metadata": { "name": "{{name}}", "uid": "deployment-uid", "generation": 1 },
+          "spec": { "replicas": 1, "selector": { "matchLabels": { "app": "web" } } },
+          "status": { "observedGeneration": 1, "readyReplicas": 1, "updatedReplicas": 1, "availableReplicas": 1 }
         }
         """;
+
+    private static KubernetesResourceWaiter CreateDeterministicWaiter(KubernetesApiHandler handler)
+    {
+        var timeProvider = new DeterministicTimeProvider(DateTimeOffset.UnixEpoch);
+        var polling = new DeterministicPolling(timeProvider);
+        return new KubernetesResourceWaiter(
+            KubernetesTestClientBuilder.Create(handler),
+            timeoutSeconds: 1,
+            timeProvider,
+            polling.DelayAsync);
+    }
 
     private static string PendingDeployment(string name) => $$"""
         {
           "apiVersion": "apps/v1",
           "kind": "Deployment",
-          "metadata": { "name": "{{name}}" },
-          "spec": { "replicas": 1 },
-          "status": { "readyReplicas": 0, "updatedReplicas": 0, "availableReplicas": 0 }
+          "metadata": { "name": "{{name}}", "uid": "deployment-uid", "generation": 1 },
+          "spec": { "replicas": 1, "selector": { "matchLabels": { "app": "web" } } },
+          "status": { "observedGeneration": 1, "readyReplicas": 0, "updatedReplicas": 0, "availableReplicas": 0 }
+        }
+        """;
+
+    private static string ReadyReplicaSetList(string name) => $$"""
+        {
+          "apiVersion": "apps/v1",
+          "kind": "ReplicaSetList",
+          "items": [{
+            "metadata": {
+              "name": "{{name}}-new",
+              "uid": "replicaset-uid",
+              "generation": 1,
+              "ownerReferences": [{ "apiVersion": "apps/v1", "kind": "Deployment", "uid": "deployment-uid" }],
+              "annotations": { "deployment.kubernetes.io/revision": "2" }
+            },
+            "status": { "observedGeneration": 1, "readyReplicas": 1 }
+          }]
+        }
+        """;
+
+    private static string PendingReplicaSetList(string name) => $$"""
+        {
+          "apiVersion": "apps/v1",
+          "kind": "ReplicaSetList",
+          "items": [{
+            "metadata": {
+              "name": "{{name}}-new",
+              "uid": "replicaset-uid",
+              "generation": 1,
+              "ownerReferences": [{ "apiVersion": "apps/v1", "kind": "Deployment", "uid": "deployment-uid" }],
+              "annotations": { "deployment.kubernetes.io/revision": "2" }
+            },
+            "status": { "observedGeneration": 1, "readyReplicas": 0 }
+          }]
         }
         """;
 }
