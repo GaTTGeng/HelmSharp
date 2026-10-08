@@ -13,8 +13,16 @@ internal static class HelmChartCreator
     };
 
     /// <summary>
-    /// Creates a new chart directory with default scaffold files.
+    /// Creates a new chart directory with default scaffold files (or a copy of
+    /// <paramref name="starter"/>). The chart is created under
+    /// <c>{destination}/{chartName}</c> with the current directory as default destination.
     /// </summary>
+    /// <param name="chartName">Chart name; becomes the directory name and Chart.yaml name.</param>
+    /// <param name="destination">Parent directory to create the chart in; defaults to the current directory.</param>
+    /// <param name="starter">Path to a starter chart directory to copy instead of the built-in scaffold.</param>
+    /// <returns>The full path of the created chart directory.</returns>
+    /// <exception cref="InvalidOperationException">The target directory exists and is not empty.</exception>
+    /// <exception cref="DirectoryNotFoundException">The starter directory does not exist.</exception>
     public static async Task<string> CreateAsync(
         string chartName,
         string? destination = null,
@@ -368,6 +376,8 @@ internal static class HelmChartCreator
             """, ct);
     }
 
+    // Copies a starter chart and rewrites every occurrence of the starter directory name to
+    // the new chart name, mirroring `helm create --starter` name substitution.
     private static async Task CopyStarterAsync(string starter, string chartDir, string chartName, CancellationToken ct)
     {
         if (!Directory.Exists(starter))

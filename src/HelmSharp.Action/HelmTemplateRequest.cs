@@ -1,11 +1,15 @@
 namespace HelmSharp.Action;
 
+/// <summary>Options for rendering a chart's templates without applying them.</summary>
 public class HelmTemplateRequest
 {
+    /// <summary>Release name used while rendering.</summary>
     public string ReleaseName { get; set; } = string.Empty;
 
+    /// <summary>Chart reference: local path, archive path, or repo/chart name.</summary>
     public string Chart { get; set; } = string.Empty;
 
+    /// <summary>Namespace exposed to templates as <c>.Release.Namespace</c>.</summary>
     public string? Namespace { get; set; }
 
     /// <summary>
@@ -20,6 +24,7 @@ public class HelmTemplateRequest
     /// </summary>
     public List<string>? ValuesFiles { get; set; }
 
+    /// <summary>Equivalent to helm --set: key is a values path, value is a scalar expression.</summary>
     public Dictionary<string, string>? SetValues { get; set; }
 
     /// <summary>
@@ -37,7 +42,7 @@ public class HelmTemplateRequest
     /// </summary>
     public Dictionary<string, string>? SetJsonValues { get; set; }
 
-    /// <summary>直接传入 values YAML 内容。</summary>
+    /// <summary>Raw values YAML content passed directly (equivalent to helm -f from stdin content).</summary>
     public string? ValuesContent { get; set; }
 
     /// <summary>

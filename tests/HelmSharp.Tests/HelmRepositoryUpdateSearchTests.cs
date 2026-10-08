@@ -7,6 +7,10 @@ using HelmSharp.Repo;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Repository update and search: named cache reuse across configured repositories,
+/// offline cache behavior, resilience to a single failing repo, and direct-URL search descriptions.
+/// </summary>
 public sealed class HelmRepositoryUpdateSearchTests : IDisposable
 {
     private readonly string _tempDir = Path.Combine(

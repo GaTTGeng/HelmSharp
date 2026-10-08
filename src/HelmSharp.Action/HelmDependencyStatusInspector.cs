@@ -4,12 +4,23 @@ using HelmSharp.Repo;
 
 namespace HelmSharp.Action;
 
+/// <summary>
+/// Computes the status text <c>helm dependency list/status</c> prints for one dependency:
+/// <c>ok</c>, <c>unpacked</c>, <c>missing</c>, <c>wrong version</c>, <c>misnamed</c>,
+/// <c>corrupt</c>, or <c>too many matches</c>.
+/// </summary>
 internal static class HelmDependencyStatusInspector
 {
+    // Strict SemVer (no leading zeros) used to tell a packaged chart's version suffix apart
+    // from an arbitrary "name-something.tgz" file when several archives match a dependency.
     private static readonly Regex StrictSemanticVersionPattern = new(
         @"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
+    /// <summary>
+    /// Inspects a dependency against the chart's <c>charts/</c> directory (archives first,
+    /// then unpacked directories) and falls back to charts embedded in the loaded parent.
+    /// </summary>
     public static async Task<string> InspectAsync(
         string chartPath,
         HelmChart parent,
@@ -64,6 +75,9 @@ internal static class HelmDependencyStatusInspector
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToList();
 
+        // Match archives by "name-" (or alias) prefix. With several candidates, keep only
+        // those whose suffix is a strict SemVer — the shape helm's packager produces — and
+        // report ambiguity when that still does not pick one, matching helm's status text.
         if (archives.Count == 0)
             return null;
         if (archives.Count > 1)
@@ -88,6 +102,8 @@ internal static class HelmDependencyStatusInspector
         }
         catch
         {
+            // An unreadable archive is reported as "corrupt" rather than failing the listing,
+            // mirroring helm's dependency status behaviour for damaged packages.
             return "corrupt";
         }
     }
@@ -115,6 +131,8 @@ internal static class HelmDependencyStatusInspector
         if (!Directory.Exists(chartsDirectory))
             return null;
 
+        // Prefer directories named after the alias (how aliased subcharts are vendored),
+        // then the dependency name, then anything else loadable.
         var preferredNames = new[] { dependency.Alias, dependency.Name }
             .Where(name => !string.IsNullOrWhiteSpace(name))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -172,6 +190,10 @@ internal static class HelmDependencyStatusInspector
             string.Equals(chart.Name, dependency.Name, StringComparison.OrdinalIgnoreCase));
     }
 
+    /// <summary>
+    /// Maps a located chart to a status string: name mismatch becomes <c>misnamed</c>, a version
+    /// outside the constraint becomes <c>wrong version</c>, otherwise the supplied present status.
+    /// </summary>
     private static string InspectChart(
         HelmChart chart,
         HelmChartDependency dependency,

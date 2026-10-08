@@ -4,6 +4,10 @@ using Xunit.Abstractions;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Rendering edge cases: empty charts, helpers-only charts, named-template <c>include</c>
+/// resolution (including aliased subcharts), and ensuring NOTES.txt never appears in manifest output.
+/// </summary>
 public class EdgeCaseTests
 {
     private readonly ITestOutputHelper _output;

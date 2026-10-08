@@ -144,6 +144,7 @@ public class RealChartGoldenTests
         }
 
         // 4. Per-template rendering (always done for detailed reporting)
+        // Isolating each template keeps a single failure from hiding the rest of the chart.
         var templateResults = new List<TemplateResult>();
         var renderableTemplates = chart.Templates
             .Where(kv =>
@@ -171,6 +172,8 @@ public class RealChartGoldenTests
         }
 
         // 5. Analyze results
+        // A chart is only "Pass" when the full render matches exactly; partial
+        // coverage still surfaces how far the engine got for the coverage score.
         var passedTemplates = templateResults.Count(t => t.Success);
         var failedTemplates = templateResults.Count(t => !t.Success);
         var totalTemplates = templateResults.Count;
@@ -337,6 +340,11 @@ public class RealChartGoldenTests
         return docs;
     }
 
+    /// <summary>
+    /// Pairs each Helm document with the best HelmSharp counterpart by kind+name and
+    /// counts byte-identical matches versus content diffs. Unmatched docs are ignored,
+    /// so this is a diagnostic breakdown, not the pass criterion (which is full-text equality).
+    /// </summary>
     private static (int matched, int diffCount) CompareDocumentSets(
         List<string> helmDocs, List<string> sharpDocs)
     {
@@ -393,14 +401,20 @@ public class RealChartGoldenTests
 //  Result types
 // ────────────────────────────────────────────────────────────────
 
+/// <summary>Overall golden outcome for a real chart: exact match, partial coverage, or failure.</summary>
 public enum GoldenVerdict { Pass, Partial, Fail }
 
+/// <summary>Per-template isolation outcome: whether the template rendered and its output or error.</summary>
 public sealed record TemplateResult(
     string Path,
     bool Success,
     string? Output,
     string? Error);
 
+/// <summary>
+/// Aggregated golden-test report for one chart. Serialized to <c>GoldenReports/&lt;chart&gt;.json</c>
+/// for the README generator and CI dashboards.
+/// </summary>
 public sealed record GoldenResult(
     string ChartName,
     GoldenVerdict Verdict,

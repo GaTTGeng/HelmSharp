@@ -7,6 +7,13 @@ using k8s;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Covers Helm hook behavior end to end: parsing <c>helm.sh/hook</c> annotations out of
+/// rendered manifests, resolving hooks from stored release records (including the legacy
+/// combined-manifest format), and executing the hook lifecycle — weight/name ordering,
+/// delete policies, wait-for-completion, success/failure cleanup, and cancellation.
+/// Execution tests drive a scriptable fake Kubernetes API (see <see cref="HookKubernetesHandler"/>).
+/// </summary>
 public class HelmHookTests
 {
     [Fact]
@@ -687,6 +694,8 @@ public class HelmHookTests
             request.Path == "/api/v1/namespaces/test-ns/configmaps/cleanup-failure-hook");
     }
 
+    // Helm parity: a Job with backoffLimit 0 must still be polled until it leaves the
+    // pending state before the hook is declared failed (no premature failure).
     [Fact]
     public async Task ExecuteHooks_WaitsForZeroBackoffJobBeforeDeclaringFailure()
     {
@@ -978,6 +987,8 @@ public class HelmHookTests
         return collected;
     }
 
+    // Shared multi-hook fixture: two already-succeeded hooks followed by a failing Job,
+    // used by the failure-finalization tests below.
     private const string FailureFinalizationBatchManifest = """
         apiVersion: v1
         kind: ConfigMap
@@ -1014,6 +1025,12 @@ public class HelmHookTests
                 image: example.invalid/migration
         """;
 
+    /// <summary>
+    /// Scriptable fake Kubernetes API for hook lifecycle tests. Constructor switches
+    /// simulate the interesting edges: failing/slow deletes, zero-backoff Job progress,
+    /// cancellation triggered mid-apply, and resources that stay visible for a few GETs
+    /// after DELETE (to exercise the before-hook-creation wait loop).
+    /// </summary>
     private sealed class HookKubernetesHandler(
         bool failJob = false,
         bool pendingZeroBackoffJob = false,

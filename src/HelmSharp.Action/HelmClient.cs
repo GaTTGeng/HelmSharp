@@ -14,6 +14,7 @@ namespace HelmSharp.Action;
 
 /// <summary>
 /// Managed Helm-compatible client. It renders charts and applies Kubernetes resources without invoking helm.
+/// Release state is stored as Kubernetes secrets via <see cref="HelmReleaseStore"/>, mirroring Helm's secret driver.
 /// </summary>
 public class HelmClient : IHelmClient
 {
@@ -24,6 +25,10 @@ public class HelmClient : IHelmClient
     private readonly Func<HelmExecutionOptions, string?, string?, CancellationToken, Task<k8s.Kubernetes>> _createKubernetesClientAsync;
     private readonly Func<HelmRepositoryOptions?, HelmChartRepository> _createChartRepository;
 
+    /// <summary>
+    /// Creates a client using default Kubernetes and chart-repository factories.
+    /// </summary>
+    /// <param name="optionsProvider">Provides per-operation <see cref="HelmExecutionOptions"/> (timeouts, namespace, kubeconfig).</param>
     public HelmClient(IHelmOptionsProvider optionsProvider)
         : this(optionsProvider, CreateKubernetesClientAsync, static options => options is null
             ? new HelmChartRepository()
@@ -53,9 +58,19 @@ public class HelmClient : IHelmClient
         _createChartRepository = createChartRepository;
     }
 
+    /// <summary>Reports the HelmSharp product version (no cluster access).</summary>
     public Task<CommandResult> VersionAsync(CancellationToken cancellationToken = default)
         => Task.FromResult(Ok($"HelmSharp {ProductVersion}"));
 
+    /// <summary>
+    /// Lists stored release records, like <c>helm list</c>. Only exact
+    /// <c>key=value</c> comma-separated label selectors are supported.
+    /// </summary>
+    /// <param name="namespace">Namespace to list. Ignored when <paramref name="allNamespaces"/> is true.</param>
+    /// <param name="allNamespaces">List releases across all namespaces.</param>
+    /// <param name="selector">Label selector, e.g. <c>app=web,tier=frontend</c>. Set and set-not operators are rejected.</param>
+    /// <param name="limit">Maximum number of releases to return; null or zero returns all.</param>
+    /// <returns>JSON array of release records ordered as stored.</returns>
     public async Task<CommandResult> ListReleasesAsync(
         string? @namespace = null,
         bool allNamespaces = false,
@@ -92,13 +107,16 @@ public class HelmClient : IHelmClient
     }
 
     /// <summary>
-    /// Generates a release name from a name template (e.g., "%RELEASE-NAME%-mychart").
+    /// Generates a release name from a name template (e.g., "%RELEASE-NAME%-mychart"), equivalent
+    /// to <c>helm install --name-template</c>. Only the <c>%RELEASE-NAME%</c> placeholder is expanded.
+    /// When no template is given, produces <c>{chart-stem}-{unix-seconds}</c> with the stem truncated to 20 characters.
     /// </summary>
     public static string GenerateReleaseName(string chartName, string? nameTemplate = null)
     {
         if (!string.IsNullOrWhiteSpace(nameTemplate))
         {
-            // Simple template: replace %RELEASE-NAME% with chart name
+            // Helm's name template supports Go template functions; only the
+            // %RELEASE-NAME% placeholder is expanded here.
             return nameTemplate.Replace("%RELEASE-NAME%", chartName, StringComparison.OrdinalIgnoreCase);
         }
 
@@ -109,6 +127,8 @@ public class HelmClient : IHelmClient
         return $"{baseName}-{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
     }
 
+    // Helm list selectors support set-based operators (!=, in, !key). Only exact
+    // equality terms are accepted so filtering stays deterministic in the managed store.
     private static bool TryParseExactLabelSelector(
         string selector,
         out Dictionary<string, string> result)
@@ -132,6 +152,12 @@ public class HelmClient : IHelmClient
         return result.Count > 0;
     }
 
+    /// <summary>
+    /// Installs or upgrades a release (equivalent to <c>helm install</c> / <c>helm upgrade</c>).
+    /// Output is buffered from <see cref="UpgradeInstallStreamAsync"/>.
+    /// </summary>
+    /// <exception cref="ArgumentException">The request fails validation (missing names, conflicting flags).</exception>
+    /// <exception cref="NotSupportedException">The request uses an option the managed lifecycle does not implement.</exception>
     public async Task<CommandResult> UpgradeInstallAsync(
         HelmUpgradeInstallRequest request,
         CancellationToken cancellationToken = default)
@@ -145,6 +171,12 @@ public class HelmClient : IHelmClient
         return Ok(output.ToString());
     }
 
+    /// <summary>
+    /// Streams progress lines for an install/upgrade: chart load, CRD install, pre-hooks,
+    /// apply, post-hooks, readiness wait, and release persistence. Failure recovery lines
+    /// (atomic restore / cleanup-on-fail) are streamed before the original error is thrown.
+    /// Applies the whole operation under a single timeout that also covers hooks and waiting.
+    /// </summary>
     public async IAsyncEnumerable<string> UpgradeInstallStreamAsync(
         HelmUpgradeInstallRequest request,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -415,6 +447,10 @@ public class HelmClient : IHelmClient
         yield return $"Release {request.ReleaseName} revision {revision} deployed ({applied} resources)";
     }
 
+    /// <summary>
+    /// Computes the labels stored on the new revision: upgrades inherit the latest revision's
+    /// labels, then requested labels override them. Returns null when the result is empty.
+    /// </summary>
     internal static Dictionary<string, string>? ResolveReleaseLabels(
         IReadOnlyCollection<HelmReleaseRecord> history,
         bool isUpgrade,
@@ -440,6 +476,10 @@ public class HelmClient : IHelmClient
         return labels.Count == 0 ? null : labels;
     }
 
+    /// <summary>
+    /// Determines whether the operation is an upgrade and which revision number to render/store.
+    /// An "uninstalled" latest record restarts at revision 1 as an install (Helm parity).
+    /// </summary>
     internal static (bool IsUpgrade, int Revision) ResolveReleaseRenderState(
         IReadOnlyCollection<HelmReleaseRecord> history)
     {
@@ -447,17 +487,26 @@ public class HelmClient : IHelmClient
             return (false, 1);
 
         var latest = history.MaxBy(record => record.Revision)!;
+        // Helm treats reinstall-after-uninstall as a fresh install with revision 1.
         var isUpgrade = !string.Equals(latest.Status, "uninstalled", StringComparison.OrdinalIgnoreCase);
         var revision = latest.Revision + 1;
         return (isUpgrade, revision);
     }
 
+    // Guards the single-active-operation invariant: a pending-* record means another
+    // lifecycle is mid-flight and must not be interleaved with a new one.
     private static bool HasActivePendingOperation(IReadOnlyCollection<HelmReleaseRecord> history)
     {
         var latest = history.MaxBy(record => record.Revision);
         return latest?.Status.StartsWith("pending-", StringComparison.OrdinalIgnoreCase) == true;
     }
 
+    /// <summary>
+    /// Resolves the user-supplied values overrides for an upgrade. With reuse-values, the last
+    /// deployed revision's stored user values are used as the base and the provided overrides are
+    /// merged on top; otherwise the provided overrides are used as-is.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Reuse-values was requested without an existing release.</exception>
     internal static Dictionary<string, object?> ResolveUpgradeOverrides(
         IReadOnlyCollection<HelmReleaseRecord> history,
         bool isUpgrade,
@@ -482,6 +531,8 @@ public class HelmClient : IHelmClient
         return result;
     }
 
+    // Recursive map merge matching Helm's values coalescing: nested maps are merged key by
+    // key, while scalars and lists from the source replace the target wholesale.
     private static void MergeValues(
         Dictionary<string, object?> target,
         IReadOnlyDictionary<string, object?> source)
@@ -500,6 +551,8 @@ public class HelmClient : IHelmClient
         }
     }
 
+    // Marks every previously deployed revision as superseded so history retains exactly one
+    // deployed revision (Helm's single-active-revision invariant).
     private static async Task SupersedeDeployedReleasesAsync(
         HelmReleaseStore store,
         IEnumerable<HelmReleaseRecord> history,
@@ -512,6 +565,8 @@ public class HelmClient : IHelmClient
         }
     }
 
+    // Relays a streamed operation while intercepting failures so the recover callback can
+    // persist lifecycle evidence (failed record, cleanup, restore) before rethrowing.
     private static async IAsyncEnumerable<string> StreamWithFailureHandlingAsync(
         IAsyncEnumerable<string> lines,
         Func<Exception, Task<List<string>>> recover)
@@ -547,6 +602,13 @@ public class HelmClient : IHelmClient
         }
     }
 
+    /// <summary>
+    /// Records a failed install/upgrade and performs request-driven recovery: with atomic or
+    /// cleanup-on-fail, deletes resources introduced by the attempted revision (or the full
+    /// manifest for a fresh install) and, for atomic upgrades, re-applies the previous deployed
+    /// manifest. Recovery storage writes ignore the caller's cancellation so the failure evidence
+    /// remains inspectable. Returns human-readable recovery lines for the caller's output stream.
+    /// </summary>
     private static async Task<List<string>> PersistFailedLifecycleAsync(
         HelmReleaseStore store,
         HelmReleaseRecord attemptedRecord,
@@ -657,6 +719,10 @@ public class HelmClient : IHelmClient
         return output;
     }
 
+    /// <summary>
+    /// Records a failed rollback: reserves the pending-rollback record if it is not yet
+    /// observable, then marks it failed. Storage errors never replace the operation error.
+    /// </summary>
     private static async Task PersistFailedRollbackAsync(
         HelmReleaseStore store,
         HelmReleaseRecord rollbackRecord,
@@ -690,6 +756,11 @@ public class HelmClient : IHelmClient
         }
     }
 
+    /// <summary>
+    /// Returns the documents present in <paramref name="attemptedManifest"/> but absent from
+    /// <paramref name="previousManifest"/>, compared by full identity (group/kind/namespace/name).
+    /// Used to delete only the resources a failed upgrade introduced.
+    /// </summary>
     internal static string GetAttemptedOnlyManifest(string previousManifest, string attemptedManifest, string defaultNamespace)
     {
         var previousIdentities = KubernetesManifestApplier.SplitDocumentsPublic(previousManifest)
@@ -708,6 +779,13 @@ public class HelmClient : IHelmClient
         return string.Join(Environment.NewLine + "---" + Environment.NewLine, attemptedOnly);
     }
 
+    /// <summary>
+    /// Scope-aware variant of <see cref="GetAttemptedOnlyManifest"/>. A document counts as
+    /// attempted-only when the previous revision has no resource with the same group/kind/name;
+    /// when names collide across namespaces, cluster-scoped resources are treated as the same
+    /// object while namespaced ones in a different namespace are kept. Scope resolution falls
+    /// back to API discovery for CRDs (see <see cref="ResolveResourceScopeAsync"/>).
+    /// </summary>
     internal static async Task<string> GetAttemptedOnlyManifestAsync(
         KubernetesManifestApplier applier,
         string previousManifest,
@@ -762,6 +840,11 @@ public class HelmClient : IHelmClient
         return string.Join(Environment.NewLine + "---" + Environment.NewLine, attemptedOnly);
     }
 
+    /// <summary>
+    /// Resolves whether a resource type is namespaced: a known typed scope first, otherwise
+    /// API discovery against the cluster. Results are cached per group/kind. Returns null when
+    /// scope cannot be determined (caller then conservatively keeps the document).
+    /// </summary>
     private static async Task<bool?> ResolveResourceScopeAsync(
         KubernetesManifestApplier applier,
         IEnumerable<(string Document, ManifestIdentity Identity)> documents,
@@ -803,6 +886,11 @@ public class HelmClient : IHelmClient
         return null;
     }
 
+    /// <summary>
+    /// Splits a manifest into deletable documents and resources annotated
+    /// <c>helm.sh/resource-policy: keep</c> (returned separately so they are never deleted).
+    /// Documents without a parseable identity are kept in the deletable set.
+    /// </summary>
     internal static (string Manifest, IReadOnlyList<string> KeptResources) FilterManifestForDeletion(
         string manifest,
         string defaultNamespace)
@@ -835,14 +923,18 @@ public class HelmClient : IHelmClient
             keptResources);
     }
 
+    // Full identity: group/kind/namespace/name — distinguishes same-named resources across namespaces.
     private static string ManifestIdentityKey(ManifestIdentity identity)
     {
         return $"{ManifestResourceTypeKey(identity)}/{identity.Namespace}/{identity.Name}";
     }
 
+    // Type + name without namespace — used to find candidates before scope disambiguation.
     private static string ManifestResourceKey(ManifestIdentity identity)
         => $"{ManifestResourceTypeKey(identity)}/{identity.Name}";
 
+    // Group/kind key (empty group for core types). Scope is invariant across apiVersions of
+    // the same group/kind, so this is the cache key for scope lookups.
     private static string ManifestResourceTypeKey(ManifestIdentity identity)
     {
         var separator = identity.ApiVersion.IndexOf('/');
@@ -850,6 +942,8 @@ public class HelmClient : IHelmClient
         return $"{apiGroup}/{identity.Kind}";
     }
 
+    // Treats a missing namespace as empty history so a first install into a not-yet-created
+    // namespace does not fail before CreateNamespace can create it.
     private static async Task<List<HelmReleaseRecord>> LoadReleaseHistoryForUpgradeInstallAsync(
         HelmReleaseStore store,
         string releaseName,
@@ -867,6 +961,9 @@ public class HelmClient : IHelmClient
         }
     }
 
+    /// <summary>
+    /// Convenience overload that uninstalls with default options (no hooks disabled, no wait).
+    /// </summary>
     public async Task<CommandResult> UninstallAsync(
         string releaseName,
         string? @namespace = null,
@@ -882,6 +979,13 @@ public class HelmClient : IHelmClient
         }, cancellationToken);
     }
 
+    /// <summary>
+    /// Uninstalls a release (equivalent to <c>helm uninstall</c>): runs pre-delete hooks,
+    /// deletes resources from failed revisions and the latest manifest (respecting
+    /// <c>helm.sh/resource-policy: keep</c>), optionally waits for deletion, runs post-delete
+    /// hooks, then purges history unless <c>KeepHistory</c> is set. A second uninstall of an
+    /// already uninstalled release purges the remaining history.
+    /// </summary>
     public async Task<CommandResult> UninstallAsync(
         HelmUninstallRequest request,
         CancellationToken cancellationToken = default)
@@ -1010,6 +1114,7 @@ public class HelmClient : IHelmClient
         return Ok(output.ToString());
     }
 
+    // Joins manifests into a single multi-document stream with --- separators for waiter input.
     private static void AppendManifestDocuments(StringBuilder builder, string manifest)
     {
         if (string.IsNullOrWhiteSpace(manifest))
@@ -1021,6 +1126,7 @@ public class HelmClient : IHelmClient
         builder.AppendLine(manifest.Trim());
     }
 
+    /// <summary>Gets the durable status of the latest stored revision of a release.</summary>
     public async Task<CommandResult> StatusAsync(
         string releaseName,
         string? @namespace = null,
@@ -1059,6 +1165,10 @@ public class HelmClient : IHelmClient
         return Ok(JsonSerializer.Serialize(statusInfo, JsonDefaults));
     }
 
+    /// <summary>
+    /// Rolls a release back to <paramref name="revision"/> without waiting for readiness.
+    /// A revision of zero selects the previous non-uninstalled revision.
+    /// </summary>
     public async Task<CommandResult> RollbackAsync(
         string releaseName,
         int revision,
@@ -1242,6 +1352,11 @@ public class HelmClient : IHelmClient
         return Ok(output.ToString());
     }
 
+    /// <summary>
+    /// Renders chart templates without applying anything (equivalent to <c>helm template</c>).
+    /// With <c>OutputDir</c>, writes one YAML file per manifest document
+    /// (<c>{kind}-{name}.yaml</c>); with <c>UseReleaseName</c>, nests under a release-named subdirectory.
+    /// </summary>
     public async Task<CommandResult> TemplateAsync(
         HelmTemplateRequest request,
         CancellationToken cancellationToken = default)
@@ -1288,6 +1403,10 @@ public class HelmClient : IHelmClient
         return Ok(manifest);
     }
 
+    /// <summary>
+    /// Renders templates and appends rendered NOTES.txt (like <c>helm template --notes</c>).
+    /// Unlike <see cref="TemplateAsync"/>, the chart path is loaded directly without remote resolution.
+    /// </summary>
     public async Task<CommandResult> TemplateWithNotesAsync(
         HelmTemplateRequest request,
         CancellationToken cancellationToken = default)
@@ -1310,6 +1429,7 @@ public class HelmClient : IHelmClient
         return Ok(manifest + "\n---\n# NOTES.txt:\n" + notes);
     }
 
+    /// <summary>Lists stored revision history for a release as JSON (like <c>helm history</c>).</summary>
     public async Task<CommandResult> HistoryAsync(
         string releaseName,
         string? @namespace = null,
@@ -1324,6 +1444,11 @@ public class HelmClient : IHelmClient
             : Ok(JsonSerializer.Serialize(history, JsonDefaults));
     }
 
+    /// <summary>
+    /// Gets values stored for the latest release revision (like <c>helm get values</c>).
+    /// With <paramref name="allValues"/>, returns computed values (chart defaults merged with
+    /// user overrides) instead of user-supplied values only.
+    /// </summary>
     public async Task<CommandResult> GetValuesAsync(
         string releaseName,
         string? @namespace = null,
@@ -1349,6 +1474,10 @@ public class HelmClient : IHelmClient
             : Ok(GetStoredValuesYaml(lookup.Record!, allValues));
     }
 
+    /// <summary>
+    /// Gets the stored manifest for a release revision (like <c>helm get manifest</c>).
+    /// A revision of zero selects the latest stored revision.
+    /// </summary>
     public async Task<CommandResult> GetManifestAsync(
         string releaseName,
         string? @namespace = null,
@@ -1366,6 +1495,10 @@ public class HelmClient : IHelmClient
             : Ok(lookup.Record!.Manifest);
     }
 
+    /// <summary>
+    /// Gets the rendered NOTES.txt stored on a release revision (like <c>helm get notes</c>).
+    /// A revision of zero selects the latest stored revision; empty notes yield a placeholder message.
+    /// </summary>
     public async Task<CommandResult> GetNotesAsync(
         string releaseName,
         string? @namespace = null,
@@ -1383,6 +1516,11 @@ public class HelmClient : IHelmClient
             : Ok(GetStoredNotes(lookup.Record!));
     }
 
+    /// <summary>
+    /// Returns user-supplied values, or computed values (chart defaults merged with user
+    /// overrides) when <paramref name="allValues"/> is true. Older records without a stored
+    /// computed snapshot are recomputed on demand.
+    /// </summary>
     internal static string GetStoredValuesYaml(HelmReleaseRecord record, bool allValues)
     {
         ArgumentNullException.ThrowIfNull(record);
@@ -1397,6 +1535,7 @@ public class HelmClient : IHelmClient
         return HelmValues.ToYaml(values);
     }
 
+    /// <summary>Returns the stored NOTES.txt, or a placeholder message when none were rendered.</summary>
     internal static string GetStoredNotes(HelmReleaseRecord record)
     {
         ArgumentNullException.ThrowIfNull(record);
@@ -1405,6 +1544,10 @@ public class HelmClient : IHelmClient
             : record.Notes;
     }
 
+    /// <summary>
+    /// Looks up a release record by revision (zero selects the highest revision) and converts
+    /// lookup failures into Helm-style error messages.
+    /// </summary>
     private static async Task<ReleaseRecordLookup> FindReleaseRecordAsync(
         HelmReleaseStore store,
         string releaseName,
@@ -1434,6 +1577,10 @@ public class HelmClient : IHelmClient
 
     private sealed record ReleaseRecordLookup(HelmReleaseRecord? Record, string? Error);
 
+    /// <summary>
+    /// Lists hook resources stored on a release revision (like <c>helm get hooks</c>),
+    /// including events, weight, delete policies, and last-run metadata.
+    /// </summary>
     public async Task<CommandResult> GetHooksAsync(
         string releaseName,
         string? @namespace = null,
@@ -1473,6 +1620,9 @@ public class HelmClient : IHelmClient
         return Ok(output.ToString());
     }
 
+    /// <summary>
+    /// Returns release metadata, manifest, and user values in one output (like <c>helm get all</c>).
+    /// </summary>
     public async Task<CommandResult> GetAllAsync(
         string releaseName,
         string? @namespace = null,
@@ -1508,6 +1658,14 @@ public class HelmClient : IHelmClient
         return Ok(output.ToString());
     }
 
+    /// <summary>
+    /// Runs test hooks for a release (like <c>helm test</c>). Hooks run in weight order, then
+    /// name/kind/path for determinism. A single failing hook fails the command; the remaining
+    /// hooks still run unless the operation timeout expires. Caller cancellation propagates,
+    /// while timeout is reported as a failed hook. <paramref name="showLogs"/> is accepted for
+    /// Helm CLI compatibility but hook logs are not yet streamed.
+    /// </summary>
+    /// <returns>Success when every test hook passed; failure output otherwise.</returns>
     public async Task<CommandResult> TestAsync(
         string releaseName,
         string? @namespace = null,
@@ -1595,6 +1753,10 @@ public class HelmClient : IHelmClient
             : Ok(output.ToString());
     }
 
+    /// <summary>
+    /// Prints the current deployed manifest and the manifest the given request would produce,
+    /// without applying changes. This is a side-by-side manifest listing, not a unified diff.
+    /// </summary>
     public async Task<CommandResult> DiffAsync(
         string releaseName,
         HelmUpgradeInstallRequest request,
@@ -1625,6 +1787,10 @@ public class HelmClient : IHelmClient
         return Ok(output.ToString());
     }
 
+    /// <summary>
+    /// Renders the prospective manifest for a diff using the same upgrade/install render state
+    /// rules (<c>.Release.IsUpgrade</c> and next revision number) as a real lifecycle operation.
+    /// </summary>
     internal static string RenderDiffManifest(
         HelmChart chart,
         string releaseName,
@@ -1646,6 +1812,11 @@ public class HelmClient : IHelmClient
         return renderer.Render();
     }
 
+    /// <summary>
+    /// Checks a chart for structural problems (like <c>helm lint</c>): required Chart.yaml
+    /// fields, template renderability, and unclosed template expressions. Renders under the
+    /// fixed identity "lint-test" in namespace "default". Errors fail the command; warnings do not.
+    /// </summary>
     public async Task<CommandResult> LintAsync(
         string chartPath,
         string? valuesContent = null,
@@ -1714,6 +1885,10 @@ public class HelmClient : IHelmClient
         return errors.Count > 0 ? Fail(output.ToString()) : Ok(output.ToString());
     }
 
+    /// <summary>
+    /// Renders a chart's manifest (like <c>helm show manifest</c>) under the fixed identity
+    /// "show". The chart reference may be a local path or a remote/OCI reference to pull.
+    /// </summary>
     public async Task<CommandResult> ShowManifestAsync(
         string chartPath,
         string? version = null,
@@ -1729,6 +1904,7 @@ public class HelmClient : IHelmClient
         return Ok(renderer.Render());
     }
 
+    /// <summary>Prints Chart.yaml metadata as JSON (like <c>helm show chart</c>).</summary>
     public async Task<CommandResult> ShowChartAsync(
         string chartPath,
         CancellationToken cancellationToken = default)
@@ -1752,6 +1928,7 @@ public class HelmClient : IHelmClient
         return Ok(System.Text.Json.JsonSerializer.Serialize(info, JsonDefaults));
     }
 
+    /// <summary>Prints the chart's default values.yaml (like <c>helm show values</c>).</summary>
     public async Task<CommandResult> ShowValuesAsync(
         string chartPath,
         CancellationToken cancellationToken = default)
@@ -1760,6 +1937,10 @@ public class HelmClient : IHelmClient
         return Ok(chart.ValuesYaml);
     }
 
+    /// <summary>
+    /// Downloads a chart archive from a repository URL or OCI reference to <paramref name="destination"/>
+    /// (current directory when null), like <c>helm pull</c>.
+    /// </summary>
     public async Task<CommandResult> PullAsync(
         string chartRef,
         string? version = null,
@@ -1785,6 +1966,10 @@ public class HelmClient : IHelmClient
         return Ok($"Chart pulled to: {path}");
     }
 
+    /// <summary>
+    /// Packages a chart directory into a versioned <c>.tgz</c> archive (like <c>helm package</c>).
+    /// <paramref name="version"/> and <paramref name="appVersion"/> override Chart.yaml values.
+    /// </summary>
     public async Task<CommandResult> PackageAsync(
         string chartPath,
         string? destination = null,
@@ -1832,6 +2017,10 @@ public class HelmClient : IHelmClient
         }
     }
 
+    /// <summary>
+    /// Scaffolds a new chart from the default starter (or the given starter path),
+    /// like <c>helm create</c>.
+    /// </summary>
     public async Task<CommandResult> CreateAsync(
         string chartName,
         string? destination = null,
@@ -1842,6 +2031,7 @@ public class HelmClient : IHelmClient
         return Ok($"Created chart: {path}");
     }
 
+    /// <summary>Resolves Chart.yaml dependencies and rewrites Chart.lock (like <c>helm dependency update</c>).</summary>
     public async Task<CommandResult> DependencyUpdateAsync(
         string chartPath,
         CancellationToken cancellationToken = default)
@@ -1849,6 +2039,12 @@ public class HelmClient : IHelmClient
             new HelmDependencyUpdateRequest { ChartPath = chartPath },
             cancellationToken);
 
+    /// <summary>
+    /// Resolves each Chart.yaml dependency into <c>charts/</c> and rewrites Chart.lock.
+    /// Archives are staged first and only moved into place after every dependency resolves,
+    /// so a partial failure never leaves a half-updated charts directory. Locally vendored
+    /// dependencies (empty repository) are validated in place and preserved.
+    /// </summary>
     /// <inheritdoc />
     public async Task<CommandResult> DependencyUpdateAsync(
         HelmDependencyUpdateRequest request,
@@ -1972,6 +2168,8 @@ public class HelmClient : IHelmClient
         }
     }
 
+    // SHA-256 content comparison used to avoid rewriting unchanged dependency archives
+    // (keeps file timestamps stable for incremental tooling).
     private static async Task<bool> FilesHaveSameDigestAsync(
         string leftPath,
         string rightPath,
@@ -1987,6 +2185,11 @@ public class HelmClient : IHelmClient
         return leftDigest.AsSpan().SequenceEqual(rightDigest);
     }
 
+    /// <summary>
+    /// Moves staged dependency archives into <c>charts/</c>, skipping identical existing files,
+    /// then deletes archives that no longer correspond to a resolved dependency. Locally vendored
+    /// dependencies (charts without a repository) are never deleted here.
+    /// </summary>
     private static async Task InstallStagedDependencyArchivesAsync(
         string chartsDirectory,
         IReadOnlyList<string> stagedArchives,
@@ -2034,6 +2237,10 @@ public class HelmClient : IHelmClient
         }
     }
 
+    /// <summary>
+    /// Pushes a chart package to a remote registry. Currently validates and packages the chart
+    /// locally (directories are packaged first); the actual registry upload is not performed yet.
+    /// </summary>
     public async Task<CommandResult> PushAsync(
         string chartRef,
         string remote,
@@ -2054,6 +2261,10 @@ public class HelmClient : IHelmClient
         return Fail($"Chart not found: {chartRef}");
     }
 
+    /// <summary>
+    /// Adds or updates a named chart repository (like <c>helm repo add</c>). Credentials are
+    /// optional and stored with the repository configuration.
+    /// </summary>
     public async Task<CommandResult> RepoAddAsync(
         string name,
         string url,
@@ -2066,6 +2277,7 @@ public class HelmClient : IHelmClient
         return Ok($"Repository \"{name}\" added with URL: {url}");
     }
 
+    /// <summary>Removes a named chart repository (like <c>helm repo remove</c>).</summary>
     public async Task<CommandResult> RepoRemoveAsync(
         string name,
         CancellationToken cancellationToken = default)
@@ -2075,6 +2287,7 @@ public class HelmClient : IHelmClient
         return Ok($"Repository \"{name}\" removed.");
     }
 
+    /// <summary>Lists configured chart repositories as JSON (like <c>helm repo list</c>).</summary>
     public async Task<CommandResult> RepoListAsync(
         CancellationToken cancellationToken = default)
     {
@@ -2083,6 +2296,10 @@ public class HelmClient : IHelmClient
         return Ok(System.Text.Json.JsonSerializer.Serialize(repos, JsonDefaults));
     }
 
+    /// <summary>
+    /// Searches chart repositories for a keyword (like <c>helm search repo</c>), optionally
+    /// limited to a single repository URL. Results are returned as JSON.
+    /// </summary>
     public async Task<CommandResult> SearchRepoAsync(
         string keyword,
         string? repoUrl = null,
@@ -2095,6 +2312,11 @@ public class HelmClient : IHelmClient
         return Ok(System.Text.Json.JsonSerializer.Serialize(results, JsonDefaults));
     }
 
+    /// <summary>
+    /// Stores registry credentials for a host (like <c>helm registry login</c>). Credentials are
+    /// written as plain JSON to <c>~/.helmsharp/registry/config.json</c> (base64 auth is not
+    /// encryption) and overwrite any previous entry for the same host.
+    /// </summary>
     public Task<CommandResult> RegistryLoginAsync(
         string host,
         string username,
@@ -2131,6 +2353,10 @@ public class HelmClient : IHelmClient
         return Task.FromResult(Ok($"Login Succeeded for: https://{host}"));
     }
 
+    /// <summary>
+    /// Removes stored registry credentials for a host (like <c>helm registry logout</c>).
+    /// Succeeds even when no credentials are stored.
+    /// </summary>
     public Task<CommandResult> RegistryLogoutAsync(
         string host,
         CancellationToken cancellationToken = default)
@@ -2163,6 +2389,10 @@ public class HelmClient : IHelmClient
         return Task.FromResult(Ok($"Not logged in to: https://{host}"));
     }
 
+    /// <summary>
+    /// Returns the chart's README.md (searched in templates first, then the chart root).
+    /// Missing README is not an error; a placeholder message is returned.
+    /// </summary>
     public async Task<CommandResult> ShowReadmeAsync(
         string chartPath,
         CancellationToken cancellationToken = default)
@@ -2184,6 +2414,7 @@ public class HelmClient : IHelmClient
         return Ok("No README found for this chart.");
     }
 
+    /// <summary>Prints the chart's crds/ resources as YAML documents (like <c>helm show crds</c>).</summary>
     public async Task<CommandResult> ShowCrdsAsync(
         string chartPath,
         CancellationToken cancellationToken = default)
@@ -2201,6 +2432,7 @@ public class HelmClient : IHelmClient
         return Ok(output.ToString());
     }
 
+    /// <summary>Generates a repository index for <paramref name="dirPath"/> (like <c>helm repo index</c>).</summary>
     public async Task<CommandResult> RepoIndexAsync(
         string dirPath,
         string? url = null,
@@ -2210,7 +2442,8 @@ public class HelmClient : IHelmClient
             cancellationToken);
 
     /// <summary>
-    /// Generates a repository index and optionally merges an existing index.
+    /// Generates a repository index and optionally merges an existing index at
+    /// <paramref name="mergeIndexPath"/>.
     /// </summary>
     public async Task<CommandResult> RepoIndexAsync(
         string dirPath,
@@ -2236,6 +2469,10 @@ public class HelmClient : IHelmClient
         return Ok($"Index generated at: {indexPath}");
     }
 
+    /// <summary>
+    /// Refreshes cached indexes for every configured repository (like <c>helm repo update</c>).
+    /// Per-repository failures are reported but do not fail the command.
+    /// </summary>
     public async Task<CommandResult> RepoUpdateAsync(
         CancellationToken cancellationToken = default)
     {
@@ -2255,6 +2492,10 @@ public class HelmClient : IHelmClient
         return Ok(output.ToString());
     }
 
+    /// <summary>
+    /// Searches Artifact Hub for charts (like <c>helm search hub</c>), returning up to 20
+    /// matching packages as raw JSON.
+    /// </summary>
     public async Task<CommandResult> SearchHubAsync(
         string keyword,
         CancellationToken cancellationToken = default)
@@ -2274,6 +2515,10 @@ public class HelmClient : IHelmClient
         }
     }
 
+    /// <summary>
+    /// Prints Chart.yaml metadata, values.yaml, all templates, CRDs, and rendered NOTES.txt
+    /// in one combined listing (like <c>helm show all</c>).
+    /// </summary>
     public async Task<CommandResult> ShowAllAsync(
         string chartPath,
         CancellationToken cancellationToken = default)
@@ -2333,6 +2578,10 @@ public class HelmClient : IHelmClient
         return Ok(output.ToString());
     }
 
+    /// <summary>
+    /// Prints the Helm-style environment variables HelmSharp honors (like <c>helm env</c>).
+    /// Values come from the process environment with Helm-compatible defaults.
+    /// </summary>
     public Task<CommandResult> EnvAsync(CancellationToken cancellationToken = default)
     {
         var output = new StringBuilder();
@@ -2345,6 +2594,7 @@ public class HelmClient : IHelmClient
         return Task.FromResult(Ok(output.ToString()));
     }
 
+    /// <summary>Rebuilds dependency archives from Chart.lock (like <c>helm dependency build</c>).</summary>
     public async Task<CommandResult> DependencyBuildAsync(
         string chartPath,
         CancellationToken cancellationToken = default)
@@ -2352,6 +2602,12 @@ public class HelmClient : IHelmClient
             new HelmDependencyBuildRequest { ChartPath = chartPath },
             cancellationToken);
 
+    /// <summary>
+    /// Rebuilds <c>charts/</c> from the locked versions in Chart.lock, verifying the lock digest
+    /// against Chart.yaml first. Fails when Chart.lock is missing or out of sync — run dependency
+    /// update first. Exact locked versions are used (no constraint re-resolution), and archive
+    /// digests can be verified with <c>VerifyDigests</c>.
+    /// </summary>
     /// <inheritdoc />
     public async Task<CommandResult> DependencyBuildAsync(
         HelmDependencyBuildRequest request,
@@ -2502,6 +2758,10 @@ public class HelmClient : IHelmClient
         }
     }
 
+    /// <summary>
+    /// Verifies a dependency archive against a Chart.lock digest (optional <c>sha256:</c> prefix).
+    /// Throws <see cref="InvalidDataException"/> on malformed or mismatched digests.
+    /// </summary>
     private static async Task VerifyDependencyArchiveDigestAsync(
         string archivePath,
         string expectedDigest,
@@ -2527,6 +2787,11 @@ public class HelmClient : IHelmClient
         }
     }
 
+    /// <summary>
+    /// Loads a locally vendored dependency from <c>charts/{name}</c> and validates its name and
+    /// version. <paramref name="exactVersion"/> switches between locked-version equality (build)
+    /// and constraint satisfaction (update).
+    /// </summary>
     private static async Task<HelmChart> ResolveVendoredDependencyAsync(
         string parentChartPath,
         string dependencyName,
@@ -2563,6 +2828,7 @@ public class HelmClient : IHelmClient
         return chart;
     }
 
+    /// <summary>Lists Chart.yaml dependencies and their status (like <c>helm dependency list</c>).</summary>
     public async Task<CommandResult> DependencyListAsync(
         string chartPath,
         CancellationToken cancellationToken = default)
@@ -2570,6 +2836,10 @@ public class HelmClient : IHelmClient
             new HelmDependencyListRequest { ChartPath = chartPath },
             cancellationToken);
 
+    /// <summary>
+    /// Lists dependencies as a tab-separated NAME/VERSION/REPOSITORY/STATUS table.
+    /// Emits a warning instead of a table when the chart has no dependencies.
+    /// </summary>
     /// <inheritdoc />
     public async Task<CommandResult> DependencyListAsync(
         HelmDependencyListRequest request,
@@ -2597,6 +2867,11 @@ public class HelmClient : IHelmClient
         return Ok(output.ToString());
     }
 
+    /// <summary>
+    /// Resolves a chart reference to a local path: existing paths pass through, http(s)/oci
+    /// references are pulled first. Remote "repo/chart" shorthand is returned unchanged for
+    /// downstream resolution.
+    /// </summary>
     private static async Task<string> ResolveChartPathAsync(
         string chartRef,
         string? version,
@@ -2615,13 +2890,18 @@ public class HelmClient : IHelmClient
             return await repo.PullChartAsync(chartRef, version, cancellationToken);
         }
 
-        // If it contains a slash and looks like repo/chart, try as HTTP repo
+        // repo/chart shorthand without path separators is left for repository resolution
         if (chartRef.Contains('/') && !chartRef.Contains(Path.DirectorySeparatorChar) && !chartRef.Contains('/'))
             return chartRef;
 
         return chartRef;
     }
 
+    /// <summary>
+    /// Validates an upgrade/install request: required fields, mutually exclusive flags
+    /// (ReuseValues/ResetValues), dependent flags (WaitForJobs requires Wait or Atomic), and
+    /// rejects options the managed lifecycle does not implement.
+    /// </summary>
     private static void ValidateUpgradeRequest(HelmUpgradeInstallRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -2672,6 +2952,8 @@ public class HelmClient : IHelmClient
         }
     }
 
+    // The managed lifecycle only performs client-side apply; server-side apply would change
+    // field ownership semantics and is rejected rather than silently downgraded.
     private static void ValidateServerSideApplyOption(HelmExecutionOptions options)
     {
         if (options.ServerSideApply)
@@ -2682,6 +2964,10 @@ public class HelmClient : IHelmClient
         }
     }
 
+    /// <summary>
+    /// Validates a rollback request: required fields, non-negative revision, positive timeout,
+    /// and dependent flags (WaitForJobs requires Wait).
+    /// </summary>
     private static void ValidateRollbackRequest(HelmRollbackRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -2697,6 +2983,11 @@ public class HelmClient : IHelmClient
             throw new ArgumentException("WaitForJobs requires Wait.", nameof(request));
     }
 
+    /// <summary>
+    /// Splits a stored record into main manifest and hooks. Records written with explicit hook
+    /// metadata are used as-is; older records re-extract hooks from the manifest so upgrades stay
+    /// compatible with releases stored before hook persistence existed.
+    /// </summary>
     internal static (string MainManifest, List<HelmHook> Hooks) ResolveStoredManifest(
         HelmReleaseRecord record,
         string defaultNamespace)
@@ -2731,6 +3022,7 @@ public class HelmClient : IHelmClient
             Kind = record.Kind,
             Path = record.Path,
             Manifest = record.Manifest,
+            // Namespace is not persisted on the record; recover it from the manifest identity.
             Namespace = ManifestIdentity.Parse(record.Manifest, string.Empty)?.Namespace ?? string.Empty,
             Weight = record.Weight,
             LastRunStartedAt = record.LastRunStartedAt,
@@ -2756,6 +3048,9 @@ public class HelmClient : IHelmClient
         IEnumerable<HelmHook> hooks)
         => releaseRecord with { Hooks = hooks.Select(ToReleaseHook).ToList() };
 
+    // Persists hook run metadata (phase, timestamps) onto the still-current revision record.
+    // Uses CancellationToken.None so cancellation of the hook run itself does not lose the
+    // last-run evidence. Reloads the record first to avoid clobbering concurrent status changes.
     private static async Task PersistHookExecutionAsync(
         HelmReleaseStore store,
         HelmReleaseRecord originalRecord,
@@ -2825,6 +3120,8 @@ public class HelmClient : IHelmClient
         return value is "before-hook-creation" or "hook-succeeded" or "hook-failed";
     }
 
+    // Builds a Kubernetes client: request-supplied kubeconfig content/path wins over options,
+    // falling back to the default kubeconfig chain (~/.kube/config, in-cluster, etc.).
     private static async Task<k8s.Kubernetes> CreateKubernetesClientAsync(
         HelmExecutionOptions options,
         string? requestKubeConfigPath,

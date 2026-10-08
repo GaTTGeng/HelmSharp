@@ -4,6 +4,10 @@ using Xunit.Abstractions;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Template function behavior: Helm-compatible path-aware diagnostics for environment
+/// and non-Helm functions, plus whitespace-trim interactions with include/define/if/range.
+/// </summary>
 public class TemplateFunctionTests
 {
     private readonly ITestOutputHelper _output;

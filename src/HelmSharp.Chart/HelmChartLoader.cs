@@ -4,38 +4,103 @@ using System.Text;
 
 namespace HelmSharp.Chart;
 
+/// <summary>
+/// Chart metadata and contents loaded from a chart directory or a packaged
+/// <c>.tgz</c> archive, matching the shape Helm derives from Chart.yaml and the
+/// chart file layout (<c>values.yaml</c>, <c>templates/</c>, <c>crds/</c>, <c>charts/</c>).
+/// </summary>
 public sealed class HelmChart
 {
     /// <summary>
     /// Gets the chart metadata API version from Chart.yaml.
     /// </summary>
     public string ApiVersion { get; init; } = string.Empty;
+
+    /// <summary>Chart name from Chart.yaml. Falls back to the chart path's file name when absent.</summary>
     public string Name { get; init; } = string.Empty;
+
+    /// <summary>SemVer chart version from Chart.yaml (not the application version).</summary>
     public string Version { get; init; } = string.Empty;
+
+    /// <summary>Optional application version from Chart.yaml; informational only.</summary>
     public string? AppVersion { get; init; }
+
+    /// <summary>Optional chart description from Chart.yaml.</summary>
     public string? Description { get; init; }
+
+    /// <summary>Optional project home page URL from Chart.yaml.</summary>
     public string? Home { get; init; }
+
+    /// <summary>Optional icon URL from Chart.yaml.</summary>
     public string? Icon { get; init; }
+
+    /// <summary>Source repository URLs from Chart.yaml. Entries are kept as raw YAML values.</summary>
     public List<object?>? Sources { get; set; }
+
+    /// <summary>Keywords from Chart.yaml, used by chart repository search.</summary>
     public List<object?>? Keywords { get; set; }
+
+    /// <summary>Maintainer entries from Chart.yaml. Entries are kept as raw YAML values.</summary>
     public List<object?>? Maintainers { get; set; }
+
+    /// <summary>Chart type from Chart.yaml; <c>application</c> or <c>library</c>.</summary>
     public string? Type { get; init; }
+
+    /// <summary>Whether Chart.yaml marks the chart as deprecated.</summary>
     public bool Deprecated { get; init; }
+
+    /// <summary>SemVer range of compatible Kubernetes versions from Chart.yaml (<c>kubeVersion</c>).</summary>
     public string? KubeVersion { get; init; }
+
+    /// <summary>Arbitrary annotation map from Chart.yaml, including Helm's artifact hub metadata.</summary>
     public Dictionary<string, object?>? Annotations { get; set; }
+
+    /// <summary>Dependency declarations from Chart.yaml's <c>dependencies</c> list.</summary>
     public List<HelmChartDependency> Dependencies { get; } = new();
+
+    /// <summary>Resolved dependency versions from Chart.lock, parallel to <see cref="Dependencies"/>.</summary>
     public List<HelmChartLockEntry> LockEntries { get; } = new();
+
+    /// <summary>Digest recorded in Chart.lock; identifies the locked dependency set.</summary>
     public string? LockDigest { get; set; }
+
+    /// <summary>Timestamp recorded in Chart.lock when the lock file was generated.</summary>
     public string? LockGenerated { get; set; }
+
+    /// <summary>
+    /// Raw contents of <c>values.yaml</c> at the chart root. Empty when the chart ships no values file.
+    /// </summary>
     public string ValuesYaml { get; init; } = string.Empty;
+
+    /// <summary>Template file contents keyed by chart-relative path (for example <c>templates/deploy.yaml</c>).</summary>
     public Dictionary<string, string> Templates { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>Non-template chart files keyed by chart-relative path, exposed to templates via <c>.Files</c>.</summary>
     public Dictionary<string, byte[]> Files { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>Parsed CRD manifests from <c>crds/</c>, applied before templates during install.</summary>
     public List<Dictionary<string, object?>> Crds { get; } = new();
+
+    /// <summary>
+    /// Loaded subcharts keyed by chart name, or by dependency alias when Chart.yaml declares one.
+    /// Sourced from directory subcharts under <c>charts/</c> and from packaged dependency archives.
+    /// </summary>
     public Dictionary<string, HelmChart> Subcharts { get; } = new(StringComparer.Ordinal);
 }
 
+/// <summary>
+/// Loads Helm charts from unpacked directories or packaged archives into <see cref="HelmChart"/> models.
+/// </summary>
 public static class HelmChartLoader
 {
+    /// <summary>
+    /// Loads a chart from a directory or a <c>.tgz</c>/<c>.tar.gz</c> archive.
+    /// </summary>
+    /// <param name="chartPath">Chart directory path, or path to a packaged chart archive.</param>
+    /// <param name="cancellationToken">Cancels file reads and recursive subchart loading.</param>
+    /// <returns>The fully loaded chart, including subcharts and CRDs.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when Chart.yaml is missing from the chart.</exception>
+    /// <exception cref="InvalidDataException">Thrown when an archive entry lies outside the chart root or a dependency archive is corrupt.</exception>
     public static async Task<HelmChart> LoadAsync(string chartPath, CancellationToken cancellationToken)
     {
         var isDirectory = Directory.Exists(chartPath);
@@ -56,6 +121,7 @@ public static class HelmChartLoader
         string? chartDir,
         CancellationToken cancellationToken)
     {
+        // Chart.yaml is the chart's identity file; Helm refuses to load a chart without it.
         var chartYamlBytes = FindFile(files, "Chart.yaml");
         if (chartYamlBytes is null || chartYamlBytes.Length == 0)
             throw new InvalidOperationException($"Chart.yaml was not found in chart {chartPath}.");
@@ -77,7 +143,8 @@ public static class HelmChartLoader
             ValuesYaml = DecodeText(FindFile(files, "values.yaml"))
         };
 
-        // Load Chart.lock if present
+        // Chart.lock is optional; when present it pins dependency versions and
+        // supplies the digest used to detect drift from the declarations in Chart.yaml.
         var lockContent = FindFile(files, "Chart.lock");
         if (lockContent is not null)
         {
@@ -128,6 +195,8 @@ public static class HelmChartLoader
                     depEntry.Tags = tagsList.Select(t => Convert.ToString(t) ?? string.Empty).ToList();
                 if (depDict.TryGetValue("import-values", out var importsObj) && importsObj is IList<object?> importsList)
                     depEntry.ImportValues = importsList.ToList();
+                // Chart.yaml dependency enabled flags are commonly written as strings
+                // in the wild; Helm treats anything other than an explicit false as enabled.
                 if (depDict.TryGetValue("enabled", out var enabledObj))
                     depEntry.Enabled = enabledObj switch
                     {
@@ -199,6 +268,9 @@ public static class HelmChartLoader
                     }
                 }
 
+                // Packaged dependency archives dropped into charts/ (helm dependency
+                // build output) sit alongside directory subcharts and take part in
+                // the same dependency-name/alias resolution.
                 foreach (var dependencyArchive in Directory
                     .EnumerateFiles(chartsDir, "*", SearchOption.TopDirectoryOnly)
                     .Where(IsDependencyArchiveFile)
@@ -279,6 +351,8 @@ public static class HelmChartLoader
             .Where(dependency => IsDependencyMatch(chart, dependency, package.Chart))
             .ToList();
 
+        // A packaged chart is registered under its dependency alias when Chart.yaml
+        // declares one, so value overrides and template scoping see the alias key.
         if (matchedDependencies.Count > 0)
         {
             foreach (var dependency in matchedDependencies)
@@ -301,6 +375,10 @@ public static class HelmChartLoader
             string.Equals(dependency.Version, subchart.Version, StringComparison.OrdinalIgnoreCase))
             return true;
 
+        // Chart.yaml may declare a SemVer range while the packaged chart carries the
+        // resolved version; Chart.lock holds that resolution. Dependency and lock
+        // entries are kept in the same order, so an index match substitutes for
+        // full SemVer range evaluation.
         var dependencyIndex = parent.Dependencies.IndexOf(dependency);
         if (dependencyIndex >= 0 && dependencyIndex < parent.LockEntries.Count)
         {
@@ -346,6 +424,8 @@ public static class HelmChartLoader
         CancellationToken cancellationToken)
     {
         var archiveFiles = new List<ArchiveFileEntry>();
+        // Packaged charts are gzipped tarballs; bare tar input is tolerated for
+        // dependency archives that omit the gzip layer.
         await using Stream archive = chartPath.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase) ||
                                      chartPath.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase)
             ? new GZipStream(input, CompressionMode.Decompress)
@@ -366,6 +446,8 @@ public static class HelmChartLoader
             archiveFiles.Add(new ArchiveFileEntry(entryName, memory.ToArray()));
         }
 
+        // Helm packages charts under a single top-level folder (chartname/version);
+        // paths must be re-rooted so the chart tree looks like a directory chart.
         var chartRoot = HelmArchivePath.FindChartRoot(archiveFiles.Select(fileEntry => fileEntry.Name));
         var files = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
         foreach (var fileEntry in archiveFiles)
@@ -419,6 +501,10 @@ public static class HelmChartLoader
     private static string DecodeText(byte[]? content)
         => content is null ? string.Empty : Encoding.UTF8.GetString(content);
 
+    /// <summary>
+    /// Normalizes a path to forward slashes without a leading slash so archive and
+    /// directory entries share one key format.
+    /// </summary>
     internal static string NormalizePath(string path)
         => path.Replace('\\', '/').TrimStart('/');
 
@@ -428,6 +514,8 @@ public static class HelmChartLoader
         if (!normalized.StartsWith("charts/", StringComparison.Ordinal))
             return false;
 
+        // Only archives placed directly under charts/ count; nested paths belong
+        // to already-expanded subchart trees and are not double-loaded.
         var rest = normalized["charts/".Length..];
         return rest.IndexOf('/') < 0 && IsDependencyArchivePath(rest);
     }

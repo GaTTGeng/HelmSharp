@@ -1,5 +1,9 @@
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Smoke tests asserting the post-renderer and related companion projects exist and
+/// are referenced by the solution layout (guard against accidental project removal).
+/// </summary>
 public class PostRendererTests
 {
     [Fact]

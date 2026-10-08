@@ -6,6 +6,10 @@ namespace HelmSharp.Tests;
 /// <summary>
 /// Unit tests for the template tokenizer and parser — Issue #24.
 /// </summary>
+/// <summary>
+/// Tokenizer/parser coverage for the Go-template lexer: actions, trim markers,
+/// nested actions, comments, and control-flow keywords.
+/// </summary>
 public class TemplateParserTests
 {
     [Fact]

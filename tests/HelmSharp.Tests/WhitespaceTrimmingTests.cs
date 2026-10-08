@@ -4,6 +4,10 @@ using Xunit.Abstractions;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Covers Go-template whitespace trim markers (<c>{{-</c> / <c>-}}</c>) around tokens
+/// and inside if/define blocks.
+/// </summary>
 public class WhitespaceTrimmingTests
 {
     private readonly ITestOutputHelper _output;

@@ -5,6 +5,10 @@ namespace HelmSharp.Action;
 /// <summary>
 /// Validates chart kubeVersion requirements against the cluster version.
 /// Implements Helm's kubeVersion compatibility check.
+/// Constraint forms mirror Helm/Masterminds SemVer: comparison operators (>=, &lt;=, &gt;, &lt;, =),
+/// tilde (~1.25.0), caret (^1.20.0), wildcards (1.25.x), and bare minor versions (1.25).
+/// Unparseable constraints or cluster versions are treated as compatible so validation never
+/// blocks a chart on metadata it cannot understand.
 /// </summary>
 public static class KubeVersionValidator
 {
@@ -12,6 +16,9 @@ public static class KubeVersionValidator
     /// Checks if a chart's kubeVersion requirement is satisfied by the cluster version.
     /// Supports SemVer ranges: >=1.20, ~1.25, ^1.20, 1.25.x, etc.
     /// </summary>
+    /// <param name="chartKubeVersion">Constraint from Chart.yaml's kubeVersion field.</param>
+    /// <param name="clusterVersion">Cluster Kubernetes version (a leading 'v' is ignored).</param>
+    /// <returns>True when compatible, when no requirement is set, or when input cannot be parsed.</returns>
     public static bool IsCompatible(string chartKubeVersion, string clusterVersion)
     {
         if (string.IsNullOrWhiteSpace(chartKubeVersion))
@@ -27,7 +34,8 @@ public static class KubeVersionValidator
     }
 
     /// <summary>
-    /// Returns a detailed compatibility result.
+    /// Returns a detailed compatibility result with a human-readable message, suitable for
+    /// warnings or failure output.
     /// </summary>
     public static (bool Compatible, string Message) Validate(string chartKubeVersion, string clusterVersion)
     {
@@ -45,6 +53,9 @@ public static class KubeVersionValidator
         return (false, $"Chart requires kubeVersion {constraint}, but cluster has {clusterVersion} (incompatible)");
     }
 
+    // Evaluates a single constraint term. Fail-open: an unparseable constraint returns true
+    // rather than blocking the chart (Helm only warns on kubeVersion mismatches at template
+    // time; hard failure is the caller's choice).
     private static bool CheckConstraint(string constraint, (int Major, int Minor, int Patch) cluster)
     {
         // Handle range constraints: >=1.20, <=1.25, >1.20, <1.25

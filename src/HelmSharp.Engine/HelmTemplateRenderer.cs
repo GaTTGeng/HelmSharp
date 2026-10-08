@@ -9,6 +9,11 @@ using HelmSharp.Chart;
 
 namespace HelmSharp.Engine;
 
+/// <summary>
+/// Renders Helm chart templates to manifests with Helm CLI-compatible output.
+/// Implements <see cref="IEvaluationContext"/> so extracted function helpers can
+/// evaluate tokens without holding a renderer reference.
+/// </summary>
 public sealed class HelmTemplateRenderer : IEvaluationContext
 {
     private static readonly string HelmSharpVersion =
@@ -70,6 +75,11 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
     /// </summary>
     internal IReadOnlyDictionary<string, string> DefinedTemplates => _definedTemplates;
 
+    /// <summary>
+    /// Creates a renderer for a fresh install (revision 1, no kubeVersion/apiVersions
+    /// overrides). Values are copied and merged with chart defaults by
+    /// <see cref="HelmValues.PrepareForRender"/>.
+    /// </summary>
     public HelmTemplateRenderer(
         HelmChart chart,
         string releaseName,
@@ -79,6 +89,18 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
     {
     }
 
+    /// <summary>
+    /// Creates a renderer with full Helm-environment controls.
+    /// </summary>
+    /// <param name="chart">Chart to render, including loaded dependencies.</param>
+    /// <param name="releaseName">Exposed as <c>.Release.Name</c>.</param>
+    /// <param name="releaseNamespace">Exposed as <c>.Release.Namespace</c>.</param>
+    /// <param name="values">User-supplied values; merged over chart defaults.</param>
+    /// <param name="kubeVersion">Optional Kubernetes version for <c>.Capabilities.KubeVersion</c>
+    /// and API-version filtering. Null uses a built-in default set.</param>
+    /// <param name="apiVersions">Extra API versions merged over the defaults.</param>
+    /// <param name="isUpgrade">When true, sets <c>.Release.IsUpgrade</c> and clears <c>IsInstall</c>.</param>
+    /// <param name="revision">Exposed as <c>.Release.Revision</c>.</param>
     public HelmTemplateRenderer(
         HelmChart chart,
         string releaseName,
@@ -244,6 +266,11 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         }
     }
 
+    /// <summary>
+    /// Manifest ordering mirrors Helm's install kind order: hooks sort before
+    /// regular manifests (by weight), then by the <see cref="InstallOrder"/> kind
+    /// rank, then by source path and original document order for stability.
+    /// </summary>
     private static IEnumerable<RenderedManifest> SortManifests(IEnumerable<RenderedManifest> manifests)
         => manifests
             .OrderBy(manifest => manifest.IsHook)
@@ -260,6 +287,13 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         return InstallOrder.TryGetValue(kind, out var order) ? order : int.MaxValue;
     }
 
+    /// <summary>
+    /// Splits rendered output into YAML documents on <c>---</c> separator lines.
+    /// Separator lines may carry trailing comments; the newline right after a
+    /// separator belongs to the separator and is consumed here. The final segment
+    /// keeps track of whether the source text ended with a newline so the
+    /// re-serialization can reproduce Helm CLI's blank-line placement.
+    /// </summary>
     private static List<ManifestDocument> SplitManifestDocuments(string manifest)
     {
         var documents = new List<ManifestDocument>();
@@ -463,6 +497,10 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             var name = openMatch.Groups["name"].Value;
             var bodyStart = openMatch.Index + openMatch.Length;
             var tokenMatches = TokenRegex.Matches(content, bodyStart);
+            // Track nesting so an 'end' belonging to an inner if/range/define does
+            // not close the define body early. Regex-based depth counting is used
+            // here (rather than the AST parser) because defines are harvested from
+            // raw template text before any render pass.
             var depth = 1;
 
             foreach (Match token in tokenMatches)
@@ -500,6 +538,12 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         }
     }
 
+    /// <summary>
+    /// Removes all <c>define</c> blocks from a template before rendering it.
+    /// Go ignores define bodies at their declaration site — they only produce output
+    /// when invoked via <c>template</c>/<c>include</c> — so leaving them in would
+    /// duplicate the body text into the manifest.
+    /// </summary>
     private static string StripDefines(string content)
     {
         var defineOpenRegex = new Regex(
@@ -544,6 +588,11 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         return result;
     }
 
+    /// <summary>
+    /// Renders the chart's <c>NOTES.txt</c> (the post-install user message) and
+    /// returns it trimmed. Returns empty string when the chart has no NOTES.txt.
+    /// NOTES.txt is excluded from <see cref="Render"/> output.
+    /// </summary>
     public string RenderNotes()
     {
         foreach (var (path, content) in _chart.Templates)
@@ -677,12 +726,6 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
     }
 
     /// <summary>
-    /// Trims trailing spaces/tabs from the current output line when the preceding
-    /// text has meaningful content (not just standalone indent before a block).
-    /// Used when a right-trim block follows a text node that carries YAML content
-    /// whose indent is duplicated by the block body.
-    /// </summary>
-    /// <summary>
     /// Returns true when the block at <paramref name="blockIndex"/> should trim
     /// the current output line before rendering — because the preceding text
     /// carries content whose trailing indent would otherwise duplicate the body indentation.
@@ -703,6 +746,11 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         return blockIndex > 1 && children[blockIndex - 2] is (ActionNode or BlockNode);
     }
 
+    /// <summary>
+    /// Trims trailing spaces/tabs from the current output line when the line so far
+    /// is pure indentation (ends at a newline). Used when a right-trim block follows
+    /// text whose trailing indent would otherwise duplicate the body indentation.
+    /// </summary>
     private static void TrimCurrentLineIndent(StringBuilder output)
     {
         var index = output.Length - 1;
@@ -753,6 +801,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         return block.Keyword switch
         {
             "if" => RenderIfBlock(block, context),
+            // `with` rebinds dot to the truthy value; `if` leaves dot untouched.
             "with" => RenderWithBlock(block, context),
             "range" => RenderRangeBlock(block, context),
             _ => string.Empty,
@@ -874,6 +923,13 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             _ => false,
         };
 
+    /// <summary>
+    /// Executes a <c>range</c> body over a collection or map.
+    /// Accepts <c>range EXPR</c>, <c>range $v := EXPR</c>, and
+    /// <c>range $k, $v := EXPR</c>. Each iteration runs in a context whose
+    /// <c>.</c> is the current element and whose variables are copies —
+    /// Go's <c>range</c> does not leak loop variables into the outer scope.
+    /// </summary>
     private string RenderRangeExpression(string expression, string body, TemplateContext context)
     {
         // Handle: range $k, $v := expr
@@ -892,6 +948,8 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                     var builder = new StringBuilder();
                     foreach (var kvp in dict)
                     {
+                        // Map iteration: first variable gets the key, second the value,
+                        // and dot is the value (Go's range-over-map convention).
                         var iterCtx = CreateRangeContext(context, kvp.Value);
                         iterCtx.Variables[vars[0]] = kvp.Key;
                         iterCtx.Variables[vars[1]] = kvp.Value;
@@ -906,6 +964,8 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                     var index = 0;
                     foreach (var item in items)
                     {
+                        // Slice iteration: first variable is the 0-based index,
+                        // second is the element, matching Go's for-range.
                         var iterCtx = CreateRangeContext(context, item);
                         iterCtx.Variables[vars[0]] = index;
                         iterCtx.Variables[vars[1]] = item;
@@ -970,6 +1030,9 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             var builder = new StringBuilder();
             foreach (var kvp in dict)
             {
+                // Without an explicit variable, a map iteration sets dot to a
+                // two-field dict so {{ .Key }} / {{ .Value }} work — Go templates
+                // expose these as struct fields on the iteration value.
                 var pair = new Dictionary<string, object?>(StringComparer.Ordinal) { ["Key"] = kvp.Key, ["Value"] = kvp.Value };
                 builder.Append(RenderSection(body, context with { Dot = pair }));
             }
@@ -987,6 +1050,12 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         return string.Empty;
     }
 
+    /// <summary>
+    /// Handles <c>$var := expr</c> / <c>$var = expr</c> actions. Both forms assign
+    /// into the current scope's variables (Go's <c>=</c> requires prior declaration,
+    /// but this renderer accepts either — Helm charts almost always use <c>:=</c>).
+    /// Returns false when the expression is not a <c>$</c>-variable assignment.
+    /// </summary>
     private bool TryAssignVariable(string expr, TemplateContext context, out string output)
     {
         output = string.Empty;
@@ -1004,6 +1073,11 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         return true;
     }
 
+    /// <summary>
+    /// Evaluates a Go pipeline: each stage receives the previous stage's result as
+    /// its final argument (or as the implicit first value for single-arg functions).
+    /// The value of the whole pipeline is the last stage's result.
+    /// </summary>
     private object? EvaluatePipeline(string expression, TemplateContext context)
     {
         var parts = SplitPipeline(expression);
@@ -1018,6 +1092,11 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         return value;
     }
 
+    /// <summary>
+    /// Dispatches one pipeline stage to the matching template function. Unknown
+    /// function names throw <see cref="UnsupportedTemplateFeatureException"/> so
+    /// Render() can collect them per-template rather than aborting the chart.
+    /// </summary>
     private object? EvaluateExpression(
         string expression,
         TemplateContext context,
@@ -1303,11 +1382,18 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         object? pipelineValue)
     {
         var args = tokens.Skip(1).Select(token => EvaluateToken(token, context)).ToList();
+        // Pipeline value is the LAST argument for these helpers (Go appends the
+        // piped value after the explicit arguments).
         if (pipelineValue is not null)
             args.Add(pipelineValue);
         return args;
     }
 
+    /// <summary>
+    /// True when an unrecognized expression is a literal/path token that can be
+    /// evaluated as a value (quoted string, number, boolean, nil, dot path, or
+    /// parenthesized expression) rather than an unsupported function call.
+    /// </summary>
     private static bool IsResolvableTokenExpression(string expression)
     {
         var token = expression.Trim();
@@ -1321,6 +1407,12 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                double.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out _);
     }
 
+    /// <summary>
+    /// Renders a named template via <c>include</c>/<c>template</c>. The optional
+    /// second argument becomes the nested render's dot context. The rendered body is
+    /// trimmed — Go's <c>include</c> returns the template output with surrounding
+    /// whitespace removed, which is what lets charts embed includes mid-line.
+    /// </summary>
     private object? IncludeTemplate(IReadOnlyList<string> tokens, TemplateContext context)
     {
         var name = TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
@@ -1365,6 +1457,11 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         };
     }
 
+    /// <summary>
+    /// Applies a single-argument function when the value arrives via the pipeline
+    /// and no explicit arguments are present (e.g. <c>.Name | quote</c>). This is the
+    /// pipeline-only fast path; the main dispatch handles the positional form.
+    /// </summary>
     private object? ApplySimpleFunction(string function, object? value, TemplateContext context)
     {
         return function switch
@@ -1453,6 +1550,14 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Evaluates a single expression token: string literals (with quote unescaping),
+    /// <c>(parenthesized)</c> sub-expressions, <c>.</c>/<c>$</c> paths, boolean/nil
+    /// keywords, numbers, and <c>$variable</c> references.
+    /// Unrecognized bare words are returned as strings — Go would treat them as
+    /// function names, so this is a deliberate lenient fallback for value-like tokens.
+    /// Missing map keys yield null rather than an error (Go's missing-key behavior).
+    /// </summary>
     private object? EvaluateToken(string? token, TemplateContext context)
     {
         if (string.IsNullOrWhiteSpace(token))
@@ -1521,6 +1626,12 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             }
         };
 
+    /// <summary>
+    /// Resolves a dotted path starting with a root name (<c>.Values.x</c>,
+    /// <c>.Release.Name</c>, …) or a bare member of dot (<c>.metadata.name</c>).
+    /// Recognized roots are materialized on demand so templates see fresh objects;
+    /// anything else is looked up as a field of the current dot.
+    /// </summary>
     private object? ResolvePath(string token, TemplateContext context)
     {
         var parts = token.TrimStart('.').Split('.', StringSplitOptions.RemoveEmptyEntries);
@@ -1663,6 +1774,11 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         return normalized.TrimEnd('\n').Split('\n').Cast<object?>().ToList();
     }
 
+    /// <summary>
+    /// Implements the <c>.Files</c> object (Get/GetBytes/Lines/Glob/AsConfig/AsSecrets).
+    /// File keys are normalized to forward slashes with no leading slash so charts
+    /// can reference them the same way on every platform.
+    /// </summary>
     private sealed class TemplateFiles
     {
         private static readonly Regex NumericScalarRegex = new(
@@ -1703,6 +1819,13 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         public string AsSecrets()
             => RenderYamlMap(encodeValues: true);
 
+        /// <summary>
+        /// Renders the files as a YAML map. Keys are file basenames (Helm parity).
+        /// Values are base64-encoded when <paramref name="encodeValues"/> is true
+        /// (<c>AsSecrets</c>), matching Helm's secret-data behavior. LF-only
+        /// multi-line values use block scalars; CR-containing values use quoted
+        /// scalars with escapes — both reproduce Helm CLI's exact YAML shape.
+        /// </summary>
         private string RenderYamlMap(bool encodeValues)
         {
             var builder = new StringBuilder();
@@ -2060,6 +2183,10 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
     private static List<string> SplitPipeline(string expression)
         => SplitByTopLevel(expression, '|');
 
+    /// <summary>
+    /// Splits a call's argument list on top-level whitespace. Quoted strings and
+    /// parenthesized groups are kept intact so spaces inside them do not split args.
+    /// </summary>
     private static List<string> SplitArguments(string expression)
     {
         var result = new List<string>();
@@ -2108,6 +2235,10 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         return result;
     }
 
+    /// <summary>
+    /// Splits on a separator character, ignoring separators inside quoted strings
+    /// or parenthesized groups (used for pipeline <c>|</c> splitting).
+    /// </summary>
     private static List<string> SplitByTopLevel(string expression, char separator)
     {
         var result = new List<string>();
@@ -2202,6 +2333,9 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
 
 
     // Sprig: untilStep START STOP STEP (defaults: start=0, step=1)
+    // Sprig accepts the start as the pipeline value: STOP STEP | untilStep START
+    // or all three as arguments; step defaults to 1 and a 0 step is coerced to 1
+    // (the helper's empty-list case is unreachable from template calls).
     private object? ResolveUntilStep(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
         long start, stop, step;
@@ -2226,6 +2360,12 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
     // ────────────────────────────────────────────────────────────
     //  MATH HELPERS — resolve args here, compute in MathFunctions
     // ────────────────────────────────────────────────────────────
+    /// <summary>
+    /// Left-folds arguments through a binary operator for Sprig's
+    /// <c>add</c>/<c>sub</c>/<c>mul</c>/<c>div</c>/<c>mod</c>. When invoked through a
+    /// pipeline the piped value is the first operand (leftmost), matching Go's
+    /// template pipeline semantics where the piped value is prepended as an argument.
+    /// </summary>
     private object FoldMathArgs(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, string op)
     {
         var args = tokens.Skip(1).Select(t => EvaluateToken(t, context)).ToList();

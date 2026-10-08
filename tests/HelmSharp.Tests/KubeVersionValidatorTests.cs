@@ -2,6 +2,10 @@ using HelmSharp.Action;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Kubernetes version constraint validation: compatibility checks, detailed results,
+/// error messages, and <c>v</c>-prefixed cluster versions.
+/// </summary>
 public class KubeVersionValidatorTests
 {
     [Theory]

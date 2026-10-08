@@ -3,6 +3,10 @@ using HelmSharp.Repo;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Operation request objects: documented defaults, preservation of non-default values,
+/// convenience overloads on <c>IHelmClient</c>, and request routing through the lower-level APIs.
+/// </summary>
 public sealed class OperationRequestTests : IDisposable
 {
     private readonly string _tempDirectory = Path.Combine(

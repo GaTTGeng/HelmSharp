@@ -7,11 +7,21 @@ namespace HelmSharp.Action;
 /// Chart provenance — generates and verifies .prov files for chart integrity.
 /// A .prov file contains: chart metadata hash, signature, and pgp info.
 /// </summary>
+/// <remarks>
+/// The .prov file is written in Helm's clearsigned armor layout for format compatibility, but
+/// the signature block currently carries a base64 SHA-512 digest of the archive rather than a
+/// real PGP signature. Integrity checking is therefore hash-based only; do not treat these
+/// files as cryptographically signed provenance.
+/// </remarks>
 public static class HelmProvenance
 {
     /// <summary>
-    /// Generates a .prov file for a chart archive.
+    /// Generates a .prov file for a chart archive, written next to it as
+    /// <c>{archive}.prov</c>. Records the archive name, SHA-256 digest, and UTC timestamp.
     /// </summary>
+    /// <param name="chartTgzPath">Chart archive to describe.</param>
+    /// <param name="keyId">Optional PGP key identifier recorded in the file (not used for signing).</param>
+    /// <returns>Path of the generated .prov file.</returns>
     public static async Task<string> GenerateProvFileAsync(
         string chartTgzPath,
         string? keyId = null,
@@ -48,7 +58,8 @@ public static class HelmProvenance
 
     /// <summary>
     /// Verifies a chart archive against its .prov file.
-    /// Returns true if the SHA256 hash matches.
+    /// Returns true if the SHA256 hash matches; a missing .prov file yields false.
+    /// Only hash integrity is checked — the signature block is not verified.
     /// </summary>
     public static async Task<bool> VerifyAsync(
         string chartTgzPath,
@@ -70,7 +81,8 @@ public static class HelmProvenance
     }
 
     /// <summary>
-    /// Extracts the SHA256 hash from a .prov file.
+    /// Extracts the SHA256 hash from a .prov file (the hex value following the
+    /// <c>sha256:</c> key), or null when the key is absent.
     /// </summary>
     public static string? ExtractSha256(string provContent)
     {
@@ -84,7 +96,9 @@ public static class HelmProvenance
     }
 
     /// <summary>
-    /// Extracts chart metadata from a .prov file.
+    /// Extracts chart metadata key/value pairs from the clearsigned message body of a .prov
+    /// file (name, sha256, generated, pgpKeyID). The armor headers and signature block are
+    /// excluded. Keys are compared case-insensitively.
     /// </summary>
     public static Dictionary<string, string> ExtractMetadata(string provContent)
     {

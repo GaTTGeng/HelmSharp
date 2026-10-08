@@ -2,6 +2,10 @@ using HelmSharp.Action;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Plugin management: portable name validation (including non-ASCII names) without
+/// touching paths outside the plugin root, platform-specific case sensitivity, and rejection of linked plugin directories.
+/// </summary>
 public sealed class HelmPluginManagerTests : IDisposable
 {
     private readonly string _tempDir = Path.Combine(

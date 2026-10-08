@@ -1,13 +1,18 @@
 namespace HelmSharp.Action;
 
+/// <summary>Options for installing a release or upgrading an existing one.</summary>
 public class HelmUpgradeInstallRequest
 {
+    /// <summary>Release name to install or upgrade.</summary>
     public string ReleaseName { get; set; } = string.Empty;
 
+    /// <summary>Chart reference: local path, archive path, or repo/chart name.</summary>
     public string Chart { get; set; } = string.Empty;
 
+    /// <summary>Target Kubernetes namespace; defaults to the configured default namespace.</summary>
     public string? Namespace { get; set; }
 
+    /// <summary>Chart version constraint; null accepts the resolvable version.</summary>
     public string? Version { get; set; }
 
     /// <summary>
@@ -22,6 +27,7 @@ public class HelmUpgradeInstallRequest
     /// </summary>
     public List<string>? ValuesFiles { get; set; }
 
+    /// <summary>Equivalent to helm --set: key is a values path, value is a scalar expression.</summary>
     public Dictionary<string, string>? SetValues { get; set; }
 
     /// <summary>
@@ -40,6 +46,7 @@ public class HelmUpgradeInstallRequest
     /// </summary>
     public Dictionary<string, string>? SetJsonValues { get; set; }
 
+    /// <summary>Create the target namespace when it does not exist.</summary>
     public bool CreateNamespace { get; set; } = true;
 
     /// <summary>
@@ -66,15 +73,19 @@ public class HelmUpgradeInstallRequest
     /// </summary>
     public int? MaxHistory { get; set; }
 
+    /// <summary>If true, roll back or uninstall automatically when the operation fails.</summary>
     public bool Atomic { get; set; }
 
+    /// <summary>If true, delete newly created resources when the upgrade fails.</summary>
     public bool CleanupOnFail { get; set; }
 
-    /// <summary>直接传入 values YAML 内容。</summary>
+    /// <summary>Raw values YAML content passed directly (equivalent to helm -f from stdin content).</summary>
     public string? ValuesContent { get; set; }
 
+    /// <summary>Path to a kubeconfig file used for cluster access.</summary>
     public string? KubeConfigPath { get; set; }
 
+    /// <summary>Raw kubeconfig content supplied inline instead of <see cref="KubeConfigPath"/>.</summary>
     public string? KubeConfigContent { get; set; }
 
     /// <summary>

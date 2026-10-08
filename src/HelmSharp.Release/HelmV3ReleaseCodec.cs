@@ -7,15 +7,29 @@ using HelmSharp.Chart;
 
 namespace HelmSharp.Release;
 
+/// <summary>
+/// Encodes and decodes Helm v3 release payloads: the release JSON object, gzipped
+/// and Base64-encoded exactly as Helm stores it in the <c>release</c> key of the
+/// sh.helm.release.v1.&lt;name&gt;.&lt;revision&gt; Secret. Decoding also accepts
+/// uncompressed JSON for tolerance of foreign writers.
+/// </summary>
 internal static class HelmV3ReleaseCodec
 {
+    // gzip header used to sniff compressed payloads before attempting decompression.
     private static readonly byte[] GzipMagic = [0x1f, 0x8b, 0x08];
 
+    /// <summary>
+    /// Serializes a release record to the Base64(gzip(JSON)) payload Helm v3 writes
+    /// into release Secrets.
+    /// </summary>
+    /// <exception cref="InvalidDataException">Thrown when name, namespace, or revision is missing or invalid.</exception>
     public static string Encode(HelmReleaseRecord record)
     {
         ArgumentNullException.ThrowIfNull(record);
         ValidateIdentity(record.Name, record.Namespace, record.Revision);
 
+        // Release JSON shape mirrors Helm's release.Release proto: name, info,
+        // chart, config (user values), manifest, hooks, version (revision), namespace.
         var chart = BuildChart(record);
         var info = new JsonObject
         {
@@ -48,6 +62,10 @@ internal static class HelmV3ReleaseCodec
         return Convert.ToBase64String(output.ToArray());
     }
 
+    /// <summary>
+    /// Parses a Base64(gzip(JSON)) or bare JSON release payload back into a record.
+    /// </summary>
+    /// <exception cref="InvalidDataException">Thrown when the payload is not valid Base64, gzip, release JSON, or lacks a valid identity.</exception>
     public static HelmReleaseRecord Decode(string encodedRelease)
     {
         if (string.IsNullOrWhiteSpace(encodedRelease))
@@ -63,6 +81,8 @@ internal static class HelmV3ReleaseCodec
             throw new InvalidDataException("The Helm release payload is not valid Base64.", ex);
         }
 
+        // Helm v3 always gzips; accept uncompressed JSON too so payloads written by
+        // hand or by older tooling still decode.
         if (payload.AsSpan().StartsWith(GzipMagic))
         {
             try
@@ -102,6 +122,9 @@ internal static class HelmV3ReleaseCodec
             var values = root.TryGetProperty("config", out var config) && config.ValueKind == JsonValueKind.Object
                 ? (Dictionary<string, object?>)JsonElementToObject(config)!
                 : new Dictionary<string, object?>(StringComparer.Ordinal);
+            // helmsharp_computed_values is a HelmSharp extension field: the coalesced
+            // values tree after dependency processing. Plain Helm ignores unknown
+            // fields, so the release stays readable by both tools.
             var computedValuesYaml = root.TryGetProperty("helmsharp_computed_values", out var computed) && computed.ValueKind == JsonValueKind.Object
                 ? HelmYaml.Serialize((Dictionary<string, object?>)JsonElementToObject(computed)!)
                 : string.Empty;
@@ -145,6 +168,11 @@ internal static class HelmV3ReleaseCodec
     }
 
 
+    /// <summary>
+    /// Serializes a chart to the snapshot JSON shape Helm embeds under
+    /// <c>release.chart</c>: metadata, lock, templates, values, schema, files,
+    /// crds, and nested dependency charts.
+    /// </summary>
     internal static string CreateChartSnapshot(HelmChart chart)
     {
         ArgumentNullException.ThrowIfNull(chart);
@@ -177,6 +205,8 @@ internal static class HelmV3ReleaseCodec
             .Select(pair => ToJsonFile(pair.Key, Encoding.UTF8.GetBytes(pair.Value)))
             .ToArray());
 
+        // values.schema.json is hoisted to "schema" (base64) and Chart.lock becomes
+        // "lock", matching Helm's chart snapshot layout; remaining files stay in "files".
         var schema = chart.Files.FirstOrDefault(pair =>
             string.Equals(pair.Key, "values.schema.json", StringComparison.OrdinalIgnoreCase));
         var files = new JsonArray(chart.Files
@@ -261,6 +291,9 @@ internal static class HelmV3ReleaseCodec
 
     private static JsonObject BuildChart(HelmReleaseRecord record)
     {
+        // Rehydrate the preserved chart snapshot (or an empty scaffold) and refresh
+        // the identity metadata from the record so a re-encoded release reflects any
+        // record-level updates even when the snapshot is stale.
         JsonObject chart;
         if (string.IsNullOrWhiteSpace(record.RawChartJson))
         {
@@ -298,6 +331,9 @@ internal static class HelmV3ReleaseCodec
             HelmYaml.DeserializeDictionary(record.ChartValuesYaml));
         return chart;
     }
+    // Hook JSON mirrors Helm's release.Hook shape (name/kind/path/manifest/events/
+    // last_run/weight/delete_policies/output_log_policies) so `helm get manifest`
+    // and hook tooling can read records written by HelmSharp.
     private static JsonNode ToJsonHook(HelmReleaseHookRecord hook)
         => new JsonObject
         {

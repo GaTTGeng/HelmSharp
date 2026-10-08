@@ -10,9 +10,15 @@ namespace HelmSharp.Action;
 internal static class ThreeWayMerge
 {
     /// <summary>
-    /// Performs a three-way merge on a single resource.
-    /// Returns the merged YAML to apply.
+    /// Performs a three-way merge on a single resource and returns the merged YAML to apply.
     /// </summary>
+    /// <param name="lastManifest">Manifest as of the previously deployed revision (the common ancestor).</param>
+    /// <param name="newManifest">Desired manifest produced by the new chart render.</param>
+    /// <param name="liveManifest">Current live resource as returned by the cluster, or null when it does not exist.</param>
+    /// <returns>
+    /// The desired manifest when there is no live resource; otherwise the merged manifest that
+    /// keeps user-side drift which does not conflict with chart changes.
+    /// </returns>
     public static string MergeResource(
         string lastManifest,
         string newManifest,
@@ -21,6 +27,7 @@ internal static class ThreeWayMerge
         var lastDoc = HelmYaml.DeserializeDictionary(lastManifest);
         var newDoc = HelmYaml.DeserializeDictionary(newManifest);
 
+        // No live resource: nothing to reconcile, apply the desired manifest as-is.
         if (liveManifest is null)
             return newManifest;
 
@@ -35,6 +42,9 @@ internal static class ThreeWayMerge
         return HelmYaml.Serialize(merged);
     }
 
+    // Recursive three-way merge. Invariant: `merged` starts as a copy of `newVals` and is
+    // only rewritten where the live resource diverged from `last` while the chart did not —
+    // that pattern is user intent and must survive the upgrade (Helm's three-way merge rule).
     private static void DeepThreeWayMerge(
         IDictionary<string, object?> last,
         IDictionary<string, object?> newVals,
@@ -49,7 +59,8 @@ internal static class ThreeWayMerge
 
         foreach (var key in allKeys)
         {
-            // Skip fields managed by Kubernetes
+            // Skip fields managed by Kubernetes: they are cluster-authoritative and must never
+            // be taken from the live object or forced from the chart.
             if (key is "resourceVersion" or "uid" or "generation" or "creationTimestamp" or
                 "managedFields" or "selfLink" or "ownerReferences" or "status")
                 continue;
@@ -113,6 +124,11 @@ internal static class ThreeWayMerge
         }
     }
 
+    /// <summary>
+    /// Structural equality for deserialized YAML values. Numeric types are compared across
+    /// long/int/double with a small epsilon for doubles so YAML type inference differences
+    /// (e.g. an int in one document, a double in another) do not count as drift.
+    /// </summary>
     internal static bool DeepEquals(object? a, object? b)
     {
         if (a is null && b is null) return true;
@@ -156,6 +172,7 @@ internal static class ThreeWayMerge
         return a.Equals(b);
     }
 
+    // Case-insensitive deep copy so merge mutation never leaks into the parsed source documents.
     private static Dictionary<string, object?> DeepCopyDict(Dictionary<string, object?> dict)
     {
         var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);

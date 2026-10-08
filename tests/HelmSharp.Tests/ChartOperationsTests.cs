@@ -10,6 +10,10 @@ using k8s.Autorest;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Chart scaffolding and filesystem operations (create/init layout, generated templates
+/// and metadata) exercised against real temp directories.
+/// </summary>
 public class ChartOperationsTests : IDisposable
 {
     private readonly string _tempDir;

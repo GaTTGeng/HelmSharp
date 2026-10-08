@@ -12,6 +12,11 @@ public static class HelmRepoIndexer
     /// <summary>
     /// Generates an index.yaml using an extensible request object.
     /// </summary>
+    /// <param name="request">Directory, output path, base URL, merge index, and failure behavior.</param>
+    /// <param name="cancellationToken">Cancels package reads and index writing.</param>
+    /// <returns>The path of the generated index file.</returns>
+    /// <exception cref="DirectoryNotFoundException">Thrown when the chart directory does not exist.</exception>
+    /// <exception cref="InvalidDataException">Thrown when <c>FailOnInvalidPackage</c> is set and any package fails to index.</exception>
     public static async Task<string> GenerateIndexAsync(
         HelmRepoIndexRequest request,
         CancellationToken cancellationToken = default)
@@ -26,6 +31,8 @@ public static class HelmRepoIndexer
         if (!string.IsNullOrEmpty(outputDirectory))
             Directory.CreateDirectory(outputDirectory);
 
+        // Fail-on-invalid mode writes to a scratch file first so a rejected run
+        // never replaces an existing index.yaml with partial results.
         var scratchPath = request.FailOnInvalidPackage
             ? Path.Combine(
                 outputDirectory ?? Path.GetTempPath(),
@@ -72,7 +79,11 @@ public static class HelmRepoIndexer
 
     /// <summary>
     /// Generates an index.yaml for a directory containing .tgz chart packages.
+    /// Writes <c>index.yaml</c> into the chart directory and returns its path.
     /// </summary>
+    /// <param name="dirPath">Directory containing <c>.tgz</c> chart packages.</param>
+    /// <param name="url">Optional base URL prepended to each package's download URL.</param>
+    /// <param name="ct">Cancels package reads and index writing.</param>
     public static Task<string> GenerateIndexAsync(
         string dirPath,
         string? url = null,
@@ -82,6 +93,10 @@ public static class HelmRepoIndexer
     /// <summary>
     /// Generates an index.yaml for a directory containing .tgz chart packages, optionally merging an existing index.
     /// </summary>
+    /// <param name="dirPath">Directory containing <c>.tgz</c> chart packages.</param>
+    /// <param name="url">Optional base URL prepended to each package's download URL.</param>
+    /// <param name="ct">Cancels package reads and index writing.</param>
+    /// <param name="mergeIndexPath">Existing index whose version entries are preserved when not regenerated locally.</param>
     public static async Task<string> GenerateIndexAsync(
         string dirPath,
         string? url,
@@ -94,7 +109,11 @@ public static class HelmRepoIndexer
 
     /// <summary>
     /// Generates an index.yaml and returns diagnostics for packages that could not be indexed.
+    /// Invalid packages are skipped and reported rather than failing the run.
     /// </summary>
+    /// <param name="dirPath">Directory containing <c>.tgz</c> chart packages.</param>
+    /// <param name="url">Optional base URL prepended to each package's download URL.</param>
+    /// <param name="ct">Cancels package reads and index writing.</param>
     public static Task<HelmRepoIndexGenerationResult> GenerateIndexWithDiagnosticsAsync(
         string dirPath,
         string? url = null,
@@ -104,6 +123,10 @@ public static class HelmRepoIndexer
     /// <summary>
     /// Generates an index.yaml and returns diagnostics for packages that could not be indexed, optionally merging an existing index.
     /// </summary>
+    /// <param name="dirPath">Directory containing <c>.tgz</c> chart packages.</param>
+    /// <param name="url">Optional base URL prepended to each package's download URL.</param>
+    /// <param name="ct">Cancels package reads and index writing.</param>
+    /// <param name="mergeIndexPath">Existing index whose version entries are preserved when not regenerated locally.</param>
     public static async Task<HelmRepoIndexGenerationResult> GenerateIndexWithDiagnosticsAsync(
         string dirPath,
         string? url,
@@ -136,10 +159,15 @@ public static class HelmRepoIndexer
             {
                 var chart = await HelmChartLoader.LoadAsync(tgzFile, ct);
                 var fileInfo = new FileInfo(tgzFile);
+                // Digest is the SHA-256 of the .tgz bytes (lowercase hex, no prefix),
+                // the same value pull-time verification compares against.
                 var digest = Convert.ToHexString(
                     System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(tgzFile, ct)))
                     .ToLowerInvariant();
 
+                // Entry shape mirrors `helm repo index`: metadata from Chart.yaml plus
+                // urls/created/digest; timestamps use the fractional-seconds UTC format
+                // Helm's indexer writes so output stays diff-compatible.
                 var entry = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
                 {
                     ["apiVersion"] = string.IsNullOrWhiteSpace(chart.ApiVersion) ? "v2" : chart.ApiVersion,
@@ -178,6 +206,8 @@ public static class HelmRepoIndexer
 
         MergeExistingEntries(entries, mergeIndexPath);
 
+        // Version lists are newest-first, the order `helm search` and version
+        // resolution expect from a published index.
         foreach (var (_, versions) in entries)
             versions.Sort(CompareChartVersionsDescending);
 
@@ -224,6 +254,9 @@ public static class HelmRepoIndexer
                 parsedVersions.Add(new Dictionary<string, object?>(entry, StringComparer.OrdinalIgnoreCase));
             }
 
+            // Merge keeps locally regenerated versions authoritative and only adds
+            // historical entries the directory no longer contains, deduplicating by
+            // version equality so re-indexing does not duplicate rows.
             foreach (var versionsByMetadataName in parsedVersions.GroupBy(
                          version => HelmYaml.GetString(version, "name") ?? chartName,
                          StringComparer.OrdinalIgnoreCase))

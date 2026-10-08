@@ -2,6 +2,10 @@ using HelmSharp.Chart;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Values precedence and merge semantics: chart defaults, values files, values content,
+/// <c>--set</c>/<c>--set-json</c> overrides, null-entry pruning rules, and computed-values persistence.
+/// </summary>
 public class HelmValuesTests
 {
     [Fact]

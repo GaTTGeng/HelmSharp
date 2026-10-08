@@ -4,6 +4,10 @@ using System.Text;
 
 namespace HelmSharp.Chart;
 
+/// <summary>
+/// A node in the chart dependency graph. <c>Identity</c> is the dependency alias when
+/// declared, otherwise the chart name — the key used under parent values.
+/// </summary>
 internal sealed record HelmDependencyNode(
     string Identity,
     HelmChart Chart,
@@ -11,18 +15,35 @@ internal sealed record HelmDependencyNode(
     IReadOnlyList<HelmChartDependency> Dependencies,
     IReadOnlyList<HelmDependencyNode> Children);
 
+/// <summary>
+/// Builds the chart dependency graph and applies Helm's enablement rules
+/// (<c>condition</c>, <c>tags</c>, <c>enabled</c>) before values coalescing.
+/// </summary>
 internal static class HelmDependencyProcessor
 {
+    // Memoizes dependency graphs per chart instance keyed by a values fingerprint;
+    // repeated renders of the same chart/values pair skip the rebuild.
     private static readonly ConditionalWeakTable<HelmChart, ProcessedChartGraphs> ProcessedGraphs = new();
 
+    /// <summary>
+    /// Builds the full graph including disabled dependencies. Used for the enablement
+    /// evaluation pass, where a disabled node may still contribute condition paths.
+    /// </summary>
     internal static HelmDependencyNode BuildAll(HelmChart chart)
         => BuildNode(chart, chart.Name, null, null, string.Empty, includeDisabled: true);
 
+    /// <summary>
+    /// Builds the graph with disabled dependencies pruned, matching the set of
+    /// subcharts Helm actually renders and value-coalesces.
+    /// </summary>
     internal static HelmDependencyNode BuildEffective(
         HelmChart chart,
         IDictionary<string, object?> values)
         => BuildNode(chart, chart.Name, null, values, string.Empty, includeDisabled: false);
 
+    /// <summary>
+    /// Returns a previously computed graph for this chart and values fingerprint, if any.
+    /// </summary>
     internal static bool TryGetProcessedGraph(
         HelmChart chart,
         Dictionary<string, object?> values,
@@ -36,6 +57,9 @@ internal static class HelmDependencyProcessor
         return false;
     }
 
+    /// <summary>
+    /// Caches the graph computed for a chart and values pair for later renders.
+    /// </summary>
     internal static void RegisterProcessedValues(
         HelmChart chart,
         Dictionary<string, object?> values,
@@ -57,6 +81,8 @@ internal static class HelmDependencyProcessor
         var effectiveDependencies = new List<HelmChartDependency>();
         if (chart.Dependencies.Count == 0)
         {
+            // Charts without a dependencies list still may have charts/ content;
+            // those subcharts are always included, with no enablement to evaluate.
             foreach (var (name, subchart) in chart.Subcharts)
             {
                 children.Add(BuildNode(
@@ -82,6 +108,10 @@ internal static class HelmDependencyProcessor
 
             if (!includeDisabled)
             {
+                // Helm enablement: tag overrides apply first; a matching true tag
+                // enables even if another tag is false. Conditions are comma-separated
+                // values paths; the first path resolving to a boolean decides, and a
+                // missing path leaves the current decision untouched.
                 var tagOverride = EvaluateTags(dependencyIdentity, dependency.Tags, tags);
                 if (tagOverride.HasValue)
                     enabled = tagOverride.Value;
@@ -108,6 +138,8 @@ internal static class HelmDependencyProcessor
             if (!enabled)
                 continue;
 
+            // Effective metadata records the resolved identity (alias) so import-values
+            // and value scoping later use the same key as the values tree.
             var effectiveMetadata = CloneDependency(dependency, dependencyIdentity);
             effectiveDependencies.Add(effectiveMetadata);
             if (!TryGetSubchart(chart, dependency, dependencyIdentity, out var subchart))
@@ -153,6 +185,9 @@ internal static class HelmDependencyProcessor
         IEnumerable<string>? dependencyTags,
         IDictionary<string, object?>? valuesTags)
     {
+        // Helm tag semantics: any true tag enables the dependency (true wins over
+        // false); only when every resolved tag is false is the dependency disabled.
+        // No tag present in values means tags do not decide enablement.
         var hasTrue = false;
         var hasFalse = false;
         foreach (var tag in dependencyTags ?? [])
@@ -210,6 +245,8 @@ internal static class HelmDependencyProcessor
         string identity,
         out HelmChart subchart)
     {
+        // Packaged subcharts are registered under alias or name depending on how they
+        // were matched at load time; fall back to a name scan to cover both layouts.
         if (chart.Subcharts.TryGetValue(identity, out subchart!))
             return true;
         if (chart.Subcharts.TryGetValue(dependency.Name, out subchart!))
@@ -228,6 +265,9 @@ internal static class HelmDependencyProcessor
         return false;
     }
 
+    // SHA-256 over a canonical encoding (sorted keys, length-prefixed scalars) so the
+    // cache key is stable across dictionary insertion orders but changes with any
+    // value that could affect enablement.
     private static string GetValuesFingerprint(IDictionary<string, object?> values)
     {
         var builder = new StringBuilder();

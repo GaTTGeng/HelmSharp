@@ -10,12 +10,19 @@ internal static class SerializationFunctions
     private static readonly JsonSerializerOptions DefaultOptions = new() { PropertyNamingPolicy = null };
     private static readonly JsonSerializerOptions PrettyOptions = new() { PropertyNamingPolicy = null, WriteIndented = true };
 
+    /// <summary>Sprig <c>toJson</c>: compact JSON. Property names keep their original casing.</summary>
     public static string ToJson(object? value)
         => JsonSerializer.Serialize(value, DefaultOptions);
 
+    /// <summary>Sprig <c>toPrettyJson</c>: indented JSON.</summary>
     public static string ToPrettyJson(object? value)
         => JsonSerializer.Serialize(value, PrettyOptions);
 
+    /// <summary>
+    /// Sprig <c>fromJson</c>: parses JSON into template-native types
+    /// (dictionaries, lists, scalars). Invalid JSON returns null rather than
+    /// throwing, matching Helm's permissive behavior.
+    /// </summary>
     public static object? FromJson(string json)
     {
         try
@@ -29,8 +36,11 @@ internal static class SerializationFunctions
         }
     }
 
+    /// <summary>
     /// Sprig toDecimal: converts Unix octal permission strings to decimal.
-    /// "0777", "0644", and "644" all parse as octal values.
+    /// "0777", "0644", and "644" all parse as octal values. Strings containing
+    /// digits 8 or 9 (or non-digits) return 0 — the value cannot be octal.
+    /// </summary>
     public static decimal ToDecimal(object? value)
     {
         var str = TypeConverters.ToTemplateString(value);
@@ -39,6 +49,11 @@ internal static class SerializationFunctions
         return 0m;
     }
 
+    /// <summary>
+    /// Sprig <c>toRawJson</c>: like <c>toJson</c> but without HTML escaping —
+    /// <c>&amp;</c>, <c>&lt;</c>, and <c>&gt;</c> stay literal so the JSON is safe
+    /// to embed in ConfigMap data without entity-escaped ampersands.
+    /// </summary>
     public static string ToRawJson(object? value)
     {
         var json = JsonSerializer.Serialize(value, DefaultOptions);
@@ -47,6 +62,12 @@ internal static class SerializationFunctions
                    .Replace("\\u003e", ">");
     }
 
+    /// <summary>
+    /// Converts a parsed <see cref="JsonElement"/> tree into template-native types.
+    /// Object keys use case-insensitive comparison so lookups match .NET dictionary
+    /// conventions used elsewhere in the engine; JSON itself remains case-sensitive
+    /// at parse time.
+    /// </summary>
     public static object? JsonElementToObject(JsonElement element)
     {
         return element.ValueKind switch

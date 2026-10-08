@@ -5,6 +5,10 @@ using HelmSharp.Repo;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Chart archive extraction: chart-root stripping into the destination directory and
+/// rejection of zip entries that would escape it (zip-slip protection).
+/// </summary>
 public sealed class HelmChartRepositoryExtractionTests : IDisposable
 {
     private readonly string _tempDir;

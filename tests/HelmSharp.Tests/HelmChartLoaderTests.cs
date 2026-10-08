@@ -6,6 +6,10 @@ using HelmSharp.Engine;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Chart loading coverage: Chart.yaml metadata, dependencies, maintainers, template
+/// collection, and values file loading from fixture charts on disk.
+/// </summary>
 public class HelmChartLoaderTests : IDisposable
 {
     private readonly string _tempDir;

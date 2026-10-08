@@ -6,6 +6,10 @@ using HelmSharp.Repo;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Chart repository configuration: add/remove persistence across instances in
+/// Helm-compatible layout, cached index cleanup, and Helm-style repository name validation.
+/// </summary>
 public sealed class HelmChartRepositoryConfigurationTests : IDisposable
 {
     private readonly string _tempDir;

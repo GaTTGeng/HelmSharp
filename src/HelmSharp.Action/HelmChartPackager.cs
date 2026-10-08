@@ -10,6 +10,8 @@ namespace HelmSharp.Action;
 
 /// <summary>
 /// Packages Helm charts into .tgz archives, matching `helm package` behavior.
+/// Entries are deterministic (sorted by normalized relative path) and respect .helmignore rules
+/// with Helm's last-match-wins / negation semantics.
 /// </summary>
 internal static class HelmChartPackager
 {
@@ -27,9 +29,16 @@ internal static class HelmChartPackager
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     /// <summary>
-    /// Packages a chart directory into a .tgz archive.
-    /// Returns the path to the created archive.
+    /// Packages a chart directory into a <c>{name}-{version}.tgz</c> archive.
     /// </summary>
+    /// <param name="chartPath">Chart directory containing Chart.yaml.</param>
+    /// <param name="destination">Output directory; defaults to the current directory.</param>
+    /// <param name="version">Overrides Chart.yaml's version (validated as SemVer) and renames the archive accordingly.</param>
+    /// <param name="appVersion">Overrides Chart.yaml's appVersion.</param>
+    /// <returns>Path of the created archive.</returns>
+    /// <exception cref="DirectoryNotFoundException">The chart directory does not exist.</exception>
+    /// <exception cref="FileNotFoundException">Chart.yaml is missing.</exception>
+    /// <exception cref="InvalidDataException">Chart metadata fails Helm's validation rules.</exception>
     public static async Task<string> PackageAsync(
         string chartPath,
         string? destination = null,
@@ -77,6 +86,8 @@ internal static class HelmChartPackager
         if (version is not null || appVersion is not null)
             chartYamlContent = HelmYaml.Serialize(metadata);
 
+        // Helm stores Chart.yaml with LF endings and a trailing newline; normalize so packed
+        // archives are byte-stable across platforms.
         chartYamlContent = NormalizeChartYamlLineEndings(chartYamlContent);
         if (!chartYamlContent.EndsWith("\n", StringComparison.Ordinal))
             chartYamlContent += "\n";
@@ -224,9 +235,12 @@ internal static class HelmChartPackager
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            // Skip the archive being written (packaging into the chart directory itself).
             if (PathsEqual(Path.GetFullPath(file.FullPath), outputFullPath))
                 continue;
 
+            // Symlinks/reparse points are not packaged: Helm archives file contents only,
+            // and following links could escape the chart root.
             if ((file.Attributes & FileAttributes.ReparsePoint) != 0)
                 continue;
 
@@ -278,6 +292,8 @@ internal static class HelmChartPackager
     private static string NormalizeRelativePath(string path)
         => path.Replace('\\', '/');
 
+    // .helmignore evaluation: patterns apply in order and the last match decides
+    // (negation "!" re-includes), matching gitignore-style semantics Helm uses.
     private sealed class HelmIgnoreRules
     {
         private readonly IReadOnlyList<HelmIgnorePattern> _patterns;
@@ -327,6 +343,8 @@ internal static class HelmChartPackager
             var ignored = false;
             foreach (var pattern in _patterns)
             {
+                // A trailing-slash rule matches directories only; for files, it still applies
+                // when an ancestor directory matches the pattern.
                 var matches = pattern.MustBeDirectory && !isDirectory
                     ? PatternMatchesAncestorDirectory(pattern, path)
                     : pattern.IsMatch(path);
@@ -389,6 +407,7 @@ internal static class HelmChartPackager
             if (rooted)
                 rule = rule[1..];
 
+            // Unrooted patterns without a slash match any path segment's basename, like gitignore.
             var matchBasenameOnly = !rooted && !rule.Contains('/', StringComparison.Ordinal);
             var regex = new Regex(
                 ConvertGlobToRegex(rule),

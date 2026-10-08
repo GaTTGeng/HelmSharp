@@ -7,20 +7,31 @@ using k8s.Models;
 
 namespace HelmSharp.Kube;
 
-/// <summary>Applies and deletes Kubernetes resources described by multi-document YAML manifests.</summary>
+/// <summary>
+/// Applies and deletes Kubernetes resources described by multi-document YAML manifests.
+/// Built-in kinds go through the typed client; other kinds (CRs) use API discovery
+/// and the custom-objects endpoints.
+/// </summary>
 public sealed class KubernetesManifestApplier
 {
+    // Helm's default delete propagation: dependents are reaped in the background so
+    // uninstall does not block on cascading deletions.
     private const string DefaultDeletionPropagationPolicy = "Background";
     private readonly k8s.Kubernetes _client;
     private readonly string _fieldManager;
     private readonly Dictionary<(string ApiVersion, string Kind), DiscoveredResource> _discoveredResources = new();
 
+    /// <param name="client">Kubernetes client used for all API operations.</param>
+    /// <param name="fieldManager">Field manager name recorded on create/replace calls (server-side apply bookkeeping).</param>
     public KubernetesManifestApplier(k8s.Kubernetes client, string fieldManager)
     {
         _client = client;
         _fieldManager = fieldManager;
     }
 
+    /// <summary>
+    /// Creates the namespace if it does not already exist. A concurrent create is tolerated.
+    /// </summary>
     public static async Task EnsureNamespaceAsync(
         k8s.Kubernetes client,
         string name,
@@ -39,6 +50,14 @@ public sealed class KubernetesManifestApplier
         }
     }
 
+    /// <summary>
+    /// Applies every resource document in manifest order (create or replace, matching
+    /// Helm's install/upgrade apply behavior). Yields each applied resource's display name.
+    /// </summary>
+    /// <param name="manifest">Multi-document YAML manifest.</param>
+    /// <param name="defaultNamespace">Namespace used when a document omits <c>metadata.namespace</c>.</param>
+    /// <param name="cancellationToken">Cancels API calls.</param>
+    /// <exception cref="KubernetesResourceOperationException">Thrown when an apply fails; wraps the resource identity and the underlying error.</exception>
     public async IAsyncEnumerable<string> ApplyAsync(
         string manifest,
         string defaultNamespace,
@@ -97,6 +116,9 @@ public sealed class KubernetesManifestApplier
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var normalizedPropagationPolicy = NormalizeDeletionPropagationPolicy(propagationPolicy);
+        // Reverse manifest order: dependents applied late (workloads, ingress) are
+        // deleted before their prerequisites (config, RBAC, namespaces), mirroring
+        // Helm's uninstall ordering on top of propagation-policy cascading.
         foreach (var doc in SplitDocuments(manifest).Reverse())
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -166,6 +188,8 @@ public sealed class KubernetesManifestApplier
 
     internal static bool TryGetTypedResourceScope(ManifestIdentity identity, out bool namespaced)
     {
+        // Static scope table for built-in kinds avoids an API discovery round-trip on
+        // every apply/delete and keeps cluster-scoped kinds free of a default namespace.
         bool? scope = (identity.ApiVersion, identity.Kind) switch
         {
             ("v1", "Namespace" or "PersistentVolume") => false,
@@ -202,6 +226,10 @@ public sealed class KubernetesManifestApplier
 
     private async Task<ManifestIdentity> ApplyOneAsync(ManifestIdentity identity, string yaml, CancellationToken ct)
     {
+        // Typed-client dispatch: known built-in kinds deserialize to strongly typed
+        // models and use read/replace/create upserts, preserving fields the typed
+        // model carries (for example Service healthCheckNodePort). Unknown kinds fall
+        // through to API discovery and the custom-objects endpoints below.
         switch (identity.ApiVersion, identity.Kind)
         {
             // ─── Core v1 ───
@@ -988,7 +1016,8 @@ public sealed class KubernetesManifestApplier
         }
         catch (HttpOperationException ex) when ((int)ex.Response.StatusCode == 404)
         {
-            // Already gone.
+            // Already gone. Delete must be idempotent so uninstall of an
+            // already-partially-removed release still completes successfully.
         }
 
         return identity;
@@ -1058,6 +1087,10 @@ public sealed class KubernetesManifestApplier
         if (declared is not null)
             return declared;
 
+        // CRD disappearance / version-skew edge case: the manifest may name an API
+        // version that is no longer served (CRD upgraded or partially removed), while
+        // the kind still exists under another served version. Enumerate the group's
+        // versions (preferred first) so the delete can still find the resource.
         var groups = await client.Apis.GetAPIVersionsAsync(cancellationToken);
         var apiGroup = groups.Groups?.SingleOrDefault(candidate =>
             string.Equals(candidate.Name, group, StringComparison.Ordinal));
@@ -1098,6 +1131,8 @@ public sealed class KubernetesManifestApplier
         }
         catch (HttpOperationException ex) when ((int)ex.Response.StatusCode == 404)
         {
+            // The whole group/version is unpublished (e.g. its CRD was deleted);
+            // report "not here" so callers can try alternate served versions.
             return null;
         }
 
@@ -1114,6 +1149,9 @@ public sealed class KubernetesManifestApplier
         Func<Task<T>> create,
         Func<T, Task<T>> replace)
     {
+        // 404 from the read means "not created yet" — the create path. Replace is
+        // preferred over patch so the applied manifest fully defines the object,
+        // matching Helm's create-or-replace semantics (resourceVersion is set by callers).
         try
         {
             var existing = await read();
@@ -1153,6 +1191,10 @@ public sealed class KubernetesManifestApplier
             yield return last;
     }
 
+    /// <summary>
+    /// Splits a multi-document YAML manifest on <c>---</c> separators.
+    /// Blank and comment-only documents are dropped.
+    /// </summary>
     public static IEnumerable<string> SplitDocumentsPublic(string manifest)
         => SplitDocuments(manifest);
 }
@@ -1182,12 +1224,27 @@ internal sealed class KubernetesResourceOperationException : InvalidOperationExc
     }
 }
 
+/// <summary>
+/// Identity of a Kubernetes resource extracted from a manifest document.
+/// </summary>
+/// <param name="ApiVersion">Declared <c>apiVersion</c>, for example <c>apps/v1</c>.</param>
+/// <param name="Kind">Declared <c>kind</c>, for example <c>Deployment</c>.</param>
+/// <param name="Name">Resource name from <c>metadata.name</c>.</param>
+/// <param name="Namespace">
+/// Effective namespace: <c>metadata.namespace</c>, else the caller's default.
+/// Empty for cluster-scoped kinds.
+/// </param>
 public sealed record ManifestIdentity(string ApiVersion, string Kind, string Name, string Namespace)
 {
+    /// <summary>Display form used in progress messages: <c>Kind/Name</c> or <c>Kind/Namespace/Name</c>.</summary>
     public string DisplayName => string.IsNullOrWhiteSpace(Namespace)
         ? $"{Kind}/{Name}"
         : $"{Kind}/{Namespace}/{Name}";
 
+    /// <summary>
+    /// Parses a manifest document into an identity. Returns null for documents that
+    /// lack apiVersion, kind, or metadata.name (for example empty or comment docs).
+    /// </summary>
     public static ManifestIdentity? Parse(string yaml, string defaultNamespace)
     {
         var doc = HelmYaml.DeserializeDictionary(yaml);

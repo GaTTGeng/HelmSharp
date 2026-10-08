@@ -6,6 +6,10 @@ using k8s.Models;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Helm v3 release secret envelope encoding/decoding: fixed release shape, pre-compression
+/// payloads, gzip corruption reporting, and round-trip preservation of chart payloads and deletion timestamps.
+/// </summary>
 public class HelmV3ReleaseStorageTests
 {
     [Fact]

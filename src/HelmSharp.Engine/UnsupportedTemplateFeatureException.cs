@@ -9,6 +9,8 @@ namespace HelmSharp.Engine;
 /// </remarks>
 public sealed class UnsupportedTemplateFeatureException : Exception
 {
+    /// <summary>Creates the exception describing the unimplemented feature.</summary>
+    /// <param name="message">Which feature was unsupported and the construct that triggered it.</param>
     public UnsupportedTemplateFeatureException(string message)
         : base(message)
     {

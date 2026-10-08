@@ -3,6 +3,10 @@ using HelmSharp.Release;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Release record retrieval helpers: stored values YAML merging (all-values mode) and
+/// release notes access from persisted releases.
+/// </summary>
 public class HelmClientReleaseTests
 {
     [Fact]

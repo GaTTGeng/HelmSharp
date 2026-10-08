@@ -2,6 +2,10 @@ using HelmSharp.Repo;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Chart version resolution against SemVer constraints, matching Helm's Masterminds/semver
+/// behavior for latest-stable selection, short versions, partial ranges, and prerelease exclusion.
+/// </summary>
 public sealed class HelmChartVersionResolverTests
 {
     [Fact]

@@ -24,6 +24,7 @@ public abstract class TemplateNode
 /// </summary>
 public sealed class TemplateDocumentNode : TemplateNode
 {
+    /// <summary>Top-level nodes of this document in source order (text, actions, blocks, defines, comments).</summary>
     public List<TemplateNode> Children { get; init; } = new();
 
     /// <summary>

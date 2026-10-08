@@ -3,6 +3,10 @@ using System.Text.Json;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Table-driven parity tests for workload readiness predicates against Helm's
+/// compatible semantics (Deployment/DaemonSet/StatefulSet/Job/Pod outcomes).
+/// </summary>
 public sealed class KubernetesReadyCheckerParityTests
 {
     [Theory]
@@ -340,6 +344,10 @@ public sealed class KubernetesReadyCheckerParityTests
     private static string Serialize<T>(T value)
         => JsonSerializer.Serialize(value, new JsonSerializerOptions(JsonSerializerDefaults.Web));
 
+    /// <summary>
+    /// One readiness scenario: the primary resource JSON, an optional auxiliary object
+    /// (e.g. a Job's Pods), and the expected readiness outcome.
+    /// </summary>
     public sealed record ReadinessCase(
         string Kind,
         string ApiVersion,
@@ -352,6 +360,7 @@ public sealed class KubernetesReadyCheckerParityTests
         public override string ToString() => $"{Kind}: {Outcome}";
     }
 
+    /// <summary>Expected result of a readiness poll for a <see cref="ReadinessCase"/>.</summary>
     public enum ReadinessOutcome
     {
         Ready,

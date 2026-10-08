@@ -30,19 +30,32 @@ public sealed class TemplateParser
     private readonly List<Token> _tokens;
     private int _pos;
 
+    // Go template define names are globally scoped per template set and are
+    // matched with ordinal comparison (case-sensitive), matching Helm's behavior.
     private readonly Dictionary<string, DefineNode> _defines = new(StringComparer.Ordinal);
 
     private static readonly HashSet<string> EndOnly = new(StringComparer.Ordinal) { "end" };
     private static readonly HashSet<string> EndElseElseIf = new(StringComparer.Ordinal) { "end", "else", "else if" };
 
+    /// <summary>Creates a parser over a pre-tokenized template stream.</summary>
     public TemplateParser(IEnumerable<Token> tokens)
     {
         _tokens = tokens.ToList();
         _pos = 0;
     }
 
+    /// <summary>
+    /// Named templates (<c>define "name"</c> blocks) collected during parsing.
+    /// Keys are template names without quotes; defines are registered globally
+    /// regardless of nesting, matching Go's template-set semantics.
+    /// </summary>
     public IReadOnlyDictionary<string, DefineNode> Defines => _defines;
 
+    /// <summary>
+    /// Parses the full token stream into a document AST.
+    /// Stray <c>end</c>/<c>else</c> at top level are tolerated as stop markers
+    /// rather than errors, mirroring the lenient handling used by the renderer.
+    /// </summary>
     public TemplateDocumentNode Parse()
     {
         var document = new TemplateDocumentNode();
@@ -140,6 +153,8 @@ public sealed class TemplateParser
         var bodyDoc = new TemplateDocumentNode();
         var stop = ParseContent(bodyDoc.Children, EndOnly);
 
+        // {{ define "x" -}} trims leading whitespace of the body; done at parse
+        // time so SerializeToText round-trips the trimmed body for the registry.
         if (rightTrim)
             TrimLeadingForRightTrim(bodyDoc.Children);
 
@@ -182,6 +197,7 @@ public sealed class TemplateParser
         var stop = ParseContent(trueBody.Children, EndElseElseIf);
         if (rightTrim)
             TrimLeadingForRightTrim(trueBody.Children);
+        // {{- else / {{- end swallows trailing whitespace of the body it closes.
         if (stop.LeftTrim)
             TrimTrailingWhitespace(trueBody.Children);
         block.TrueBody = trueBody;
@@ -245,6 +261,11 @@ public sealed class TemplateParser
         return block;
     }
 
+    /// <summary>
+    /// Applies Go's <c>-}}</c> right-trim marker to the leading text of a body:
+    /// removes horizontal whitespace and consumes one following newline.
+    /// Only the first text node can be affected, so non-text first nodes are left alone.
+    /// </summary>
     private static void TrimLeadingForRightTrim(List<TemplateNode> children)
     {
         if (children.FirstOrDefault() is not TextNode text)
@@ -267,6 +288,10 @@ public sealed class TemplateParser
         };
     }
 
+    /// <summary>
+    /// Applies Go's <c>{{-</c> left-trim marker to the trailing text of the
+    /// preceding body: removes all trailing whitespace (including newlines).
+    /// </summary>
     private static void TrimTrailingWhitespace(List<TemplateNode> children)
     {
         if (children.LastOrDefault() is not TextNode text)

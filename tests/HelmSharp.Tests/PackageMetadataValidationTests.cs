@@ -5,6 +5,11 @@ using HelmSharp.Action;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Package metadata validation failures: invalid metadata, missing/malformed Chart.yaml,
+/// invalid chart names, and unsupported apiVersions must fail without producing an archive,
+/// with actionable messages from the lower-level API.
+/// </summary>
 public sealed class PackageMetadataValidationTests : IDisposable
 {
     private readonly string _tempDir;

@@ -6,18 +6,26 @@ using HelmSharp.Chart;
 
 namespace HelmSharp.Action;
 
+/// <summary>A dependency as resolved and pinned by Chart.lock.</summary>
 internal sealed record HelmResolvedDependency(
     string Name,
     string Version,
     string Repository,
     string? ArchiveDigest = null);
 
+/// <summary>Parsed Chart.lock contents: the lock digest and the pinned dependency list.</summary>
 internal sealed record HelmDependencyLock(
     string Digest,
     IReadOnlyList<HelmResolvedDependency> Dependencies);
 
+/// <summary>
+/// Reads and writes Chart.lock and computes its digest. Digest computation and field
+/// normalization mirror Helm so lock files stay byte-compatible with <c>helm dependency</c>.
+/// </summary>
 internal static class HelmDependencyLockFile
 {
+    /// <summary>Loads Chart.lock from the chart directory, or null when the file is absent.</summary>
+    /// <exception cref="InvalidDataException">The lock file is missing required fields or has invalid entries.</exception>
     public static async Task<HelmDependencyLock?> LoadAsync(
         string chartPath,
         CancellationToken cancellationToken)
@@ -54,6 +62,10 @@ internal static class HelmDependencyLockFile
         return new HelmDependencyLock(digest, lockedDependencies);
     }
 
+    /// <summary>
+    /// Loads the dependency declarations from Chart.yaml, normalized into the shape Helm
+    /// feeds into the lock digest. Returns an empty list when the chart declares none.
+    /// </summary>
     public static async Task<IReadOnlyList<Dictionary<string, object?>>> LoadRequestedDependenciesAsync(
         string chartPath,
         CancellationToken cancellationToken)
@@ -70,6 +82,11 @@ internal static class HelmDependencyLockFile
             .ToList();
     }
 
+    /// <summary>
+    /// Computes the Chart.lock digest as <c>sha256:</c> plus a hex hash over the JSON encoding
+    /// of the requested (Chart.yaml) and resolved (locked) dependency lists.
+    /// </summary>
+    /// <exception cref="InvalidDataException">Requested and resolved dependency counts differ.</exception>
     public static string ComputeDigest(
         IReadOnlyList<Dictionary<string, object?>> requested,
         IReadOnlyList<HelmResolvedDependency> resolved)
@@ -84,11 +101,17 @@ internal static class HelmDependencyLockFile
             ["version"] = dependency.Version,
             ["repository"] = dependency.Repository
         }).ToList();
+        // Hash over both lists serialized together, matching Helm's digest input exactly;
+        // any drift in either the declarations or the pins changes the digest.
         var json = JsonSerializer.Serialize(new object[] { requested, locked });
         var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json))).ToLowerInvariant();
         return $"sha256:{digest}";
     }
 
+    /// <summary>
+    /// Writes Chart.lock when the digest differs from the stored one. Returns true when the
+    /// file was rewritten; false when the existing lock already matches.
+    /// </summary>
     public static async Task<bool> WriteIfChangedAsync(
         string chartPath,
         IReadOnlyList<HelmResolvedDependency> dependencies,
@@ -96,6 +119,8 @@ internal static class HelmDependencyLockFile
         CancellationToken cancellationToken)
     {
         var lockPath = Path.Combine(chartPath, "Chart.lock");
+        // Skip the write entirely when the digest matches so a no-op dependency build does
+        // not churn the lock file's timestamp or content.
         if (File.Exists(lockPath))
         {
             var existing = HelmYaml.DeserializeDictionary(await File.ReadAllTextAsync(lockPath, cancellationToken));
@@ -114,6 +139,7 @@ internal static class HelmDependencyLockFile
         yaml.Append("digest: ").AppendLine(digest);
         yaml.Append("generated: \"").Append(generated).AppendLine("\"");
 
+        // Write to a temp file and swap it in so a crash mid-write cannot leave a truncated lock.
         var temporaryPath = $"{lockPath}.tmp-{Guid.NewGuid():N}";
         try
         {
@@ -133,6 +159,11 @@ internal static class HelmDependencyLockFile
         return true;
     }
 
+    /// <summary>
+    /// Normalizes one Chart.yaml dependency into the canonical shape used for digesting:
+    /// empty strings are dropped and <c>enabled</c> is kept only when true, so the digest is
+    /// insensitive to omitted versus empty fields.
+    /// </summary>
     private static Dictionary<string, object?> NormalizeRequestedDependency(
         IDictionary<string, object?> dependency)
     {
@@ -171,6 +202,10 @@ internal static class HelmDependencyLockFile
         target[key] = list.Select(NormalizeJsonValue).ToList();
     }
 
+    /// <summary>
+    /// Recursively normalizes JSON values for digesting: object keys are sorted so the digest
+    /// is stable regardless of the mapping order in the source YAML.
+    /// </summary>
     private static object? NormalizeJsonValue(object? value)
         => value switch
         {

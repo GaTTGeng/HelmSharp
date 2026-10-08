@@ -4,6 +4,10 @@ using k8s;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Builds a Kubernetes client wired to the in-memory <see cref="KubernetesApiHandler"/>
+/// so tests exercise the real client stack against a fake API server.
+/// </summary>
 internal static class KubernetesTestClientBuilder
 {
     public static Kubernetes Create(KubernetesApiHandler handler)
@@ -14,6 +18,11 @@ internal static class KubernetesTestClientBuilder
         }, handler);
 }
 
+/// <summary>
+/// Scriptable HTTP handler that records every Kubernetes API request and replays
+/// canned responses. Queue responses with <see cref="Respond"/> (consumed in order)
+/// or <see cref="RespondAlways"/> (repeated); unmatched paths fall back to a 404 Status body.
+/// </summary>
 internal sealed class KubernetesApiHandler : DelegatingHandler
 {
     private readonly Dictionary<(string Method, string Path), Queue<KubernetesResponse>> _responses = [];
@@ -87,6 +96,7 @@ internal sealed record KubernetesResponse(HttpStatusCode StatusCode, string Cont
         };
 }
 
+/// <summary>Helpers for materializing <see cref="IAsyncEnumerable{T}"/> sources in tests.</summary>
 internal static class AsyncEnumerableTestExtensions
 {
     public static async Task<IReadOnlyList<T>> CollectAsync<T>(IAsyncEnumerable<T> source)
@@ -105,6 +115,9 @@ internal static class AsyncEnumerableTestExtensions
     }
 }
 
+/// <summary>
+/// Manually advanced clock for readiness/waiter tests that must not depend on real time.
+/// </summary>
 internal sealed class DeterministicTimeProvider(DateTimeOffset utcNow) : TimeProvider
 {
     private DateTimeOffset _utcNow = utcNow;
@@ -114,6 +127,10 @@ internal sealed class DeterministicTimeProvider(DateTimeOffset utcNow) : TimePro
     public void Advance(TimeSpan duration) => _utcNow = _utcNow.Add(duration);
 }
 
+/// <summary>
+/// Stub polling delay that records requested intervals and optionally advances a
+/// <see cref="DeterministicTimeProvider"/>, keeping wait loops synchronous and deterministic.
+/// </summary>
 internal sealed class DeterministicPolling(DeterministicTimeProvider timeProvider, bool advanceClock = true)
 {
     public List<TimeSpan> Delays { get; } = [];

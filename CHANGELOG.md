@@ -6,6 +6,10 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+### Added
+
+- Documented the public API surface and key implementation notes with English XML documentation and comments so IntelliSense and source readers can understand Helm equivalence, constraints, and non-obvious behavior without reverse-engineering the code.
+
 ### Changed
 
 - Aligned workload readiness checks with Helm's observed-generation, rollout, partition, and selected-Pod semantics (#234).

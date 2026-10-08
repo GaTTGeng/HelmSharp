@@ -3,6 +3,10 @@ using HelmSharp.Engine;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Error-path golden tests: rendering must fail the same way <c>helm template</c> fails
+/// for the error fixtures, and argument-count/range errors must throw with usable messages.
+/// </summary>
 public class TemplateErrorGoldenTests
 {
     [HelmCliTheory]

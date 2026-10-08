@@ -11,6 +11,11 @@ using HelmSharp.Repo;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Packaging and repository golden tests against the real Helm CLI: chart archive
+/// output, <c>helm repo index</c> field parity, and index merge semantics
+/// (absent versions kept, matching versions replaced).
+/// </summary>
 public sealed class PackagingRepositoryGoldenTests : IDisposable
 {
     private readonly string _tempDir;

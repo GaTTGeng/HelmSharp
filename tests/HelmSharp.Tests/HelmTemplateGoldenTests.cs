@@ -4,8 +4,14 @@ using HelmSharp.Engine;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Golden tests that compare HelmSharp template rendering against real <c>helm template</c>
+/// output for the fixture charts under <c>Fixtures/Charts</c>. Also pins NOTES.txt
+/// rendering and dependency-condition values behavior without invoking the CLI.
+/// </summary>
 public class HelmTemplateGoldenTests
 {
+    // Per-template golden comparison for each fixture chart; the chart name is the test data.
     [HelmCliTheory]
     [InlineData("minimal")]
     [InlineData("helpers")]
@@ -56,6 +62,8 @@ public class HelmTemplateGoldenTests
             notes);
     }
 
+    // Verifies a values-file condition can disable a subchart, and that the child's
+    // exported-only values do not leak into the parent values map.
     [HelmCliFact]
     public async Task Render_DependencyConditionOverride_MatchesHelmTemplate()
     {
@@ -118,6 +126,7 @@ public class HelmTemplateGoldenTests
         var normalized = HelmCliRunner.NormalizeLineEndings(manifest);
 
         // Helm adds source comments to CLI output; HelmSharp does not emit them yet.
+        // Only line endings and those source comments are normalized — nothing else.
         normalized = Regex.Replace(normalized, @"(?m)^# Source: .+\n", string.Empty);
         return normalized.TrimEnd() + "\n";
     }

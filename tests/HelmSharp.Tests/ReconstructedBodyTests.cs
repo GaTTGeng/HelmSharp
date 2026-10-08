@@ -4,6 +4,10 @@ using Xunit.Abstractions;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Directly exercises the manually reconstructed block-body form used when the parser
+/// rewrites control flow, including parenthesized <c>else if</c> conditions.
+/// </summary>
 public class ReconstructedBodyTests
 {
     private readonly ITestOutputHelper _output;
