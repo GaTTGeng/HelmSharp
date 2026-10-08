@@ -51,7 +51,7 @@ Useful context includes the chart identity or path, release name, namespace, sel
 | Symptom | First thing to inspect |
 | --- | --- |
 | A template function is not supported | [Template-function matrix](../template-function-compatibility.md), then the template path in the renderer diagnostic. |
-| A chart differs from Helm | Target capabilities, effective values, and the [compatibility contract](../helm-compatibility.md). [HelmCompare](../compare.md) can help inspect the difference. |
+| A chart differs from Helm | Check target capabilities, effective values, and the [compatibility contract](../helm-compatibility.md). Render both implementations with the same inputs and inspect the saved outputs with a local diff tool. |
 | A release command returns failure | `StandardError`, Kubernetes RBAC, target namespace, hook status, and readiness timeout. |
 | A release exists but output is unexpected | Stored revision with `StatusAsync`, `HistoryAsync`, `GetManifestAsync`, or `GetValuesAsync`; do not assume the current chart was used. |
 | A direct apply fails for a CRD | API discovery, resource identity, and the target cluster's installed CRD version. |

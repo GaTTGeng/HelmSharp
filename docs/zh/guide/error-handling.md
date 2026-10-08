@@ -51,7 +51,7 @@ catch (Exception ex)
 | 现象 | 先检查什么 |
 | --- | --- |
 | 模板函数不支持 | [模板函数矩阵](../template-function-compatibility.md)，然后看渲染器诊断中的模板路径。 |
-| Chart 输出与 Helm 不同 | 目标 capabilities、生效 values 和[兼容性约定](../helm-compatibility.md)。也可使用 [HelmCompare](../compare.md)。 |
+| Chart 输出与 Helm 不同 | 检查目标 capabilities、生效 values 和[兼容性约定](../helm-compatibility.md)。使用相同输入分别渲染两份输出，再用本地 diff 工具检查。 |
 | Release 命令失败 | `StandardError`、Kubernetes RBAC、目标命名空间、hook 状态和就绪超时。 |
 | Release 存在但输出异常 | 用 `StatusAsync`、`HistoryAsync`、`GetManifestAsync` 或 `GetValuesAsync` 查看存储 revision；不要假定它由当前 Chart 产生。 |
 | 直接提交 CRD 失败 | API 发现、资源标识和目标集群中安装的 CRD 版本。 |

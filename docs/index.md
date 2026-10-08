@@ -15,9 +15,6 @@ hero:
     - theme: alt
       text: Browse examples
       link: /examples/render-preview-api
-    - theme: alt
-      text: Compare output
-      link: /compare
 
 features:
   - title: Render in-process
@@ -71,5 +68,3 @@ The [package decision guide](api-overview.md) explains these boundaries in more 
 ## Before using an existing chart
 
 HelmSharp follows Helm behavior where that behavior is implemented and tested; it is not a promise that every chart or plugin will work unchanged. Check the [compatibility contract](helm-compatibility.md) and the [template-function matrix](template-function-compatibility.md) before treating a Helm edge case as a production dependency.
-
-[HelmCompare](compare.md) is also available for side-by-side output inspection.

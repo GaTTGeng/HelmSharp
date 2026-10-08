@@ -28,6 +28,6 @@ var renderer = new HelmTemplateRenderer(
 var manifest = renderer.Render();
 ```
 
-Before rolling this into a product, pin the archive digest and test the exact chart version with the exact values and capabilities you will use. If output differs from Helm, reduce the difference to a small chart/template, then compare the effective values, target capabilities, and the [function matrix](../template-function-compatibility.md). [HelmCompare](../compare.md) is useful for the side-by-side part of that investigation.
+Before rolling this into a product, pin the archive digest and test the exact chart version with the exact values and capabilities you will use. If output differs from Helm, reduce the difference to a small chart/template, then compare the effective values, target capabilities, and the [function matrix](../template-function-compatibility.md). Render both implementations with those inputs and inspect the saved outputs using a local diff tool.
 
 The public-chart golden tests in this repository are regression evidence, not a certification that every version of every public chart is supported.

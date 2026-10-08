@@ -11,6 +11,10 @@ This project follows semantic versioning once stable releases begin.
 - Made Kubernetes deletion deterministic across uninstall, rollback, and hook cleanup, including reverse ordering, propagation policies, keep annotations, discovered resource identity, and actionable failure diagnostics (#232).
 - Hardened Kubernetes wait controls by rejecting non-positive waiter timeouts and documenting standard polling, cancellation, Job waiting, and unsupported Helm status-watcher semantics (#233).
 
+### Removed
+
+- Removed the Helm comparison tool and its API server configuration from the documentation site because no supported server is available.
+
 ## [1.3.2] - 2026-08-13
 
 ### Added

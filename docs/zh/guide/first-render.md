@@ -71,4 +71,4 @@ var values = await HelmValues.BuildAsync(
 
 如果输出归你的应用使用，就保持在这层 API。若你的接口更适合返回命令式的 `CommandResult`，可使用 `HelmClient.TemplateAsync`；只有应用也要负责提交资源时，才使用 `UpgradeInstallAsync`。
 
-若现有 Chart 与 Helm 的输出不同，请查看[兼容性约定](../helm-compatibility.md)和[模板函数矩阵](../template-function-compatibility.md)。可通过 [HelmCompare](../compare.md) 检查具体差异。
+若现有 Chart 与 Helm 的输出不同，请查看[兼容性约定](../helm-compatibility.md)和[模板函数矩阵](../template-function-compatibility.md)。可使用相同 Chart 和 values 分别运行 HelmSharp 与 `helm template`，保存两份输出后用本地 diff 工具检查差异。

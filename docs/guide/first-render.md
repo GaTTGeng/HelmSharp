@@ -71,4 +71,4 @@ Read [Values and overrides](values.md) before accepting these inputs from users.
 
 Stay on this API when the output belongs to your application. Move to `HelmClient.TemplateAsync` when a command-style `CommandResult` is easier for your interface, and to `UpgradeInstallAsync` only when the application is also responsible for applying the result.
 
-If an existing chart renders differently from Helm, check the [compatibility contract](../helm-compatibility.md) and the [template-function matrix](../template-function-compatibility.md). Use [HelmCompare](../compare.md) to inspect a concrete difference.
+If an existing chart renders differently from Helm, check the [compatibility contract](../helm-compatibility.md) and the [template-function matrix](../template-function-compatibility.md). Render the same chart and values with `helm template`, save both outputs, and use a local diff tool to inspect the difference.

@@ -15,9 +15,6 @@ hero:
     - theme: alt
       text: 查看示例
       link: /zh/examples/render-preview-api
-    - theme: alt
-      text: 对比输出
-      link: /zh/compare
 
 features:
   - title: 进程内渲染
@@ -71,5 +68,3 @@ var manifest = renderer.Render();
 ## 接入现有 Chart 前
 
 HelmSharp 在已经实现并测试的范围内遵循 Helm 行为；它不保证任意 Chart 或插件都可原样运行。把某个 Helm 边缘行为作为生产依赖前，请先查看[兼容性约定](helm-compatibility.md)和[模板函数矩阵](template-function-compatibility.md)。
-
-[HelmCompare](compare.md)也可用于并排检查输出。
