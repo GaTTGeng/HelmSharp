@@ -90,7 +90,9 @@ public static class HelmYaml
             }
         }
 
-        // Apply merges first (lower precedence — explicit keys win)
+        // Apply merges first (lower precedence — explicit keys win). When a merge
+        // sequence supplies the same key more than once, the later source map
+        // overwrites the earlier one within this merge layer.
         foreach (var merged in merges)
         {
             foreach (var (k, v) in merged)
@@ -173,6 +175,8 @@ public static class HelmYaml
             return octal;
         if (long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var integer))
             return integer;
+        // Only treat as float when a fraction/exponent marker is present, so bare
+        // numeric-looking tokens that failed the long parse stay strings.
         if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) &&
             value.Any(c => c is '.' or 'e' or 'E'))
             return number;

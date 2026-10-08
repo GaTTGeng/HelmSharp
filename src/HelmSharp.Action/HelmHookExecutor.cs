@@ -197,6 +197,14 @@ internal sealed class HelmHookExecutor
         string releaseNamespace,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        // Execution stages:
+        //   1. Filter to hooks declaring this event; sort by weight, then name/kind/path.
+        //   2. Per hook, sequentially: BeforeHookCreation delete → apply manifest →
+        //      wait Job/Pod to completion (hooks are run-to-completion).
+        //   3. On failure/cancellation: bounded finalization deletes the failed hook
+        //      (HookFailed) and earlier succeeded hooks (HookSucceeded) in reverse order.
+        //   4. After the whole batch succeeds: reverse-order HookSucceeded deletes —
+        //      later hooks may still observe earlier hook resources until then.
         var executing = hooks
             .Where(h => h.Events.Contains(hookEvent))
             .OrderBy(h => h.Weight)

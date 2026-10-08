@@ -181,6 +181,9 @@ public class HelmClient : IHelmClient
         HelmUpgradeInstallRequest request,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        // --- 1. Validate request and pin down the operation scope ---
+        // A single timeout covers hooks, apply, and readiness wait, matching Helm's
+        // --timeout semantics for the whole lifecycle operation.
         ValidateUpgradeRequest(request);
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
         ValidateServerSideApplyOption(options);
@@ -190,6 +193,7 @@ public class HelmClient : IHelmClient
         var operationToken = operationSource.Token;
         var ns = request.Namespace ?? options.DefaultNamespace ?? "default";
 
+        // --- 2. Load chart and collect the user-supplied values overrides ---
         yield return $"Loading chart {request.Chart}";
         var chartPath = await ResolveChartPathAsync(request.Chart, request.Version, options, operationToken);
         var chart = await HelmChartLoader.LoadAsync(chartPath, operationToken);
@@ -208,6 +212,9 @@ public class HelmClient : IHelmClient
         var valuesFiles = CombineValuesFiles(request.ValuesFile, request.ValuesFiles);
         var providedOverrides = await HelmValues.BuildOverridesAsync(valuesFiles, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, operationToken);
 
+        // --- 3. Dry-run early exit ---
+        // Renders the manifest and returns before any cluster access or release-store
+        // writes; DryRunIsUpgrade/DryRunRevision let callers preview an upgrade render.
         if (request.DryRun)
         {
             var dryRunValues = HelmValues.BuildFromOverrides(chart, providedOverrides);
@@ -227,6 +234,7 @@ public class HelmClient : IHelmClient
             yield break;
         }
 
+        // --- 4. Load release history and guard against concurrent operations ---
         using var client = await _createKubernetesClientAsync(options, request.KubeConfigPath, request.KubeConfigContent, operationToken);
         var store = new HelmReleaseStore(client);
         var existingHistory = await LoadReleaseHistoryForUpgradeInstallAsync(
@@ -238,6 +246,9 @@ public class HelmClient : IHelmClient
         if (HasActivePendingOperation(existingHistory))
             throw new InvalidOperationException($"another operation is in progress for release {request.ReleaseName}");
 
+        // --- 5. Resolve install-vs-upgrade state and render the manifest ---
+        // isUpgrade drives .Release.IsUpgrade and which pre/post hook events fire;
+        // revision is the number this operation will store if it succeeds.
         var (isUpgrade, revision) = ResolveReleaseRenderState(existingHistory);
         if (!isUpgrade && !request.Install)
             throw new InvalidOperationException($"release: not found: {request.ReleaseName}");
@@ -255,6 +266,7 @@ public class HelmClient : IHelmClient
             revision);
         var manifest = renderer.Render();
 
+        // --- 6. Namespace and CRDs, before any release resources are applied ---
         if (request.CreateNamespace)
         {
             await KubernetesManifestApplier.EnsureNamespaceAsync(client, ns, operationToken);
@@ -280,6 +292,8 @@ public class HelmClient : IHelmClient
                 }
                 catch (Exception ex)
                 {
+                    // CRD failures are downgraded to warnings: a partially-managed CRD set
+                    // must not abort the release. The main apply below is the hard failure point.
                     crdError = ex.Message;
                 }
                 foreach (var line in crdResults) yield return line;
@@ -287,6 +301,9 @@ public class HelmClient : IHelmClient
             }
         }
 
+        // --- 7. Build the release record for this attempt ---
+        // Status is optimistically "deployed"; any later failure rewrites it via
+        // PersistFailedLifecycleAsync before the original error is rethrown.
         // Extract hooks from manifest
         var (mainManifest, hooks) = HelmHookExecutor.ExtractHooks(manifest, ns);
         var attemptedAt = DateTimeOffset.UtcNow;
@@ -319,7 +336,7 @@ public class HelmClient : IHelmClient
             Labels = ResolveReleaseLabels(existingHistory, isUpgrade, request.Labels)
         };
 
-        // Execute pre-hooks
+        // --- 8. Pre-hooks: run before any resource is applied ---
         if (!request.DisableHooks && hooks.Count > 0)
         {
             var hookExecutor = new HelmHookExecutor(client, options.FieldManager, timeout);
@@ -332,6 +349,7 @@ public class HelmClient : IHelmClient
             }
         }
 
+        // --- 9. Apply the main manifest ---
         var applier = new KubernetesManifestApplier(client, options.FieldManager);
         var applied = 0;
         var appliedResources = new List<string>();
@@ -349,18 +367,21 @@ public class HelmClient : IHelmClient
             applyError = ex;
         }
 
+        // Emit progress lines before recovery output so the failure reads chronologically.
         foreach (var line in appliedResources)
             yield return line;
 
         if (applyError is not null)
         {
+            // Failure-recovery branch: persist the failed record, run atomic/cleanup-on-fail
+            // recovery, stream its lines, then rethrow the original apply error.
             var recovery = await PersistFailedLifecycleAsync(store, WithHookExecution(releaseRecord, hooks), applyError, applier, mainManifest, existingHistory, isUpgrade, request, ns);
             foreach (var line in recovery)
                 yield return line;
             throw applyError;
         }
 
-        // Execute post-hooks
+        // --- 10. Post-hooks: run only after a successful apply ---
         if (!request.DisableHooks && hooks.Count > 0)
         {
             var hookExecutor = new HelmHookExecutor(client, options.FieldManager, timeout);
@@ -373,7 +394,9 @@ public class HelmClient : IHelmClient
             }
         }
 
-        // Wait for resources to be ready
+        // --- 11. Wait for resources to become ready ---
+        // The wait is driven by a hand-rolled enumerator (not await foreach) so a wait
+        // failure can run recovery and stream its lines before the error is rethrown.
         if ((request.Wait || request.Atomic) && !request.DryRun)
         {
             yield return $"Waiting for resources to be ready (timeout: {timeout}s)...";
@@ -401,6 +424,8 @@ public class HelmClient : IHelmClient
                     yield return waitLine;
                 if (waitError is not null)
                 {
+                    // Failure-recovery branch, same as apply: atomic restores the previous
+                    // revision, cleanup-on-fail deletes what this attempt introduced.
                     var recovery = await PersistFailedLifecycleAsync(store, WithHookExecution(releaseRecord, hooks), waitError, applier, mainManifest, existingHistory, isUpgrade, request, ns);
                     foreach (var line in recovery)
                         yield return line;
@@ -410,6 +435,8 @@ public class HelmClient : IHelmClient
                     break;
             }
         }
+
+        // --- 12. Persist the completed revision ---
         List<string>? saveRecovery = null;
         Exception? saveError = null;
         try
@@ -425,6 +452,8 @@ public class HelmClient : IHelmClient
         }
         catch (Exception ex)
         {
+            // Resources are already live even though the record could not be stored.
+            // Recovery still runs so atomic/cleanup-on-fail semantics hold here too.
             saveRecovery = await PersistFailedLifecycleAsync(store, WithHookExecution(releaseRecord, hooks), ex, applier, mainManifest, existingHistory, isUpgrade, request, ns);
             saveError = ex;
         }
@@ -433,6 +462,9 @@ public class HelmClient : IHelmClient
                 yield return line;
         if (saveError is not null)
             throw saveError;
+
+        // --- 13. Supersede prior revisions and prune history ---
+        // Final-save vs operation-timeout: everything below runs under CancellationToken.None.
         // Once the new revision is durable, preserve the single-active-revision invariant
         // even if the caller's operation timeout expires during finalization.
         await SupersedeDeployedReleasesAsync(store, existingHistory, CancellationToken.None);
@@ -639,9 +671,16 @@ public class HelmClient : IHelmClient
             // Preserve the operation error; storage failures cannot safely replace it.
         }
 
+        // Nothing was applied (e.g. a pre-hook failure), so there is nothing to clean up.
         if (applier is null)
             return output;
 
+        // Recovery decision tree (only when atomic or cleanup-on-fail is requested):
+        //   upgrade with a deployed predecessor -> delete attempted-only resources, and
+        //     with atomic also re-apply the previous deployed manifest;
+        //   upgrade with history but no deployed predecessor -> delete the full manifest
+        //     (retry after a failed first install; everything belongs to failed attempts);
+        //   fresh install -> delete the full manifest (nothing pre-existed to preserve).
         if (isUpgrade && (request.Atomic || request.CleanupOnFail))
         {
             var previous = history
@@ -800,6 +839,9 @@ public class HelmClient : IHelmClient
             .ToList();
         var scopeCache = new Dictionary<string, bool>(StringComparer.Ordinal);
 
+        // Three-way match per attempted document: no same-type/name candidate means it is
+        // new; an exact full-identity hit means it already existed; otherwise the name
+        // collides across namespaces and scope decides (see ResolveResourceScopeAsync).
         var attemptedOnly = new List<string>();
         foreach (var document in KubernetesManifestApplier.SplitDocumentsPublic(attemptedManifest))
         {
@@ -990,6 +1032,7 @@ public class HelmClient : IHelmClient
         HelmUninstallRequest request,
         CancellationToken cancellationToken = default)
     {
+        // --- 1. Validate request and pin down the operation scope ---
         if (string.IsNullOrWhiteSpace(request.ReleaseName))
             return Fail("release name is required");
         if (!Enum.IsDefined(request.DeletionPropagation))
@@ -1008,11 +1051,17 @@ public class HelmClient : IHelmClient
         var ns = request.Namespace ?? options.DefaultNamespace ?? "default";
         using var client = await _createKubernetesClientAsync(options, request.KubeConfigPath, request.KubeConfigContent, operationToken);
         var store = new HelmReleaseStore(client);
+
+        // --- 2. Load release history and guard against concurrent operations ---
         var latest = await store.GetLatestAsync(request.ReleaseName, ns, operationToken);
         var history = await store.HistoryAsync(request.ReleaseName, ns, operationToken);
         if (HasActivePendingOperation(history))
             return Fail($"another operation is in progress for release {request.ReleaseName}");
 
+        // --- 3. Second-uninstall purge path ---
+        // When KeepHistory was used on the first uninstall, the records remain with status
+        // "uninstalled" and no live revision. A follow-up uninstall without KeepHistory is
+        // how those leftovers get purged; this is the only path that deletes them.
         if (latest is null && !request.KeepHistory)
         {
             if (history is { Count: > 0 } && string.Equals(history[^1].Status, "uninstalled", StringComparison.OrdinalIgnoreCase))
@@ -1028,7 +1077,7 @@ public class HelmClient : IHelmClient
         var hookTimeout = request.TimeoutSeconds is > 0 ? request.TimeoutSeconds.Value : options.TimeoutSeconds;
         var hookExecutor = new HelmHookExecutor(client, options.FieldManager, hookTimeout);
 
-        // Execute pre-delete hooks
+        // --- 4. Pre-delete hooks: run before any resource is removed ---
         if (!request.DisableHooks && hooks.Any(h => h.Events.Contains(HelmHookEvent.PreDelete)))
         {
             try
@@ -1044,12 +1093,17 @@ public class HelmClient : IHelmClient
             }
         }
 
+        // --- 5. Delete resources ---
+        // Order matters: resources introduced only by failed revisions are cleaned up first,
+        // then the latest deployed manifest. Both passes honor helm.sh/resource-policy: keep.
         var applier = new KubernetesManifestApplier(client, options.FieldManager);
         var output = new StringBuilder();
         var deletedManifests = new StringBuilder();
         foreach (var failedRevision in history.Where(record =>
                      string.Equals(record.Status, "failed", StringComparison.OrdinalIgnoreCase)))
         {
+            // Only documents the failed revision introduced relative to the current manifest;
+            // shared resources are left for the main deletion pass below.
             var failedOnlyManifest = await GetAttemptedOnlyManifestAsync(
                 applier,
                 mainManifest,
@@ -1082,6 +1136,7 @@ public class HelmClient : IHelmClient
         }
         AppendManifestDocuments(deletedManifests, mainDeletion.Manifest);
 
+        // --- 6. Optionally wait until deletions are observed gone ---
         if (request.Wait)
         {
             var timeout = request.TimeoutSeconds ?? options.TimeoutSeconds;
@@ -1090,7 +1145,7 @@ public class HelmClient : IHelmClient
                 output.AppendLine(line);
         }
 
-        // Execute post-delete hooks
+        // --- 7. Post-delete hooks: run only after resources are removed ---
         if (!request.DisableHooks && hooks.Any(h => h.Events.Contains(HelmHookEvent.PostDelete)))
         {
             try
@@ -1106,6 +1161,9 @@ public class HelmClient : IHelmClient
             }
         }
 
+        // --- 8. Persist the final state ---
+        // KeepHistory marks the revision "uninstalled" (a later install restarts at revision 1);
+        // otherwise the entire history is purged and the release name is free again.
         if (request.KeepHistory)
             await store.MarkUninstalledAsync(WithHookExecution(latest, hooks), operationToken);
         else
@@ -1187,6 +1245,7 @@ public class HelmClient : IHelmClient
         HelmRollbackRequest request,
         CancellationToken cancellationToken = default)
     {
+        // --- 1. Validate request and pin down the operation scope ---
         ValidateRollbackRequest(request);
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
         ValidateServerSideApplyOption(options);
@@ -1202,6 +1261,7 @@ public class HelmClient : IHelmClient
             operationToken);
         var store = new HelmReleaseStore(client);
 
+        // --- 2. Load release history and guard against concurrent operations ---
         var current = await store.GetLatestAsync(request.ReleaseName, ns, operationToken);
         if (current is null)
             return Fail($"release: not found: {request.ReleaseName}");
@@ -1210,6 +1270,9 @@ public class HelmClient : IHelmClient
         if (HasActivePendingOperation(storedHistory))
             return Fail($"another operation is in progress for release {request.ReleaseName}");
 
+        // --- 3. Select the target revision ---
+        // Explicit revision > 0 picks that exact record; revision 0 means "previous", the
+        // highest revision below the current one (skipping uninstalled records).
         var targetRecord = request.Revision > 0
             ? storedHistory.FirstOrDefault(x => x.Revision == request.Revision)
             : storedHistory
@@ -1220,6 +1283,10 @@ public class HelmClient : IHelmClient
         if (targetRecord is null)
             return Fail($"release has no revision {request.Revision}");
 
+        // --- 4. Build and reserve the pending-rollback record ---
+        // The rollback is stored as a NEW revision (next number) carrying the target's
+        // chart/manifest; reserving it up front marks the operation in-flight so a
+        // concurrent lifecycle is rejected by the pending-op guard above.
         var (mainManifest, hooks) = ResolveStoredManifest(targetRecord, ns);
         var (currentMainManifest, _) = ResolveStoredManifest(current, ns);
         var hookExecutor = new HelmHookExecutor(client, options.FieldManager, timeout);
@@ -1268,7 +1335,7 @@ public class HelmClient : IHelmClient
 
         try
         {
-            // Execute pre-rollback hooks
+            // --- 5. Pre-rollback hooks ---
             if (!request.DisableHooks && hooks.Any(h => h.Events.Contains(HelmHookEvent.PreRollback)))
             {
                 await foreach (var hookLine in hookExecutor.ExecuteHooksWithFailureHandlingAsync(hooks, HelmHookEvent.PreRollback, ns, operationToken))
@@ -1277,6 +1344,10 @@ public class HelmClient : IHelmClient
                 }
             }
 
+            // --- 6. Re-apply the target manifest, then remove current-only resources ---
+            // Apply first so shared resources transition in place; afterwards delete what the
+            // current revision added on top of the target (rollback-only delta), so nothing
+            // from the rolled-away revision is left running. Keep-annotated resources survive.
             var applier = new KubernetesManifestApplier(client, options.FieldManager);
             var rollbackOnlyManifest = await GetAttemptedOnlyManifestAsync(
                 applier,
@@ -1302,7 +1373,7 @@ public class HelmClient : IHelmClient
                 output.AppendLine($"Removed rollback resource {resource}");
             }
 
-            // Execute post-rollback hooks
+            // --- 7. Post-rollback hooks ---
             if (!request.DisableHooks && hooks.Any(h => h.Events.Contains(HelmHookEvent.PostRollback)))
             {
                 await foreach (var hookLine in hookExecutor.ExecuteHooksWithFailureHandlingAsync(hooks, HelmHookEvent.PostRollback, ns, operationToken))
@@ -1311,6 +1382,7 @@ public class HelmClient : IHelmClient
                 }
             }
 
+            // --- 8. Optionally wait for the restored resources to become ready ---
             if (request.Wait)
             {
                 output.AppendLine($"Waiting for resources to be ready (timeout: {timeout}s)...");
@@ -1321,12 +1393,14 @@ public class HelmClient : IHelmClient
         }
         catch (Exception ex)
         {
+            // Any failure above marks the pending-rollback record failed before rethrowing.
             await PersistFailedRollbackAsync(store, WithHookExecution(rollbackRecord, hooks), operationId, ex);
             throw;
         }
 
         try
         {
+            // --- 9. Persist the new deployed revision ---
             // The manifest has been applied. Complete the durable release-state transition
             // independently of the operation deadline so history cannot retain two deployed
             // revisions when the timeout expires during this final save.
@@ -1342,6 +1416,7 @@ public class HelmClient : IHelmClient
             await PersistFailedRollbackAsync(store, WithHookExecution(rollbackRecord, hooks), operationId, ex);
             throw;
         }
+        // --- 10. Supersede prior revisions and prune history ---
         var history = await store.HistoryAsync(request.ReleaseName, ns, CancellationToken.None);
         await SupersedeDeployedReleasesAsync(store, history.Where(record => record.Revision != newRevision), CancellationToken.None);
         var maxHistory = request.MaxHistory ?? options.MaxHistory;
@@ -1361,6 +1436,7 @@ public class HelmClient : IHelmClient
         HelmTemplateRequest request,
         CancellationToken cancellationToken = default)
     {
+        // Load chart, merge values, render — no cluster access and no release-store writes.
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
         var ns = request.Namespace ?? options.DefaultNamespace ?? "default";
         var chartPath = await ResolveChartPathAsync(request.Chart, null, options, cancellationToken);
@@ -1385,6 +1461,8 @@ public class HelmClient : IHelmClient
                 : request.OutputDir;
             Directory.CreateDirectory(outputDir);
 
+            // One file per manifest document: {kind}-{name}.yaml when the document has a
+            // parseable identity, otherwise a positional manifest-{n}.yaml fallback.
             var docs = KubernetesManifestApplier.SplitDocumentsPublic(manifest);
             var fileIndex = 0;
             foreach (var doc in docs)
@@ -1691,6 +1769,8 @@ public class HelmClient : IHelmClient
         if (latest is null)
             return Fail($"release: not found: {releaseName}");
 
+        // Test hooks are ordered by weight first (Helm semantics), then name/kind/path so
+        // equal-weight hooks still run in a deterministic order across invocations.
         var (_, hooks) = ResolveStoredManifest(latest, ns);
         var testHooks = hooks
             .Where(h => h.Events.Contains(HelmHookEvent.Test))
@@ -1703,6 +1783,8 @@ public class HelmClient : IHelmClient
         if (testHooks.Count == 0)
             return Ok($"No test hooks found for release {releaseName}");
 
+        // Run hooks one at a time: a failing hook is recorded but does not stop the rest,
+        // except that an operation timeout ends the run immediately (nothing left to wait for).
         var output = new StringBuilder();
         output.AppendLine($"TESTING: {releaseName}");
         var hookExecutor = new HelmHookExecutor(client, options.FieldManager, timeout);
@@ -1725,10 +1807,12 @@ public class HelmClient : IHelmClient
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
+                    // Caller cancellation propagates as-is; it is not a test failure.
                     throw;
                 }
                 catch (OperationCanceledException ex) when (timeoutSource?.IsCancellationRequested == true)
                 {
+                    // Operation timeout is reported as a failed hook and stops the run.
                     failed++;
                     output.AppendLine($"FAILED: {hook.Name}: {ex.Message}");
                     break;
@@ -1767,6 +1851,8 @@ public class HelmClient : IHelmClient
         using var client = await _createKubernetesClientAsync(options, request.KubeConfigPath, request.KubeConfigContent, cancellationToken);
         var store = new HelmReleaseStore(client);
 
+        // --- 1. Current side: the latest deployed revision's stored manifest ---
+        // Only "deployed" records count; a failed/pending latest must not be shown as current.
         var history = await store.HistoryAsync(releaseName, ns, cancellationToken);
         var currentManifest = history
             .Where(record => string.Equals(record.Status, "deployed", StringComparison.OrdinalIgnoreCase))
@@ -1774,6 +1860,7 @@ public class HelmClient : IHelmClient
             .Select(record => record.Manifest)
             .FirstOrDefault() ?? string.Empty;
 
+        // --- 2. New side: render with the same install/upgrade render-state rules ---
         var chart = await HelmChartLoader.LoadAsync(request.Chart, cancellationToken);
         var valuesFiles = CombineValuesFiles(request.ValuesFile, request.ValuesFiles);
         var values = await HelmValues.BuildAsync(chart, valuesFiles, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
@@ -2080,11 +2167,14 @@ public class HelmClient : IHelmClient
             var configuredRepositories = await repo.ListRepositoriesAsync(cancellationToken);
             var refreshedRepositories = new HashSet<string>(StringComparer.Ordinal);
 
+            // --- Stage: resolve every dependency into staging (all-or-nothing commit below) ---
             foreach (var dependency in chart.Dependencies)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
+                    // Local/vendored deps (empty repository) are validated in place and never
+                    // staged or deleted; only remote deps produce staged archives.
                     if (string.IsNullOrWhiteSpace(dependency.Repository))
                     {
                         var local = await ResolveVendoredDependencyAsync(
@@ -2138,6 +2228,9 @@ public class HelmClient : IHelmClient
                 return Fail(output.ToString());
             }
 
+            // --- Stage: commit staged archives and rewrite Chart.lock ---
+            // Reached only when every dependency resolved; a partial failure above returns
+            // before this point so charts/ is never half-updated.
             var requestedDependencies = await HelmDependencyLockFile.LoadRequestedDependenciesAsync(
                 chartPath,
                 cancellationToken);
@@ -2615,6 +2708,10 @@ public class HelmClient : IHelmClient
     {
         ArgumentNullException.ThrowIfNull(request);
         var chartPath = Path.GetFullPath(request.ChartPath);
+
+        // --- Stage: validate Chart.lock exists and matches Chart.yaml ---
+        // Build never re-resolves constraints; an out-of-sync lock must be fixed by
+        // dependency update first so Chart.lock stays the single source of truth.
         IReadOnlyList<Dictionary<string, object?>> requestedDependencies;
         HelmDependencyLock? lockFile;
         try
@@ -2675,11 +2772,14 @@ public class HelmClient : IHelmClient
             var configuredRepositories = await repository.ListRepositoriesAsync(cancellationToken);
             var refreshedRepositories = new HashSet<string>(StringComparer.Ordinal);
 
+            // --- Stage: download exact locked versions into staging ---
             foreach (var dependency in lockFile.Dependencies)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
+                    // Local/vendored deps are validated in place (exact locked version) and
+                    // never restaged; only remote deps are downloaded as archives.
                     if (string.IsNullOrWhiteSpace(dependency.Repository))
                     {
                         await ResolveVendoredDependencyAsync(
@@ -2738,6 +2838,7 @@ public class HelmClient : IHelmClient
                 return Fail(output.ToString());
             }
 
+            // --- Stage: commit staged archives into charts/ (all-or-nothing, as in update) ---
             await InstallStagedDependencyArchivesAsync(
                 chartsDirectory,
                 stagedArchives,

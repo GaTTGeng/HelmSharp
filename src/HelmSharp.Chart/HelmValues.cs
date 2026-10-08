@@ -53,6 +53,9 @@ public static class HelmValues
     {
         var overrides = new Dictionary<string, object?>(StringComparer.Ordinal);
 
+        // Stage: collect user overrides in Helm precedence order. Values files are
+        // merged deeply; the --set family writes through dotted paths, and each
+        // family below overwrites the previous one on key collisions.
         // Multiple values files (equivalent to helm -f / --values, applied in order)
         foreach (var filePath in valuesFiles ?? [])
         {
@@ -88,6 +91,8 @@ public static class HelmValues
         return overrides;
     }
 
+    // Runs the full coalesce pipeline on a prebuilt override map (stage list in
+    // ProcessOverrides) — the sync counterpart of BuildAsync's second half.
     internal static Dictionary<string, object?> BuildFromOverrides(
         HelmChart chart,
         Dictionary<string, object?> overrides)
@@ -111,6 +116,16 @@ public static class HelmValues
     {
         // Helm first coalesces all loaded dependencies to evaluate enablement, then
         // removes disabled nodes before importing child values and doing the final merge.
+        //
+        // Coalesce pipeline stages:
+        //   1. Evaluation pass over the full dependency graph (including disabled
+        //      nodes) so tag/condition enablement sees every candidate's values.
+        //   2. Effective graph: dependencies disabled by tags/conditions drop out.
+        //   3. Final merge: chart defaults + each enabled child's coalesced subtree.
+        //   4. import-values: fill parent keys exported by children (never overwrite).
+        //   5. User overrides re-applied on top of the coalesced tree.
+        //   6. Global propagation down the effective graph.
+        //   7. Result cached under a values fingerprint for later render passes.
         var evaluationValues = BuildChartValues(chart, overrides, HelmDependencyProcessor.BuildAll(chart));
         effectiveGraph = HelmDependencyProcessor.BuildEffective(chart, evaluationValues);
         var result = BuildChartValues(chart, new Dictionary<string, object?>(), effectiveGraph);
@@ -127,6 +142,8 @@ public static class HelmValues
         IDictionary<string, object?> overrides,
         HelmDependencyNode node)
     {
+        // Stage: chart defaults, null-pruned so placeholder keys do not shadow
+        // user overrides, then the incoming override slice on top.
         var result = HelmYaml.DeserializeDictionary(chart.ValuesYaml);
         PruneNullMapEntries(result);
         MergeInto(result, CloneDictionary(overrides));
@@ -206,6 +223,9 @@ public static class HelmValues
         }
     }
 
+    // Invariant: parent global keys win over the child's existing global scalars
+    // and lists (maps deep-merge), and both inputs are cloned so neither map is
+    // mutated or aliased into the result.
     private static void MergeGlobalValues(
         Dictionary<string, object?> values,
         Dictionary<string, object?>? globalValues)
@@ -284,6 +304,8 @@ public static class HelmValues
     {
         // Import semantics: never overwrite an existing parent key, only add absent
         // ones (recursing into maps so nested defaults can still fill gaps).
+        // Source values are cloned on insert; later mutation of one side cannot
+        // leak into the other.
         foreach (var (key, value) in source)
         {
             if (!target.TryGetValue(key, out var existing))

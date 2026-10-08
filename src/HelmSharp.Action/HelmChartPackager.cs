@@ -46,6 +46,12 @@ internal static class HelmChartPackager
         string? appVersion = null,
         CancellationToken cancellationToken = default)
     {
+        // Package stages:
+        //   1. Load Chart.yaml and validate name/version/apiVersion/type.
+        //   2. Apply version/appVersion overrides and normalize Chart.yaml to LF
+        //      with a trailing newline (byte-stable archives across platforms).
+        //   3. Stream the chart tree into .tgz under a {name}/ root: .helmignore
+        //      filter, then deterministic ordering by normalized relative path.
         if (!Directory.Exists(chartPath))
             throw new DirectoryNotFoundException($"Chart directory not found: {chartPath}");
 

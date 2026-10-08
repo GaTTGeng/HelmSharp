@@ -108,10 +108,15 @@ internal static class HelmDependencyProcessor
 
             if (!includeDisabled)
             {
+                // Stage: enablement evaluation is skipped entirely in the BuildAll
+                // pass so every declared dependency stays visible to condition paths.
                 // Helm enablement: tag overrides apply first; a matching true tag
                 // enables even if another tag is false. Conditions are comma-separated
                 // values paths; the first path resolving to a boolean decides, and a
-                // missing path leaves the current decision untouched.
+                // missing path leaves the current decision untouched. Condition paths
+                // resolve against the declaring chart's values slice via the dotted
+                // identity prefix accumulated in `path`, so nested conditions are
+                // looked up from the root map at path + condition.
                 var tagOverride = EvaluateTags(dependencyIdentity, dependency.Tags, tags);
                 if (tagOverride.HasValue)
                     enabled = tagOverride.Value;

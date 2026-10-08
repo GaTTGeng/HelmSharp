@@ -28,6 +28,7 @@ internal static class HelmV3ReleaseCodec
         ArgumentNullException.ThrowIfNull(record);
         ValidateIdentity(record.Name, record.Namespace, record.Revision);
 
+        // Stage 1: assemble the release JSON object.
         // Release JSON shape mirrors Helm's release.Release proto: name, info,
         // chart, config (user values), manifest, hooks, version (revision), namespace.
         var chart = BuildChart(record);
@@ -49,12 +50,17 @@ internal static class HelmV3ReleaseCodec
             ["config"] = JsonSerializer.SerializeToNode(HelmYaml.DeserializeDictionary(record.ValuesYaml)),
             ["manifest"] = record.Manifest,
             ["hooks"] = hooks,
+            // Helm names the revision number "version" — it is not a semver.
             ["version"] = record.Revision,
             ["namespace"] = record.Namespace
         };
         if (!string.IsNullOrWhiteSpace(record.ComputedValuesYaml))
+            // Extension field: the coalesced values tree after dependency processing.
+            // Plain Helm ignores unknown keys (see Decode for the full rationale).
             release["helmsharp_computed_values"] = JsonSerializer.SerializeToNode(HelmYaml.DeserializeDictionary(record.ComputedValuesYaml));
 
+        // Stage 2: serialize to UTF-8 JSON, gzip it, then Base64 — byte-for-byte the
+        // payload Helm writes under the Secret's "release" data key.
         var json = Encoding.UTF8.GetBytes(release.ToJsonString());
         using var output = new MemoryStream();
         using (var gzip = new GZipStream(output, CompressionLevel.SmallestSize, leaveOpen: true))
@@ -74,6 +80,7 @@ internal static class HelmV3ReleaseCodec
         byte[] payload;
         try
         {
+            // Stage 1: Base64-decode the Secret data key payload.
             payload = Convert.FromBase64String(encodedRelease);
         }
         catch (FormatException ex)
@@ -81,8 +88,9 @@ internal static class HelmV3ReleaseCodec
             throw new InvalidDataException("The Helm release payload is not valid Base64.", ex);
         }
 
-        // Helm v3 always gzips; accept uncompressed JSON too so payloads written by
-        // hand or by older tooling still decode.
+        // Stage 2: sniff for gzip magic and decompress when present. Helm v3 always
+        // gzips; accept uncompressed JSON too so payloads written by hand or by
+        // older tooling still decode.
         if (payload.AsSpan().StartsWith(GzipMagic))
         {
             try
@@ -101,6 +109,7 @@ internal static class HelmV3ReleaseCodec
 
         try
         {
+            // Stage 3: parse the release JSON and map it back onto a record.
             using var document = JsonDocument.Parse(payload);
             var root = document.RootElement;
             var name = GetString(root, "name");

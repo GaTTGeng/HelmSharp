@@ -62,6 +62,7 @@ public sealed class KubernetesResourceWaiter
         var deadline = _timeProvider.GetUtcNow().AddSeconds(_timeoutSeconds);
         var identities = new List<ManifestIdentity>();
 
+        // Stage 1: parse manifest documents into identities (unparseable docs are skipped).
         foreach (var doc in KubernetesManifestApplier.SplitDocumentsPublic(manifest))
         {
             var identity = ManifestIdentity.Parse(doc, defaultNamespace);
@@ -69,6 +70,7 @@ public sealed class KubernetesResourceWaiter
                 identities.Add(identity);
         }
 
+        // Stage 2: keep only waitable kinds; inert config objects never block --wait.
         var waitable = identities
             .Where(id => IsWaitableKind(id.Kind))
             .ToList();
@@ -90,6 +92,7 @@ public sealed class KubernetesResourceWaiter
         var pollInterval = TimeSpan.FromSeconds(3);
         var consecutiveErrors = 0;
 
+        // Stage 3: poll every still-pending resource until ready, failed, or the deadline.
         while (pending.Count > 0 && _timeProvider.GetUtcNow() < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -168,6 +171,8 @@ public sealed class KubernetesResourceWaiter
             }
         }
 
+        // Stage 4: settle — terminal failures are reported first; otherwise any
+        // resource still pending at the deadline becomes a timeout with diagnostics.
         if (failed.Count > 0)
         {
             throw new InvalidOperationException($"Resources failed: {string.Join(", ", failed)}");
@@ -175,6 +180,8 @@ public sealed class KubernetesResourceWaiter
 
         if (pending.Count > 0)
         {
+            // Timeout diagnostics: attach each pending resource's last observed status
+            // so the message shows where the rollout stalled, not just what is left.
             var timeoutMsg = $"Timed out after {_timeoutSeconds}s waiting for: {string.Join(", ", pending)}";
             var statuses = pending
                 .Where(lastStatuses.ContainsKey)
@@ -261,6 +268,9 @@ public sealed class KubernetesResourceWaiter
     {
         if (state.ScopeResolved)
             return;
+        // Prefer the static typed scope table (no discovery round-trip); discovery is
+        // only needed for CRs and other unknown kinds. Cluster-scoped kinds drop the
+        // namespace so the subsequent existence read targets the cluster scope.
         if (KubernetesManifestApplier.TryGetTypedResourceScope(state.Identity, out _))
         {
             state.Identity = KubernetesManifestApplier.NormalizeTypedIdentity(state.Identity);
@@ -387,6 +397,8 @@ public sealed class KubernetesResourceWaiter
             ("apps/v1", "DaemonSet") => await CheckDaemonSetAsync(identity.Name, ns, ct),
             ("apps/v1", "ReplicaSet") => await CheckReplicaSetAsync(identity.Name, ns, ct),
             ("batch/v1", "Job") => waitForJobs
+                // Helm's default is not to wait for Jobs; the flag promotes Job
+                // completion to a readiness requirement when requested.
                 ? await CheckJobAsync(identity.Name, ns, ct)
                 : (true, false, ""),
             ("batch/v1", "CronJob") => (true, false, ""),
@@ -401,6 +413,7 @@ public sealed class KubernetesResourceWaiter
             ("networking.k8s.io/v1", "Ingress") => (true, false, ""),
             ("autoscaling/v2", "HorizontalPodAutoscaler") => await CheckHpaAsync(identity.Name, ns, ct),
             ("autoscaling/v1", "HorizontalPodAutoscaler") => (true, false, ""),
+            // Unknown kinds expose no readiness signal — treated as ready, matching Helm.
             _ => (true, false, "")
         };
     }
@@ -520,6 +533,8 @@ public sealed class KubernetesResourceWaiter
     private async Task<(bool Ready, bool Failed, string Status)> CheckReplicaSetAsync(
         string name, string ns, CancellationToken ct)
     {
+        // ReplicaSet readiness is pod-level: every pod matching its selector must
+        // report Ready=True (there is no richer ReplicaSet status condition).
         var rs = await _client.AppsV1.ReadNamespacedReplicaSetAsync(name, ns, cancellationToken: ct);
         if ((rs.Status?.ObservedGeneration ?? 0) != (rs.Metadata.Generation ?? 0))
             return (false, false, "ReplicaSet controller has not observed the current generation");
@@ -538,6 +553,8 @@ public sealed class KubernetesResourceWaiter
     private async Task<(bool Ready, bool Failed, string Status)> CheckReplicationControllerAsync(
         string name, string ns, CancellationToken ct)
     {
+        // Same pod-level readiness as ReplicaSet; an RC selector is plain labels
+        // (matchLabels only), so it is adapted to a label selector for the pod list.
         var controller = await _client.CoreV1.ReadNamespacedReplicationControllerAsync(name, ns, cancellationToken: ct);
         if ((controller.Status?.ObservedGeneration ?? 0) != (controller.Metadata.Generation ?? 0))
             return (false, false, "ReplicationController has not observed the current generation");
@@ -617,6 +634,10 @@ public sealed class KubernetesResourceWaiter
 
     private static int ResolveDeploymentMaxUnavailable(V1Deployment deployment, int desired)
     {
+        // Recreate (and desired == 0) never tolerates unavailable replicas. RollingUpdate
+        // defaults match the API: surge 25% rounded up, unavailable 25% rounded down.
+        // The API forbids surge and unavailable both being zero, so force one unavailable
+        // to let the roll make progress; the result is also clamped to desired.
         if (deployment.Spec.Strategy?.Type == "Recreate" || desired == 0)
             return 0;
 
@@ -645,6 +666,10 @@ public sealed class KubernetesResourceWaiter
         int defaultValue,
         int? invalidValueFallback = null)
     {
+        // IntOrString resolution: ints pass through; "N%" scales by total using the
+        // caller's rounding direction (surge rounds up, unavailable rounds down).
+        // Unparseable or absent values fall back per policy: invalidValueFallback
+        // when supplied (fail-safe like "treat as fully unavailable"), else defaultValue.
         if (value is null)
             return defaultValue;
 

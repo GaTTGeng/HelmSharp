@@ -96,6 +96,14 @@ internal static class HelmChartVersionResolver
 
     private static bool TryParseConstraint(string? constraint, out VersionConstraint parsed)
     {
+        // Constraint grammar pipeline:
+        //   1. Split on "||" into alternative groups (union at satisfy time).
+        //   2. Each group is either a hyphen range ("1.2 - 2") or a conjunction of
+        //      comparator tokens (commas/spaces are equivalent separators).
+        //   3. Tokens are re-joined with detached operators (">= 1.2"), then tilde,
+        //      caret, wildcard, and partial versions desugar into comparator pairs.
+        //   4. Satisfy: a candidate passes when any group's comparators all hold;
+        //      prerelease exclusion is decided per group (see ConstraintGroup).
         // A blank constraint means "any stable release" (prereleases excluded unless
         // a comparator mentions one), matching Helm/Masterminds default behavior.
         if (string.IsNullOrWhiteSpace(constraint))

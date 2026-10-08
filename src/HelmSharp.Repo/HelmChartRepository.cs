@@ -520,6 +520,14 @@ public sealed class HelmChartRepository : IDisposable
         var passCredentials = false;
         HelmRepository? configuredRepository = null;
 
+        // Pull stages:
+        //   1. Resolve the archive URL and a pinned version entry. Three reference
+        //      forms: direct .tgz URL (no index lookup), repo URL + chart name, or
+        //      configured repo/chart (index served from cache when present).
+        //   2. Download with credential scoping (same-origin or PassCredentialsAll).
+        //   3. Optionally verify the SHA-256 digest recorded on the index entry.
+        //   4. Atomic write of the archive to the destination.
+        //   5. Optionally untar via a temp directory that is swapped into place.
         if (IsArchiveUrl(chartReference))
         {
             var archiveUri = ParseAbsoluteHttpUri(chartReference, "chart archive");

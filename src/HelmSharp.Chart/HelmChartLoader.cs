@@ -103,6 +103,8 @@ public static class HelmChartLoader
     /// <exception cref="InvalidDataException">Thrown when an archive entry lies outside the chart root or a dependency archive is corrupt.</exception>
     public static async Task<HelmChart> LoadAsync(string chartPath, CancellationToken cancellationToken)
     {
+        // Stage 1: flatten the chart to a path→bytes map — directory walk or tar
+        // extraction with the archive's chart root re-rooted — then share one loader.
         var isDirectory = Directory.Exists(chartPath);
         var files = isDirectory
             ? await LoadDirectoryAsync(chartPath, cancellationToken)
@@ -121,6 +123,15 @@ public static class HelmChartLoader
         string? chartDir,
         CancellationToken cancellationToken)
     {
+        // Load stages, in order:
+        //   1. Chart.yaml — identity and dependency declarations (required).
+        //   2. values.yaml defaults and optional Chart.lock pinning/digest.
+        //   3. File walk into templates/ (rendered later), crds/ (applied before
+        //      templates), and static files exposed via .Files; charts/ is skipped here.
+        //   4. charts/ subcharts: directory trees (on-disk charts) and packaged
+        //      dependency archives (directory or embedded in the parent archive).
+        //   5. Alias registration for packaged deps, aligned against Chart.lock by
+        //      declaration index when Chart.yaml carries a SemVer range.
         // Chart.yaml is the chart's identity file; Helm refuses to load a chart without it.
         var chartYamlBytes = FindFile(files, "Chart.yaml");
         if (chartYamlBytes is null || chartYamlBytes.Length == 0)

@@ -30,13 +30,16 @@ public sealed class KubernetesManifestApplier
     }
 
     /// <summary>
-    /// Creates the namespace if it does not already exist. A concurrent create is tolerated.
+    /// Creates the namespace if it does not already exist (read-then-create). An existing
+    /// namespace is left untouched; a concurrent create race is not specially handled.
     /// </summary>
     public static async Task EnsureNamespaceAsync(
         k8s.Kubernetes client,
         string name,
         CancellationToken cancellationToken)
     {
+        // Read-then-create: only a 404 read miss falls through to create; an
+        // already-existing namespace is left untouched.
         try
         {
             await client.CoreV1.ReadNamespaceAsync(name, cancellationToken: cancellationToken);
@@ -63,6 +66,9 @@ public sealed class KubernetesManifestApplier
         string defaultNamespace,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        // Stage: split into documents → parse one identity per doc → ApplyOneAsync
+        // (typed upsert or discovery fallback). Failures are rewrapped with the
+        // resource identity so the error names what could not be applied.
         foreach (var doc in SplitDocuments(manifest))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -277,6 +283,9 @@ public sealed class KubernetesManifestApplier
                         var item = KubernetesYaml.Deserialize<V1Service>(yaml, false);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
+                        // ClusterIP(s) and IpFamilyPolicy are allocated/immutable after
+                        // creation; healthCheckNodePort is server-allocated for
+                        // LoadBalancer+Local services. All must survive the replace.
                         item.Spec.ClusterIP = existing.Spec.ClusterIP;
                         item.Spec.ClusterIPs = existing.Spec.ClusterIPs;
                         if (item.Spec.IpFamilyPolicy is null)
@@ -442,6 +451,8 @@ public sealed class KubernetesManifestApplier
                         var item = KubernetesYaml.Deserialize<V1Job>(yaml, false);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
+                        // The Job selector is controller-assigned and immutable — carry
+                        // the existing one over or the replace is rejected.
                         item.Spec.Selector = existing.Spec.Selector;
                         return _client.BatchV1.ReplaceNamespacedJobAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
                     });
@@ -759,6 +770,8 @@ public sealed class KubernetesManifestApplier
                 break;
 
             default:
+                // Discovery fallback: CRs and any kind without a typed arm go through
+                // API discovery and the custom-objects endpoints.
                 return await ApplyDiscoveredResourceAsync(identity, yaml, ct);
         }
 
@@ -866,6 +879,9 @@ public sealed class KubernetesManifestApplier
         try
         {
             var deleteOptions = new V1DeleteOptions { PropagationPolicy = propagationPolicy };
+            // Typed delete dispatch (mechanical per-kind arms); the 404 catch below
+            // provides shared idempotent-delete semantics, and unknown kinds fall
+            // through to discovery-based deletion.
             switch (identity.ApiVersion, identity.Kind)
             {
                 // Core v1

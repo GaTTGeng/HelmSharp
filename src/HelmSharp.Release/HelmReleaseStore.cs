@@ -35,6 +35,9 @@ public sealed class HelmReleaseStore
     /// </summary>
     public async Task SaveAsync(HelmReleaseRecord record, CancellationToken cancellationToken)
     {
+        // One Secret per (release, revision) named sh.helm.release.v1.<name>.v<rev>.
+        // Upsert: replace carries the prior resourceVersion so a concurrent writer
+        // conflicts instead of silently clobbering the revision.
         var secretName = SecretName(record.Name, record.Revision);
         try
         {
@@ -139,6 +142,9 @@ public sealed class HelmReleaseStore
             ? await _client.CoreV1.ListSecretForAllNamespacesAsync(labelSelector: "owner=helm", cancellationToken: cancellationToken)
             : await _client.CoreV1.ListNamespacedSecretAsync(ns ?? "default", labelSelector: "owner=helm", cancellationToken: cancellationToken);
 
+        // Revision supersede model: among each release's revisions only "deployed"
+        // counts as active, and the highest of those wins — superseded and
+        // uninstalled revisions never surface in the list.
         return secrets.Items
             .Select(ReadRecord)
             .Where(IsActiveRelease)
@@ -155,6 +161,8 @@ public sealed class HelmReleaseStore
     /// </summary>
     public async Task<List<HelmReleaseRecord>> HistoryAsync(string name, string ns, CancellationToken cancellationToken)
     {
+        // name=<release> narrows the owner=helm set to one release's full revision
+        // chain (history is append-only and keeps superseded/uninstalled revisions).
         var secrets = await _client.CoreV1.ListNamespacedSecretAsync(
             ns,
             labelSelector: $"owner=helm,name={name}",
@@ -172,6 +180,8 @@ public sealed class HelmReleaseStore
     /// </summary>
     public async Task<HelmReleaseRecord?> GetLatestAsync(string name, string ns, CancellationToken cancellationToken)
     {
+        // Latest active only: the supersede filter drops stale revisions and the
+        // uninstall tombstone, so a deleted release reports as absent.
         var history = await HistoryAsync(name, ns, cancellationToken);
         return history
             .Where(IsActiveRelease)
@@ -186,6 +196,9 @@ public sealed class HelmReleaseStore
     /// </summary>
     public async Task MarkUninstalledAsync(HelmReleaseRecord record, CancellationToken cancellationToken)
     {
+        // Uninstall tombstone model: history is append-only. The live revision is
+        // flipped to "superseded" first, then a new revision numbered +1 with status
+        // "uninstalled" is appended as the tombstone (never a Secret deletion).
         var updatedAt = DateTimeOffset.UtcNow;
         var uninstalled = record with
         {

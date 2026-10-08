@@ -112,6 +112,9 @@ public sealed class TemplateParser
 
                 var keyword = GetFirstWord(expr);
 
+                // Stop keywords (end / else / else if) are consumed here and
+                // reported to the caller instead of becoming nodes — their trim
+                // markers ride along so the caller can trim the body they close.
                 if (stopKeywords.Contains(keyword))
                     return new StopResult { Keyword = keyword, Expression = expr, LeftTrim = leftTrim, RightTrim = rightTrim, Line = startLine, Column = startCol, Offset = startOffset };
 
@@ -150,6 +153,9 @@ public sealed class TemplateParser
                 "The 'define' keyword was given an empty template name.",
                 startLine, startCol, startOffset);
 
+        // The body is captured until `end` and registered in the global define
+        // table. No node is appended to the enclosing body: Go emits nothing at a
+        // define's declaration site — the body runs only via include/template.
         var bodyDoc = new TemplateDocumentNode();
         var stop = ParseContent(bodyDoc.Children, EndOnly);
 
@@ -176,6 +182,8 @@ public sealed class TemplateParser
 
     private BlockNode ParseBlock(string keyword, string expr, bool leftTrim, bool rightTrim, int startOffset, int startLine, int startCol)
     {
+        // Phases: true body → else-if chain (source order) → optional else →
+        // require the closing `end`. Render time picks the first truthy branch.
         // Skip past keyword in the trimmed expression to extract the condition
         var trimmedExpr = expr.TrimStart();
         var condition = trimmedExpr.StartsWith(keyword, StringComparison.Ordinal) && trimmedExpr.Length > keyword.Length
@@ -202,7 +210,9 @@ public sealed class TemplateParser
             TrimTrailingWhitespace(trueBody.Children);
         block.TrueBody = trueBody;
 
-        // Handle else-if chain
+        // Handle else-if chain: each `else if` stop becomes one chain entry —
+        // condition is the stop expression minus the keyword, body runs until the
+        // next branch boundary (another else if / else / end).
         while (stop.Keyword == "else if")
         {
             // Capture trim marker before ParseContent overwrites `stop`
