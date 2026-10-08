@@ -11,6 +11,10 @@ This project follows semantic versioning once stable releases begin.
 - Made Kubernetes deletion deterministic across uninstall, rollback, and hook cleanup, including reverse ordering, propagation policies, keep annotations, discovered resource identity, and actionable failure diagnostics (#232).
 - Hardened Kubernetes wait controls by rejecting non-positive waiter timeouts and documenting standard polling, cancellation, Job waiting, and unsupported Helm status-watcher semantics (#233).
 
+### Removed
+
+- Removed the Helm comparison tool and its API server configuration from the documentation site because no supported server is available.
+
 ## [1.3.2] - 2026-08-13
 
 ### Added
@@ -102,7 +106,6 @@ This project follows semantic versioning once stable releases begin.
 
 ### Fixed
 
-- Completed the Helm Compare Quick Examples flow with localized chart descriptions and visible loading and download-error feedback.
 - Matched Helm manifest sorting for `PriorityClass`.
 - Matched Helm v4 manifest separator formatting and chart-default null pruning while preserving explicit null overrides.
 - Updated Helm CLI compatibility references and CI oracle version to Helm `v4.2.2`.

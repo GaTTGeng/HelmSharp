@@ -28,6 +28,6 @@ var renderer = new HelmTemplateRenderer(
 var manifest = renderer.Render();
 ```
 
-在将它引入产品前，固定归档摘要，并用准确的 Chart 版本、values 和 capabilities 测试。输出与 Helm 不同时，先把差异缩减到一个小 Chart/模板，再比较生效 values、目标 capabilities 和[函数矩阵](../template-function-compatibility.md)。[HelmCompare](../compare.md)适合并排检查。
+在将它引入产品前，固定归档摘要，并用准确的 Chart 版本、values 和 capabilities 测试。输出与 Helm 不同时，先把差异缩减到一个小 Chart/模板，再比较生效 values、目标 capabilities 和[函数矩阵](../template-function-compatibility.md)。使用相同输入分别渲染两份输出，再用本地 diff 工具检查。
 
 仓库中的公开 Chart golden 测试是回归证据，并不是对所有公开 Chart、所有版本的认证。

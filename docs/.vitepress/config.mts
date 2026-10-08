@@ -7,8 +7,7 @@ const englishNav = [
   { text: 'Guides', link: '/guide/first-render' },
   { text: 'Examples', link: '/examples/render-preview-api' },
   { text: 'Reference', link: '/api-overview' },
-  { text: 'Compatibility', link: '/helm-compatibility' },
-  { text: 'Compare', link: '/compare' }
+  { text: 'Compatibility', link: '/helm-compatibility' }
 ];
 
 const englishSidebar = [
@@ -87,7 +86,6 @@ const englishSidebar = [
     items: [
       { text: 'Compatibility contract', link: '/helm-compatibility' },
       { text: 'Template-function matrix', link: '/template-function-compatibility' },
-      { text: 'HelmCompare', link: '/compare' },
       { text: 'Roadmap', link: '/roadmap' },
       { text: 'Migrate from Helm CLI', link: '/migration/from-helm-cli' },
       { text: 'Changelog', link: 'https://github.com/GaTTGeng/HelmSharp/blob/master/CHANGELOG.md' }
@@ -100,8 +98,7 @@ const chineseNav = [
   { text: '指南', link: '/zh/guide/first-render' },
   { text: '示例', link: '/zh/examples/render-preview-api' },
   { text: '参考', link: '/zh/api-overview' },
-  { text: '兼容性', link: '/zh/helm-compatibility' },
-  { text: '对比', link: '/zh/compare' }
+  { text: '兼容性', link: '/zh/helm-compatibility' }
 ];
 
 const chineseSidebar = [
@@ -180,7 +177,6 @@ const chineseSidebar = [
     items: [
       { text: '兼容性约定', link: '/zh/helm-compatibility' },
       { text: '模板函数矩阵', link: '/zh/template-function-compatibility' },
-      { text: 'HelmCompare', link: '/zh/compare' },
       { text: '路线图', link: '/zh/roadmap' },
       { text: '从 Helm CLI 迁移', link: '/zh/migration/from-helm-cli' },
       { text: '更新日志', link: 'https://github.com/GaTTGeng/HelmSharp/blob/master/CHANGELOG.md' }
