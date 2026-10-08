@@ -64,12 +64,16 @@ public sealed class KubernetesReadyCheckerParityTests
             "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("2", 2)), ReadinessOutcome.Pending)];
         yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(maxUnavailable: "50%"),
             "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("2", 2)), ReadinessOutcome.Ready)];
+        yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(replicas: 2, maxSurge: "0%", maxUnavailable: "1%"),
+            "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("2", 1)), ReadinessOutcome.Ready)];
         yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(strategyType: "Recreate"),
             "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("2", 3)), ReadinessOutcome.Pending)];
         yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(strategyType: "Recreate"),
             "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("2", 4)), ReadinessOutcome.Ready)];
         yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(),
             "/apis/apps/v1/namespaces/ns/replicasets", DuplicateTemplateReplicaSetList(), ReadinessOutcome.Ready)];
+        yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(),
+            "/apis/apps/v1/namespaces/ns/replicasets", EqualTimestampReplicaSetList(), ReadinessOutcome.Ready)];
         yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(),
             "/apis/apps/v1/namespaces/ns/replicasets", NonControllerReplicaSetList(), ReadinessOutcome.Pending)];
         yield return [CreateCase("DaemonSet", "apps/v1", "/apis/apps/v1/namespaces/ns/daemonsets/demo", DaemonSet(4, 4, 3, numberAvailable: 0),
@@ -124,7 +128,7 @@ public sealed class KubernetesReadyCheckerParityTests
         => new(kind, apiVersion, resourcePath, resourceJson, auxiliaryPath, auxiliaryJson, outcome);
 
     private static string Deployment(int observedGeneration = 1, bool paused = false, string maxUnavailable = "25%",
-        bool exceededProgressDeadline = false, string strategyType = "RollingUpdate")
+        bool exceededProgressDeadline = false, string strategyType = "RollingUpdate", string maxSurge = "25%", int replicas = 4)
         => Serialize(new
         {
             apiVersion = "apps/v1",
@@ -132,13 +136,13 @@ public sealed class KubernetesReadyCheckerParityTests
             metadata = new { name = "demo", uid = "deployment-uid", generation = 1 },
             spec = new
             {
-                replicas = 4,
+                replicas,
                 paused,
                 selector = new { matchLabels = new Dictionary<string, string> { ["app"] = "demo" } },
                 strategy = new
                 {
                     type = strategyType,
-                    rollingUpdate = strategyType == "RollingUpdate" ? new { maxUnavailable } : null
+                    rollingUpdate = strategyType == "RollingUpdate" ? new { maxSurge, maxUnavailable } : null
                 },
                 template = PodTemplate("desired", includeHash: false, hash: "")
             },
@@ -185,6 +189,18 @@ public sealed class KubernetesReadyCheckerParityTests
             }
         });
 
+    private static string EqualTimestampReplicaSetList()
+        => Serialize(new
+        {
+            apiVersion = "apps/v1",
+            kind = "ReplicaSetList",
+            items = new[]
+            {
+                ReplicaSetResource("9", 0, "desired", "2023-01-01T00:00:00Z", "rs-z"),
+                ReplicaSetResource("2", 3, "desired", "2023-01-01T00:00:00Z", "rs-a")
+            }
+        });
+
     private static string NonControllerReplicaSetList()
         => Serialize(new
         {
@@ -208,12 +224,12 @@ public sealed class KubernetesReadyCheckerParityTests
             }
         });
 
-    private static object ReplicaSetResource(string revision, int ready, string image, string createdAt)
+    private static object ReplicaSetResource(string revision, int ready, string image, string createdAt, string? name = null)
         => new
         {
             metadata = new
             {
-                name = $"rs-{revision}",
+                name = name ?? $"rs-{revision}",
                 uid = $"rs-{revision}",
                 generation = 1,
                 creationTimestamp = createdAt,

@@ -402,6 +402,7 @@ public sealed class KubernetesResourceWaiter
                 owner.Uid == deploy.Metadata.Uid && owner.Kind == "Deployment" && owner.Controller == true) == true)
             .Where(replicaSet => PodTemplatesMatch(replicaSet.Spec.Template, deploy.Spec.Template))
             .OrderBy(replicaSet => replicaSet.Metadata.CreationTimestamp)
+            .ThenBy(replicaSet => replicaSet.Metadata.Name, StringComparer.Ordinal)
             .FirstOrDefault();
         if (newReplicaSet is null)
             return (false, false, "Deployment has no new ReplicaSet");
@@ -410,13 +411,7 @@ public sealed class KubernetesResourceWaiter
             return (false, false, "Deployment ReplicaSet controller has not observed the current generation");
 
         var desired = deploy.Spec.Replicas ?? 1;
-        var maxUnavailable = deploy.Spec.Strategy?.Type == "Recreate"
-            ? 0
-            : ResolveScaledValue(
-                deploy.Spec.Strategy?.RollingUpdate?.MaxUnavailable,
-                desired,
-                roundUp: false,
-                defaultValue: (int)Math.Floor(desired * 0.25));
+        var maxUnavailable = ResolveDeploymentMaxUnavailable(deploy, desired);
         var expectedReady = desired - maxUnavailable;
         var ready = newReplicaSet.Status?.ReadyReplicas ?? 0;
         if (ready >= expectedReady)
@@ -585,6 +580,29 @@ public sealed class KubernetesResourceWaiter
     {
         if (podTemplate?["metadata"]?["labels"] is JsonObject labels)
             labels.Remove("pod-template-hash");
+    }
+
+    private static int ResolveDeploymentMaxUnavailable(V1Deployment deployment, int desired)
+    {
+        if (deployment.Spec.Strategy?.Type == "Recreate" || desired == 0)
+            return 0;
+
+        var rollingUpdate = deployment.Spec.Strategy?.RollingUpdate;
+        var maxSurge = ResolveScaledValue(
+            rollingUpdate?.MaxSurge,
+            desired,
+            roundUp: true,
+            defaultValue: (int)Math.Ceiling(desired * 0.25));
+        var maxUnavailable = ResolveScaledValue(
+            rollingUpdate?.MaxUnavailable,
+            desired,
+            roundUp: false,
+            defaultValue: (int)Math.Floor(desired * 0.25));
+
+        if (maxSurge == 0 && maxUnavailable == 0)
+            maxUnavailable = 1;
+
+        return Math.Min(maxUnavailable, desired);
     }
 
     private static int ResolveScaledValue(
