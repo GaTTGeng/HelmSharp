@@ -471,7 +471,7 @@ public sealed class KubernetesResourceWaiterTests
           "apiVersion": "apps/v1",
           "kind": "Deployment",
           "metadata": { "name": "{{name}}", "uid": "deployment-uid", "generation": 1 },
-          "spec": { "replicas": 1, "selector": { "matchLabels": { "app": "web" } } },
+          "spec": { "replicas": 1, "selector": { "matchLabels": { "app": "web" } }, "template": { "metadata": { "labels": { "app": "web" } }, "spec": { "containers": [{ "name": "web", "image": "nginx" }] } } },
           "status": { "observedGeneration": 1, "readyReplicas": 1, "updatedReplicas": 1, "availableReplicas": 1 }
         }
         """;
@@ -492,7 +492,7 @@ public sealed class KubernetesResourceWaiterTests
           "apiVersion": "apps/v1",
           "kind": "Deployment",
           "metadata": { "name": "{{name}}", "uid": "deployment-uid", "generation": 1 },
-          "spec": { "replicas": 1, "selector": { "matchLabels": { "app": "web" } } },
+          "spec": { "replicas": 1, "selector": { "matchLabels": { "app": "web" } }, "template": { "metadata": { "labels": { "app": "web" } }, "spec": { "containers": [{ "name": "web", "image": "nginx" }] } } },
           "status": { "observedGeneration": 1, "readyReplicas": 0, "updatedReplicas": 0, "availableReplicas": 0 }
         }
         """;
@@ -509,6 +509,7 @@ public sealed class KubernetesResourceWaiterTests
               "ownerReferences": [{ "apiVersion": "apps/v1", "kind": "Deployment", "uid": "deployment-uid" }],
               "annotations": { "deployment.kubernetes.io/revision": "2" }
             },
+            "spec": { "template": { "metadata": { "labels": { "app": "web", "pod-template-hash": "new" } }, "spec": { "containers": [{ "name": "web", "image": "nginx" }] } } },
             "status": { "observedGeneration": 1, "readyReplicas": 1 }
           }]
         }
@@ -526,6 +527,7 @@ public sealed class KubernetesResourceWaiterTests
               "ownerReferences": [{ "apiVersion": "apps/v1", "kind": "Deployment", "uid": "deployment-uid" }],
               "annotations": { "deployment.kubernetes.io/revision": "2" }
             },
+            "spec": { "template": { "metadata": { "labels": { "app": "web", "pod-template-hash": "new" } }, "spec": { "containers": [{ "name": "web", "image": "nginx" }] } } },
             "status": { "observedGeneration": 1, "readyReplicas": 0 }
           }]
         }

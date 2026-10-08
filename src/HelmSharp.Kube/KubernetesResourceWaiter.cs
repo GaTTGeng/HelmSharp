@@ -1,4 +1,6 @@
 using System.Runtime.CompilerServices;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using k8s;
 using k8s.Autorest;
 using k8s.Models;
@@ -398,7 +400,8 @@ public sealed class KubernetesResourceWaiter
         var newReplicaSet = replicaSets.Items
             .Where(replicaSet => replicaSet.Metadata.OwnerReferences?.Any(owner =>
                 owner.Uid == deploy.Metadata.Uid && owner.Kind == "Deployment") == true)
-            .OrderByDescending(GetReplicaSetRevision)
+            .Where(replicaSet => PodTemplatesMatch(replicaSet.Spec.Template, deploy.Spec.Template))
+            .OrderBy(replicaSet => replicaSet.Metadata.CreationTimestamp)
             .FirstOrDefault();
         if (newReplicaSet is null)
             return (false, false, "Deployment has no new ReplicaSet");
@@ -407,11 +410,13 @@ public sealed class KubernetesResourceWaiter
             return (false, false, "Deployment ReplicaSet controller has not observed the current generation");
 
         var desired = deploy.Spec.Replicas ?? 1;
-        var maxUnavailable = ResolveScaledValue(
-            deploy.Spec.Strategy?.RollingUpdate?.MaxUnavailable,
-            desired,
-            roundUp: false,
-            defaultValue: (int)Math.Floor(desired * 0.25));
+        var maxUnavailable = deploy.Spec.Strategy?.Type == "Recreate"
+            ? 0
+            : ResolveScaledValue(
+                deploy.Spec.Strategy?.RollingUpdate?.MaxUnavailable,
+                desired,
+                roundUp: false,
+                defaultValue: (int)Math.Floor(desired * 0.25));
         var expectedReady = desired - maxUnavailable;
         var ready = newReplicaSet.Status?.ReadyReplicas ?? 0;
         if (ready >= expectedReady)
@@ -567,14 +572,19 @@ public sealed class KubernetesResourceWaiter
         return string.Join(",", requirements);
     }
 
-    private static int GetReplicaSetRevision(V1ReplicaSet replicaSet)
+    private static bool PodTemplatesMatch(V1PodTemplateSpec? left, V1PodTemplateSpec? right)
     {
-        var annotations = replicaSet.Metadata.Annotations;
-        return annotations is not null &&
-               annotations.TryGetValue("deployment.kubernetes.io/revision", out var value) &&
-               int.TryParse(value, out var revision)
-            ? revision
-            : 0;
+        var leftNode = JsonSerializer.SerializeToNode(left);
+        var rightNode = JsonSerializer.SerializeToNode(right);
+        RemovePodTemplateHash(leftNode);
+        RemovePodTemplateHash(rightNode);
+        return JsonNode.DeepEquals(leftNode, rightNode);
+    }
+
+    private static void RemovePodTemplateHash(JsonNode? podTemplate)
+    {
+        if (podTemplate?["metadata"]?["labels"] is JsonObject labels)
+            labels.Remove("pod-template-hash");
     }
 
     private static int ResolveScaledValue(

@@ -64,6 +64,12 @@ public sealed class KubernetesReadyCheckerParityTests
             "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("2", 2)), ReadinessOutcome.Pending)];
         yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(maxUnavailable: "50%"),
             "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("2", 2)), ReadinessOutcome.Ready)];
+        yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(strategyType: "Recreate"),
+            "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("2", 3)), ReadinessOutcome.Pending)];
+        yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(strategyType: "Recreate"),
+            "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("2", 4)), ReadinessOutcome.Ready)];
+        yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(),
+            "/apis/apps/v1/namespaces/ns/replicasets", DuplicateTemplateReplicaSetList(), ReadinessOutcome.Ready)];
         yield return [CreateCase("DaemonSet", "apps/v1", "/apis/apps/v1/namespaces/ns/daemonsets/demo", DaemonSet(4, 4, 3, numberAvailable: 0),
             outcome: ReadinessOutcome.Ready)];
         yield return [CreateCase("DaemonSet", "apps/v1", "/apis/apps/v1/namespaces/ns/daemonsets/demo", DaemonSet(4, 4, 2, maxUnavailable: "50%"),
@@ -116,7 +122,7 @@ public sealed class KubernetesReadyCheckerParityTests
         => new(kind, apiVersion, resourcePath, resourceJson, auxiliaryPath, auxiliaryJson, outcome);
 
     private static string Deployment(int observedGeneration = 1, bool paused = false, string maxUnavailable = "25%",
-        bool exceededProgressDeadline = false)
+        bool exceededProgressDeadline = false, string strategyType = "RollingUpdate")
         => Serialize(new
         {
             apiVersion = "apps/v1",
@@ -127,7 +133,12 @@ public sealed class KubernetesReadyCheckerParityTests
                 replicas = 4,
                 paused,
                 selector = new { matchLabels = new Dictionary<string, string> { ["app"] = "demo" } },
-                strategy = new { type = "RollingUpdate", rollingUpdate = new { maxUnavailable } }
+                strategy = new
+                {
+                    type = strategyType,
+                    rollingUpdate = strategyType == "RollingUpdate" ? new { maxUnavailable } : null
+                },
+                template = PodTemplate("desired", includeHash: false, hash: "")
             },
             status = new
             {
@@ -150,12 +161,56 @@ public sealed class KubernetesReadyCheckerParityTests
                     name = $"rs-{replica.Revision}",
                     uid = $"rs-{replica.Revision}",
                     generation = 1,
+                    creationTimestamp = replica.Revision == "1" ? "2024-01-01T00:00:00Z" : "2024-02-01T00:00:00Z",
                     ownerReferences = new[] { new { apiVersion = "apps/v1", kind = "Deployment", uid = "deployment-uid" } },
                     annotations = new Dictionary<string, string> { ["deployment.kubernetes.io/revision"] = replica.Revision }
                 },
+                spec = new { template = PodTemplate(replica.Revision == "1" ? "previous" : "desired", includeHash: true, replica.Revision) },
                 status = new { observedGeneration = 1, readyReplicas = replica.Ready }
             })
         });
+
+    private static string DuplicateTemplateReplicaSetList()
+        => Serialize(new
+        {
+            apiVersion = "apps/v1",
+            kind = "ReplicaSetList",
+            items = new[]
+            {
+                ReplicaSetResource("9", 4, "different", "2020-01-01T00:00:00Z"),
+                ReplicaSetResource("2", 3, "desired", "2021-01-01T00:00:00Z"),
+                ReplicaSetResource("3", 0, "desired", "2022-01-01T00:00:00Z")
+            }
+        });
+
+    private static object ReplicaSetResource(string revision, int ready, string image, string createdAt)
+        => new
+        {
+            metadata = new
+            {
+                name = $"rs-{revision}",
+                uid = $"rs-{revision}",
+                generation = 1,
+                creationTimestamp = createdAt,
+                ownerReferences = new[] { new { apiVersion = "apps/v1", kind = "Deployment", uid = "deployment-uid" } },
+                annotations = new Dictionary<string, string> { ["deployment.kubernetes.io/revision"] = revision }
+            },
+            spec = new { template = PodTemplate(image, includeHash: true, revision) },
+            status = new { observedGeneration = 1, readyReplicas = ready }
+        };
+
+    private static object PodTemplate(string image, bool includeHash, string hash)
+    {
+        var labels = new Dictionary<string, string> { ["app"] = "demo" };
+        if (includeHash)
+            labels["pod-template-hash"] = hash;
+
+        return new
+        {
+            metadata = new { labels },
+            spec = new { containers = new[] { new { name = "app", image } } }
+        };
+    }
 
     private static string DaemonSet(int desired, int updated, int ready, string strategy = "RollingUpdate", string maxUnavailable = "1", int? numberAvailable = null)
         => Serialize(new
