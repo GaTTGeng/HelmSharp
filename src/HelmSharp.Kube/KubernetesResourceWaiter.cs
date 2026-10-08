@@ -17,6 +17,9 @@ public sealed class KubernetesResourceWaiter
     private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
     private readonly Dictionary<(string ApiVersion, string Kind), DeletionResource> _deletionResources = new();
 
+    /// <param name="client">Kubernetes client used for readiness reads.</param>
+    /// <param name="timeoutSeconds">Maximum wait duration. Must be greater than zero.</param>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when the timeout is zero or negative.</exception>
     public KubernetesResourceWaiter(k8s.Kubernetes client, int timeoutSeconds = 300)
         : this(client, timeoutSeconds, TimeProvider.System, Task.Delay)
     {
@@ -28,6 +31,10 @@ public sealed class KubernetesResourceWaiter
         TimeProvider timeProvider,
         Func<TimeSpan, CancellationToken, Task> delayAsync)
     {
+        ArgumentNullException.ThrowIfNull(client);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutSeconds);
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        ArgumentNullException.ThrowIfNull(delayAsync);
         _client = client;
         _timeoutSeconds = timeoutSeconds;
         _timeProvider = timeProvider;

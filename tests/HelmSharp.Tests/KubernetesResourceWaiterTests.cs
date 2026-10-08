@@ -7,6 +7,15 @@ namespace HelmSharp.Tests;
 public sealed class KubernetesResourceWaiterTests
 {
     [Fact]
+    public void Constructor_RejectsNonPositiveTimeout()
+    {
+        var client = KubernetesTestClientBuilder.Create(new KubernetesApiHandler());
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => new KubernetesResourceWaiter(client, 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new KubernetesResourceWaiter(client, -1));
+    }
+
+    [Fact]
     public async Task WaitForReadyAsync_ReturnsImmediatelyWhenManifestHasNoWaitableResources()
     {
         var handler = new KubernetesApiHandler();

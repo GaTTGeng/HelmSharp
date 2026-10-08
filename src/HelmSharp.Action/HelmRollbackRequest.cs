@@ -15,13 +15,19 @@ public sealed class HelmRollbackRequest
 
     public string? Namespace { get; set; }
 
-    /// <summary>Wait for the restored resources before recording a deployed revision.</summary>
+    /// <summary>
+    /// Wait using HelmSharp's standard readiness polling before recording a deployed revision.
+    /// The legacy Helm status-watcher strategy is not implemented or exposed.
+    /// </summary>
     public bool Wait { get; set; } = true;
 
     /// <summary>When waiting, also wait for Jobs to complete.</summary>
     public bool WaitForJobs { get; set; }
 
-    /// <summary>Operation timeout in seconds. When omitted, the configured Helm timeout is used.</summary>
+    /// <summary>
+    /// Operation timeout in seconds. Must be greater than zero when specified; when omitted,
+    /// the configured Helm timeout is used.
+    /// </summary>
     public int? TimeoutSeconds { get; set; }
 
     /// <summary>Skip pre-rollback and post-rollback hooks.</summary>
