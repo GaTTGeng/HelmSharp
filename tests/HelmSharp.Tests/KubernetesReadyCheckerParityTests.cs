@@ -55,7 +55,7 @@ public sealed class KubernetesReadyCheckerParityTests
         yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(),
             "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("1", 4), ("2", 3)), ReadinessOutcome.Ready)];
         yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(paused: true),
-            "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("2", 4)), ReadinessOutcome.Pending)];
+            "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("2", 0)), ReadinessOutcome.Ready)];
         yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(observedGeneration: 0),
             "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("2", 4)), ReadinessOutcome.Pending)];
         yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(),
@@ -70,6 +70,8 @@ public sealed class KubernetesReadyCheckerParityTests
             "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("2", 4)), ReadinessOutcome.Ready)];
         yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(),
             "/apis/apps/v1/namespaces/ns/replicasets", DuplicateTemplateReplicaSetList(), ReadinessOutcome.Ready)];
+        yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(),
+            "/apis/apps/v1/namespaces/ns/replicasets", NonControllerReplicaSetList(), ReadinessOutcome.Pending)];
         yield return [CreateCase("DaemonSet", "apps/v1", "/apis/apps/v1/namespaces/ns/daemonsets/demo", DaemonSet(4, 4, 3, numberAvailable: 0),
             outcome: ReadinessOutcome.Ready)];
         yield return [CreateCase("DaemonSet", "apps/v1", "/apis/apps/v1/namespaces/ns/daemonsets/demo", DaemonSet(4, 4, 2, maxUnavailable: "50%"),
@@ -162,7 +164,7 @@ public sealed class KubernetesReadyCheckerParityTests
                     uid = $"rs-{replica.Revision}",
                     generation = 1,
                     creationTimestamp = replica.Revision == "1" ? "2024-01-01T00:00:00Z" : "2024-02-01T00:00:00Z",
-                    ownerReferences = new[] { new { apiVersion = "apps/v1", kind = "Deployment", uid = "deployment-uid" } },
+                    ownerReferences = new[] { new { apiVersion = "apps/v1", kind = "Deployment", uid = "deployment-uid", controller = true } },
                     annotations = new Dictionary<string, string> { ["deployment.kubernetes.io/revision"] = replica.Revision }
                 },
                 spec = new { template = PodTemplate(replica.Revision == "1" ? "previous" : "desired", includeHash: true, replica.Revision) },
@@ -183,6 +185,29 @@ public sealed class KubernetesReadyCheckerParityTests
             }
         });
 
+    private static string NonControllerReplicaSetList()
+        => Serialize(new
+        {
+            apiVersion = "apps/v1",
+            kind = "ReplicaSetList",
+            items = new[]
+            {
+                new
+                {
+                    metadata = new
+                    {
+                        name = "rs-non-controller-owner",
+                        uid = "rs-non-controller-owner",
+                        generation = 1,
+                        creationTimestamp = "2020-01-01T00:00:00Z",
+                        ownerReferences = new[] { new { apiVersion = "apps/v1", kind = "Deployment", uid = "deployment-uid", controller = false } }
+                    },
+                    spec = new { template = PodTemplate("desired", includeHash: true, hash: "non-controller") },
+                    status = new { observedGeneration = 1, readyReplicas = 4 }
+                }
+            }
+        });
+
     private static object ReplicaSetResource(string revision, int ready, string image, string createdAt)
         => new
         {
@@ -192,7 +217,7 @@ public sealed class KubernetesReadyCheckerParityTests
                 uid = $"rs-{revision}",
                 generation = 1,
                 creationTimestamp = createdAt,
-                ownerReferences = new[] { new { apiVersion = "apps/v1", kind = "Deployment", uid = "deployment-uid" } },
+                ownerReferences = new[] { new { apiVersion = "apps/v1", kind = "Deployment", uid = "deployment-uid", controller = true } },
                 annotations = new Dictionary<string, string> { ["deployment.kubernetes.io/revision"] = revision }
             },
             spec = new { template = PodTemplate(image, includeHash: true, revision) },

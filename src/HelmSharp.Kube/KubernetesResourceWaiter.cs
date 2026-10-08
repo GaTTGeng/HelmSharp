@@ -387,7 +387,7 @@ public sealed class KubernetesResourceWaiter
     {
         var deploy = await _client.AppsV1.ReadNamespacedDeploymentAsync(name, ns, cancellationToken: ct);
         if (deploy.Spec.Paused == true)
-            return (false, false, "Deployment is paused");
+            return (true, false, "");
 
         if ((deploy.Status?.ObservedGeneration ?? 0) != (deploy.Metadata.Generation ?? 0))
             return (false, false, "Deployment controller has not observed the current generation");
@@ -399,7 +399,7 @@ public sealed class KubernetesResourceWaiter
             cancellationToken: ct);
         var newReplicaSet = replicaSets.Items
             .Where(replicaSet => replicaSet.Metadata.OwnerReferences?.Any(owner =>
-                owner.Uid == deploy.Metadata.Uid && owner.Kind == "Deployment") == true)
+                owner.Uid == deploy.Metadata.Uid && owner.Kind == "Deployment" && owner.Controller == true) == true)
             .Where(replicaSet => PodTemplatesMatch(replicaSet.Spec.Template, deploy.Spec.Template))
             .OrderBy(replicaSet => replicaSet.Metadata.CreationTimestamp)
             .FirstOrDefault();

@@ -506,7 +506,7 @@ public sealed class KubernetesResourceWaiterTests
               "name": "{{name}}-new",
               "uid": "replicaset-uid",
               "generation": 1,
-              "ownerReferences": [{ "apiVersion": "apps/v1", "kind": "Deployment", "uid": "deployment-uid" }],
+              "ownerReferences": [{ "apiVersion": "apps/v1", "kind": "Deployment", "uid": "deployment-uid", "controller": true }],
               "annotations": { "deployment.kubernetes.io/revision": "2" }
             },
             "spec": { "template": { "metadata": { "labels": { "app": "web", "pod-template-hash": "new" } }, "spec": { "containers": [{ "name": "web", "image": "nginx" }] } } },
@@ -524,7 +524,7 @@ public sealed class KubernetesResourceWaiterTests
               "name": "{{name}}-new",
               "uid": "replicaset-uid",
               "generation": 1,
-              "ownerReferences": [{ "apiVersion": "apps/v1", "kind": "Deployment", "uid": "deployment-uid" }],
+              "ownerReferences": [{ "apiVersion": "apps/v1", "kind": "Deployment", "uid": "deployment-uid", "controller": true }],
               "annotations": { "deployment.kubernetes.io/revision": "2" }
             },
             "spec": { "template": { "metadata": { "labels": { "app": "web", "pod-template-hash": "new" } }, "spec": { "containers": [{ "name": "web", "image": "nginx" }] } } },
