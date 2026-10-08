@@ -3,6 +3,11 @@ using System.Text;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Test-only wrapper around the real Helm CLI, used as a golden-test oracle.
+/// Helm is never a runtime dependency of the SDK; these helpers shell out to the
+/// <c>helm</c> binary on PATH and return stdout, stderr, and the exit code.
+/// </summary>
 internal static class HelmCliRunner
 {
     private static readonly TimeSpan AvailabilityTimeout = TimeSpan.FromSeconds(5);
@@ -16,12 +21,17 @@ internal static class HelmCliRunner
         "http_proxy",
         "https_proxy"
     ];
+    // Cached so each test run probes the CLI at most once.
     private static readonly Lazy<bool> HelmAvailability = new(
         DetectAvailability,
         LazyThreadSafetyMode.ExecutionAndPublication);
 
     public static bool IsAvailable() => HelmAvailability.Value;
 
+    /// <summary>
+    /// Creates an isolated HELM_CONFIG/CACHE/DATA home so CLI runs never touch the
+    /// developer's real Helm state. Dispose to clean up the temp directories.
+    /// </summary>
     public static HelmCliHome CreateHome() => new();
 
     private static bool DetectAvailability()
@@ -56,6 +66,7 @@ internal static class HelmCliRunner
         string? valuesFile,
         CancellationToken cancellationToken)
     {
+        // Pin --kube-version so golden output is independent of the machine's cluster.
         var arguments = new List<string>
         {
             "template",
@@ -259,6 +270,7 @@ internal static class HelmCliRunner
         process.StartInfo.Environment["HELM_CONFIG_HOME"] = home.ConfigHome;
         process.StartInfo.Environment["HELM_CACHE_HOME"] = home.CacheHome;
         process.StartInfo.Environment["HELM_DATA_HOME"] = home.DataHome;
+        // Drop proxy variables so machine-local proxy config cannot skew or block CLI runs.
         foreach (var variable in ProxyEnvironmentVariables)
             process.StartInfo.Environment.Remove(variable);
 
@@ -319,12 +331,19 @@ internal static class HelmCliRunner
         await process.WaitForExitAsync(CancellationToken.None);
     }
 
+    /// <summary>
+    /// Golden-test comparison policy: normalize line endings only; do not otherwise
+    /// rewrite CLI output.
+    /// </summary>
     public static string NormalizeLineEndings(string value)
         => value.Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\r", "\n", StringComparison.Ordinal);
 
     private static string NormalizeHelmPath(string path)
         => path.Replace('\\', '/');
 
+    /// <summary>
+    /// Disposable per-test Helm home (config/cache/data) rooted in a unique temp directory.
+    /// </summary>
     public sealed class HelmCliHome : IDisposable
     {
         private readonly string _root;

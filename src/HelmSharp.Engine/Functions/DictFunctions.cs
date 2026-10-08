@@ -7,6 +7,10 @@ internal static class DictFunctions
 {
     // ── Dict construction ──
 
+    /// <summary>
+    /// Sprig <c>dict</c>: builds a map from alternating KEY VALUE arguments.
+    /// A trailing key without a value maps to null. Keys compare case-insensitively.
+    /// </summary>
     public static object Dict(IReadOnlyList<string> tokens, TemplateContext context, IEvaluationContext eval)
     {
         var dict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
@@ -20,6 +24,10 @@ internal static class DictFunctions
         return dict;
     }
 
+    /// <summary>
+    /// Sprig <c>set</c>: mutates the dict in place (set DICT KEY VALUE) and returns it
+    /// for chaining. Non-dict values are returned unchanged without error.
+    /// </summary>
     public static object? Set(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
         var dict = pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(1), context);
@@ -33,6 +41,7 @@ internal static class DictFunctions
         return dict;
     }
 
+    /// <summary>Sprig <c>unset</c>: removes a key in place and returns the dict; missing keys are a no-op.</summary>
     public static object? Unset(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
         var dict = pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(1), context);
@@ -45,6 +54,10 @@ internal static class DictFunctions
         return dict;
     }
 
+    /// <summary>
+    /// Sprig <c>merge</c>: deep-merges every dict argument into a new dict
+    /// (first source wins at conflicting leaves — see <see cref="CollectionsHelpers.MergeInto"/>).
+    /// </summary>
     public static object? MergeDicts(IReadOnlyList<string> tokens, TemplateContext context, IEvaluationContext eval)
     {
         var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
@@ -57,6 +70,11 @@ internal static class DictFunctions
         return result;
     }
 
+    /// <summary>
+    /// Sprig <c>pick</c>: new dict containing only the listed keys.
+    /// Signature: <c>pick DICT KEY…</c> or <c>DICT | pick KEY…</c> (keys shift
+    /// earlier in the token stream when a pipeline value is present).
+    /// </summary>
     public static object? Pick(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
         var dict = pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(1), context);
@@ -73,6 +91,7 @@ internal static class DictFunctions
         return result;
     }
 
+    /// <summary>Sprig <c>omit</c>: new dict excluding the listed keys (pipeline form shifts key tokens as in <see cref="Pick"/>).</summary>
     public static object? Omit(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
         var dict = pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(1), context);
@@ -89,6 +108,10 @@ internal static class DictFunctions
         return result;
     }
 
+    /// <summary>
+    /// Sprig <c>pluck</c>: collects the value of KEY from each dict argument into a
+    /// list, skipping dicts that lack the key. Signature: <c>plucks KEY DICT…</c>.
+    /// </summary>
     public static object? Pluck(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
         var key = TypeConverters.ToTemplateString(eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));
@@ -104,6 +127,11 @@ internal static class DictFunctions
         return result;
     }
 
+    /// <summary>
+    /// Sprig <c>dig</c>: walks a chain of keys (<c>dig KEY1 KEY2 … DEFAULT</c>) and
+    /// returns DEFAULT as soon as any level is missing or not a map. The last
+    /// argument is always the default, not a key.
+    /// </summary>
     public static object? Dig(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
         var args = tokens.Skip(1).Select(t => eval.EvaluateToken(t, context)).ToList();
@@ -126,6 +154,11 @@ internal static class DictFunctions
         return current;
     }
 
+    /// <summary>
+    /// Sprig <c>index</c>: multi-level lookup — each remaining argument is resolved
+    /// and used to index the previous result (map key or list index). Missing
+    /// intermediate values yield null rather than an error.
+    /// </summary>
     public static object? Index(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
         var value = pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(1), context);
@@ -137,6 +170,7 @@ internal static class DictFunctions
         return value;
     }
 
+    /// <summary>Sprig <c>get</c>: single-key map lookup; returns null when the key is absent (unlike direct <c>.key</c> access which errors).</summary>
     public static object? Get(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
         var dict = pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(1), context);
@@ -146,6 +180,7 @@ internal static class DictFunctions
         return IndexOne(dict, key);
     }
 
+    /// <summary>Sprig <c>hasKey</c>: true when the map contains the key (case-insensitive key comparison).</summary>
     public static bool HasKey(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
         var dict = pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(1), context);
@@ -160,6 +195,11 @@ internal static class DictFunctions
         };
     }
 
+    /// <summary>
+    /// Sprig <c>lookup</c>: in managed (non-cluster) mode this always returns an empty
+    /// dict — no live cluster access happens during template rendering. Templates that
+    /// branch on lookup results will see "resource not found" behavior.
+    /// </summary>
     public static object? Lookup(IReadOnlyList<string> tokens, TemplateContext context, IEvaluationContext eval)
     {
         // In managed mode, return empty dict — no cluster access during template rendering
@@ -168,6 +208,12 @@ internal static class DictFunctions
 
     // ── Helpers ──
 
+    /// <summary>
+    /// Single-step indexing used by <c>index</c>/<c>get</c>/<c>dig</c>. Keys are
+    /// matched by their string form: map keys directly, lists by zero-based integer
+    /// index. Out-of-range or non-numeric list keys yield null, matching Go's
+    /// missing-key behavior in templates rather than panicking.
+    /// </summary>
     internal static object? IndexOne(object? value, object? key)
     {
         var keyString = TypeConverters.ToTemplateString(key);

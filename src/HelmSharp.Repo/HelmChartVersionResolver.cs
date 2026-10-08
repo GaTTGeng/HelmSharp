@@ -2,8 +2,18 @@ using System.Text.RegularExpressions;
 
 namespace HelmSharp.Repo;
 
+/// <summary>
+/// Resolves chart versions against SemVer constraint ranges using the same syntax
+/// Helm accepts in Chart.yaml dependency versions (Masterminds/semver style):
+/// comparison operators, hyphen ranges, wildcards, tilde/caret ranges, and
+/// comma-separated conjunctions joined by <c>||</c> alternatives.
+/// </summary>
 internal static class HelmChartVersionResolver
 {
+    /// <summary>
+    /// Picks the highest chart version satisfying <paramref name="constraint"/>.
+    /// When the constraint is not a valid range it is treated as an exact version string.
+    /// </summary>
     public static HelmChartVersion? Resolve(
         IEnumerable<HelmChartVersion> versions,
         string? constraint)
@@ -14,6 +24,10 @@ internal static class HelmChartVersionResolver
         return selected?.Value;
     }
 
+    /// <summary>
+    /// Picks the highest version string satisfying <paramref name="constraint"/>.
+    /// Same resolution rules as <see cref="Resolve"/>.
+    /// </summary>
     public static string? ResolveVersion(
         IEnumerable<string> versions,
         string? constraint)
@@ -24,6 +38,10 @@ internal static class HelmChartVersionResolver
         return selected?.Value;
     }
 
+    /// <summary>
+    /// Orders two version strings SemVer-first. Unparseable versions sort before
+    /// parseable ones and fall back to ordinal string comparison between themselves.
+    /// </summary>
     public static int CompareVersions(string left, string right)
     {
         var leftParsed = SemanticVersion.TryParse(left, out var leftVersion);
@@ -38,6 +56,10 @@ internal static class HelmChartVersionResolver
         return string.CompareOrdinal(left, right);
     }
 
+    /// <summary>
+    /// Returns whether a single version satisfies the constraint. Unparseable
+    /// constraints and versions do not satisfy.
+    /// </summary>
     public static bool Satisfies(string version, string? constraint)
     {
         var candidate = new Candidate<string>(version, version, 0);
@@ -51,6 +73,9 @@ internal static class HelmChartVersionResolver
         string? constraint)
     {
         var candidateList = candidates.ToList();
+        // Chart.yaml "version: 1.2.3" without range syntax is an exact pin; only
+        // strings that fail range parsing take this path. Empty constraint selects
+        // nothing here — callers wanting "latest" must pass a range or null handling.
         if (!TryParseConstraint(constraint, out var parsedConstraint))
         {
             var exact = constraint?.Trim();
@@ -59,6 +84,8 @@ internal static class HelmChartVersionResolver
                 : candidateList.FirstOrDefault(candidate => candidate.Version.Equals(exact, StringComparison.Ordinal));
         }
 
+        // Highest satisfying version wins; equal versions keep index order (stable
+        // across repository entry order) to match Helm's selection on ties.
         return candidateList
             .Where(candidate => candidate.SemanticVersion is not null)
             .Where(candidate => parsedConstraint.IsSatisfiedBy(candidate.SemanticVersion!))
@@ -69,12 +96,23 @@ internal static class HelmChartVersionResolver
 
     private static bool TryParseConstraint(string? constraint, out VersionConstraint parsed)
     {
+        // Constraint grammar pipeline:
+        //   1. Split on "||" into alternative groups (union at satisfy time).
+        //   2. Each group is either a hyphen range ("1.2 - 2") or a conjunction of
+        //      comparator tokens (commas/spaces are equivalent separators).
+        //   3. Tokens are re-joined with detached operators (">= 1.2"), then tilde,
+        //      caret, wildcard, and partial versions desugar into comparator pairs.
+        //   4. Satisfy: a candidate passes when any group's comparators all hold;
+        //      prerelease exclusion is decided per group (see ConstraintGroup).
+        // A blank constraint means "any stable release" (prereleases excluded unless
+        // a comparator mentions one), matching Helm/Masterminds default behavior.
         if (string.IsNullOrWhiteSpace(constraint))
         {
             parsed = VersionConstraint.AnyStable;
             return true;
         }
 
+        // "||" separates alternatives (union); within a group, tokens are AND-ed.
         var groups = new List<ConstraintGroup>();
         foreach (var groupText in constraint.Split("||", StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
         {
@@ -113,6 +151,8 @@ internal static class HelmChartVersionResolver
 
     private static bool TryParseHyphenRange(string text, out ConstraintGroup group)
     {
+        // Hyphen range "1.2.3 - 2.3.4" is inclusive on both ends; the bounds are
+        // re-fed through comparator parsing so partial bounds work ("1.2 - 2").
         var match = Regex.Match(text, @"^\s*(?<min>\S+)\s+-\s+(?<max>\S+)\s*$", RegexOptions.CultureInvariant);
         if (!match.Success)
         {
@@ -134,6 +174,8 @@ internal static class HelmChartVersionResolver
 
     private static IEnumerable<string> ExpandComparatorTokens(string text)
     {
+        // Ranges may write the operator detached from the version (">= 1.2.3");
+        // re-join operator tokens with the token that follows them.
         var rawTokens = text
             .Replace(",", " ", StringComparison.Ordinal)
             .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -155,6 +197,7 @@ internal static class HelmChartVersionResolver
     private static bool TryAppendComparators(string token, List<Comparator> comparators)
     {
         token = token.Trim();
+        // Bare "*" / "x" constrain nothing; they exist so "1.x || *" parses.
         if (token is "*" or "x" or "X")
             return true;
 
@@ -171,6 +214,8 @@ internal static class HelmChartVersionResolver
         if (ContainsCoreWildcard(versionText))
             return TryAppendWildcardRange(operatorText, versionText, comparators);
 
+        // Partial versions ("1", "1.2") expand to the corresponding range rather
+        // than a pinned equality, unless compared as a prerelease-carrying version.
         if (!TryParseConstraintVersion(versionText, out var version, out var specifiedParts))
             return false;
 
@@ -383,6 +428,8 @@ internal static class HelmChartVersionResolver
 
     private static bool TryAppendTildeRange(string versionText, List<Comparator> comparators)
     {
+        // Tilde: patch-level changes when minor is specified ("~1.2.3" -> >=1.2.3 <1.3.0),
+        // minor-level when only major is ("~1.2" -> >=1.2 <1.3, "~1" -> >=1 <2).
         if (!TryParseVersionPattern(versionText, out var lower, out var specifiedParts, out _))
             return false;
 
@@ -397,6 +444,8 @@ internal static class HelmChartVersionResolver
 
     private static bool TryAppendCaretRange(string versionText, List<Comparator> comparators)
     {
+        // Caret allows changes that do not modify the left-most non-zero digit:
+        // "^1.2.3" -> >=1.2.3 <2.0.0, "^0.2.3" -> >=0.2.3 <0.3.0, "^0.0.3" -> >=0.0.3 <0.0.4.
         if (!TryParseVersionPattern(versionText, out var lower, out var specifiedParts, out _))
             return false;
 
@@ -461,6 +510,8 @@ internal static class HelmChartVersionResolver
 
     private sealed record ConstraintGroup(IReadOnlyList<Comparator> Comparators)
     {
+        // Masterminds/semver rule: a prerelease version only satisfies a group when
+        // that group itself mentions a prerelease; otherwise "1.2.3-beta" is excluded.
         private bool AllowsPrerelease { get; } = Comparators.Any(comparator => comparator.Version.HasPrerelease);
 
         public bool IsSatisfiedBy(SemanticVersion version)
@@ -474,6 +525,9 @@ internal static class HelmChartVersionResolver
         SemanticVersion? UpperBound = null,
         bool AllowsPrereleaseInsideRange = false)
     {
+        // *Core* operators compare major.minor.patch only: the upper bound of a range
+        // ("<1.3.0" from "~1.2") must reject the next core's prereleases ("1.3.0-beta")
+        // that a plain LessThan would incorrectly allow past the boundary.
         public bool IsSatisfiedBy(SemanticVersion version)
         {
             var comparison = SemanticVersionComparer.Instance.Compare(version, Version);

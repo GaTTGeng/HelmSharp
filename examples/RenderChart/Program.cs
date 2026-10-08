@@ -1,8 +1,11 @@
+// Demonstrates offline chart rendering: load a chart (directory or .tgz), merge --set
+// style values, render the manifest, then print NOTES.txt when present.
 using HelmSharp.Chart;
 using HelmSharp.Engine;
 
 var requestedChartPath = args.Length > 0
     ? args[0]
+    // Fall back to examples/sample-chart relative to the binary output directory.
     : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "sample-chart"));
 var chartPath = ResolveChartPath(requestedChartPath);
 
@@ -52,6 +55,7 @@ if (!string.IsNullOrWhiteSpace(notes))
     Console.WriteLine(notes);
 }
 
+// Accepts a chart directory, .tgz, or .tar.gz; bare paths also try those archive extensions.
 static string? ResolveChartPath(string path)
 {
     var fullPath = Path.GetFullPath(path);

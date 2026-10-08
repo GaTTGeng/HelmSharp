@@ -1,7 +1,11 @@
+// Demonstrates install/upgrade of a release through HelmClient. Safe by default:
+// runs as a dry-run unless --apply is passed, so no cluster changes happen by accident.
+// Usage: InstallRelease [chart-path] [release-name] [--apply]
 using HelmSharp.Action;
 
 var chartPath = args.Length > 0
     ? args[0]
+    // Fall back to examples/sample-chart relative to the binary output directory.
     : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "sample-chart"));
 var releaseName = args.Length > 1 ? args[1] : "demo";
 var dryRun = !args.Contains("--apply", StringComparer.OrdinalIgnoreCase);
@@ -42,6 +46,7 @@ else
     Console.WriteLine("Dry run completed. Pass --apply to submit resources to the configured Kubernetes cluster.");
 }
 
+// Minimal options provider pinned to the "default" namespace and a fixed field manager.
 sealed class StaticHelmOptionsProvider : IHelmOptionsProvider
 {
     public ValueTask<HelmExecutionOptions> GetHelmAsync(CancellationToken cancellationToken = default)

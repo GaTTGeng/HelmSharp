@@ -5,6 +5,12 @@ namespace HelmSharp.Engine;
 /// </summary>
 internal static class TypeFunctions
 {
+    /// <summary>
+    /// Sprig <c>kindOf</c>: Go-style kind name for a value
+    /// (<c>nil</c>, <c>bool</c>, <c>int64</c>, <c>float64</c>, <c>string</c>,
+    /// <c>slice</c>, <c>map</c>, <c>invalid</c>). Numeric C# types are normalized
+    /// to Go's canonical <c>int64</c>/<c>float64</c> kinds.
+    /// </summary>
     public static string KindOf(object? value)
         => value switch
         {
@@ -19,6 +25,10 @@ internal static class TypeFunctions
             _ => "invalid"
         };
 
+    /// <summary>
+    /// Sprig <c>deepEqual</c>: structural equality for nested maps/slices.
+    /// Doubles are compared with a small epsilon so JSON round-trips compare equal.
+    /// </summary>
     public static bool DeepEquals(object? a, object? b)
     {
         if (a is null && b is null) return true;
@@ -48,6 +58,12 @@ internal static class TypeFunctions
         return a.Equals(b);
     }
 
+    /// <summary>
+    /// Sprig <c>typeIs</c>: true when the second argument's Go type name matches
+    /// the first. Go type names are used verbatim (<c>"int"</c>, <c>"float64"</c>,
+    /// <c>"[]interface {}"</c>, <c>"map[string]interface {}"</c>, <c>"nil"</c>).
+    /// When invoked through a pipeline, the pipeline value is the checked value.
+    /// </summary>
     public static bool TypeIs(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
         var typeName = TypeConverters.ToTemplateString(HelmTemplateRenderer.EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
@@ -65,9 +81,15 @@ internal static class TypeFunctions
         };
     }
 
+    /// <summary>
+    /// Sprig <c>typeIsLike</c>: same matching rules as <see cref="TypeIs"/>.
+    /// Sprig treats Go's <c>reflect.Type.String()</c> equality identically for both;
+    /// kept separate so call sites document intent.
+    /// </summary>
     public static bool TypeIsLike(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
         => TypeIs(tokens, context, pipelineValue);
 
+    /// <summary>Sprig <c>kindIs</c>: compares the value's <see cref="KindOf"/> against the given kind name.</summary>
     public static bool KindIs(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
         var kind = TypeConverters.ToTemplateString(HelmTemplateRenderer.EvaluateTokenStatic(tokens.ElementAtOrDefault(1), context));
@@ -75,6 +97,11 @@ internal static class TypeFunctions
         return KindOf(val) == kind;
     }
 
+    /// <summary>
+    /// Ordering for <c>lt</c>/<c>gt</c>/<c>le</c>/<c>ge</c>: numbers compare numerically,
+    /// everything else falls back to ordinal string comparison of their template
+    /// representations. Nulls sort first.
+    /// </summary>
     public static int CompareValues(object? a, object? b)
     {
         if (a is null && b is null) return 0;
@@ -86,6 +113,11 @@ internal static class TypeFunctions
         return string.Compare(TypeConverters.ToTemplateString(a), TypeConverters.ToTemplateString(b), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Sprig <c>len</c>: character count for strings, element count for collections,
+    /// and 0 for everything else (including null) — matching Go's template <c>len</c>
+    /// which reports 0 for types without a length rather than failing.
+    /// </summary>
     public static int GetLength(object? value)
         => value switch
         {

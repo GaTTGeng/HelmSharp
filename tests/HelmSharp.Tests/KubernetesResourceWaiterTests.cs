@@ -4,6 +4,10 @@ using k8s.Autorest;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Resource waiter: timeout validation, polling only waitable resources in the target
+/// namespace, job waiting behind a flag, and deterministic timeout errors carrying resource identity.
+/// </summary>
 public sealed class KubernetesResourceWaiterTests
 {
     [Fact]

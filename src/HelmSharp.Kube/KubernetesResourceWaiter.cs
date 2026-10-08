@@ -46,6 +46,13 @@ public sealed class KubernetesResourceWaiter
     /// <summary>
     /// Waits for all resources in the manifest to become ready.
     /// </summary>
+    /// <param name="manifest">Multi-document YAML manifest whose waitable kinds are polled.</param>
+    /// <param name="defaultNamespace">Namespace used when a document omits <c>metadata.namespace</c>.</param>
+    /// <param name="waitForJobs">When true, Jobs must reach Complete; otherwise Jobs are treated as ready immediately.</param>
+    /// <param name="cancellationToken">Cancels polling.</param>
+    /// <returns>Progress lines as resources become ready.</returns>
+    /// <exception cref="TimeoutException">Thrown when resources are still pending at the deadline; the message lists each resource's last observed status.</exception>
+    /// <exception cref="InvalidOperationException">Thrown when any resource reaches a terminal failed state.</exception>
     public async IAsyncEnumerable<string> WaitForReadyAsync(
         string manifest,
         string defaultNamespace,
@@ -55,6 +62,7 @@ public sealed class KubernetesResourceWaiter
         var deadline = _timeProvider.GetUtcNow().AddSeconds(_timeoutSeconds);
         var identities = new List<ManifestIdentity>();
 
+        // Stage 1: parse manifest documents into identities (unparseable docs are skipped).
         foreach (var doc in KubernetesManifestApplier.SplitDocumentsPublic(manifest))
         {
             var identity = ManifestIdentity.Parse(doc, defaultNamespace);
@@ -62,6 +70,7 @@ public sealed class KubernetesResourceWaiter
                 identities.Add(identity);
         }
 
+        // Stage 2: keep only waitable kinds; inert config objects never block --wait.
         var waitable = identities
             .Where(id => IsWaitableKind(id.Kind))
             .ToList();
@@ -77,9 +86,13 @@ public sealed class KubernetesResourceWaiter
         var pending = new HashSet<string>(waitable.Select(id => id.DisplayName));
         var failed = new HashSet<string>();
         var lastStatuses = new Dictionary<string, string>();
+        // Poll strategy: fixed 3s cadence matching Helm's --wait loop; transient API
+        // read errors are tolerated and back off up to 30s, but a run of more than 10
+        // consecutive failures aborts instead of burning the whole timeout on a dead API.
         var pollInterval = TimeSpan.FromSeconds(3);
         var consecutiveErrors = 0;
 
+        // Stage 3: poll every still-pending resource until ready, failed, or the deadline.
         while (pending.Count > 0 && _timeProvider.GetUtcNow() < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -97,6 +110,7 @@ public sealed class KubernetesResourceWaiter
                 }
                 catch (HttpOperationException ex) when ((int)ex.Response.StatusCode == 404)
                 {
+                    // Not found yet — the apply may still be creating the object.
                     consecutiveErrors = 0;
                     lastStatuses[id.DisplayName] = "Resource not found yet";
                     continue;
@@ -157,6 +171,8 @@ public sealed class KubernetesResourceWaiter
             }
         }
 
+        // Stage 4: settle — terminal failures are reported first; otherwise any
+        // resource still pending at the deadline becomes a timeout with diagnostics.
         if (failed.Count > 0)
         {
             throw new InvalidOperationException($"Resources failed: {string.Join(", ", failed)}");
@@ -164,6 +180,8 @@ public sealed class KubernetesResourceWaiter
 
         if (pending.Count > 0)
         {
+            // Timeout diagnostics: attach each pending resource's last observed status
+            // so the message shows where the rollout stalled, not just what is left.
             var timeoutMsg = $"Timed out after {_timeoutSeconds}s waiting for: {string.Join(", ", pending)}";
             var statuses = pending
                 .Where(lastStatuses.ContainsKey)
@@ -177,7 +195,14 @@ public sealed class KubernetesResourceWaiter
         yield return $"All {waitable.Count} resources are ready";
     }
 
-    /// <summary>Waits for all resources targeted by the manifest applier to disappear after deletion.</summary>
+    /// <summary>
+    /// Waits for all resources targeted by the manifest applier to disappear after deletion.
+    /// </summary>
+    /// <param name="manifest">Multi-document YAML manifest of the deleted release.</param>
+    /// <param name="defaultNamespace">Namespace used when a document omits <c>metadata.namespace</c>.</param>
+    /// <param name="cancellationToken">Cancels polling.</param>
+    /// <returns>Progress lines as resources disappear.</returns>
+    /// <exception cref="TimeoutException">Thrown when resources still exist at the deadline.</exception>
     public async IAsyncEnumerable<string> WaitForDeletedAsync(
         string manifest,
         string defaultNamespace,
@@ -214,6 +239,8 @@ public sealed class KubernetesResourceWaiter
                 catch (Exception ex) when (ex is KubernetesApiResourceNotFoundException or
                                            KubernetesApiResourceUnsupportedException)
                 {
+                    // The kind itself is gone (CRD deleted, or a kind this client
+                    // cannot address) — nothing left to wait for, so count as deleted.
                     pending.Remove(state);
                     deleted.Add(state.Identity.DisplayName);
                 }
@@ -241,6 +268,9 @@ public sealed class KubernetesResourceWaiter
     {
         if (state.ScopeResolved)
             return;
+        // Prefer the static typed scope table (no discovery round-trip); discovery is
+        // only needed for CRs and other unknown kinds. Cluster-scoped kinds drop the
+        // namespace so the subsequent existence read targets the cluster scope.
         if (KubernetesManifestApplier.TryGetTypedResourceScope(state.Identity, out _))
         {
             state.Identity = KubernetesManifestApplier.NormalizeTypedIdentity(state.Identity);
@@ -357,6 +387,9 @@ public sealed class KubernetesResourceWaiter
         bool waitForJobs,
         CancellationToken ct)
     {
+        // Readiness dispatch. Kinds without a meaningful readiness condition
+        // (ConfigMap, Secret, Service, Ingress, CronJob, ...) report ready immediately;
+        // only workload/volume kinds with real status conditions are polled.
         return (identity.ApiVersion, identity.Kind) switch
         {
             ("apps/v1", "Deployment") => await CheckDeploymentAsync(identity.Name, ns, ct),
@@ -364,6 +397,8 @@ public sealed class KubernetesResourceWaiter
             ("apps/v1", "DaemonSet") => await CheckDaemonSetAsync(identity.Name, ns, ct),
             ("apps/v1", "ReplicaSet") => await CheckReplicaSetAsync(identity.Name, ns, ct),
             ("batch/v1", "Job") => waitForJobs
+                // Helm's default is not to wait for Jobs; the flag promotes Job
+                // completion to a readiness requirement when requested.
                 ? await CheckJobAsync(identity.Name, ns, ct)
                 : (true, false, ""),
             ("batch/v1", "CronJob") => (true, false, ""),
@@ -378,6 +413,7 @@ public sealed class KubernetesResourceWaiter
             ("networking.k8s.io/v1", "Ingress") => (true, false, ""),
             ("autoscaling/v2", "HorizontalPodAutoscaler") => await CheckHpaAsync(identity.Name, ns, ct),
             ("autoscaling/v1", "HorizontalPodAutoscaler") => (true, false, ""),
+            // Unknown kinds expose no readiness signal — treated as ready, matching Helm.
             _ => (true, false, "")
         };
     }
@@ -385,6 +421,10 @@ public sealed class KubernetesResourceWaiter
     private async Task<(bool Ready, bool Failed, string Status)> CheckDeploymentAsync(
         string name, string ns, CancellationToken ct)
     {
+        // Deployment readiness mirrors Helm/kubectl: the newest ReplicaSet whose pod
+        // template matches (ignoring the controller-added pod-template-hash label) must
+        // have at least desired - maxUnavailable ready replicas. Paused deployments
+        // are complete by definition, and a stale observedGeneration is not ready.
         var deploy = await _client.AppsV1.ReadNamespacedDeploymentAsync(name, ns, cancellationToken: ct);
         if (deploy.Spec.Paused == true)
             return (true, false, "");
@@ -423,6 +463,10 @@ public sealed class KubernetesResourceWaiter
     private async Task<(bool Ready, bool Failed, string Status)> CheckStatefulSetAsync(
         string name, string ns, CancellationToken ct)
     {
+        // StatefulSet readiness: every replica ready, the rolled-out (partitioned)
+        // portion updated, and — when partition is 0 — current and update revisions
+        // equal so the roll is fully converged. Non-RollingUpdate strategies have no
+        // roll to wait for.
         var sts = await _client.AppsV1.ReadNamespacedStatefulSetAsync(name, ns, cancellationToken: ct);
         if ((sts.Status?.ObservedGeneration ?? 0) != (sts.Metadata.Generation ?? 0))
             return (false, false, "StatefulSet controller has not observed the current generation");
@@ -455,6 +499,8 @@ public sealed class KubernetesResourceWaiter
     private async Task<(bool Ready, bool Failed, string Status)> CheckDaemonSetAsync(
         string name, string ns, CancellationToken ct)
     {
+        // DaemonSet readiness: all scheduled nodes run the updated pod, and ready
+        // count meets desired - maxUnavailable (default 1, matching the controller).
         var ds = await _client.AppsV1.ReadNamespacedDaemonSetAsync(name, ns, cancellationToken: ct);
         if ((ds.Status?.ObservedGeneration ?? 0) != (ds.Metadata.Generation ?? 0))
             return (false, false, "DaemonSet controller has not observed the current generation");
@@ -487,6 +533,8 @@ public sealed class KubernetesResourceWaiter
     private async Task<(bool Ready, bool Failed, string Status)> CheckReplicaSetAsync(
         string name, string ns, CancellationToken ct)
     {
+        // ReplicaSet readiness is pod-level: every pod matching its selector must
+        // report Ready=True (there is no richer ReplicaSet status condition).
         var rs = await _client.AppsV1.ReadNamespacedReplicaSetAsync(name, ns, cancellationToken: ct);
         if ((rs.Status?.ObservedGeneration ?? 0) != (rs.Metadata.Generation ?? 0))
             return (false, false, "ReplicaSet controller has not observed the current generation");
@@ -505,6 +553,8 @@ public sealed class KubernetesResourceWaiter
     private async Task<(bool Ready, bool Failed, string Status)> CheckReplicationControllerAsync(
         string name, string ns, CancellationToken ct)
     {
+        // Same pod-level readiness as ReplicaSet; an RC selector is plain labels
+        // (matchLabels only), so it is adapted to a label selector for the pod list.
         var controller = await _client.CoreV1.ReadNamespacedReplicationControllerAsync(name, ns, cancellationToken: ct);
         if ((controller.Status?.ObservedGeneration ?? 0) != (controller.Metadata.Generation ?? 0))
             return (false, false, "ReplicationController has not observed the current generation");
@@ -584,6 +634,10 @@ public sealed class KubernetesResourceWaiter
 
     private static int ResolveDeploymentMaxUnavailable(V1Deployment deployment, int desired)
     {
+        // Recreate (and desired == 0) never tolerates unavailable replicas. RollingUpdate
+        // defaults match the API: surge 25% rounded up, unavailable 25% rounded down.
+        // The API forbids surge and unavailable both being zero, so force one unavailable
+        // to let the roll make progress; the result is also clamped to desired.
         if (deployment.Spec.Strategy?.Type == "Recreate" || desired == 0)
             return 0;
 
@@ -612,6 +666,10 @@ public sealed class KubernetesResourceWaiter
         int defaultValue,
         int? invalidValueFallback = null)
     {
+        // IntOrString resolution: ints pass through; "N%" scales by total using the
+        // caller's rounding direction (surge rounds up, unavailable rounds down).
+        // Unparseable or absent values fall back per policy: invalidValueFallback
+        // when supplied (fail-safe like "treat as fully unavailable"), else defaultValue.
         if (value is null)
             return defaultValue;
 
@@ -637,6 +695,8 @@ public sealed class KubernetesResourceWaiter
     private async Task<(bool Ready, bool Failed, string Status)> CheckJobAsync(
         string name, string ns, CancellationToken ct)
     {
+        // Job readiness: Complete condition wins; a Failed condition or failures
+        // reaching backoffLimit is terminal failure rather than a timeout later.
         var job = await _client.BatchV1.ReadNamespacedJobAsync(name, ns, cancellationToken: ct);
         var conditions = job.Status?.Conditions;
 
@@ -663,6 +723,8 @@ public sealed class KubernetesResourceWaiter
     private async Task<(bool Ready, bool Failed, string Status)> CheckPodAsync(
         string name, string ns, CancellationToken ct)
     {
+        // Pod readiness is the Ready condition; Failed phase and CrashLoopBackOff are
+        // terminal so a crash-looping pod fails the wait instead of timing out.
         var pod = await _client.CoreV1.ReadNamespacedPodAsync(name, ns, cancellationToken: ct);
         var phase = pod.Status?.Phase;
 
@@ -689,6 +751,7 @@ public sealed class KubernetesResourceWaiter
     private async Task<(bool Ready, bool Failed, string Status)> CheckPvcAsync(
         string name, string ns, CancellationToken ct)
     {
+        // PVC is ready when Bound; Lost is terminal (the volume will not bind).
         var pvc = await _client.CoreV1.ReadNamespacedPersistentVolumeClaimAsync(name, ns, cancellationToken: ct);
         if (pvc.Status?.Phase == "Bound")
             return (true, false, "");
@@ -702,6 +765,8 @@ public sealed class KubernetesResourceWaiter
     private async Task<(bool Ready, bool Failed, string Status)> CheckEndpointsAsync(
         string name, string ns, CancellationToken ct)
     {
+        // Endpoints are ready once at least one subset has ready addresses —
+        // the signal that a Service's backing pods have registered.
         var endpoints = await _client.CoreV1.ReadNamespacedEndpointsAsync(name, ns, cancellationToken: ct);
         var subsets = endpoints.Subsets;
         if (subsets is null || subsets.Count == 0)
@@ -717,6 +782,8 @@ public sealed class KubernetesResourceWaiter
     private async Task<(bool Ready, bool Failed, string Status)> CheckHpaAsync(
         string name, string ns, CancellationToken ct)
     {
+        // HPA readiness is ScalingActive=True; ScalingActive=False (for example
+        // missing metrics) is terminal because retrying will not fix it.
         var hpa = await _client.AutoscalingV2.ReadNamespacedHorizontalPodAutoscalerAsync(name, ns, cancellationToken: ct);
         var conditions = hpa.Status?.Conditions;
         if (conditions is null)
@@ -732,6 +799,8 @@ public sealed class KubernetesResourceWaiter
         return (false, false, "HPA initializing");
     }
 
+    // Only kinds with a real readiness condition are waitable; everything else in the
+    // manifest is ignored here so --wait never blocks on inert config objects.
     private static bool IsWaitableKind(string kind)
         => kind is "Deployment" or "StatefulSet" or "DaemonSet" or "ReplicaSet"
             or "Job" or "Pod" or "PersistentVolumeClaim" or "Endpoints"

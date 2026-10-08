@@ -6,23 +6,38 @@ using k8s.Models;
 
 namespace HelmSharp.Release;
 
+/// <summary>
+/// Stores release revisions as Kubernetes Secrets in Helm v3 layout:
+/// type <c>helm.sh/release.v1</c>, name <c>sh.helm.release.v1.&lt;name&gt;.v&lt;revision&gt;</c>,
+/// payload Base64(gzip(JSON)) under the <c>release</c> data key.
+/// </summary>
 public sealed class HelmReleaseStore
 {
     private readonly k8s.Kubernetes _client;
 
+    /// <param name="client">Kubernetes client used for Secret reads and writes.</param>
     public HelmReleaseStore(k8s.Kubernetes client)
     {
         _client = client;
     }
 
+    /// <summary>
+    /// Returns the next revision number for a release (max stored revision + 1, or 1 when empty).
+    /// </summary>
     public async Task<int> NextRevisionAsync(string name, string ns, CancellationToken cancellationToken)
     {
         var history = await HistoryAsync(name, ns, cancellationToken);
         return history.Count == 0 ? 1 : history.Max(x => x.Revision) + 1;
     }
 
+    /// <summary>
+    /// Writes a release revision, replacing its existing Secret when present and creating it otherwise.
+    /// </summary>
     public async Task SaveAsync(HelmReleaseRecord record, CancellationToken cancellationToken)
     {
+        // One Secret per (release, revision) named sh.helm.release.v1.<name>.v<rev>.
+        // Upsert: replace carries the prior resourceVersion so a concurrent writer
+        // conflicts instead of silently clobbering the revision.
         var secretName = SecretName(record.Name, record.Revision);
         try
         {
@@ -112,12 +127,24 @@ public sealed class HelmReleaseStore
         return true;
     }
 
+    /// <summary>
+    /// Lists the latest active revision per release in a namespace (or all namespaces).
+    /// Only revisions with status <c>deployed</c> count as active.
+    /// </summary>
+    /// <param name="ns">Namespace to search; ignored when <paramref name="allNamespaces"/> is true.</param>
+    /// <param name="allNamespaces">Search every namespace via the <c>owner=helm</c> label selector.</param>
+    /// <param name="cancellationToken">Cancels Secret list calls.</param>
     public async Task<List<HelmReleaseRecord>> ListAsync(string? ns, bool allNamespaces, CancellationToken cancellationToken)
     {
+        // Label selector owner=helm is the index Helm keeps on release Secrets; it
+        // lets one list call find every release without enumerating secret names.
         var secrets = allNamespaces
             ? await _client.CoreV1.ListSecretForAllNamespacesAsync(labelSelector: "owner=helm", cancellationToken: cancellationToken)
             : await _client.CoreV1.ListNamespacedSecretAsync(ns ?? "default", labelSelector: "owner=helm", cancellationToken: cancellationToken);
 
+        // Revision supersede model: among each release's revisions only "deployed"
+        // counts as active, and the highest of those wins — superseded and
+        // uninstalled revisions never surface in the list.
         return secrets.Items
             .Select(ReadRecord)
             .Where(IsActiveRelease)
@@ -128,8 +155,14 @@ public sealed class HelmReleaseStore
             .ToList();
     }
 
+    /// <summary>
+    /// Returns every stored revision of a release ordered by revision number,
+    /// including superseded and uninstalled revisions.
+    /// </summary>
     public async Task<List<HelmReleaseRecord>> HistoryAsync(string name, string ns, CancellationToken cancellationToken)
     {
+        // name=<release> narrows the owner=helm set to one release's full revision
+        // chain (history is append-only and keeps superseded/uninstalled revisions).
         var secrets = await _client.CoreV1.ListNamespacedSecretAsync(
             ns,
             labelSelector: $"owner=helm,name={name}",
@@ -141,8 +174,14 @@ public sealed class HelmReleaseStore
             .ToList();
     }
 
+    /// <summary>
+    /// Returns the highest-revision active release, or null when the release has no
+    /// deployed revision (never installed, or uninstalled).
+    /// </summary>
     public async Task<HelmReleaseRecord?> GetLatestAsync(string name, string ns, CancellationToken cancellationToken)
     {
+        // Latest active only: the supersede filter drops stale revisions and the
+        // uninstall tombstone, so a deleted release reports as absent.
         var history = await HistoryAsync(name, ns, cancellationToken);
         return history
             .Where(IsActiveRelease)
@@ -150,8 +189,16 @@ public sealed class HelmReleaseStore
             .FirstOrDefault();
     }
 
+    /// <summary>
+    /// Records an uninstall following Helm's revision model: the current revision is
+    /// marked <c>superseded</c> and a new revision with status <c>uninstalled</c>
+    /// (carrying the deletion timestamp) is appended as the tombstone.
+    /// </summary>
     public async Task MarkUninstalledAsync(HelmReleaseRecord record, CancellationToken cancellationToken)
     {
+        // Uninstall tombstone model: history is append-only. The live revision is
+        // flipped to "superseded" first, then a new revision numbered +1 with status
+        // "uninstalled" is appended as the tombstone (never a Secret deletion).
         var updatedAt = DateTimeOffset.UtcNow;
         var uninstalled = record with
         {
@@ -188,6 +235,7 @@ public sealed class HelmReleaseStore
             cancellationToken: cancellationToken);
     }
 
+    /// <summary>Updates a revision's status and timestamp and persists it.</summary>
     public async Task MarkStatusAsync(HelmReleaseRecord record, string status, CancellationToken cancellationToken)
     {
         record.Status = status;
@@ -201,6 +249,8 @@ public sealed class HelmReleaseStore
         var secretName = secret.Metadata?.Name ?? "<unknown>";
         var namespaceName = secret.Metadata?.NamespaceProperty ?? "default";
 
+        // Helm v3 payload key is "release" (Base64(gzip(JSON))). A "release.json"
+        // key indicates a legacy HelmSharp layout kept readable for migration.
         if (TryGetPayload(secret, "release", out var helmPayload))
         {
             try
@@ -242,6 +292,9 @@ public sealed class HelmReleaseStore
         DateTimeOffset timestamp)
     {
         ArgumentNullException.ThrowIfNull(record);
+        // System labels (name/owner/status/version/createdAt/modifiedAt) are managed
+        // here and filtered out of user-visible labels on read; custom labels from the
+        // existing Secret and the record are preserved across rewrites.
         var labels = new Dictionary<string, string>(StringComparer.Ordinal);
         MergeCustomLabels(labels, existing?.Metadata?.Labels);
         MergeCustomLabels(labels, record.Labels);
@@ -309,6 +362,8 @@ public sealed class HelmReleaseStore
         }
     }
 
+    // Helm v3 Secret naming scheme; `helm ls` / `helm history` discover revisions
+    // only through this exact name shape and the owner=helm label.
     internal static string SecretName(string releaseName, int revision)
         => $"sh.helm.release.v1.{releaseName}.v{revision}";
 

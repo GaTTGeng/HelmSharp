@@ -7,12 +7,20 @@ using YamlDotNet.RepresentationModel;
 
 namespace HelmSharp.Chart;
 
+/// <summary>
+/// YAML parse/serialize helpers tuned for Helm parity: go-yaml v3 scalar typing,
+/// merge keys, deterministic key ordering, and Go-style null marshaling.
+/// </summary>
 public static class HelmYaml
 {
     private static readonly ISerializer Serializer = new SerializerBuilder()
         .WithTypeConverter(new QuotedYamlStringConverter())
         .Build();
 
+    /// <summary>
+    /// Deserializes a YAML mapping into a case-insensitive dictionary.
+    /// Returns an empty map for null, empty, or non-mapping documents.
+    /// </summary>
     public static Dictionary<string, object?> DeserializeDictionary(string? yaml)
     {
         if (string.IsNullOrWhiteSpace(yaml))
@@ -82,7 +90,9 @@ public static class HelmYaml
             }
         }
 
-        // Apply merges first (lower precedence — explicit keys win)
+        // Apply merges first (lower precedence — explicit keys win). When a merge
+        // sequence supplies the same key more than once, the later source map
+        // overwrites the earlier one within this merge layer.
         foreach (var merged in merges)
         {
             foreach (var (k, v) in merged)
@@ -165,12 +175,18 @@ public static class HelmYaml
             return octal;
         if (long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var integer))
             return integer;
+        // Only treat as float when a fraction/exponent marker is present, so bare
+        // numeric-looking tokens that failed the long parse stay strings.
         if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) &&
             value.Any(c => c is '.' or 'e' or 'E'))
             return number;
         return value;
     }
 
+    /// <summary>
+    /// Serializes a value to YAML matching Helm/Go output shape: map keys sorted
+    /// alphabetically, ambiguous strings quoted, and null emitted as <c>null</c>.
+    /// </summary>
     public static string Serialize(object? value)
     {
         if (value is null)
@@ -203,6 +219,8 @@ public static class HelmYaml
         };
     }
 
+    // Strings that would re-parse as null/bool/number must be quoted on output so a
+    // values round-trip preserves the original string type (Helm does the same).
     private static bool NeedsQuotedString(string value)
         => value.Equals("null", StringComparison.OrdinalIgnoreCase)
            || value.Equals("~", StringComparison.Ordinal)
@@ -210,6 +228,8 @@ public static class HelmYaml
            || value.Equals("false", StringComparison.OrdinalIgnoreCase)
            || Regex.IsMatch(value, @"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$");
 
+    // Go's yaml.Marshal emits empty map values as "key: null"; YamlDotNet emits bare
+    // "key:". This rewrite restores the explicit " null" form byte-for-byte.
     private static string NormalizeNullMapScalars(string yaml)
     {
         var lines = yaml.Replace("\r\n", "\n", StringComparison.Ordinal)
@@ -244,9 +264,14 @@ public static class HelmYaml
         return string.Join('\n', lines);
     }
 
+    /// <summary>Reads a mapping entry as a string; returns null when the key is absent.</summary>
     public static string? GetString(IDictionary<string, object?> values, string key)
         => values.TryGetValue(key, out var value) ? Convert.ToString(value) : null;
 
+    /// <summary>
+    /// Converts parser-shaped graphs (object-keyed dictionaries, nested lists) into
+    /// the string-keyed dictionary / list shapes the rest of the library consumes.
+    /// </summary>
     public static object? Normalize(object? value)
     {
         return value switch
@@ -264,6 +289,7 @@ public static class HelmYaml
         };
     }
 
+    // Wrapper that forces double-quoted style for strings with ambiguous scalar meaning.
     private sealed record QuotedYamlString(string Value);
 
     private sealed class QuotedYamlStringConverter : IYamlTypeConverter

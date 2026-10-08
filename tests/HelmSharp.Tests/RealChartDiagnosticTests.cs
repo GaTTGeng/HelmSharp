@@ -8,6 +8,10 @@ namespace HelmSharp.Tests;
 /// Focused diagnostic tests for real-chart template rendering failures.
 /// Prints detailed error information to help identify parser gaps.
 /// </summary>
+/// <summary>
+/// Targeted diagnostics for specific real-chart render gaps (not pass/fail golden
+/// coverage) — used to drill into a single failing template such as ingress-nginx's PodDisruptionBudget.
+/// </summary>
 public class RealChartDiagnosticTests
 {
     private readonly ITestOutputHelper _output;

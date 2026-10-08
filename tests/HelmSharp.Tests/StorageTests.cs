@@ -4,6 +4,10 @@ using HelmSharp.Storage;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Release storage surface: optional purge capability advertisement, legacy store
+/// implementations without purge, and <c>HelmReleaseRecord</c> defaults/mutability.
+/// </summary>
 public class StorageTests
 {
     [Fact]

@@ -7,6 +7,10 @@ namespace HelmSharp.Tests;
 /// <summary>
 /// Focused tests for else-if chain reconstruction.
 /// </summary>
+/// <summary>
+/// Verifies that reconstructed <c>else if</c> chains pick the correct branch for
+/// default and matched values (a regression surface for the body-reconstruction path).
+/// </summary>
 public class ElseIfReconstructionTests
 {
     private readonly ITestOutputHelper _output;

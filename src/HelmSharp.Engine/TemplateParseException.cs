@@ -16,6 +16,14 @@ public sealed class TemplateParseException : Exception
     /// <summary>The byte offset into the template string where the error was detected.</summary>
     public int Offset { get; }
 
+    /// <summary>
+    /// Creates a parse error with a source location. The location is appended to
+    /// <paramref name="message"/> so the exception message alone is actionable.
+    /// </summary>
+    /// <param name="message">Description of the structural error.</param>
+    /// <param name="line">1-based line where the error was detected.</param>
+    /// <param name="column">1-based column where the error was detected.</param>
+    /// <param name="offset">Character offset into the template text where the error was detected.</param>
     public TemplateParseException(string message, int line, int column, int offset)
         : base(FormatMessage(message, line, column, offset))
     {
@@ -24,6 +32,7 @@ public sealed class TemplateParseException : Exception
         Offset = offset;
     }
 
+    /// <summary>Appends "at line L, column C (offset O)" to the raw message.</summary>
     private static string FormatMessage(string message, int line, int column, int offset)
         => $"{message} at line {line}, column {column} (offset {offset})";
 }

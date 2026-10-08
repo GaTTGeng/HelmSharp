@@ -8,18 +8,28 @@ namespace HelmSharp.Engine;
 /// </summary>
 internal static class EncodingHelpers
 {
+    /// <summary>
+    /// Sprig <c>b64enc</c>: standard Base64 of the UTF-8 bytes. Raw
+    /// <see cref="byte"/> arrays are encoded directly without re-encoding.
+    /// </summary>
     public static string Base64Encode(object? value)
         => Convert.ToBase64String(
             value is byte[] bytes
                 ? bytes
                 : Encoding.UTF8.GetBytes(TypeConverters.ToTemplateString(value)));
 
+    /// <summary>Sprig <c>sha1sum</c>: lowercase hex SHA-1 of the UTF-8 bytes.</summary>
     public static string Sha1Sum(string value)
     {
         var bytes = SHA1.HashData(Encoding.UTF8.GetBytes(value));
         return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 
+    /// <summary>
+    /// Sprig <c>adler32sum</c>: 8-digit hex Adler-32 checksum. Computed over
+    /// UTF-16 code units (like iterating a Go string's bytes for ASCII input);
+    /// non-ASCII input may diverge from Helm which hashes raw UTF-8 bytes.
+    /// </summary>
     public static string Adler32Sum(string value)
     {
         uint a = 1, b = 0;
@@ -31,6 +41,11 @@ internal static class EncodingHelpers
         return ((b << 16) | a).ToString("x8");
     }
 
+    /// <summary>
+    /// Sprig <c>bcrypt</c>. .NET has no BCrypt in the BCL and adding a dependency
+    /// is not justified for templating, so a SHA-256 hash is returned instead.
+    /// Charts using <c>bcrypt</c> for real password hashing will not match Helm output.
+    /// </summary>
     public static string BCryptHash(string value)
     {
         // BCrypt is not available in .NET BCL without a library.
@@ -38,6 +53,11 @@ internal static class EncodingHelpers
         return StringHelpers.Sha256Sum(value);
     }
 
+    /// <summary>
+    /// Sprig <c>b32enc</c>: RFC 4648 Base32 (alphabet A-Z2-7) of the UTF-8 bytes,
+    /// without '=' padding. Output differs from Go's padded base32.StdEncoding
+    /// for inputs whose length is not a multiple of 5.
+    /// </summary>
     public static string Base32Encode(string value)
     {
         const string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -64,6 +84,11 @@ internal static class EncodingHelpers
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Sprig <c>b32dec</c>: inverse of <see cref="Base32Encode"/>. Case-insensitive;
+    /// missing or unrecognized trailing characters are treated as zero bits, so both
+    /// padded and unpadded input decode. Invalid UTF-8 sequences are replaced, not thrown.
+    /// </summary>
     public static string Base32Decode(string value)
     {
         const string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -90,12 +115,17 @@ internal static class EncodingHelpers
         return Encoding.UTF8.GetString(bytes.ToArray());
     }
 
+    /// <summary>Sprig <c>sha512sum</c>: lowercase hex SHA-512 of the UTF-8 bytes.</summary>
     public static string Sha512Sum(string value)
     {
         var bytes = SHA512.HashData(Encoding.UTF8.GetBytes(value));
         return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 
+    /// <summary>
+    /// Sprig <c>uuidv4</c>: random RFC 4122 version-4 UUID in lowercase hyphenated form.
+    /// Uses a CSPRNG, not <see cref="Random"/>, so values are suitable for secret-like data.
+    /// </summary>
     public static string UuidV4()
     {
         var bytes = new byte[16];
@@ -111,6 +141,12 @@ internal static class EncodingHelpers
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Sprig <c>expandenv</c>: replaces <c>%NAME%</c> (Windows) and <c>$NAME</c>/<c>${NAME}</c>
+    /// style placeholders with process environment variables. Placeholder syntax follows
+    /// .NET's <see cref="Environment.ExpandEnvironmentVariables"/>, which differs from
+    /// Go's <c>os.ExpandEnv</c> (<c>$NAME</c> only) on Windows-style names.
+    /// </summary>
     public static string ExpandEnv(string input)
         => Environment.ExpandEnvironmentVariables(input);
 }

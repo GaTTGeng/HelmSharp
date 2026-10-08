@@ -3,6 +3,10 @@ using HelmSharp.Engine;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Covers <c>ApiVersionSet</c> semantics: defensive snapshotting of the input list and
+/// filtering of APIs that a given Kubernetes version has removed (1.22 / 1.25 / 1.30 deprecations).
+/// </summary>
 public class ApiVersionSetTests
 {
     [Fact]

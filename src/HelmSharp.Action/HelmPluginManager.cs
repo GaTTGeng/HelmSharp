@@ -6,10 +6,20 @@ namespace HelmSharp.Action;
 /// Manages Helm plugins — install, list, uninstall, and run.
 /// Plugins are stored in ~/.helmsharp/plugins/.
 /// </summary>
+/// <remarks>
+/// Security boundary: plugin names are strictly validated (portable ASCII, no path separators,
+/// no Windows device names) and every resolved path must stay inside the configured plugin
+/// directory. Plugin directories and entry scripts that are symlinks/reparse points are rejected
+/// so a link planted under the plugins root cannot redirect reads or execution outside it.
+/// </remarks>
 public class HelmPluginManager
 {
     private readonly string _pluginsDir;
 
+    /// <summary>
+    /// Creates a manager rooted at <paramref name="pluginsDir"/>, defaulting to
+    /// <c>~/.helmsharp/plugins</c>. The directory is created if missing.
+    /// </summary>
     public HelmPluginManager(string? pluginsDir = null)
     {
         _pluginsDir = Path.GetFullPath(pluginsDir ?? Path.Combine(
@@ -21,8 +31,12 @@ public class HelmPluginManager
     /// <summary>
     /// Installs a plugin from a URL or local directory. Plugin names must use only ASCII letters,
     /// digits, dots, underscores, and hyphens, and must begin and end with a letter or digit.
+    /// Remote sources ending in .tgz/.tar.gz are downloaded and extracted; other URLs are saved
+    /// as plugin.sh. Writes a plugin.json metadata file on success.
     /// </summary>
+    /// <returns>The full path of the installed plugin directory.</returns>
     /// <exception cref="ArgumentException"><paramref name="name"/> is not a portable plugin name.</exception>
+    /// <exception cref="InvalidOperationException">The plugin is already installed, or its directory is a symlink.</exception>
     public async Task<string> InstallAsync(string name, string source, CancellationToken ct = default)
     {
         var pluginDir = ResolvePluginDirectory(name);
@@ -31,6 +45,7 @@ public class HelmPluginManager
             throw new InvalidOperationException($"Plugin '{name}' is already installed");
 
         Directory.CreateDirectory(pluginDir);
+        // Re-check after creation in case the parent was manipulated into a link race.
         EnsurePluginDirectoryIsNotLink(pluginDir, name);
 
         if (Directory.Exists(source))
@@ -82,7 +97,8 @@ public class HelmPluginManager
     }
 
     /// <summary>
-    /// Lists installed plugins.
+    /// Lists installed plugins with metadata from plugin.json. Symlinked plugin directories
+    /// are skipped so a planted link cannot surface as a trusted plugin entry.
     /// </summary>
     public List<HelmPluginInfo> List()
     {
@@ -124,10 +140,11 @@ public class HelmPluginManager
     }
 
     /// <summary>
-    /// Uninstalls a plugin. Plugin names must use only ASCII letters, digits, dots, underscores,
-    /// and hyphens, and must begin and end with a letter or digit.
+    /// Uninstalls a plugin by deleting its directory tree. Plugin names must use only ASCII
+    /// letters, digits, dots, underscores, and hyphens, and must begin and end with a letter or digit.
     /// </summary>
     /// <exception cref="ArgumentException"><paramref name="name"/> is not a portable plugin name.</exception>
+    /// <exception cref="InvalidOperationException">The plugin is not installed, or its directory is a symlink.</exception>
     public void Uninstall(string name)
     {
         var pluginDir = ResolvePluginDirectory(name);
@@ -140,7 +157,9 @@ public class HelmPluginManager
 
     /// <summary>
     /// Runs a plugin command. Plugin names must use only ASCII letters, digits, dots, underscores,
-    /// and hyphens, and must begin and end with a letter or digit.
+    /// and hyphens, and must begin and end with a letter or digit. The entry script is resolved
+    /// from well-known names (plugin.sh, run, ...); symlinked candidates are ignored. stdout and
+    /// stderr are captured and returned with the process exit code.
     /// </summary>
     /// <exception cref="ArgumentException"><paramref name="name"/> is not a portable plugin name.</exception>
     public async Task<CommandResult> RunAsync(string name, string[] args, CancellationToken ct = default)
@@ -204,6 +223,9 @@ public class HelmPluginManager
         return null;
     }
 
+    // Resolves the plugin directory and enforces the containment boundary: the name must be
+    // portable (no separators, no traversal, no Windows device names) and the combined path
+    // must remain under _pluginsDir even after normalization.
     private string ResolvePluginDirectory(string name)
     {
         ArgumentNullException.ThrowIfNull(name);
@@ -235,6 +257,8 @@ public class HelmPluginManager
         return pluginDir;
     }
 
+    // Portable across filesystems: ASCII alphanumerics plus . _ -, starting and ending
+    // alphanumeric. Also rejects Windows reserved device stems (CON, COM1, ...).
     private static bool IsPortablePluginName(string name)
     {
         if (name.Length == 0 ||
@@ -252,6 +276,8 @@ public class HelmPluginManager
         return true;
     }
 
+    // Windows reserves CON/PRN/AUX/NUL and COM1-9/LPT1-9 regardless of extension; a plugin
+    // named after one of these cannot be materialized as a file on Windows.
     private static bool IsWindowsDeviceName(string name)
     {
         var dotIndex = name.IndexOf('.');
@@ -274,6 +300,8 @@ public class HelmPluginManager
     private static bool IsAsciiLetterOrDigit(char character) =>
         character is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9';
 
+    // Defense against link-based escape: a symlinked plugin directory could point outside
+    // the plugins root, so install/uninstall/run refuse to operate through it.
     private static void EnsurePluginDirectoryIsNotLink(string pluginDir, string name)
     {
         var directory = new DirectoryInfo(pluginDir);
@@ -285,10 +313,18 @@ public class HelmPluginManager
         entry.LinkTarget is not null || (entry.Attributes & FileAttributes.ReparsePoint) != 0;
 }
 
+/// <summary>Metadata describing an installed plugin.</summary>
 public class HelmPluginInfo
 {
+    /// <summary>Plugin directory name; the identifier used with run/uninstall.</summary>
     public string Name { get; set; } = string.Empty;
+
+    /// <summary>Version from plugin.json; "unknown" when absent or unreadable.</summary>
     public string Version { get; set; } = string.Empty;
+
+    /// <summary>Description from plugin.json; empty when absent.</summary>
     public string Description { get; set; } = string.Empty;
+
+    /// <summary>Full path of the plugin directory.</summary>
     public string Path { get; set; } = string.Empty;
 }

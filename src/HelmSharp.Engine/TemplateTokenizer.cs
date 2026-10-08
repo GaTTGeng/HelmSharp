@@ -29,6 +29,7 @@ public enum TokenKind
 /// </summary>
 public sealed class Token
 {
+    /// <summary>Structural role of this token in the template.</summary>
     public TokenKind Kind { get; set; }
 
     /// <summary>Raw text value of this token.</summary>
@@ -55,6 +56,7 @@ public sealed class Token
     /// </summary>
     public bool RightTrim { get; set; }
 
+    /// <summary>Debug-friendly token description with its source location.</summary>
     public override string ToString()
         => $"{Kind}({Value}) at {Line}:{Column}";
 }
@@ -75,6 +77,7 @@ public sealed class TemplateTokenizer
     private int _line;
     private int _col;
 
+    /// <summary>Creates a tokenizer over the raw template text.</summary>
     public TemplateTokenizer(string input)
     {
         _input = input;
@@ -161,7 +164,7 @@ public sealed class TemplateTokenizer
         if (_pos + 1 >= _input.Length || _input[_pos] != '{' || _input[_pos + 1] != '{')
             return false;
 
-        // {{-
+        // {{- : the trim marker is part of the delimiter, not the expression.
         if (_pos + 2 < _input.Length && _input[_pos + 2] == '-')
         {
             leftTrim = true;
@@ -208,7 +211,9 @@ public sealed class TemplateTokenizer
                 return (sb.ToString(), rightTrim);
             }
 
-            // Check for -}} (right trim, but not --}})
+            // Check for -}} (right trim). A preceding '-' means this is a decrement
+            // expression like {{ x--}}, not a trim marker — Go would parse `--}}` as
+            // an expression ending in `--`, so we require the previous char not be '-'.
             if (_input[_pos] == '-' &&
                 _pos + 1 < _input.Length && _input[_pos + 1] == '}' &&
                 _pos + 2 < _input.Length && _input[_pos + 2] == '}' &&
@@ -220,7 +225,8 @@ public sealed class TemplateTokenizer
                 return (sb.ToString(), rightTrim);
             }
 
-            // Skip quoted strings (don't mistake }} inside strings for delimiters)
+            // Skip quoted strings so a }} inside a string literal is not mistaken
+            // for the closing delimiter. Raw strings (` `) have no escapes.
             if (_input[_pos] is '"' or '\'' or '`')
             {
                 var quote = _input[_pos];
@@ -247,7 +253,8 @@ public sealed class TemplateTokenizer
                 continue;
             }
 
-            // Skip comments (don't mistake }} inside comments)
+            // Skip block comments so a }} inside {{/* ... */}} is not mistaken
+            // for the closing delimiter.
             if (_input[_pos] == '/' && _pos + 1 < _input.Length && _input[_pos + 1] == '*')
             {
                 sb.Append('/');

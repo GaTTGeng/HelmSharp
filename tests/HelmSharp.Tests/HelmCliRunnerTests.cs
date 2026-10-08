@@ -1,5 +1,9 @@
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Unit tests for the Helm CLI runner helpers themselves (currently line-ending
+/// normalization used by golden comparisons).
+/// </summary>
 public class HelmCliRunnerTests
 {
     [Theory]

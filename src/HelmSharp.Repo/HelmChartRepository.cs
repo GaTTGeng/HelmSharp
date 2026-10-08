@@ -27,6 +27,10 @@ public sealed class HelmChartRepository : IDisposable
     /// <summary>
     /// Creates a repository client using Helm-compatible environment settings and defaults.
     /// </summary>
+    /// <param name="cacheDir">
+    /// Optional cache and configuration directory. When null, Helm's standard cache
+    /// locations are used (<c>$HELM_CACHE_HOME</c>, then platform defaults).
+    /// </param>
     public HelmChartRepository(string? cacheDir = null)
         : this(cacheDir is null
             ? new HelmRepositoryOptions()
@@ -37,6 +41,7 @@ public sealed class HelmChartRepository : IDisposable
     /// <summary>
     /// Creates a repository client with explicit configuration and cache locations.
     /// </summary>
+    /// <param name="options">Cache/config locations and Helm environment overrides.</param>
     public HelmChartRepository(HelmRepositoryOptions options)
         : this(options, new HttpClientHandler(), CreateConfiguredRepositoryHandler)
     {
@@ -74,6 +79,13 @@ public sealed class HelmChartRepository : IDisposable
     /// - HTTP/HTTPS chart repository URLs
     /// - OCI references (oci://registry/repo/chart)
     /// </summary>
+    /// <param name="chartRef">Local path, direct archive URL, repository URL, or <c>oci://</c> reference.</param>
+    /// <param name="version">Optional SemVer constraint or exact version; null selects the latest stable release.</param>
+    /// <param name="cancellationToken">Cancels the download.</param>
+    /// <returns>
+    /// Path to the local chart: unchanged for local inputs, the cached extraction
+    /// directory for HTTP and OCI downloads.
+    /// </returns>
     public async Task<string> PullChartAsync(
         string chartRef,
         string? version = null,
@@ -99,8 +111,13 @@ public sealed class HelmChartRepository : IDisposable
     }
 
     /// <summary>
-    /// Downloads a chart using an extensible request object.
+    /// Downloads a chart using an extensible request object (destination, untar,
+    /// digest verification, credentials, and exact-version selection).
     /// </summary>
+    /// <param name="request">Pull options; <see cref="HelmPullRequest.ChartReference"/> is required.</param>
+    /// <param name="cancellationToken">Cancels the download.</param>
+    /// <returns>Archive path, or the extracted chart directory when <c>Untar</c> is set.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the reference cannot be resolved to a downloadable chart.</exception>
     public async Task<string> PullChartAsync(
         HelmPullRequest request,
         CancellationToken cancellationToken = default)
@@ -130,8 +147,15 @@ public sealed class HelmChartRepository : IDisposable
     }
 
     /// <summary>
-    /// Adds a chart repository.
+    /// Registers a chart repository in the Helm-compatible <c>repositories.yaml</c>.
+    /// Adding an identical existing entry is a no-op; a conflicting entry with the
+    /// same name must be removed first.
     /// </summary>
+    /// <param name="name">Repository short name used in <c>repo/chart</c> references.</param>
+    /// <param name="url">Repository base URL; <c>index.yaml</c> is appended when fetching.</param>
+    /// <param name="username">Optional basic-auth username.</param>
+    /// <param name="password">Optional basic-auth password.</param>
+    /// <param name="cancellationToken">Cancels config file IO.</param>
     public async Task AddRepositoryAsync(
         string name,
         string url,
@@ -159,8 +183,9 @@ public sealed class HelmChartRepository : IDisposable
     }
 
     /// <summary>
-    /// Removes a chart repository.
+    /// Removes a repository from the configuration and deletes its cached index.
     /// </summary>
+    /// <exception cref="InvalidOperationException">Thrown when the repository name is not configured.</exception>
     public async Task RemoveRepositoryAsync(string name, CancellationToken cancellationToken = default)
     {
         await using var repositoryLock = await AcquireRepositoryConfigurationLockAsync(cancellationToken);
@@ -174,7 +199,7 @@ public sealed class HelmChartRepository : IDisposable
     }
 
     /// <summary>
-    /// Lists configured repositories.
+    /// Lists configured repositories sorted by name.
     /// </summary>
     public async Task<List<HelmRepository>> ListRepositoriesAsync(CancellationToken cancellationToken = default)
     {
@@ -189,6 +214,9 @@ public sealed class HelmChartRepository : IDisposable
     /// Searches cached indexes for all configured repositories. This operation does not access the network.
     /// Run a repository update first to populate the caches.
     /// </summary>
+    /// <param name="keyword">Substring matched against chart names and descriptions, case-insensitive.</param>
+    /// <param name="cancellationToken">Cancels cache file IO.</param>
+    /// <returns>Matching charts, one entry per chart at its latest stable version, sorted by name.</returns>
     public async Task<List<HelmChartSearchResult>> SearchRepoAsync(
         string keyword,
         CancellationToken cancellationToken = default)
@@ -226,8 +254,13 @@ public sealed class HelmChartRepository : IDisposable
     }
 
     /// <summary>
-    /// Searches for charts in a repository by keyword.
+    /// Searches for charts in a repository by keyword, fetching the index from the network.
     /// </summary>
+    /// <param name="repoUrl">Repository base URL.</param>
+    /// <param name="keyword">Substring matched against chart names and descriptions, case-insensitive.</param>
+    /// <param name="username">Optional basic-auth username.</param>
+    /// <param name="password">Optional basic-auth password.</param>
+    /// <param name="cancellationToken">Cancels the index fetch.</param>
     public async Task<List<HelmChartSearchResult>> SearchRepoAsync(
         string repoUrl,
         string keyword,
@@ -296,8 +329,12 @@ public sealed class HelmChartRepository : IDisposable
             .ToList();
 
     /// <summary>
-    /// Fetches and caches a repository index.
+    /// Fetches <c>index.yaml</c> from a repository URL and caches it for offline search.
     /// </summary>
+    /// <param name="repoUrl">Repository base URL; <c>index.yaml</c> is appended.</param>
+    /// <param name="username">Optional basic-auth username.</param>
+    /// <param name="password">Optional basic-auth password.</param>
+    /// <param name="cancellationToken">Cancels the HTTP request.</param>
     public Task<HelmRepoIndex> FetchRepoIndexAsync(
         string repoUrl,
         string? username = null,
@@ -308,6 +345,11 @@ public sealed class HelmChartRepository : IDisposable
     /// <summary>
     /// Fetches and caches a repository index using the provided repository name for the cache filename.
     /// </summary>
+    /// <param name="repoUrl">Repository base URL; <c>index.yaml</c> is appended.</param>
+    /// <param name="username">Optional basic-auth username.</param>
+    /// <param name="password">Optional basic-auth password.</param>
+    /// <param name="repositoryName">Cache key; when null, the cache filename is derived from the URL.</param>
+    /// <param name="cancellationToken">Cancels the HTTP request.</param>
     public async Task<HelmRepoIndex> FetchRepoIndexAsync(
         string repoUrl,
         string? username,
@@ -332,6 +374,8 @@ public sealed class HelmChartRepository : IDisposable
     }
 
     /// <summary>Fetches an index using the TLS and credential options configured for a repository.</summary>
+    /// <param name="repository">Configured repository supplying URL, credentials, and TLS options.</param>
+    /// <param name="cancellationToken">Cancels the HTTP request.</param>
     public Task<HelmRepoIndex> FetchRepoIndexAsync(HelmRepository repository, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(repository);
@@ -476,6 +520,14 @@ public sealed class HelmChartRepository : IDisposable
         var passCredentials = false;
         HelmRepository? configuredRepository = null;
 
+        // Pull stages:
+        //   1. Resolve the archive URL and a pinned version entry. Three reference
+        //      forms: direct .tgz URL (no index lookup), repo URL + chart name, or
+        //      configured repo/chart (index served from cache when present).
+        //   2. Download with credential scoping (same-origin or PassCredentialsAll).
+        //   3. Optionally verify the SHA-256 digest recorded on the index entry.
+        //   4. Atomic write of the archive to the destination.
+        //   5. Optionally untar via a temp directory that is swapped into place.
         if (IsArchiveUrl(chartReference))
         {
             var archiveUri = ParseAbsoluteHttpUri(chartReference, "chart archive");
@@ -554,6 +606,9 @@ public sealed class HelmChartRepository : IDisposable
             var archiveUri = Uri.TryCreate(entryUrl, UriKind.Absolute, out var absoluteArchiveUri)
                 ? absoluteArchiveUri
                 : new Uri(new Uri(repositoryUri.AbsoluteUri.TrimEnd('/') + "/"), entryUrl);
+            // Credentials are sent only when the chart archive shares the repository
+            // origin (or PassCredentialsAll is set), matching Helm's credential-scoping
+            // rule that keeps basic auth off cross-origin redirect targets.
             passCredentials = request.PassCredentialsAll
                               || configuredRepository?.PassCredentialsAll == true
                               || HaveSameOrigin(repositoryUri, archiveUri);
@@ -586,6 +641,8 @@ public sealed class HelmChartRepository : IDisposable
         if (string.IsNullOrWhiteSpace(archiveFileName))
             throw new InvalidDataException("The chart archive URL does not contain a valid filename.");
         var archivePath = Path.Combine(destination, archiveFileName);
+        // Atomic write: a concurrent pull or an interrupted download must never leave
+        // a truncated .tgz where a consumer expects a complete chart archive.
         await WriteAllBytesAtomicallyAsync(archivePath, chartBytes, cancellationToken);
 
         if (!request.Untar)
@@ -793,7 +850,8 @@ public sealed class HelmChartRepository : IDisposable
         var manifestJson = await response.Content.ReadAsStringAsync(cancellationToken);
         var manifest = JsonSerializer.Deserialize<JsonElement>(manifestJson);
 
-        // Find the chart layer
+        // Find the chart layer: Helm OCI charts store the packaged chart as the
+        // single tar+gzip layer; config layers are skipped by the mediaType filter.
         if (!manifest.TryGetProperty("layers", out var layers))
             throw new InvalidOperationException("OCI manifest has no layers");
 
@@ -826,7 +884,8 @@ public sealed class HelmChartRepository : IDisposable
     {
         var chartBytes = await DownloadChartArchiveAsync(url, username, password, cancellationToken);
 
-        // Create a cache key from the URL hash
+        // Cache key is the content hash of the archive, so the same chart bytes always
+        // share one extraction directory and ref pulls of identical content reuse it.
         var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(chartBytes))[..12];
         var extractDir = Path.Combine(_cacheDir, hash);
         if (Directory.Exists(extractDir))
@@ -920,6 +979,9 @@ public sealed class HelmChartRepository : IDisposable
 
     private static void VerifyArchiveDigest(byte[] chartBytes, string expectedDigest, string chartName)
     {
+        // Integrity check against the digest recorded in index.yaml (or Chart.lock).
+        // Only SHA-256 is supported — Helm publishes SHA-256 digests; other algorithms
+        // are rejected rather than silently skipped so a tampered archive cannot pass.
         const string sha256Prefix = "sha256:";
         var expectedHash = expectedDigest;
         var separator = expectedDigest.IndexOf(':', StringComparison.Ordinal);
@@ -1001,6 +1063,8 @@ public sealed class HelmChartRepository : IDisposable
         foreach (var fileEntry in archiveFiles)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            // ResolveSafeDestination rejects entries that escape the extraction root
+            // (zip-slip), so a hostile archive cannot write outside extractDir.
             var entryPath = HelmArchivePath.GetChartRelativePath(fileEntry.Name, chartRoot);
             if (string.IsNullOrWhiteSpace(entryPath))
                 throw new InvalidDataException($"Chart archive entry '{fileEntry.Name}' has no path below the chart root.");
@@ -1018,6 +1082,9 @@ public sealed class HelmChartRepository : IDisposable
 
     internal static HelmRepoIndex ParseRepoIndex(string yaml)
     {
+        // index.yaml shape (Helm repository format v1): apiVersion + generated
+        // timestamps, and an entries map of chart name -> version entry list.
+        // Each entry carries urls and the sha256 digest later used for verification.
         var dict = HelmYaml.DeserializeDictionary(yaml);
         var apiVersion = HelmYaml.GetString(dict, "apiVersion");
         if (string.IsNullOrWhiteSpace(apiVersion))
@@ -1447,8 +1514,17 @@ public sealed class HelmChartRepository : IDisposable
     }
 
     /// <summary>
-    /// Pushes a chart to an OCI registry.
+    /// Pushes a packaged chart to an OCI registry using the Helm OCI media types
+    /// (chart content layer, Helm config, OCI image manifest).
     /// </summary>
+    /// <param name="chartTgzPath">Path to the packaged chart archive (<c>.tgz</c>).</param>
+    /// <param name="registry">Registry host, without scheme.</param>
+    /// <param name="repository">Repository path within the registry.</param>
+    /// <param name="tag">Image tag to publish under.</param>
+    /// <param name="username">Optional basic-auth username.</param>
+    /// <param name="password">Optional basic-auth password.</param>
+    /// <param name="ct">Cancels the upload.</param>
+    /// <returns>The canonical <c>oci://registry/repository:tag</c> reference.</returns>
     public async Task<string> PushToOciAsync(
         string chartTgzPath,
         string registry,
@@ -1561,48 +1637,106 @@ public sealed class HelmChartRepository : IDisposable
         return $"oci://{registry}/{repository}:{tag}";
     }
 
+    /// <summary>Disposes the underlying HTTP client.</summary>
     public void Dispose()
     {
         _httpClient.Dispose();
     }
 }
 
+/// <summary>
+/// A chart repository entry from the Helm-compatible <c>repositories.yaml</c> configuration.
+/// </summary>
 public class HelmRepository
 {
+    /// <summary>Short name used in <c>repo/chart</c> references.</summary>
     public string Name { get; set; } = string.Empty;
+
+    /// <summary>Repository base URL; <c>index.yaml</c> is appended for index fetches.</summary>
     public string Url { get; set; } = string.Empty;
+
+    /// <summary>Optional basic-auth username.</summary>
     public string? Username { get; set; }
+
+    /// <summary>Optional basic-auth password.</summary>
     public string? Password { get; set; }
+
+    /// <summary>Optional client certificate file for mutual TLS.</summary>
     public string? CertFile { get; set; }
+
+    /// <summary>Optional private key file paired with <see cref="CertFile"/>.</summary>
     public string? KeyFile { get; set; }
+
+    /// <summary>Optional custom CA bundle used in place of the system trust store.</summary>
     public string? CaFile { get; set; }
+
+    /// <summary>Skips TLS certificate verification for this repository.</summary>
     public bool InsecureSkipTlsVerify { get; set; }
+
+    /// <summary>
+    /// Sends credentials to every request, including cross-origin redirects and
+    /// chart archive URLs. When false, credentials only go to the repository origin.
+    /// </summary>
     public bool PassCredentialsAll { get; set; }
 }
 
+/// <summary>
+/// A parsed chart repository <c>index.yaml</c> (Helm repository index format v1).
+/// </summary>
 public class HelmRepoIndex
 {
+    /// <summary>Index format version; Helm emits <c>v1</c>.</summary>
     public string ApiVersion { get; set; } = "v1";
+
+    /// <summary>Timestamp of when the index was generated.</summary>
     public string Generated { get; set; } = string.Empty;
+
+    /// <summary>Chart name to published version entries, newest content as published by the repository.</summary>
     public Dictionary<string, List<HelmChartVersion>> Entries { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
+/// <summary>
+/// One published chart version entry from a repository index.
+/// </summary>
 public class HelmChartVersion
 {
+    /// <summary>Chart name.</summary>
     public string Name { get; set; } = string.Empty;
+
+    /// <summary>SemVer chart version.</summary>
     public string Version { get; set; } = string.Empty;
+
+    /// <summary>Optional chart description from Chart.yaml.</summary>
     public string? Description { get; set; }
+
+    /// <summary>Optional application version from Chart.yaml.</summary>
     public string? AppVersion { get; set; }
+
+    /// <summary>Expected SHA-256 digest of the chart archive, used for download verification.</summary>
     public string? Digest { get; set; }
+
+    /// <summary>Publication timestamp of this version entry.</summary>
     public string? Created { get; set; }
+
+    /// <summary>Download URLs for the chart archive; relative URLs resolve against the repository base.</summary>
     public List<string> Urls { get; set; } = new();
 }
 
+/// <summary>
+/// A chart matched by repository search.
+/// </summary>
 public class HelmChartSearchResult
 {
+    /// <summary>Chart name, prefixed with <c>repo/</c> when searching all configured repositories.</summary>
     public string Name { get; set; } = string.Empty;
+
+    /// <summary>Latest stable version matching the search.</summary>
     public string Version { get; set; } = string.Empty;
+
+    /// <summary>Chart description, when present in the index entry.</summary>
     public string? Description { get; set; }
+
+    /// <summary>Application version of the matched chart version, when present.</summary>
     public string? AppVersion { get; set; }
 }
 

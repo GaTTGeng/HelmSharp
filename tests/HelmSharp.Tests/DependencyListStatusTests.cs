@@ -4,6 +4,10 @@ using HelmSharp.Action;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// <c>helm dependency list</c> parity: status rows must match the Helm CLI with and
+/// without a lock file, including aliases, disabled conditions, and tag values.
+/// </summary>
 public sealed class DependencyListStatusTests : IDisposable
 {
     private readonly string _tempDirectory = Path.Combine(

@@ -4,14 +4,16 @@ using HelmSharp.Chart;
 namespace HelmSharp.Action;
 
 /// <summary>
-/// Validates chart values against a JSON Schema (values.schema.json).
-/// Implements Helm's values schema validation.
+/// Validates chart values against a JSON Schema (values.schema.json), implementing Helm's
+/// values schema validation. Only the subset of JSON Schema Helm commonly uses is enforced:
+/// type, required, properties, items, enum, minimum/maximum, minLength/maxLength, pattern.
+/// Unknown keywords are ignored, matching Helm's lenient handling of unused schema features.
 /// </summary>
 internal static class HelmSchemaValidator
 {
     /// <summary>
     /// Validates values against a chart's schema file.
-    /// Returns a list of validation errors (empty if valid).
+    /// Returns a list of validation errors (empty if valid or when the chart has no schema).
     /// </summary>
     public static List<string> Validate(HelmChart chart, Dictionary<string, object?> values)
     {
@@ -35,6 +37,8 @@ internal static class HelmSchemaValidator
         return errors;
     }
 
+    // Helm looks for values.schema.json at the chart root; matching by file-name suffix also
+    // covers packed charts where files are keyed by relative path.
     private static string? FindSchemaFile(HelmChart chart)
     {
         // Check in Files dictionary
@@ -97,7 +101,7 @@ internal static class HelmSchemaValidator
 
         if (expectedType is not null && actualType is not null && expectedType != actualType)
         {
-            // Allow integer for number
+            // JSON Schema allows integers wherever "number" is expected
             if (expectedType == "number" && actualType == "integer")
             { }
             else

@@ -4,6 +4,10 @@ using k8s.Autorest;
 
 namespace HelmSharp.Tests;
 
+/// <summary>
+/// Manifest identity and apply behavior: namespace parsing (including cluster-scoped
+/// built-ins and custom kinds), namespace creation on demand, and create-vs-replace apply semantics.
+/// </summary>
 public sealed class KubernetesManifestApplierTests
 {
     [Fact]

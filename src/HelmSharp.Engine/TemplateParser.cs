@@ -30,19 +30,32 @@ public sealed class TemplateParser
     private readonly List<Token> _tokens;
     private int _pos;
 
+    // Go template define names are globally scoped per template set and are
+    // matched with ordinal comparison (case-sensitive), matching Helm's behavior.
     private readonly Dictionary<string, DefineNode> _defines = new(StringComparer.Ordinal);
 
     private static readonly HashSet<string> EndOnly = new(StringComparer.Ordinal) { "end" };
     private static readonly HashSet<string> EndElseElseIf = new(StringComparer.Ordinal) { "end", "else", "else if" };
 
+    /// <summary>Creates a parser over a pre-tokenized template stream.</summary>
     public TemplateParser(IEnumerable<Token> tokens)
     {
         _tokens = tokens.ToList();
         _pos = 0;
     }
 
+    /// <summary>
+    /// Named templates (<c>define "name"</c> blocks) collected during parsing.
+    /// Keys are template names without quotes; defines are registered globally
+    /// regardless of nesting, matching Go's template-set semantics.
+    /// </summary>
     public IReadOnlyDictionary<string, DefineNode> Defines => _defines;
 
+    /// <summary>
+    /// Parses the full token stream into a document AST.
+    /// Stray <c>end</c>/<c>else</c> at top level are tolerated as stop markers
+    /// rather than errors, mirroring the lenient handling used by the renderer.
+    /// </summary>
     public TemplateDocumentNode Parse()
     {
         var document = new TemplateDocumentNode();
@@ -99,6 +112,9 @@ public sealed class TemplateParser
 
                 var keyword = GetFirstWord(expr);
 
+                // Stop keywords (end / else / else if) are consumed here and
+                // reported to the caller instead of becoming nodes — their trim
+                // markers ride along so the caller can trim the body they close.
                 if (stopKeywords.Contains(keyword))
                     return new StopResult { Keyword = keyword, Expression = expr, LeftTrim = leftTrim, RightTrim = rightTrim, Line = startLine, Column = startCol, Offset = startOffset };
 
@@ -137,9 +153,14 @@ public sealed class TemplateParser
                 "The 'define' keyword was given an empty template name.",
                 startLine, startCol, startOffset);
 
+        // The body is captured until `end` and registered in the global define
+        // table. No node is appended to the enclosing body: Go emits nothing at a
+        // define's declaration site — the body runs only via include/template.
         var bodyDoc = new TemplateDocumentNode();
         var stop = ParseContent(bodyDoc.Children, EndOnly);
 
+        // {{ define "x" -}} trims leading whitespace of the body; done at parse
+        // time so SerializeToText round-trips the trimmed body for the registry.
         if (rightTrim)
             TrimLeadingForRightTrim(bodyDoc.Children);
 
@@ -161,6 +182,8 @@ public sealed class TemplateParser
 
     private BlockNode ParseBlock(string keyword, string expr, bool leftTrim, bool rightTrim, int startOffset, int startLine, int startCol)
     {
+        // Phases: true body → else-if chain (source order) → optional else →
+        // require the closing `end`. Render time picks the first truthy branch.
         // Skip past keyword in the trimmed expression to extract the condition
         var trimmedExpr = expr.TrimStart();
         var condition = trimmedExpr.StartsWith(keyword, StringComparison.Ordinal) && trimmedExpr.Length > keyword.Length
@@ -182,11 +205,14 @@ public sealed class TemplateParser
         var stop = ParseContent(trueBody.Children, EndElseElseIf);
         if (rightTrim)
             TrimLeadingForRightTrim(trueBody.Children);
+        // {{- else / {{- end swallows trailing whitespace of the body it closes.
         if (stop.LeftTrim)
             TrimTrailingWhitespace(trueBody.Children);
         block.TrueBody = trueBody;
 
-        // Handle else-if chain
+        // Handle else-if chain: each `else if` stop becomes one chain entry —
+        // condition is the stop expression minus the keyword, body runs until the
+        // next branch boundary (another else if / else / end).
         while (stop.Keyword == "else if")
         {
             // Capture trim marker before ParseContent overwrites `stop`
@@ -245,6 +271,11 @@ public sealed class TemplateParser
         return block;
     }
 
+    /// <summary>
+    /// Applies Go's <c>-}}</c> right-trim marker to the leading text of a body:
+    /// removes horizontal whitespace and consumes one following newline.
+    /// Only the first text node can be affected, so non-text first nodes are left alone.
+    /// </summary>
     private static void TrimLeadingForRightTrim(List<TemplateNode> children)
     {
         if (children.FirstOrDefault() is not TextNode text)
@@ -267,6 +298,10 @@ public sealed class TemplateParser
         };
     }
 
+    /// <summary>
+    /// Applies Go's <c>{{-</c> left-trim marker to the trailing text of the
+    /// preceding body: removes all trailing whitespace (including newlines).
+    /// </summary>
     private static void TrimTrailingWhitespace(List<TemplateNode> children)
     {
         if (children.LastOrDefault() is not TextNode text)

@@ -53,7 +53,10 @@ internal sealed class HelmHook
     public List<HelmHookEvent> Events { get; } = new();
     public List<HelmHookDeletePolicy> DeletePolicies { get; } = new();
     public List<string> OutputLogPolicies { get; } = new();
+
+    /// <summary>Value of the helm.sh/hook-weight annotation; lower weights run first. Defaults to 0.</summary>
     public int Weight { get; init; }
+
     public DateTimeOffset? LastRunStartedAt { get; set; }
     public DateTimeOffset? LastRunCompletedAt { get; set; }
     public string? LastRunPhase { get; set; }
@@ -61,6 +64,11 @@ internal sealed class HelmHook
 
 /// <summary>
 /// Parses and executes Helm hooks from rendered manifests.
+/// Hooks run in ascending weight order (ties broken by name, kind, path for determinism),
+/// matching Helm's hook-weight semantics. Job hooks are waited to completion; Pod hooks are
+/// polled until Succeeded/Failed. Delete policies are honored with Helm's batch contract:
+/// previously succeeded hooks stay available to later hooks and are cleaned in reverse
+/// execution order only after the whole batch completes (or during failure finalization).
 /// </summary>
 internal sealed class HelmHookExecutor
 {
@@ -69,6 +77,10 @@ internal sealed class HelmHookExecutor
     private readonly string _fieldManager;
     private readonly int _timeoutSeconds;
 
+    /// <summary>
+    /// Creates an executor that applies hooks with <paramref name="fieldManager"/> and bounds
+    /// Job/Pod waiting to <paramref name="timeoutSeconds"/>.
+    /// </summary>
     public HelmHookExecutor(k8s.Kubernetes client, string fieldManager, int timeoutSeconds)
     {
         _client = client;
@@ -78,6 +90,9 @@ internal sealed class HelmHookExecutor
 
     /// <summary>
     /// Extracts hook resources from the manifest, returning (remainingManifest, hooks).
+    /// Documents annotated with helm.sh/hook become hooks (events may be a comma-separated
+    /// list); everything else stays in the main manifest. When no delete policy is annotated,
+    /// BeforeHookCreation is applied as Helm's default.
     /// </summary>
     public static (string RemainingManifest, List<HelmHook> Hooks) ExtractHooks(string manifest, string defaultNamespace)
     {
@@ -170,7 +185,11 @@ internal sealed class HelmHookExecutor
     }
 
     /// <summary>
-    /// Executes hooks and handles failures with appropriate cleanup.
+    /// Executes hooks matching <paramref name="hookEvent"/> in ascending weight order
+    /// (ties broken by name, kind, path) and handles failures with appropriate cleanup:
+    /// previously succeeded hooks with HookSucceeded are deleted on failure or cancellation,
+    /// and a failed hook with HookFailed is deleted as well. Cleanup errors are attached to
+    /// the thrown exception under <see cref="CleanupErrorDataKey"/> instead of masking it.
     /// </summary>
     public async IAsyncEnumerable<string> ExecuteHooksWithFailureHandlingAsync(
         List<HelmHook> hooks,
@@ -178,6 +197,14 @@ internal sealed class HelmHookExecutor
         string releaseNamespace,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        // Execution stages:
+        //   1. Filter to hooks declaring this event; sort by weight, then name/kind/path.
+        //   2. Per hook, sequentially: BeforeHookCreation delete → apply manifest →
+        //      wait Job/Pod to completion (hooks are run-to-completion).
+        //   3. On failure/cancellation: bounded finalization deletes the failed hook
+        //      (HookFailed) and earlier succeeded hooks (HookSucceeded) in reverse order.
+        //   4. After the whole batch succeeds: reverse-order HookSucceeded deletes —
+        //      later hooks may still observe earlier hook resources until then.
         var executing = hooks
             .Where(h => h.Events.Contains(hookEvent))
             .OrderBy(h => h.Weight)
@@ -227,6 +254,8 @@ internal sealed class HelmHookExecutor
                     hookApplied.Add($"  Hook resource applied: {resource}");
                 }
 
+                // Helm treats Job hooks as run-to-completion: the hook batch cannot proceed
+                // until the Job finishes. Pod hooks get the same completion semantics via polling.
                 if (hook.Kind == "Job")
                 {
                     var waiter = new KubernetesResourceWaiter(_client, _timeoutSeconds);
@@ -349,6 +378,12 @@ internal sealed class HelmHookExecutor
         }
     }
 
+    /// <summary>
+    /// Failure/cancellation finalization: deletes the failed hook when it has HookFailed, then
+    /// deletes earlier succeeded hooks carrying HookSucceeded in reverse execution order.
+    /// The cleanup window is clamped to 2–10 seconds so finalization cannot hang past the
+    /// operation timeout. Returns output lines and any cleanup errors (never thrown here).
+    /// </summary>
     private async Task<(List<string> Lines, List<Exception> Errors)> CleanupSucceededHooksDuringFinalizationAsync(
         IEnumerable<HelmHook> hooks,
         string releaseNamespace,
@@ -357,6 +392,7 @@ internal sealed class HelmHookExecutor
     {
         var lines = new List<string>();
         var errors = new List<Exception>();
+        // Bounded cleanup: keep finalization short even for large hook timeouts.
         var cleanupSeconds = Math.Clamp(_timeoutSeconds, 2, 10);
         using var cleanupSource = new CancellationTokenSource(TimeSpan.FromSeconds(cleanupSeconds));
 
@@ -405,6 +441,8 @@ internal sealed class HelmHookExecutor
         return (lines, errors);
     }
 
+    // Cleanup problems ride along on the hook failure under Exception.Data instead of
+    // replacing it, so callers always see the root cause first.
     private static void AttachCleanupErrors(Exception hookError, List<Exception> cleanupErrors)
     {
         if (cleanupErrors.Count == 1)
@@ -413,6 +451,9 @@ internal sealed class HelmHookExecutor
             hookError.Data[CleanupErrorDataKey] = new AggregateException(cleanupErrors);
     }
 
+    // Polls a Pod hook once per second until Succeeded/Failed or the executor timeout.
+    // Unlike Jobs, Pods have no completion condition in the readiness waiter, so completion
+    // is detected from pod.status.phase.
     private async IAsyncEnumerable<string> WaitForPodCompletionAsync(
         HelmHook hook,
         string ns,
@@ -457,6 +498,10 @@ internal sealed class HelmHookExecutor
         }
     }
 
+    /// <summary>
+    /// Deletes a hook resource and waits until it is actually absent so a recreate cannot race
+    /// the old object. Returns false (without deleting) for CRD hooks.
+    /// </summary>
     private async Task<bool> DeleteHookResourceAsync(
         HelmHook hook,
         string ns,

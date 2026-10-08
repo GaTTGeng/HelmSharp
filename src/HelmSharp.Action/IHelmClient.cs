@@ -3,7 +3,8 @@ using HelmSharp.Repo;
 namespace HelmSharp.Action;
 
 /// <summary>
-/// Helm 基础操作封装。当前实现为托管子集，不要求运行环境中存在 helm 可执行文件。
+/// Facade over Helm chart and release operations. The current implementation is a managed
+/// subset and does not require a <c>helm</c> executable on the host.
 /// </summary>
 public interface IHelmClient
 {
