@@ -176,6 +176,33 @@ public sealed class KubernetesResourceWaiterTests
     }
 
     [Fact]
+    public async Task WaitForReadyAsync_ReadsBetaCrdsThroughTheirDeclaredApiVersion()
+    {
+        var handler = new KubernetesApiHandler()
+            .RespondAlways(HttpMethod.Get, "/apis/apiextensions.k8s.io/v1beta1/customresourcedefinitions/legacy", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "apiextensions.k8s.io/v1beta1",
+                  "kind": "CustomResourceDefinition",
+                  "metadata": { "name": "legacy" },
+                  "status": { "conditions": [{ "type": "Established", "status": "True" }] }
+                }
+                """);
+        var waiter = new KubernetesResourceWaiter(KubernetesTestClientBuilder.Create(handler));
+
+        var messages = await AsyncEnumerableTestExtensions.CollectAsync(waiter.WaitForReadyAsync("""
+            apiVersion: apiextensions.k8s.io/v1beta1
+            kind: CustomResourceDefinition
+            metadata:
+              name: legacy
+            """, "release-ns"));
+
+        Assert.Contains("  CustomResourceDefinition/legacy is ready", messages);
+        Assert.All(
+            handler.Requests,
+            request => Assert.Equal("/apis/apiextensions.k8s.io/v1beta1/customresourcedefinitions/legacy", request.PathAndQuery));
+    }
+
+    [Fact]
     public async Task WaitForReadyAsync_ReportsDeterministicTimeoutWithResourceIdentity()
     {
         var handler = new KubernetesApiHandler()

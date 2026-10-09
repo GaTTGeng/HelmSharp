@@ -212,7 +212,7 @@ public sealed class KubernetesManifestApplier
             ("policy/v1", "PodDisruptionBudget") => true,
             ("storage.k8s.io/v1", "StorageClass" or "CSIDriver" or "CSINode" or "VolumeAttachment") => false,
             ("scheduling.k8s.io/v1", "PriorityClass") => false,
-            ("apiextensions.k8s.io/v1", "CustomResourceDefinition") => false,
+            ("apiextensions.k8s.io/v1" or "apiextensions.k8s.io/v1beta1", "CustomResourceDefinition") => false,
             ("admissionregistration.k8s.io/v1", "MutatingWebhookConfiguration" or "ValidatingWebhookConfiguration") => false,
             ("apiregistration.k8s.io/v1", "APIService") => false,
             ("coordination.k8s.io/v1", "Lease") => true,

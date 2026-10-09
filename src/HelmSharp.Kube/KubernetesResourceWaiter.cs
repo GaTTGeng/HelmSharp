@@ -411,8 +411,8 @@ public sealed class KubernetesResourceWaiter
             ("v1", "ServiceAccount") => (true, false, ""),
             ("v1", "Endpoints") => await CheckEndpointsAsync(identity.Name, ns, ct),
             ("networking.k8s.io/v1", "Ingress") => (true, false, ""),
-            ("apiextensions.k8s.io/v1", "CustomResourceDefinition") => await CheckCrdAsync(identity.Name, ct),
-            ("apiextensions.k8s.io/v1beta1", "CustomResourceDefinition") => await CheckCrdAsync(identity.Name, ct),
+            ("apiextensions.k8s.io/v1", "CustomResourceDefinition") => await CheckCrdAsync(identity.ApiVersion, identity.Name, ct),
+            ("apiextensions.k8s.io/v1beta1", "CustomResourceDefinition") => await CheckCrdAsync(identity.ApiVersion, identity.Name, ct),
             ("autoscaling/v2", "HorizontalPodAutoscaler") => await CheckHpaAsync(identity.Name, ns, ct),
             ("autoscaling/v1", "HorizontalPodAutoscaler") => (true, false, ""),
             // Unknown kinds expose no readiness signal — treated as ready, matching Helm.
@@ -757,22 +757,53 @@ public sealed class KubernetesResourceWaiter
     }
 
     private async Task<(bool Ready, bool Failed, string Status)> CheckCrdAsync(
-        string name, CancellationToken ct)
+        string apiVersion,
+        string name,
+        CancellationToken ct)
     {
         // CRD readiness mirrors Helm ReadyChecker.crdReady: Established=True is
         // ready, and NamesAccepted=False (a naming conflict) is deliberately
         // treated as ready so install can continue; every other state is pending.
-        var crd = await _client.ApiextensionsV1.ReadCustomResourceDefinitionAsync(name, cancellationToken: ct);
-        foreach (var condition in crd.Status?.Conditions ?? [])
+        // Read through the manifest's declared API version so a cluster that serves
+        // only apiextensions.k8s.io/v1beta1 still answers instead of timing out on
+        // a v1 typed-client 404.
+        var version = apiVersion.EndsWith("/v1beta1", StringComparison.Ordinal)
+            ? "v1beta1"
+            : "v1";
+        var raw = await _client.CustomObjects.GetClusterCustomObjectAsync(
+            "apiextensions.k8s.io", version, "customresourcedefinitions", name, ct);
+
+        foreach (var (type, status) in ReadCrdConditions(raw))
         {
-            if (condition.Type == "Established" && condition.Status == "True")
+            if (type == "Established" && status == "True")
                 return (true, false, "");
 
-            if (condition.Type == "NamesAccepted" && condition.Status == "False")
+            if (type == "NamesAccepted" && status == "False")
                 return (true, false, "");
         }
 
         return (false, false, "CustomResourceDefinition is not established");
+    }
+
+    private static IEnumerable<(string Type, string Status)> ReadCrdConditions(object raw)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(raw));
+        if (!document.RootElement.TryGetProperty("status", out var status) ||
+            !status.TryGetProperty("conditions", out var conditions) ||
+            conditions.ValueKind != JsonValueKind.Array)
+            yield break;
+
+        foreach (var condition in conditions.EnumerateArray())
+        {
+            if (!condition.TryGetProperty("type", out var typeElement) ||
+                !condition.TryGetProperty("status", out var statusElement))
+                continue;
+
+            var type = typeElement.GetString();
+            var conditionStatus = statusElement.GetString();
+            if (type is not null && conditionStatus is not null)
+                yield return (type, conditionStatus);
+        }
     }
 
     private async Task<(bool Ready, bool Failed, string Status)> CheckPodAsync(

@@ -143,18 +143,35 @@ public sealed class KubernetesReadyCheckerParityTests
 
         // Helm v3.17.3 crdReady: Established=True is ready; NamesAccepted=False is
         // deliberately ready (naming conflict does not block install); else pending.
+        // Reads go through the declared apiVersion so beta-only clusters still answer.
         yield return [CreateCase("CustomResourceDefinition", "apiextensions.k8s.io/v1",
             "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/demo",
-            Crd(conditions: [("Established", "True")]), outcome: ReadinessOutcome.Ready)];
+            Crd(apiVersion: "apiextensions.k8s.io/v1", conditions: [("Established", "True")]),
+            outcome: ReadinessOutcome.Ready)];
         yield return [CreateCase("CustomResourceDefinition", "apiextensions.k8s.io/v1",
             "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/demo",
-            Crd(conditions: [("NamesAccepted", "False")]), outcome: ReadinessOutcome.Ready)];
+            Crd(apiVersion: "apiextensions.k8s.io/v1", conditions: [("NamesAccepted", "False")]),
+            outcome: ReadinessOutcome.Ready)];
         yield return [CreateCase("CustomResourceDefinition", "apiextensions.k8s.io/v1",
             "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/demo",
-            Crd(conditions: [("NamesAccepted", "True")]), outcome: ReadinessOutcome.Pending)];
+            Crd(apiVersion: "apiextensions.k8s.io/v1", conditions: [("NamesAccepted", "True")]),
+            outcome: ReadinessOutcome.Pending)];
         yield return [CreateCase("CustomResourceDefinition", "apiextensions.k8s.io/v1",
             "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/demo",
-            Crd(conditions: []), outcome: ReadinessOutcome.Pending)];
+            Crd(apiVersion: "apiextensions.k8s.io/v1", conditions: []),
+            outcome: ReadinessOutcome.Pending)];
+        yield return [CreateCase("CustomResourceDefinition", "apiextensions.k8s.io/v1beta1",
+            "/apis/apiextensions.k8s.io/v1beta1/customresourcedefinitions/demo",
+            Crd(apiVersion: "apiextensions.k8s.io/v1beta1", conditions: [("Established", "True")]),
+            outcome: ReadinessOutcome.Ready)];
+        yield return [CreateCase("CustomResourceDefinition", "apiextensions.k8s.io/v1beta1",
+            "/apis/apiextensions.k8s.io/v1beta1/customresourcedefinitions/demo",
+            Crd(apiVersion: "apiextensions.k8s.io/v1beta1", conditions: [("NamesAccepted", "False")]),
+            outcome: ReadinessOutcome.Ready)];
+        yield return [CreateCase("CustomResourceDefinition", "apiextensions.k8s.io/v1beta1",
+            "/apis/apiextensions.k8s.io/v1beta1/customresourcedefinitions/demo",
+            Crd(apiVersion: "apiextensions.k8s.io/v1beta1", conditions: []),
+            outcome: ReadinessOutcome.Pending)];
 
         // Helm v3.17.3 jobReady: fail only when failed > backoffLimit; otherwise wait
         // for Succeeded >= Completions (skipped when completions is unset).
@@ -412,10 +429,10 @@ public sealed class KubernetesReadyCheckerParityTests
         });
     }
 
-    private static string Crd((string Type, string Status)[] conditions)
+    private static string Crd(string apiVersion, (string Type, string Status)[] conditions)
         => Serialize(new
         {
-            apiVersion = "apiextensions.k8s.io/v1",
+            apiVersion,
             kind = "CustomResourceDefinition",
             metadata = new { name = "demo" },
             status = new
