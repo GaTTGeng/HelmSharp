@@ -12,6 +12,7 @@ This project follows semantic versioning once stable releases begin.
 
 ### Changed
 
+- Aligned Service, CustomResourceDefinition, and Job wait readiness with Helm's ReadyChecker: ExternalName/ClusterIP/LoadBalancer service exposure, CRD Established and NamesAccepted conditions, and Job completion versus backoff-limit failure (#148).
 - Aligned workload readiness checks with Helm's observed-generation, rollout, partition, and selected-Pod semantics (#234).
 - Made Kubernetes deletion deterministic across uninstall, rollback, and hook cleanup, including reverse ordering, propagation policies, keep annotations, discovered resource identity, and actionable failure diagnostics (#232).
 - Hardened Kubernetes wait controls by rejecting non-positive waiter timeouts and documenting standard polling, cancellation, Job waiting, and unsupported Helm status-watcher semantics (#233).

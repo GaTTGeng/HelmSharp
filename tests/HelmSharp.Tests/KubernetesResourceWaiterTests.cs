@@ -111,6 +111,71 @@ public sealed class KubernetesResourceWaiterTests
     }
 
     [Fact]
+    public async Task WaitForReadyAsync_WaitsForServiceClusterIpAndLoadBalancerIngress()
+    {
+        var handler = new KubernetesApiHandler()
+            .RespondAlways(HttpMethod.Get, "/api/v1/namespaces/release-ns/services/web", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Service",
+                  "metadata": { "name": "web" },
+                  "spec": { "type": "LoadBalancer", "clusterIP": "10.0.0.1" },
+                  "status": { "loadBalancer": {} }
+                }
+                """);
+        var timeProvider = new DeterministicTimeProvider(DateTimeOffset.UnixEpoch);
+        var polling = new DeterministicPolling(timeProvider);
+        var waiter = new KubernetesResourceWaiter(
+            KubernetesTestClientBuilder.Create(handler),
+            timeoutSeconds: 1,
+            timeProvider,
+            polling.DelayAsync);
+
+        var exception = await Assert.ThrowsAsync<TimeoutException>(() =>
+            AsyncEnumerableTestExtensions.DrainAsync(waiter.WaitForReadyAsync("""
+                apiVersion: v1
+                kind: Service
+                metadata:
+                  name: web
+                """, "release-ns")));
+
+        Assert.Contains("Service/release-ns/web", exception.Message);
+        Assert.Contains("load balancer ingress", exception.Message);
+    }
+
+    [Fact]
+    public async Task WaitForReadyAsync_WaitsForCrdEstablished()
+    {
+        var handler = new KubernetesApiHandler()
+            .RespondAlways(HttpMethod.Get, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/widgets", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "apiextensions.k8s.io/v1",
+                  "kind": "CustomResourceDefinition",
+                  "metadata": { "name": "widgets" },
+                  "status": { "conditions": [{ "type": "NamesAccepted", "status": "True" }] }
+                }
+                """);
+        var timeProvider = new DeterministicTimeProvider(DateTimeOffset.UnixEpoch);
+        var polling = new DeterministicPolling(timeProvider);
+        var waiter = new KubernetesResourceWaiter(
+            KubernetesTestClientBuilder.Create(handler),
+            timeoutSeconds: 1,
+            timeProvider,
+            polling.DelayAsync);
+
+        var exception = await Assert.ThrowsAsync<TimeoutException>(() =>
+            AsyncEnumerableTestExtensions.DrainAsync(waiter.WaitForReadyAsync("""
+                apiVersion: apiextensions.k8s.io/v1
+                kind: CustomResourceDefinition
+                metadata:
+                  name: widgets
+                """, "release-ns")));
+
+        Assert.Contains("CustomResourceDefinition/widgets", exception.Message);
+        Assert.Contains("not established", exception.Message);
+    }
+
+    [Fact]
     public async Task WaitForReadyAsync_ReportsDeterministicTimeoutWithResourceIdentity()
     {
         var handler = new KubernetesApiHandler()

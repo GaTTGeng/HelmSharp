@@ -9,7 +9,7 @@ namespace HelmSharp.Kube;
 
 /// <summary>
 /// Waits for Kubernetes resources to reach a ready state, matching Helm's --wait behavior.
-/// Supports Deployments, StatefulSets, DaemonSets, Jobs, Pods, PVCs, and more.
+/// Supports Deployments, StatefulSets, DaemonSets, Jobs, Pods, PVCs, Services, CRDs, and more.
 /// </summary>
 public sealed class KubernetesResourceWaiter
 {
@@ -388,8 +388,8 @@ public sealed class KubernetesResourceWaiter
         CancellationToken ct)
     {
         // Readiness dispatch. Kinds without a meaningful readiness condition
-        // (ConfigMap, Secret, Service, Ingress, CronJob, ...) report ready immediately;
-        // only workload/volume kinds with real status conditions are polled.
+        // (ConfigMap, Secret, Ingress, CronJob, ...) report ready immediately;
+        // only kinds Helm's ReadyChecker polls have real status predicates.
         return (identity.ApiVersion, identity.Kind) switch
         {
             ("apps/v1", "Deployment") => await CheckDeploymentAsync(identity.Name, ns, ct),
@@ -405,12 +405,14 @@ public sealed class KubernetesResourceWaiter
             ("v1", "Pod") => await CheckPodAsync(identity.Name, ns, ct),
             ("v1", "ReplicationController") => await CheckReplicationControllerAsync(identity.Name, ns, ct),
             ("v1", "PersistentVolumeClaim") => await CheckPvcAsync(identity.Name, ns, ct),
-            ("v1", "Service") => (true, false, ""),
+            ("v1", "Service") => await CheckServiceAsync(identity.Name, ns, ct),
             ("v1", "ConfigMap") => (true, false, ""),
             ("v1", "Secret") => (true, false, ""),
             ("v1", "ServiceAccount") => (true, false, ""),
             ("v1", "Endpoints") => await CheckEndpointsAsync(identity.Name, ns, ct),
             ("networking.k8s.io/v1", "Ingress") => (true, false, ""),
+            ("apiextensions.k8s.io/v1", "CustomResourceDefinition") => await CheckCrdAsync(identity.Name, ct),
+            ("apiextensions.k8s.io/v1beta1", "CustomResourceDefinition") => await CheckCrdAsync(identity.Name, ct),
             ("autoscaling/v2", "HorizontalPodAutoscaler") => await CheckHpaAsync(identity.Name, ns, ct),
             ("autoscaling/v1", "HorizontalPodAutoscaler") => (true, false, ""),
             // Unknown kinds expose no readiness signal — treated as ready, matching Helm.
@@ -695,29 +697,82 @@ public sealed class KubernetesResourceWaiter
     private async Task<(bool Ready, bool Failed, string Status)> CheckJobAsync(
         string name, string ns, CancellationToken ct)
     {
-        // Job readiness: Complete condition wins; a Failed condition or failures
-        // reaching backoffLimit is terminal failure rather than a timeout later.
+        // Job readiness mirrors Helm ReadyChecker.jobReady: fail only when the
+        // failure count strictly exceeds backoffLimit, then require completions.
+        // Terminal Failed conditions keep their reason as diagnostics so a
+        // DeadlineExceeded or similar failure is not reduced to a bare count.
         var job = await _client.BatchV1.ReadNamespacedJobAsync(name, ns, cancellationToken: ct);
         var conditions = job.Status?.Conditions;
-
-        if (conditions is not null)
-        {
-            if (conditions.Any(c => c.Type == "Complete" && c.Status == "True"))
-                return (true, false, "Job completed");
-            if (conditions.Any(c => c.Type == "Failed" && c.Status == "True"))
-            {
-                var failed = conditions.First(c => c.Type == "Failed");
-                return (false, true, $"Job failed: {failed.Reason ?? "unknown"}");
-            }
-        }
-
-        // Check for too many failures
         var failures = job.Status?.Failed ?? 0;
         var backoffLimit = job.Spec?.BackoffLimit ?? 6;
-        if (failures > 0 && failures >= backoffLimit)
+        var succeeded = job.Status?.Succeeded ?? 0;
+        var completions = job.Spec?.Completions;
+
+        if (failures > backoffLimit)
             return (false, true, $"Job exceeded backoff limit ({failures}/{backoffLimit})");
 
-        return (false, false, $"Job in progress (completions: {job.Status?.Succeeded ?? 0}/{job.Spec?.Completions ?? 1})");
+        var failedCondition = conditions?.FirstOrDefault(c => c.Type == "Failed" && c.Status == "True");
+        if (failedCondition is not null)
+            return (false, true, $"Job failed: {failedCondition.Reason ?? "unknown"}");
+
+        if (conditions?.Any(c => c.Type == "Complete" && c.Status == "True") == true)
+            return (true, false, "Job completed");
+
+        // Helm skips the completion check when completions is unset.
+        if (completions is null)
+            return (true, false, "");
+
+        if (succeeded >= completions.Value)
+            return (true, false, "Job completed");
+
+        return (false, false, $"Job in progress (completions: {succeeded}/{completions.Value})");
+    }
+
+    private async Task<(bool Ready, bool Failed, string Status)> CheckServiceAsync(
+        string name, string ns, CancellationToken ct)
+    {
+        // Service readiness mirrors Helm ReadyChecker.serviceReady: ExternalName is
+        // external to the cluster and ready immediately; otherwise a ClusterIP must
+        // be assigned; LoadBalancer additionally waits for external exposure unless
+        // ExternalIPs already pin an address.
+        var service = await _client.CoreV1.ReadNamespacedServiceAsync(name, ns, cancellationToken: ct);
+        if (service.Spec.Type == "ExternalName")
+            return (true, false, "");
+
+        if (string.IsNullOrEmpty(service.Spec.ClusterIP))
+            return (false, false, "Service does not have cluster IP address");
+
+        if (service.Spec.Type == "LoadBalancer")
+        {
+            if (service.Spec.ExternalIPs is { Count: > 0 })
+                return (true, false, "");
+
+            // Helm treats a missing LoadBalancer ingress as pending. An empty list
+            // is the same practical state, so both wait for an external address.
+            if (service.Status?.LoadBalancer?.Ingress is not { Count: > 0 })
+                return (false, false, "Service does not have load balancer ingress IP address");
+        }
+
+        return (true, false, "");
+    }
+
+    private async Task<(bool Ready, bool Failed, string Status)> CheckCrdAsync(
+        string name, CancellationToken ct)
+    {
+        // CRD readiness mirrors Helm ReadyChecker.crdReady: Established=True is
+        // ready, and NamesAccepted=False (a naming conflict) is deliberately
+        // treated as ready so install can continue; every other state is pending.
+        var crd = await _client.ApiextensionsV1.ReadCustomResourceDefinitionAsync(name, cancellationToken: ct);
+        foreach (var condition in crd.Status?.Conditions ?? [])
+        {
+            if (condition.Type == "Established" && condition.Status == "True")
+                return (true, false, "");
+
+            if (condition.Type == "NamesAccepted" && condition.Status == "False")
+                return (true, false, "");
+        }
+
+        return (false, false, "CustomResourceDefinition is not established");
     }
 
     private async Task<(bool Ready, bool Failed, string Status)> CheckPodAsync(
@@ -804,7 +859,8 @@ public sealed class KubernetesResourceWaiter
     private static bool IsWaitableKind(string kind)
         => kind is "Deployment" or "StatefulSet" or "DaemonSet" or "ReplicaSet"
             or "Job" or "Pod" or "PersistentVolumeClaim" or "Endpoints"
-            or "HorizontalPodAutoscaler" or "ReplicationController";
+            or "HorizontalPodAutoscaler" or "ReplicationController"
+            or "Service" or "CustomResourceDefinition";
 
 }
 

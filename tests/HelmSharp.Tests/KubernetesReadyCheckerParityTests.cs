@@ -4,8 +4,8 @@ using System.Text.Json;
 namespace HelmSharp.Tests;
 
 /// <summary>
-/// Table-driven parity tests for workload readiness predicates against Helm's
-/// compatible semantics (Deployment/DaemonSet/StatefulSet/Job/Pod outcomes).
+/// Table-driven parity tests for readiness predicates against Helm's ReadyChecker
+/// semantics (Deployment/DaemonSet/StatefulSet/Service/CRD/Job/Pod outcomes).
 /// </summary>
 public sealed class KubernetesReadyCheckerParityTests
 {
@@ -36,19 +36,21 @@ public sealed class KubernetesReadyCheckerParityTests
         if (testCase.Outcome == ReadinessOutcome.Ready)
         {
             var messages = await AsyncEnumerableTestExtensions.CollectAsync(
-                waiter.WaitForReadyAsync(manifest, "ns"));
+                waiter.WaitForReadyAsync(manifest, "ns", waitForJobs: testCase.WaitForJobs));
             Assert.Contains("All 1 resources are ready", messages);
         }
         else if (testCase.Outcome == ReadinessOutcome.Pending)
         {
             var exception = await Assert.ThrowsAsync<TimeoutException>(() =>
-                AsyncEnumerableTestExtensions.DrainAsync(waiter.WaitForReadyAsync(manifest, "ns")));
+                AsyncEnumerableTestExtensions.DrainAsync(
+                    waiter.WaitForReadyAsync(manifest, "ns", waitForJobs: testCase.WaitForJobs)));
             Assert.Contains(testCase.Kind, exception.Message, StringComparison.OrdinalIgnoreCase);
         }
         else
         {
             var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                AsyncEnumerableTestExtensions.DrainAsync(waiter.WaitForReadyAsync(manifest, "ns")));
+                AsyncEnumerableTestExtensions.DrainAsync(
+                    waiter.WaitForReadyAsync(manifest, "ns", waitForJobs: testCase.WaitForJobs)));
             Assert.Contains("demo", exception.Message);
         }
     }
@@ -119,6 +121,63 @@ public sealed class KubernetesReadyCheckerParityTests
         yield return [CreateCase("PersistentVolumeClaim", "v1", "/api/v1/namespaces/ns/persistentvolumeclaims/demo", Pvc("Lost"), outcome: ReadinessOutcome.Failed)];
         yield return [CreateCase("Endpoints", "v1", "/api/v1/namespaces/ns/endpoints/demo", Endpoints(ready: true), outcome: ReadinessOutcome.Ready)];
         yield return [CreateCase("Endpoints", "v1", "/api/v1/namespaces/ns/endpoints/demo", Endpoints(ready: false), outcome: ReadinessOutcome.Pending)];
+
+        // Helm v3.17.3 serviceReady: ExternalName is ready immediately; ClusterIP must
+        // be assigned; LoadBalancer waits for ExternalIPs or LoadBalancer ingress.
+        yield return [CreateCase("Service", "v1", "/api/v1/namespaces/ns/services/demo",
+            Service(type: "ExternalName", clusterIP: ""), outcome: ReadinessOutcome.Ready)];
+        yield return [CreateCase("Service", "v1", "/api/v1/namespaces/ns/services/demo",
+            Service(type: "ClusterIP", clusterIP: ""), outcome: ReadinessOutcome.Pending)];
+        yield return [CreateCase("Service", "v1", "/api/v1/namespaces/ns/services/demo",
+            Service(type: "ClusterIP", clusterIP: "10.0.0.1"), outcome: ReadinessOutcome.Ready)];
+        yield return [CreateCase("Service", "v1", "/api/v1/namespaces/ns/services/demo",
+            Service(type: "LoadBalancer", clusterIP: "10.0.0.1"), outcome: ReadinessOutcome.Pending)];
+        yield return [CreateCase("Service", "v1", "/api/v1/namespaces/ns/services/demo",
+            Service(type: "LoadBalancer", clusterIP: "10.0.0.1", externalIPs: ["203.0.113.10"]),
+            outcome: ReadinessOutcome.Ready)];
+        yield return [CreateCase("Service", "v1", "/api/v1/namespaces/ns/services/demo",
+            Service(type: "LoadBalancer", clusterIP: "10.0.0.1", loadBalancerIngress: true),
+            outcome: ReadinessOutcome.Ready)];
+        yield return [CreateCase("Service", "v1", "/api/v1/namespaces/ns/services/demo",
+            Service(type: "LoadBalancer", clusterIP: ""), outcome: ReadinessOutcome.Pending)];
+
+        // Helm v3.17.3 crdReady: Established=True is ready; NamesAccepted=False is
+        // deliberately ready (naming conflict does not block install); else pending.
+        yield return [CreateCase("CustomResourceDefinition", "apiextensions.k8s.io/v1",
+            "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/demo",
+            Crd(conditions: [("Established", "True")]), outcome: ReadinessOutcome.Ready)];
+        yield return [CreateCase("CustomResourceDefinition", "apiextensions.k8s.io/v1",
+            "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/demo",
+            Crd(conditions: [("NamesAccepted", "False")]), outcome: ReadinessOutcome.Ready)];
+        yield return [CreateCase("CustomResourceDefinition", "apiextensions.k8s.io/v1",
+            "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/demo",
+            Crd(conditions: [("NamesAccepted", "True")]), outcome: ReadinessOutcome.Pending)];
+        yield return [CreateCase("CustomResourceDefinition", "apiextensions.k8s.io/v1",
+            "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/demo",
+            Crd(conditions: []), outcome: ReadinessOutcome.Pending)];
+
+        // Helm v3.17.3 jobReady: fail only when failed > backoffLimit; otherwise wait
+        // for Succeeded >= Completions (skipped when completions is unset).
+        yield return [CreateCase("Job", "batch/v1", "/apis/batch/v1/namespaces/ns/jobs/demo",
+            Job(completions: 1, succeeded: 1), waitForJobs: true, outcome: ReadinessOutcome.Ready)];
+        yield return [CreateCase("Job", "batch/v1", "/apis/batch/v1/namespaces/ns/jobs/demo",
+            Job(completions: 1, succeeded: 0), waitForJobs: true, outcome: ReadinessOutcome.Pending)];
+        yield return [CreateCase("Job", "batch/v1", "/apis/batch/v1/namespaces/ns/jobs/demo",
+            Job(completions: null, succeeded: 0), waitForJobs: true, outcome: ReadinessOutcome.Ready)];
+        yield return [CreateCase("Job", "batch/v1", "/apis/batch/v1/namespaces/ns/jobs/demo",
+            Job(completions: 2, succeeded: 1), waitForJobs: true, outcome: ReadinessOutcome.Pending)];
+        yield return [CreateCase("Job", "batch/v1", "/apis/batch/v1/namespaces/ns/jobs/demo",
+            Job(completions: 1, succeeded: 0, failed: 6, backoffLimit: 6), waitForJobs: true,
+            outcome: ReadinessOutcome.Pending)];
+        yield return [CreateCase("Job", "batch/v1", "/apis/batch/v1/namespaces/ns/jobs/demo",
+            Job(completions: 1, succeeded: 0, failed: 7, backoffLimit: 6), waitForJobs: true,
+            outcome: ReadinessOutcome.Failed)];
+        yield return [CreateCase("Job", "batch/v1", "/apis/batch/v1/namespaces/ns/jobs/demo",
+            Job(completions: 1, succeeded: 0, failed: 1, backoffLimit: 0), waitForJobs: true,
+            outcome: ReadinessOutcome.Failed)];
+        yield return [CreateCase("Job", "batch/v1", "/apis/batch/v1/namespaces/ns/jobs/demo",
+            Job(completions: 1, succeeded: 1, conditions: [("Failed", "True", "BackoffLimitExceeded")]),
+            waitForJobs: true, outcome: ReadinessOutcome.Failed)];
     }
 
     private static ReadinessCase CreateCase(
@@ -128,8 +187,9 @@ public sealed class KubernetesReadyCheckerParityTests
         string resourceJson,
         string? auxiliaryPath = null,
         string? auxiliaryJson = null,
-        ReadinessOutcome outcome = ReadinessOutcome.Ready)
-        => new(kind, apiVersion, resourcePath, resourceJson, auxiliaryPath, auxiliaryJson, outcome);
+        ReadinessOutcome outcome = ReadinessOutcome.Ready,
+        bool waitForJobs = false)
+        => new(kind, apiVersion, resourcePath, resourceJson, auxiliaryPath, auxiliaryJson, outcome, waitForJobs);
 
     private static string Deployment(int observedGeneration = 1, bool paused = false, string maxUnavailable = "25%",
         bool exceededProgressDeadline = false, string strategyType = "RollingUpdate", string maxSurge = "25%", int replicas = 4)
@@ -325,6 +385,67 @@ public sealed class KubernetesReadyCheckerParityTests
     private static string Pvc(string phase)
         => Serialize(new { apiVersion = "v1", kind = "PersistentVolumeClaim", metadata = new { name = "demo" }, status = new { phase } });
 
+    private static string Service(
+        string type,
+        string clusterIP,
+        string[]? externalIPs = null,
+        bool loadBalancerIngress = false)
+    {
+        // Pending LoadBalancer cases omit ingress (Helm treats missing ingress as
+        // not ready); ready cases publish at least one LoadBalancer ingress address.
+        object loadBalancer = loadBalancerIngress
+            ? new { ingress = new[] { new { ip = "203.0.113.10" } } }
+            : new Dictionary<string, object>();
+
+        return Serialize(new
+        {
+            apiVersion = "v1",
+            kind = "Service",
+            metadata = new { name = "demo" },
+            spec = new
+            {
+                type,
+                clusterIP,
+                externalIPs
+            },
+            status = new { loadBalancer }
+        });
+    }
+
+    private static string Crd((string Type, string Status)[] conditions)
+        => Serialize(new
+        {
+            apiVersion = "apiextensions.k8s.io/v1",
+            kind = "CustomResourceDefinition",
+            metadata = new { name = "demo" },
+            status = new
+            {
+                conditions = conditions.Select(c => new { type = c.Type, status = c.Status }).ToArray()
+            }
+        });
+
+    private static string Job(
+        int? completions,
+        int succeeded,
+        int failed = 0,
+        int backoffLimit = 6,
+        (string Type, string Status, string Reason)[]? conditions = null)
+        => Serialize(new
+        {
+            apiVersion = "batch/v1",
+            kind = "Job",
+            metadata = new { name = "demo" },
+            spec = new { completions, backoffLimit },
+            status = new
+            {
+                succeeded,
+                failed,
+                conditions = conditions?
+                    .Select(c => new { type = c.Type, status = c.Status, reason = c.Reason })
+                    .ToArray()
+            }
+        });
+
     private static string Endpoints(bool ready)
         => Serialize(new
         {
@@ -346,7 +467,7 @@ public sealed class KubernetesReadyCheckerParityTests
 
     /// <summary>
     /// One readiness scenario: the primary resource JSON, an optional auxiliary object
-    /// (e.g. a Job's Pods), and the expected readiness outcome.
+    /// (e.g. a Job's Pods), the expected readiness outcome, and whether Job waiting is enabled.
     /// </summary>
     public sealed record ReadinessCase(
         string Kind,
@@ -355,7 +476,8 @@ public sealed class KubernetesReadyCheckerParityTests
         string ResourceJson,
         string? AuxiliaryPath,
         string? AuxiliaryJson,
-        ReadinessOutcome Outcome)
+        ReadinessOutcome Outcome,
+        bool WaitForJobs = false)
     {
         public override string ToString() => $"{Kind}: {Outcome}";
     }
