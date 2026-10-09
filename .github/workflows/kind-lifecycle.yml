@@ -96,8 +96,10 @@ jobs:
           --logger "trx;LogFileName=kind-lifecycle.trx"
           --results-directory TestResults
         env:
+          # Only enable the opt-in gate. Do not re-export KUBECONFIG here: the
+          # env context omits runner-process variables, so ${{ env.KUBECONFIG }}
+          # would export an empty string and hide the kubeconfig written by kind-action.
           HELM_SHARP_KIND_TESTS: "1"
-          KUBECONFIG: ${{ env.KUBECONFIG }}
 
       - name: Collect cluster diagnostics
         if: failure()
