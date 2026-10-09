@@ -251,6 +251,72 @@ public sealed class KubernetesManifestApplierTests
     }
 
     [Fact]
+    public async Task ApplyAsync_RetriesDiscoveryUntilCustomResourceKindRegisters()
+    {
+        // First discovery misses the kind (CRD endpoint not registered yet); the second sees it.
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/example.com/v1", HttpStatusCode.OK, """
+                { "kind": "APIResourceList", "apiVersion": "v1", "groupVersion": "example.com/v1", "resources": [] }
+                """)
+            .Respond(HttpMethod.Get, "/apis/example.com/v1", HttpStatusCode.OK, """
+                {
+                  "kind": "APIResourceList",
+                  "apiVersion": "v1",
+                  "groupVersion": "example.com/v1",
+                  "resources": [{ "name": "widgets", "kind": "Widget", "namespaced": true }]
+                }
+                """)
+            .Respond(HttpMethod.Post, "/apis/example.com/v1/namespaces/release-ns/widgets?fieldManager=helmsharp-test", HttpStatusCode.Created, "{}");
+        var delayCalls = new List<TimeSpan>();
+        var applier = new KubernetesManifestApplier(
+            KubernetesTestClientBuilder.Create(handler),
+            "helmsharp-test",
+            (delay, _) =>
+            {
+                delayCalls.Add(delay);
+                return Task.CompletedTask;
+            });
+
+        var applied = await AsyncEnumerableTestExtensions.CollectAsync(applier.ApplyAsync("""
+            apiVersion: example.com/v1
+            kind: Widget
+            metadata:
+              name: sample
+            """, "release-ns"));
+
+        Assert.Equal(["Widget/release-ns/sample"], applied);
+        Assert.NotEmpty(delayCalls);
+        Assert.Equal(2, handler.Requests.Count(request =>
+            request.Method == HttpMethod.Get && request.PathAndQuery == "/apis/example.com/v1"));
+    }
+
+    [Fact]
+    public async Task ApplyAsync_FailsAfterDiscoveryRetriesWhenKindRemainsAbsent()
+    {
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/example.com/v1", HttpStatusCode.OK, """
+                { "kind": "APIResourceList", "apiVersion": "v1", "groupVersion": "example.com/v1", "resources": [] }
+                """)
+            .RespondAlways(HttpMethod.Get, "/apis/example.com/v1", HttpStatusCode.OK, """
+                { "kind": "APIResourceList", "apiVersion": "v1", "groupVersion": "example.com/v1", "resources": [] }
+                """);
+        var applier = new KubernetesManifestApplier(
+            KubernetesTestClientBuilder.Create(handler),
+            "helmsharp-test",
+            (_, _) => Task.CompletedTask);
+
+        var exception = await Assert.ThrowsAsync<KubernetesResourceOperationException>(() =>
+            AsyncEnumerableTestExtensions.DrainAsync(applier.ApplyAsync("""
+            apiVersion: example.com/v1
+            kind: Missing
+            metadata:
+              name: sample
+            """, "release-ns")));
+
+        Assert.IsType<KubernetesApiResourceNotFoundException>(exception.InnerException);
+    }
+
+    [Fact]
     public async Task ApplyAsync_UsesDeclaredV2Beta2EndpointThroughDiscovery()
     {
         var handler = new KubernetesApiHandler()

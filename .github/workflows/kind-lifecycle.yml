@@ -117,7 +117,12 @@ jobs:
             echo "=== events ==="
             kubectl get events -A --sort-by=.lastTimestamp || true
             echo "=== pod logs ==="
-            kubectl logs -A --all-containers --prefix --tail=200 --ignore-errors || true
+            kubectl get pods -A -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' 2>/dev/null \
+              | while read -r ns name; do
+                  [ -z "$name" ] && continue
+                  echo "--- logs ${ns}/${name} ---"
+                  kubectl logs -n "$ns" "$name" --all-containers --tail=200 --ignore-errors || true
+                done
             echo "=== CRDs ==="
             kubectl get crds || true
           } > kind-diagnostics/cluster.txt 2>&1
