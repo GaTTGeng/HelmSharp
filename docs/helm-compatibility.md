@@ -65,3 +65,5 @@ Small reproducible charts are more useful than screenshots or large private char
 ## Continuous validation
 
 Golden test results are validated on every push and pull request through the [CI workflow](https://github.com/GaTTGeng/HelmSharp/blob/master/.github/workflows/ci.yml). The CI runner installs Helm CLI (`v4.2.2`) alongside the .NET SDKs and executes the full golden test suite, including both fixture-chart and real-chart comparisons. JSON reports are published as workflow artifacts for each run.
+
+Kubernetes apply, wait, hook, rollback, uninstall, and release-Secret behavior is additionally proven against a disposable kind cluster. See the [kind lifecycle test lane](testing-kind-lifecycle.md) for coverage, how to trigger it, and how to interpret failure artifacts.

@@ -1,0 +1,155 @@
+name: Kind Lifecycle
+
+# Disposable kind-backed Kubernetes lifecycle lane.
+# Fast unit, golden, package, and docs checks stay in ci.yml and do not need a cluster.
+#
+# When this lane runs:
+#   - every push to master
+#   - workflow_dispatch (manual)
+#   - pull requests labeled `kind-lifecycle`
+#
+# Maintainers request the lane on a PR by adding the `kind-lifecycle` label.
+# Promote the job to a required status check once the lane is stable.
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CONFIGURATION: Release
+  HELM_SHARP_KIND_TESTS: "1"
+  # Bounded so a stuck cluster cannot burn a full runner day.
+  JOB_TIMEOUT_MINUTES: 25
+
+jobs:
+  kind-lifecycle:
+    name: Kind lifecycle integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # PRs only when the maintainer opted in with the kind-lifecycle label.
+    if: >
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'kind-lifecycle'))
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v6
+        with:
+          path: ~/.nuget/packages
+          key: nuget-kind-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', '**/Directory.Packages.props', 'NuGet.config') }}
+          restore-keys: |
+            nuget-kind-${{ runner.os }}-
+            nuget-${{ runner.os }}-
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: helmsharp-kind
+          wait: 120s
+
+      - name: Show cluster info
+        run: |
+          kubectl config current-context
+          kubectl get nodes -o wide
+          kubectl version
+
+      - name: Restore
+        run: dotnet restore HelmSharp.sln
+
+      - name: Build
+        run: dotnet build HelmSharp.sln --configuration ${{ env.CONFIGURATION }} --no-restore
+
+      - name: Run kind lifecycle tests
+        # Single target framework keeps the lane bounded; behavior is asserted
+        # against the cluster, not per-TFM.
+        run: >
+          dotnet test tests/HelmSharp.Tests/HelmSharp.Tests.csproj
+          --configuration ${{ env.CONFIGURATION }}
+          --no-build
+          --no-restore
+          --framework net8.0
+          --filter "Category=Kind"
+          --logger "trx;LogFileName=kind-lifecycle.trx"
+          --results-directory TestResults
+        env:
+          # Only enable the opt-in gate. Do not re-export KUBECONFIG here: the
+          # env context omits runner-process variables, so ${{ env.KUBECONFIG }}
+          # would export an empty string and hide the kubeconfig written by kind-action.
+          HELM_SHARP_KIND_TESTS: "1"
+
+      - name: Collect cluster diagnostics
+        if: failure()
+        run: |
+          mkdir -p kind-diagnostics
+          {
+            echo "=== kubectl get all ==="
+            kubectl get all,configmaps,secrets,events -A || true
+            echo "=== kubectl get nodes ==="
+            kubectl get nodes -o wide || true
+            echo "=== helm release secrets ==="
+            kubectl get secrets -A -l owner=helm -o wide || true
+            echo "=== release secret payloads (labels only; payload keys listed) ==="
+            kubectl get secrets -A -l owner=helm -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' || true
+            echo "=== describe workloads ==="
+            kubectl describe deploy,job,po -A || true
+            echo "=== events ==="
+            kubectl get events -A --sort-by=.lastTimestamp || true
+            echo "=== pod logs ==="
+            kubectl get pods -A -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' 2>/dev/null \
+              | while read -r ns name; do
+                  [ -z "$name" ] && continue
+                  echo "--- logs ${ns}/${name} ---"
+                  kubectl logs -n "$ns" "$name" --all-containers --tail=200 --ignore-errors || true
+                done
+            echo "=== CRDs ==="
+            kubectl get crds || true
+          } > kind-diagnostics/cluster.txt 2>&1
+
+          # Release Secrets are Helm state, not credentials. Dump them for storage-contract
+          # failures; the kind cluster is ephemeral and holds no real secrets.
+          kubectl get secrets -A -l owner=helm -o yaml > kind-diagnostics/release-secrets.yaml || true
+          kubectl get crds -o yaml > kind-diagnostics/crds.yaml || true
+
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: kind-lifecycle-diagnostics
+          path: |
+            kind-diagnostics/**
+            TestResults/*.trx
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: kind-lifecycle-test-results
+          path: TestResults/*.trx
+          if-no-files-found: ignore
+          retention-days: 7

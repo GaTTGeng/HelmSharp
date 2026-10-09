@@ -1,0 +1,2 @@
+1. Release {{ .Release.Name }} is installed in namespace {{ .Release.Namespace }}.
+2. The fixture chart is used only by the kind lifecycle test lane.

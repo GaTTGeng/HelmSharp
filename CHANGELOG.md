@@ -9,6 +9,7 @@ This project follows semantic versioning once stable releases begin.
 ### Added
 
 - Documented the public API surface and key implementation notes with English XML documentation and comments so IntelliSense and source readers can understand Helm equivalence, constraints, and non-obvious behavior without reverse-engineering the code.
+- Added an opt-in kind-backed Kubernetes lifecycle integration lane covering install-through-uninstall, namespace identity, CRD discovery, readiness, hook Jobs, rollback after failure, retained uninstall, wait timeout post-state, and Helm v3 release Secret storage contract (#27).
 
 ### Changed
 
@@ -16,6 +17,7 @@ This project follows semantic versioning once stable releases begin.
 - Aligned workload readiness checks with Helm's observed-generation, rollout, partition, and selected-Pod semantics (#234).
 - Made Kubernetes deletion deterministic across uninstall, rollback, and hook cleanup, including reverse ordering, propagation policies, keep annotations, discovered resource identity, and actionable failure diagnostics (#232).
 - Hardened Kubernetes wait controls by rejecting non-positive waiter timeouts and documenting standard polling, cancellation, Job waiting, and unsupported Helm status-watcher semantics (#233).
+- Retried Kubernetes API discovery briefly on apply when a custom-resource kind is not yet registered, so a CRD and its custom resource can ship in one release without intermittent install failures.
 
 ### Removed
 

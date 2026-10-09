@@ -17,16 +17,36 @@ public sealed class KubernetesManifestApplier
     // Helm's default delete propagation: dependents are reaped in the background so
     // uninstall does not block on cascading deletions.
     private const string DefaultDeletionPropagationPolicy = "Background";
+
+    // A CRD endpoint can take a few seconds to register after create. Apply retries
+    // discovery briefly so a chart that ships a CRD and its CR in one release does not
+    // fail before the control plane is ready; delete does not retry.
+    private const int DiscoveryRetryAttempts = 25;
+    private static readonly TimeSpan DiscoveryRetryDelay = TimeSpan.FromMilliseconds(300);
+
     private readonly k8s.Kubernetes _client;
     private readonly string _fieldManager;
+    private readonly Func<TimeSpan, CancellationToken, Task> _discoveryDelay;
     private readonly Dictionary<(string ApiVersion, string Kind), DiscoveredResource> _discoveredResources = new();
 
     /// <param name="client">Kubernetes client used for all API operations.</param>
     /// <param name="fieldManager">Field manager name recorded on create/replace calls (server-side apply bookkeeping).</param>
     public KubernetesManifestApplier(k8s.Kubernetes client, string fieldManager)
+        : this(client, fieldManager, static (delay, ct) => Task.Delay(delay, ct))
+    {
+    }
+
+    /// <summary>
+    /// Test seam that replaces the discovery retry delay so registration-lag tests stay fast.
+    /// </summary>
+    internal KubernetesManifestApplier(
+        k8s.Kubernetes client,
+        string fieldManager,
+        Func<TimeSpan, CancellationToken, Task> discoveryDelay)
     {
         _client = client;
         _fieldManager = fieldManager;
+        _discoveryDelay = discoveryDelay;
     }
 
     /// <summary>
@@ -181,7 +201,7 @@ public sealed class KubernetesManifestApplier
         DiscoveredResource resource;
         try
         {
-            resource = await DiscoverResourceAsync(identity, cancellationToken);
+            resource = await DiscoverResourceAsync(identity, retryRegistration: false, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -780,7 +800,8 @@ public sealed class KubernetesManifestApplier
 
     private async Task<ManifestIdentity> ApplyDiscoveredResourceAsync(ManifestIdentity identity, string yaml, CancellationToken ct)
     {
-        var resource = await DiscoverResourceAsync(identity, ct);
+        // Retry discovery: the CR may be applied in the same pass that created its CRD.
+        var resource = await DiscoverResourceAsync(identity, retryRegistration: true, ct);
         var item = HelmYaml.DeserializeDictionary(yaml);
 
         if (resource.Namespaced)
@@ -810,7 +831,10 @@ public sealed class KubernetesManifestApplier
         return identity;
     }
 
-    private async Task<DiscoveredResource> DiscoverResourceAsync(ManifestIdentity identity, CancellationToken ct)
+    private async Task<DiscoveredResource> DiscoverResourceAsync(
+        ManifestIdentity identity,
+        bool retryRegistration,
+        CancellationToken ct)
     {
         var cacheKey = (identity.ApiVersion, identity.Kind);
         if (_discoveredResources.TryGetValue(cacheKey, out var cached))
@@ -820,18 +844,40 @@ public sealed class KubernetesManifestApplier
         if (string.IsNullOrEmpty(group))
             throw new KubernetesApiResourceUnsupportedException(identity.ApiVersion, identity.Kind);
 
-        var resources = await _client.CustomObjects.GetAPIResourcesAsync(group, version, ct);
-        var match = resources.Resources?.SingleOrDefault(resource =>
-            string.Equals(resource.Kind, identity.Kind, StringComparison.Ordinal) &&
-            !resource.Name.Contains('/', StringComparison.Ordinal));
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                var resources = await _client.CustomObjects.GetAPIResourcesAsync(group, version, ct);
+                var match = resources.Resources?.SingleOrDefault(resource =>
+                    string.Equals(resource.Kind, identity.Kind, StringComparison.Ordinal) &&
+                    !resource.Name.Contains('/', StringComparison.Ordinal));
 
-        if (match is null || string.IsNullOrWhiteSpace(match.Name))
-            throw new KubernetesApiResourceNotFoundException(identity.ApiVersion, identity.Kind);
+                if (match is null || string.IsNullOrWhiteSpace(match.Name))
+                    throw new KubernetesApiResourceNotFoundException(identity.ApiVersion, identity.Kind);
 
-        var discovered = new DiscoveredResource(group, version, match.Name, match.Namespaced == true);
-        _discoveredResources.Add(cacheKey, discovered);
-        return discovered;
+                var discovered = new DiscoveredResource(group, version, match.Name, match.Namespaced == true);
+                _discoveredResources.Add(cacheKey, discovered);
+                return discovered;
+            }
+            catch (Exception ex) when (
+                retryRegistration &&
+                attempt < DiscoveryRetryAttempts &&
+                ex is not OperationCanceledException &&
+                IsRetryableDiscoveryFailure(ex))
+            {
+                await _discoveryDelay(DiscoveryRetryDelay, ct);
+            }
+        }
     }
+
+    /// <summary>
+    /// Discovery not-found is retryable during apply because a CRD created moments earlier
+    /// may not have registered its endpoint yet. Other discovery failures are permanent.
+    /// </summary>
+    private static bool IsRetryableDiscoveryFailure(Exception ex)
+        => ex is KubernetesApiResourceNotFoundException
+            || (ex is HttpOperationException http && (int)http.Response.StatusCode == 404);
 
     private static (string Group, string Version) SplitApiVersion(string apiVersion)
     {
