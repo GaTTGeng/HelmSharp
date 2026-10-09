@@ -1,0 +1,27 @@
+replicaCount: 1
+
+image:
+  repository: nginx
+  tag: 1.27-alpine
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+
+# Marker written into the ConfigMap so upgrades can prove chart-owned changes.
+message: hello
+
+# When true, a pre-upgrade hook Job fails and the upgrade records a failed revision.
+failUpgrade: false
+
+# When true, the Deployment image is replaced with a pull-failing reference so
+# readiness never completes and wait operations time out.
+useUnreadyImage: false
+
+hook:
+  enabled: true
+
+customResource:
+  enabled: true
+  size: small

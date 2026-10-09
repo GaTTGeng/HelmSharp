@@ -62,3 +62,5 @@ CLI 颜色、进度文案、终端格式和插件执行不是目标，除非它�
 ## 持续验证
 
 基准输出测试结果会在每次推送和拉取请求中通过 [CI 工作流](https://github.com/GaTTGeng/HelmSharp/blob/master/.github/workflows/ci.yml) 验证。CI 运行器会在 .NET SDK 旁安装 Helm CLI（`v4.2.2`），并执行完整的基准输出测试套件，包括测试用 Chart 和公开 Chart 对比。JSON 报告会作为每次工作流运行的产物发布。
+
+Kubernetes apply、wait、hook、rollback、uninstall 与 release Secret 行为还会在一次性 kind 集群上验证。覆盖范围、触发方式与失败诊断见 [Kind 生命周期测试通道](testing-kind-lifecycle.md)。

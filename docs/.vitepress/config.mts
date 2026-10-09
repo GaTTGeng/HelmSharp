@@ -86,6 +86,7 @@ const englishSidebar = [
     items: [
       { text: 'Compatibility contract', link: '/helm-compatibility' },
       { text: 'Template-function matrix', link: '/template-function-compatibility' },
+      { text: 'Kind lifecycle tests', link: '/testing-kind-lifecycle' },
       { text: 'Roadmap', link: '/roadmap' },
       { text: 'Migrate from Helm CLI', link: '/migration/from-helm-cli' },
       { text: 'Changelog', link: 'https://github.com/GaTTGeng/HelmSharp/blob/master/CHANGELOG.md' }
@@ -177,6 +178,7 @@ const chineseSidebar = [
     items: [
       { text: '兼容性约定', link: '/zh/helm-compatibility' },
       { text: '模板函数矩阵', link: '/zh/template-function-compatibility' },
+      { text: 'Kind 生命周期测试', link: '/zh/testing-kind-lifecycle' },
       { text: '路线图', link: '/zh/roadmap' },
       { text: '从 Helm CLI 迁移', link: '/zh/migration/from-helm-cli' },
       { text: '更新日志', link: 'https://github.com/GaTTGeng/HelmSharp/blob/master/CHANGELOG.md' }
