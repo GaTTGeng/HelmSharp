@@ -173,10 +173,10 @@ public sealed class HelmProvenanceTrustedKey
 
     /// <summary>
     /// Whether the governing key-flags subpacket authorizes data signing.
-    /// Flags are asserted by self-signatures (user-ID certifications on a primary key,
-    /// binding signatures on a subkey); the most recent assertion wins. Keys without a
-    /// key-flags subpacket keep their historical unrestricted usage, gated only by
-    /// <see cref="AlgorithmCanSign"/>.
+    /// Flags are asserted by verified direct-key or user-ID signatures on a primary
+    /// key and binding signatures on a subkey; the most recent assertion wins. Keys
+    /// without a key-flags subpacket keep their historical unrestricted usage, gated
+    /// only by <see cref="AlgorithmCanSign"/>.
     /// </summary>
     private static bool KeyFlagsPermitSigning(PgpPublicKey key, PgpPublicKey? master)
     {
@@ -196,12 +196,18 @@ public sealed class HelmProvenanceTrustedKey
         var hasValidatedAssertion = false;
         foreach (var sig in assertions)
         {
-            if (key.IsMasterKey && sig.SignatureType is not (PgpSignature.PositiveCertification
-                    or PgpSignature.CasualCertification or PgpSignature.NoCertification
-                    or PgpSignature.DefaultCertification))
-                continue;
-            if (key.IsMasterKey && !HasValidSelfCertification(sig, key))
-                continue;
+            if (key.IsMasterKey)
+            {
+                var validPrimaryAssertion = sig.SignatureType == PgpSignature.DirectKey
+                    ? HasValidDirectKeySignature(sig, key)
+                    : sig.SignatureType is (PgpSignature.PositiveCertification
+                        or PgpSignature.CasualCertification or PgpSignature.NoCertification
+                        or PgpSignature.DefaultCertification)
+                        && HasValidSelfCertification(sig, key);
+                if (!validPrimaryAssertion)
+                    continue;
+            }
+
             hasValidatedAssertion = true;
             var hashed = sig.GetHashedSubPackets();
             if (hashed is null || !hashed.HasSubpacket(SignatureSubpacketTag.KeyFlags))
@@ -299,9 +305,36 @@ public sealed class HelmProvenanceTrustedKey
         try
         {
             signature.InitVerify(key);
-            return signature.VerifyCertification(key);
+            var keyContents = key.PublicKeyPacket.GetEncodedContents();
+            byte[] keyPrefix;
+            if (key.Version == 4 && keyContents.Length <= ushort.MaxValue)
+            {
+                keyPrefix = [(byte)0x99, (byte)(keyContents.Length >> 8), (byte)keyContents.Length];
+            }
+            else if (key.Version is 5 or 6)
+            {
+                var packetTag = key.Version == 5 ? (byte)0x9A : (byte)0x9B;
+                keyPrefix = [
+                    packetTag,
+                    (byte)(keyContents.Length >> 24),
+                    (byte)(keyContents.Length >> 16),
+                    (byte)(keyContents.Length >> 8),
+                    (byte)keyContents.Length,
+                ];
+            }
+            else
+            {
+                return false;
+            }
+
+            // Bouncy Castle's public VerifyCertification(PgpPublicKey) overload accepts
+            // key revocations only; a direct-key signature hashes the primary packet.
+            signature.Update(keyPrefix);
+            signature.Update(keyContents);
+            return signature.Verify();
         }
-        catch (PgpException)
+        catch (Exception exception) when (exception is PgpException or IOException
+            or InvalidOperationException or ArgumentException)
         {
             // A forged or malformed direct-key packet cannot set primary-key expiry.
             return false;

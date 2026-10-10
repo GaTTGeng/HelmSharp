@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Org.BouncyCastle.Bcpg;
 using Org.BouncyCastle.Bcpg.OpenPgp;
 using Org.BouncyCastle.Crypto;
@@ -331,11 +332,8 @@ public static class HelmProvenance
             if (inFilesSection)
             {
                 // "  archive-name.tgz: sha256:<hex>" -> record as files entry + sha256 key.
-                var colon = trimmed.IndexOf(':');
-                if (colon > 0)
+                if (TryParseFilesEntry(trimmed, out var fileKey, out var fileValue))
                 {
-                    var fileKey = trimmed[..colon].Trim();
-                    var fileValue = trimmed[(colon + 1)..].Trim();
                     result["files." + fileKey] = fileValue;
                     if (fileValue.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
                         result["sha256"] = fileValue["sha256:".Length..].Trim();
@@ -373,7 +371,7 @@ public static class HelmProvenance
         sb.Append(metadataYaml);
         sb.Append("\n\n...\n");
         sb.Append("files:\n");
-        sb.Append("  ").Append(archiveName).Append(": sha256:").Append(sha256).Append('\n');
+        sb.Append("  ").Append(JsonSerializer.Serialize(archiveName)).Append(": sha256:").Append(sha256).Append('\n');
         return sb.ToString();
     }
 
@@ -762,12 +760,9 @@ public static class HelmProvenance
                 break;
 
             var trimmed = line.Trim();
-            var colon = trimmed.IndexOf(':');
-            if (colon <= 0)
+            if (!TryParseFilesEntry(trimmed, out var key, out var value))
                 continue;
 
-            var key = trimmed[..colon].Trim();
-            var value = trimmed[(colon + 1)..].Trim();
             if (!value.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
                 continue;
 
@@ -785,6 +780,59 @@ public static class HelmProvenance
         // Without a filename a single-entry map is unambiguous; a multi-entry map is
         // ambiguous and the caller must name the archive instead of guessing.
         return archiveName is null && entryCount == 1 ? sole : null;
+    }
+
+    private static bool TryParseFilesEntry(string line, out string key, out string value)
+    {
+        key = string.Empty;
+        value = string.Empty;
+        if (line.StartsWith('"'))
+        {
+            var escaped = false;
+            for (var index = 1; index < line.Length; index++)
+            {
+                var current = line[index];
+                if (escaped)
+                {
+                    escaped = false;
+                    continue;
+                }
+
+                if (current == '\\')
+                {
+                    escaped = true;
+                    continue;
+                }
+
+                if (current != '"')
+                    continue;
+
+                if (index + 1 >= line.Length || line[index + 1] != ':')
+                    return false;
+
+                try
+                {
+                    key = JsonSerializer.Deserialize<string>(line[..(index + 1)]) ?? string.Empty;
+                }
+                catch (JsonException)
+                {
+                    return false;
+                }
+
+                value = line[(index + 2)..].Trim();
+                return key.Length > 0;
+            }
+
+            return false;
+        }
+
+        var separator = line.IndexOf(": ", StringComparison.Ordinal);
+        if (separator <= 0)
+            return false;
+
+        key = line[..separator].Trim();
+        value = line[(separator + 2)..].Trim();
+        return key.Length > 0;
     }
 
     /// <summary>
