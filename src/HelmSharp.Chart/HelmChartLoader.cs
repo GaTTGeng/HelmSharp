@@ -329,6 +329,9 @@ public static class HelmChartLoader
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     var dependencyPath = NormalizePath(Path.GetRelativePath(chartDir, dependencyArchive));
+                    // Validate the known file size before allocating the archive bytes so an
+                    // oversized dependency is rejected without ever being buffered in memory.
+                    budget.CheckCompressedBytes(new FileInfo(dependencyArchive).Length);
                     var archiveBytes = await File.ReadAllBytesAsync(dependencyArchive, cancellationToken);
                     var subchart = await LoadDependencyArchiveAsync(
                         chartPath,
@@ -459,6 +462,11 @@ public static class HelmChartLoader
         {
             cancellationToken.ThrowIfCancellationRequested();
             var relative = NormalizePath(Path.GetRelativePath(chartPath, file));
+            // Packaged dependency archives are loaded and budgeted separately from disk;
+            // flattening them here would buffer an oversized charts/*.tgz twice before any
+            // compressed-size budget could reject it.
+            if (IsEmbeddedDependencyArchivePath(relative))
+                continue;
             files[relative] = await File.ReadAllBytesAsync(file, cancellationToken);
         }
 

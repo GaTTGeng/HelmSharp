@@ -2048,7 +2048,11 @@ public class HelmClient : IHelmClient
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        using var repo = _createChartRepository(null);
+        var options = await _optionsProvider.GetHelmAsync(cancellationToken);
+        using var repo = _createChartRepository(new HelmRepositoryOptions
+        {
+            ArchiveLimits = options.ArchiveLimits
+        });
         var path = await repo.PullChartAsync(request, cancellationToken);
         return Ok($"Chart pulled to: {path}");
     }
@@ -2139,6 +2143,7 @@ public class HelmClient : IHelmClient
     {
         ArgumentNullException.ThrowIfNull(request);
         var chartPath = Path.GetFullPath(request.ChartPath);
+        var options = await _optionsProvider.GetHelmAsync(cancellationToken);
         var chart = await LoadChartAsync(chartPath, cancellationToken);
         if (chart.Dependencies.Count == 0)
             return Ok("No dependencies found in Chart.yaml");
@@ -2158,11 +2163,15 @@ public class HelmClient : IHelmClient
         try
         {
             using var repo = request.RepositoryConfigPath is null && request.RepositoryCachePath is null
-                ? _createChartRepository(null)
+                ? _createChartRepository(new HelmRepositoryOptions
+                {
+                    ArchiveLimits = options.ArchiveLimits
+                })
                 : _createChartRepository(new HelmRepositoryOptions
                 {
                     RepositoryConfigPath = request.RepositoryConfigPath,
-                    CacheDirectory = request.RepositoryCachePath
+                    CacheDirectory = request.RepositoryCachePath,
+                    ArchiveLimits = options.ArchiveLimits
                 });
             var configuredRepositories = await repo.ListRepositoriesAsync(cancellationToken);
             var refreshedRepositories = new HashSet<string>(StringComparer.Ordinal);
@@ -2182,6 +2191,7 @@ public class HelmClient : IHelmClient
                             dependency.Name,
                             dependency.Version,
                             exactVersion: false,
+                            options.ArchiveLimits,
                             cancellationToken);
                         output.AppendLine(
                             $"Resolved local dependency: {dependency.Name} ({local.Version}) from charts/{dependency.Name}");
@@ -2205,6 +2215,7 @@ public class HelmClient : IHelmClient
                         refreshConfiguredRepository: !request.SkipRepositoryRefresh,
                         requireConfiguredCache: request.SkipRepositoryRefresh,
                         exactVersion: false,
+                        options.ArchiveLimits,
                         cancellationToken);
                     output.AppendLine(
                         $"Resolved dependency: {dependency.Name} ({staged.Version}) from {dependency.Repository}");
@@ -2240,6 +2251,7 @@ public class HelmClient : IHelmClient
                 stagedArchives,
                 localDependencyNames,
                 output,
+                options.ArchiveLimits,
                 cancellationToken);
 
             var lockChanged = await HelmDependencyLockFile.WriteIfChangedAsync(
@@ -2288,6 +2300,7 @@ public class HelmClient : IHelmClient
         IReadOnlyList<string> stagedArchives,
         IReadOnlySet<string> localDependencyNames,
         StringBuilder output,
+        HelmChartArchiveLimits? archiveLimits,
         CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(chartsDirectory);
@@ -2320,7 +2333,7 @@ public class HelmClient : IHelmClient
         {
             if (!desiredArchiveNames.Contains(Path.GetFileName(existingArchive)))
             {
-                var existingChart = await HelmChartLoader.LoadAsync(existingArchive, cancellationToken);
+                var existingChart = await HelmChartLoader.LoadAsync(existingArchive, archiveLimits, cancellationToken);
                 if (localDependencyNames.Contains(existingChart.Name))
                     continue;
 
@@ -2708,6 +2721,7 @@ public class HelmClient : IHelmClient
     {
         ArgumentNullException.ThrowIfNull(request);
         var chartPath = Path.GetFullPath(request.ChartPath);
+        var options = await _optionsProvider.GetHelmAsync(cancellationToken);
 
         // --- Stage: validate Chart.lock exists and matches Chart.yaml ---
         // Build never re-resolves constraints; an out-of-sync lock must be fixed by
@@ -2763,11 +2777,15 @@ public class HelmClient : IHelmClient
         try
         {
             using var repository = request.RepositoryConfigPath is null && request.RepositoryCachePath is null
-                ? _createChartRepository(null)
+                ? _createChartRepository(new HelmRepositoryOptions
+                {
+                    ArchiveLimits = options.ArchiveLimits
+                })
                 : _createChartRepository(new HelmRepositoryOptions
                 {
                     RepositoryConfigPath = request.RepositoryConfigPath,
-                    CacheDirectory = request.RepositoryCachePath
+                    CacheDirectory = request.RepositoryCachePath,
+                    ArchiveLimits = options.ArchiveLimits
                 });
             var configuredRepositories = await repository.ListRepositoriesAsync(cancellationToken);
             var refreshedRepositories = new HashSet<string>(StringComparer.Ordinal);
@@ -2787,6 +2805,7 @@ public class HelmClient : IHelmClient
                             dependency.Name,
                             dependency.Version,
                             exactVersion: false,
+                            options.ArchiveLimits,
                             cancellationToken);
                         output.AppendLine(
                             $"Using local locked dependency: {dependency.Name} ({dependency.Version}) " +
@@ -2810,6 +2829,7 @@ public class HelmClient : IHelmClient
                         refreshConfiguredRepository: false,
                         requireConfiguredCache: true,
                         exactVersion: true,
+                        options.ArchiveLimits,
                         cancellationToken);
                     var archivePath = staged.ArchivePath;
                     if (!File.Exists(archivePath))
@@ -2844,6 +2864,7 @@ public class HelmClient : IHelmClient
                 stagedArchives,
                 localDependencyNames,
                 output,
+                options.ArchiveLimits,
                 cancellationToken);
             output.AppendLine("Dependencies rebuilt from Chart.lock.");
             return Ok(output.ToString());
@@ -2898,6 +2919,7 @@ public class HelmClient : IHelmClient
         string dependencyName,
         string? requestedVersion,
         bool exactVersion,
+        HelmChartArchiveLimits? archiveLimits,
         CancellationToken cancellationToken)
     {
         var dependencyPath = Path.Combine(parentChartPath, "charts", dependencyName);
@@ -2907,7 +2929,7 @@ public class HelmClient : IHelmClient
                 $"Local dependency directory was not found: {dependencyPath}");
         }
 
-        var chart = await HelmChartLoader.LoadAsync(dependencyPath, cancellationToken);
+        var chart = await HelmChartLoader.LoadAsync(dependencyPath, archiveLimits, cancellationToken);
         if (!string.Equals(chart.Name, dependencyName, StringComparison.Ordinal))
         {
             throw new InvalidDataException(
@@ -2947,6 +2969,7 @@ public class HelmClient : IHelmClient
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var options = await _optionsProvider.GetHelmAsync(cancellationToken);
         var chart = await LoadChartAsync(request.ChartPath, cancellationToken);
         if (chart.Dependencies.Count == 0)
             return Ok($"WARNING: no dependencies at {Path.Combine(request.ChartPath, "charts")}{Environment.NewLine}");
@@ -2960,6 +2983,7 @@ public class HelmClient : IHelmClient
                 request.ChartPath,
                 chart,
                 dep,
+                options.ArchiveLimits,
                 cancellationToken);
             output.AppendLine($"{dep.Name}\t{dep.Version ?? string.Empty}\t{dep.Repository ?? string.Empty}\t{status}");
         }

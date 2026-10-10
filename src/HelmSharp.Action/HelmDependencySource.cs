@@ -28,6 +28,7 @@ internal static class HelmDependencySource
     /// <param name="refreshConfiguredRepository">Refresh the repository index before pulling (once per repository per run).</param>
     /// <param name="requireConfiguredCache">Fail when no cached index exists instead of refreshing (dependency list without update).</param>
     /// <param name="exactVersion">Treat <paramref name="versionConstraint"/> as an exact locked version rather than a range.</param>
+    /// <param name="archiveLimits">Decompression budgets applied when validating the staged chart; null applies the defaults.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     public static async Task<HelmStagedDependency> StageAsync(
         HelmChartRepository repository,
@@ -42,6 +43,7 @@ internal static class HelmDependencySource
         bool refreshConfiguredRepository,
         bool requireConfiguredCache,
         bool exactVersion,
+        HelmChartArchiveLimits? archiveLimits,
         CancellationToken cancellationToken)
     {
         if (repositoryReference.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
@@ -53,6 +55,7 @@ internal static class HelmDependencySource
                 repositoryReference,
                 destination,
                 exactVersion,
+                archiveLimits,
                 cancellationToken);
         }
 
@@ -105,7 +108,9 @@ internal static class HelmDependencySource
         }
 
         var archivePath = await repository.PullChartAsync(pullRequest, cancellationToken);
-        var chart = await HelmChartLoader.LoadAsync(archivePath, cancellationToken);
+        // Validate under the operation's budgets so a stricter configured policy is honored
+        // and a trusted profile raised above the defaults is not rejected here.
+        var chart = await HelmChartLoader.LoadAsync(archivePath, archiveLimits, cancellationToken);
         // Guard against a repository serving a different chart for the requested name;
         // Helm rejects the dependency in that case rather than trusting the download.
         if (!string.Equals(chart.Name, dependencyName, StringComparison.Ordinal))
@@ -124,6 +129,7 @@ internal static class HelmDependencySource
         string repositoryReference,
         string destination,
         bool exactVersion,
+        HelmChartArchiveLimits? archiveLimits,
         CancellationToken cancellationToken)
     {
         // file:// references are relative to the parent chart directory unless rooted;
@@ -137,7 +143,7 @@ internal static class HelmDependencySource
         if (!Directory.Exists(localPath))
             throw new DirectoryNotFoundException($"File dependency directory was not found: {localPath}");
 
-        var chart = await HelmChartLoader.LoadAsync(localPath, cancellationToken);
+        var chart = await HelmChartLoader.LoadAsync(localPath, archiveLimits, cancellationToken);
         if (!string.Equals(chart.Name, dependencyName, StringComparison.Ordinal))
         {
             throw new InvalidDataException(

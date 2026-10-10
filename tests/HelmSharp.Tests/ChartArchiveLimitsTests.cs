@@ -2,6 +2,7 @@ using System.Formats.Tar;
 using System.IO.Compression;
 using System.Net;
 using System.Text;
+using HelmSharp.Action;
 using HelmSharp.Chart;
 using HelmSharp.Repo;
 
@@ -640,6 +641,163 @@ public sealed class ChartArchiveLimitsTests : IDisposable
         Assert.Equal(ChartArchiveLimitKind.TotalExtractedBytes, ex.Limit);
     }
 
+    // --- Directory-sourced dependency archives are validated before buffering ---
+
+    [Fact]
+    public async Task LoadAsync_DirectoryDependencyArchiveOverCompressedLimit_ThrowsCompressedBytesLimit()
+    {
+        var chartDir = Path.Combine(_tempDir, "dir-chart-oversized-dep");
+        Directory.CreateDirectory(Path.Combine(chartDir, "charts"));
+        await File.WriteAllTextAsync(
+            Path.Combine(chartDir, "Chart.yaml"),
+            "apiVersion: v2\nname: dir-chart\nversion: 1.0.0\n");
+        var payload = new byte[16 * 1024];
+        new Random(12345).NextBytes(payload);
+        var dependencyArchive = CreateChartTgz(("blob.bin", payload));
+        Assert.True(dependencyArchive.Length > 4 * 1024);
+        await File.WriteAllBytesAsync(Path.Combine(chartDir, "charts", "dep-1.0.0.tgz"), dependencyArchive);
+        var limits = new HelmChartArchiveLimits { MaxCompressedBytes = 4 * 1024 };
+
+        var ex = await Assert.ThrowsAsync<ChartArchiveLimitExceededException>(
+            () => HelmChartLoader.LoadAsync(chartDir, limits, CancellationToken.None));
+
+        Assert.Equal(ChartArchiveLimitKind.CompressedBytes, ex.Limit);
+    }
+
+    // --- Extraction cache honors the active limit profile ---
+
+    [Fact]
+    public async Task PullChartAsync_CachedExtractionFromLooserLimits_NotReusedUnderStricterLimits()
+    {
+        // A cache entry produced under unlimited budgets must not satisfy a stricter
+        // client: the identical archive is re-extracted under the active profile.
+        var payload = new byte[48 * 1024];
+        new Random(99).NextBytes(payload);
+        var archive = CreateChartTgz(("big.bin", payload));
+        var handler = new SingleResponseHandler(
+            new HttpResponseMessage(HttpStatusCode.OK) { Content = new InstrumentedContent(archive, declareLength: true) },
+            new HttpResponseMessage(HttpStatusCode.OK) { Content = new InstrumentedContent(archive, declareLength: true) });
+        using var looseRepository = new HelmChartRepository(
+            CreateRepositoryOptions(HelmChartArchiveLimits.ForTrustedCharts()),
+            handler);
+
+        var cachedPath = await looseRepository.PullChartAsync(
+            "https://repo.example.test/cached-1.0.0.tgz",
+            version: null,
+            CancellationToken.None);
+        Assert.True(Directory.Exists(cachedPath));
+
+        var strictLimits = new HelmChartArchiveLimits
+        {
+            MaxEntryBytes = 4 * 1024,
+            MaxTotalExtractedBytes = 1024 * 1024,
+            MaxCompressionRatio = 10_000,
+        };
+        using var strictRepository = new HelmChartRepository(CreateRepositoryOptions(strictLimits), handler);
+
+        var ex = await Assert.ThrowsAsync<ChartArchiveLimitExceededException>(
+            () => strictRepository.PullChartAsync(
+                "https://repo.example.test/cached-1.0.0.tgz",
+                version: null,
+                CancellationToken.None));
+
+        Assert.Equal(ChartArchiveLimitKind.EntryBytes, ex.Limit);
+    }
+
+    // --- Action entry points propagate the configured limit profile ---
+
+    [Fact]
+    public async Task StageAsync_TrustedLimitsProfile_LoadsDependencyBeyondDefaultBudgets()
+    {
+        // A high-amplification dependency chart fits the trusted profile; validating the
+        // downloaded archive with the default budgets would reject the same bytes.
+        var depArchive = CreateTgz(new (string Name, byte[] Content)[]
+        {
+            ("dep/Chart.yaml", Encoding.UTF8.GetBytes("apiVersion: v2\nname: dep\nversion: 1.0.0\n")),
+            ("dep/zeros.bin", new byte[96 * 1024]),
+        });
+        Assert.True(depArchive.Length < 8 * 1024, $"compressed size should be tiny, was {depArchive.Length}");
+        var handler = new SingleResponseHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new InstrumentedContent(depArchive, declareLength: true)
+        });
+        var trustedLimits = HelmChartArchiveLimits.ForTrustedCharts();
+        var options = CreateRepositoryOptions(trustedLimits);
+        Directory.CreateDirectory(options.ConfigDirectory!);
+        await File.WriteAllTextAsync(Path.Combine(options.ConfigDirectory!, "repositories.yaml"), """
+            apiVersion: v1
+            repositories:
+              - name: stable
+                url: https://repo.example.test
+            """);
+        Directory.CreateDirectory(options.CacheDirectory!);
+        await File.WriteAllTextAsync(
+            Path.Combine(options.CacheDirectory!, HelmChartRepository.GetRepositoryIndexCacheFileName("stable")),
+            """
+            apiVersion: v1
+            entries:
+              dep:
+                - name: dep
+                  version: 1.0.0
+                  urls:
+                    - https://repo.example.test/charts/dep-1.0.0.tgz
+            """);
+        using var repository = new HelmChartRepository(options, new SingleResponseHandler(), _ => handler);
+
+        var staged = await HelmDependencySource.StageAsync(
+            repository,
+            new List<HelmRepository> { new() { Name = "stable", Url = "https://repo.example.test" } },
+            new HashSet<string>(StringComparer.Ordinal),
+            _tempDir,
+            dependencyName: "dep",
+            versionConstraint: "1.0.0",
+            repositoryReference: "@stable",
+            destination: Path.Combine(_tempDir, "stage-destination"),
+            verifyDigest: false,
+            refreshConfiguredRepository: false,
+            requireConfiguredCache: true,
+            exactVersion: false,
+            trustedLimits,
+            CancellationToken.None);
+
+        Assert.Equal("1.0.0", staged.Version);
+    }
+
+    [Fact]
+    public async Task PullAsync_ClientConfiguredLimitsApplyToRepositoryDownloads()
+    {
+        // HelmClient must hand the operation's limit profile to the repository it creates;
+        // a strict compressed-input budget has to abort the oversized download.
+        var payload = new byte[256 * 1024];
+        new Random(7).NextBytes(payload);
+        var archive = CreateChartTgz(("blob.bin", payload));
+        var content = new InstrumentedContent(archive, declareLength: false);
+        var handler = new SingleResponseHandler(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
+        var strictLimits = new HelmChartArchiveLimits { MaxCompressedBytes = 64 * 1024 };
+        var client = new HelmClient(
+            new StaticLimitsOptionsProvider(strictLimits),
+            (_, _, _, _) => throw new NotSupportedException(),
+            options => new HelmChartRepository(
+                new HelmRepositoryOptions
+                {
+                    ConfigDirectory = Path.Combine(_tempDir, "client-config"),
+                    CacheDirectory = Path.Combine(_tempDir, "client-cache"),
+                    ArchiveLimits = options?.ArchiveLimits
+                },
+                handler));
+
+        var ex = await Assert.ThrowsAsync<ChartArchiveLimitExceededException>(() => client.PullAsync(
+            new HelmPullRequest
+            {
+                ChartReference = "https://repo.example.test/oversized-1.0.0.tgz",
+                Destination = Path.Combine(_tempDir, "client-pull-destination"),
+            },
+            CancellationToken.None));
+
+        Assert.Equal(ChartArchiveLimitKind.CompressedBytes, ex.Limit);
+        Assert.True(content.BytesDelivered < payload.Length);
+    }
+
     // --- Helpers ---
 
     private static string FixturesRoot => Path.Combine(AppContext.BaseDirectory, "Fixtures", "Charts");
@@ -855,6 +1013,12 @@ public sealed class ChartArchiveLimitsTests : IDisposable
             HttpRequestMessage request,
             CancellationToken cancellationToken)
             => Task.FromResult(_responses.Dequeue());
+    }
+
+    private sealed class StaticLimitsOptionsProvider(HelmChartArchiveLimits limits) : IHelmOptionsProvider
+    {
+        public ValueTask<HelmExecutionOptions> GetHelmAsync(CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(new HelmExecutionOptions { ArchiveLimits = limits });
     }
 
     /// <summary>

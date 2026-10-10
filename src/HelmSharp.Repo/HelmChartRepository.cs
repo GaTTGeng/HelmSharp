@@ -1,4 +1,5 @@
 using System.Formats.Tar;
+using System.Globalization;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
@@ -894,10 +895,11 @@ public sealed class HelmChartRepository : IDisposable
     {
         var chartBytes = await DownloadChartArchiveAsync(url, username, password, cancellationToken);
 
-        // Cache key is the content hash of the archive, so the same chart bytes always
-        // share one extraction directory and ref pulls of identical content reuse it.
+        // Cache key is the content hash of the archive plus the active limit profile, so the
+        // same chart bytes under different budgets never share an extraction directory. A
+        // cache populated under looser limits must not be accepted by a stricter client.
         var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(chartBytes))[..12];
-        var extractDir = Path.Combine(_cacheDir, hash);
+        var extractDir = Path.Combine(_cacheDir, $"{hash}-{GetArchiveLimitsFingerprint(_archiveLimits)}");
         if (Directory.Exists(extractDir))
             return extractDir;
 
@@ -922,6 +924,25 @@ public sealed class HelmChartRepository : IDisposable
         }
 
         return extractDir;
+    }
+
+    /// <summary>
+    /// Derives a short stable fingerprint of a limit profile for extraction-cache identity,
+    /// so extractions produced under different budgets are never reused interchangeably.
+    /// </summary>
+    /// <param name="limits">The active archive resource budgets.</param>
+    /// <returns>An eight-hex-character fingerprint of the limit values.</returns>
+    private static string GetArchiveLimitsFingerprint(HelmChartArchiveLimits limits)
+    {
+        var profile = string.Join(
+            ";",
+            limits.MaxCompressedBytes.ToString(CultureInfo.InvariantCulture),
+            limits.MaxTotalExtractedBytes.ToString(CultureInfo.InvariantCulture),
+            limits.MaxEntryBytes.ToString(CultureInfo.InvariantCulture),
+            limits.MaxEntryCount.ToString(CultureInfo.InvariantCulture),
+            limits.MaxCompressionRatio.ToString("R", CultureInfo.InvariantCulture),
+            limits.MaxDependencyDepth.ToString(CultureInfo.InvariantCulture));
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(profile)))[..8];
     }
 
     private async Task<byte[]> DownloadChartArchiveAsync(

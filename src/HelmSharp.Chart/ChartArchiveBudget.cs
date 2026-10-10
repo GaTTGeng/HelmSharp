@@ -38,6 +38,21 @@ internal sealed class ChartArchiveBudget
     }
 
     /// <summary>
+    /// Validates a known compressed size against the compressed-input budget before the
+    /// bytes are buffered, so oversized inputs are rejected without allocating them.
+    /// </summary>
+    /// <param name="compressedBytes">Compressed size of the archive about to be read.</param>
+    /// <exception cref="ChartArchiveLimitExceededException">Thrown when the compressed input limit is exceeded.</exception>
+    internal void CheckCompressedBytes(long compressedBytes)
+    {
+        if (compressedBytes > _limits.MaxCompressedBytes)
+            throw new ChartArchiveLimitExceededException(
+                ChartArchiveLimitKind.CompressedBytes,
+                _limits.MaxCompressedBytes,
+                compressedBytes);
+    }
+
+    /// <summary>
     /// Validates the compressed size of one archive stream and opens a scope whose
     /// metered decompression stream and entry reads enforce per-entry, total-extracted,
     /// entry-count, and compression-ratio budgets on the actual bytes produced.
@@ -50,12 +65,7 @@ internal sealed class ChartArchiveBudget
     /// <exception cref="ChartArchiveLimitExceededException">Thrown when the compressed input limit is exceeded.</exception>
     internal ArchiveScope BeginArchive(long compressedBytes)
     {
-        if (compressedBytes > _limits.MaxCompressedBytes)
-            throw new ChartArchiveLimitExceededException(
-                ChartArchiveLimitKind.CompressedBytes,
-                _limits.MaxCompressedBytes,
-                compressedBytes);
-
+        CheckCompressedBytes(compressedBytes);
         return new ArchiveScope(this, compressedBytes);
     }
 
