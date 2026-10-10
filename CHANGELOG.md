@@ -10,6 +10,7 @@ This project follows semantic versioning once stable releases begin.
 
 - Documented the public API surface and key implementation notes with English XML documentation and comments so IntelliSense and source readers can understand Helm equivalence, constraints, and non-obvious behavior without reverse-engineering the code.
 - Added an opt-in kind-backed Kubernetes lifecycle integration lane covering install-through-uninstall, namespace identity, CRD discovery, readiness, hook Jobs, rollback after failure, retained uninstall, wait timeout post-state, and Helm v3 release Secret storage contract (#27).
+- Added real OpenPGP clear-signing and verification for chart provenance (`HelmProvenance.SignAsync` / `VerifyAsync`) with explicit private-key and trusted-key inputs, signer fingerprint reporting, and Helm-compatible `.prov` files (#262).
 
 ### Changed
 
@@ -18,6 +19,12 @@ This project follows semantic versioning once stable releases begin.
 - Made Kubernetes deletion deterministic across uninstall, rollback, and hook cleanup, including reverse ordering, propagation policies, keep annotations, discovered resource identity, and actionable failure diagnostics (#232).
 - Hardened Kubernetes wait controls by rejecting non-positive waiter timeouts and documenting standard polling, cancellation, Job waiting, and unsupported Helm status-watcher semantics (#233).
 - Retried Kubernetes API discovery briefly on apply when a custom-resource kind is not yet registered, so a CRD and its custom resource can ship in one release without intermittent install failures.
+
+### Security
+
+- Replaced the HelmProvenance pseudo-signature (a Base64 SHA-512 digest presented as a PGP signature) with real OpenPGP verification that binds chart digest, signed metadata, and trusted signer identity ([GHSA-p8v5-2m72-3hrw](https://github.com/GaTTGeng/HelmSharp/security/advisories/GHSA-p8v5-2m72-3hrw)). Authenticity verification now requires explicit trusted keys and fails closed on tampered charts, tampered signed metadata, malformed armor, unknown keys, and invalid signatures. **Breaking API change:** `GenerateProvFileAsync` and the hash-only `VerifyAsync` overload are removed; legacy pseudo-signature `.prov` files no longer pass authenticity checks and must be re-signed. Hash-only integrity remains available under the explicitly non-authenticating `CheckDigestAsync` (#262).
+- Trusted provenance keyrings now import only keys OpenPGP authorizes to sign: revoked keys, expired keys, and encryption-only (or otherwise non-signing) keys can no longer act as trusted signers, and verification fails closed when the signer is not a valid signing key.
+- Provenance digest lookup now selects the archive entry in the signed `files:` map by filename instead of returning the first `sha256:`-shaped scalar, so chart metadata such as an annotation value that looks like a digest can no longer be mistaken for the archive digest.
 
 ### Removed
 
