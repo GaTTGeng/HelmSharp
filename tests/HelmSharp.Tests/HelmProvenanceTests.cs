@@ -136,6 +136,36 @@ public class HelmProvenanceTests
         return (secretRing, publicRing, attackSecretBytes);
     }
 
+    private static (PgpSecretKeyRing SecretRing, PgpPublicKeyRing PublicRing) CreateRingWithSigningSubkey(
+        string userId = "Signing subkey <subkey@example.com>")
+    {
+        var kpg = new RsaKeyPairGenerator();
+        kpg.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
+        var createdAt = DateTime.UtcNow;
+        var primaryPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, kpg.GenerateKeyPair(), createdAt);
+        var primaryFlags = new PgpSignatureSubpacketGenerator();
+        primaryFlags.SetKeyFlags(true, PgpKeyFlags.CanCertify);
+        var keyRingGenerator = new PgpKeyRingGenerator(
+            (int)PgpSignature.PositiveCertification,
+            primaryPair,
+            userId,
+            SymmetricKeyAlgorithmTag.Null,
+            (char[])null!,
+            false,
+            primaryFlags.Generate(),
+            null,
+            new SecureRandom());
+
+        var signingPair = new PgpKeyPair(
+            PublicKeyAlgorithmTag.RsaGeneral,
+            kpg.GenerateKeyPair(),
+            createdAt);
+        var signingFlags = new PgpSignatureSubpacketGenerator();
+        signingFlags.SetKeyFlags(true, PgpKeyFlags.CanSign);
+        keyRingGenerator.AddSubKey(signingPair, signingFlags.Generate(), null);
+        return (keyRingGenerator.GenerateSecretKeyRing(), keyRingGenerator.GeneratePublicKeyRing());
+    }
+
     /// <summary>Binary public keyring containing a single signing key that is revoked.</summary>
     private static byte[] CreateRevokedSigningKeyring(string userId = "Revoked <revoked@example.com>")
     {
@@ -566,36 +596,110 @@ public class HelmProvenanceTests
     }
 
     [Fact]
-    public async Task Verify_SignatureByEncryptionOnlySubkey_FailsClosed()
+    public void FromKeyringData_CertificationOnlyPrimary_IsRejected()
+    {
+        var (secretRing, _) = CreateRingWithSigningSubkey();
+        using var ms = new MemoryStream();
+        secretRing.GetSecretKeys().First().PublicKey.Encode(ms);
+
+        var ex = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
+        Assert.Contains("signing key", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void FromKeyringData_RevokedPrimary_InvalidatesSigningSubkeys()
+    {
+        var (secretRing, publicRing) = CreateRingWithSigningSubkey();
+        var primarySecret = secretRing.GetSecretKeys().First();
+        var primaryPublic = publicRing.GetPublicKeys().First(key => key.IsMasterKey);
+        var revocation = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        revocation.InitSign(PgpSignature.KeyRevocation, primarySecret.ExtractPrivateKey(null)!);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        revocation.SetHashedSubpackets(packets.Generate());
+        var revokedPrimary = PgpPublicKey.AddCertification(
+            primaryPublic,
+            revocation.GenerateCertification(primaryPublic));
+        var revokedRing = PgpPublicKeyRing.InsertPublicKey(publicRing, revokedPrimary);
+
+        using var ms = new MemoryStream();
+        revokedRing.Encode(ms);
+        var ex = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
+        Assert.Contains("signing key", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void FromKeyringData_ForgedSubkeyBinding_CannotAuthorizeSigning()
+    {
+        var (_, publicRing, encryptionSecretBytes) = CreateRingWithEncryptionSubkey();
+        var master = publicRing.GetPublicKeys().First(key => key.IsMasterKey);
+        var encryptionSubkey = publicRing.GetPublicKeys().First(key => !key.IsMasterKey);
+        var secretFactory = new PgpObjectFactory(new MemoryStream(encryptionSecretBytes));
+        var attackerRing = Assert.IsType<PgpSecretKeyRing>(secretFactory.NextPgpObject());
+        var attackerSecret = attackerRing.GetSecretKeys().Single();
+        var attackerPrivate = attackerSecret.ExtractPrivateKey(null)!;
+
+        // An attacker who controls the subkey can attach a newer apparent binding that
+        // grants CanSign. Its issuer is not the primary, so the keyring importer must
+        // ignore the unverified flags even though the packet names the correct subkey.
+        var signature = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        signature.InitSign(PgpSignature.SubkeyBinding, attackerPrivate);
+        var forgedFlags = new PgpSignatureSubpacketGenerator();
+        forgedFlags.SetSignatureCreationTime(false, DateTime.UtcNow.AddMinutes(1));
+        forgedFlags.SetKeyFlags(true, PgpKeyFlags.CanSign);
+        signature.SetHashedSubpackets(forgedFlags.Generate());
+        var forgedSubkey = PgpPublicKey.AddCertification(
+            encryptionSubkey,
+            signature.GenerateCertification(master, encryptionSubkey));
+        var forgedRing = PgpPublicKeyRing.InsertPublicKey(publicRing, forgedSubkey);
+
+        using var ms = new MemoryStream();
+        forgedRing.Encode(ms);
+        var trusted = HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray());
+
+        Assert.Single(trusted);
+        Assert.Equal(Convert.ToHexString(master.GetFingerprint()).ToLowerInvariant(), trusted[0].Fingerprint);
+    }
+
+    [Fact]
+    public async Task SignAsync_SelectsAuthorizedSigningSubkey()
     {
         var work = TempDir();
         try
         {
             var tgz = await CreateTestChartArchiveAsync(work);
-            var (_, publicRing, subSecretBytes) = CreateRingWithEncryptionSubkey();
+            var (secretRing, publicRing) = CreateRingWithSigningSubkey();
+            using var secretBytes = new MemoryStream();
+            secretRing.Encode(secretBytes);
+            using var publicBytes = new MemoryStream();
+            publicRing.Encode(publicBytes);
+            using var signingKey = HelmProvenanceSigningKey.FromSecretKeyData(secretBytes.ToArray());
 
-            // Attacker signs with the encryption-only subkey's private key: the signature
-            // is mathematically valid, but OpenPGP does not authorize that key to sign.
-            using var attackKey = HelmProvenanceSigningKey.FromSecretKeyData(subSecretBytes);
-            await HelmProvenance.SignAsync(tgz, attackKey);
-
-            byte[] publicBytes;
-            using (var ms = new MemoryStream())
-            {
-                publicRing.Encode(ms);
-                publicBytes = ms.ToArray();
-            }
-
-            // Victim trusts the full keyring; only the primary may act as a signer.
-            var trusted = HelmProvenanceTrustedKey.FromKeyringData(publicBytes);
+            await HelmProvenance.SignAsync(tgz, signingKey);
+            var trusted = HelmProvenanceTrustedKey.FromKeyringData(publicBytes.ToArray());
             var result = await HelmProvenance.VerifyAsync(tgz, trusted);
-            Assert.False(result.IsValid);
-            Assert.False(result.SignatureValid);
+
+            Assert.True(result.IsValid, result.FailureReason);
+            Assert.Equal(
+                Convert.ToHexString(publicRing.GetPublicKeys().Last().GetFingerprint()).ToLowerInvariant(),
+                result.SignerFingerprint);
         }
         finally
         {
             Directory.Delete(work, recursive: true);
         }
+    }
+
+    [Fact]
+    public void FromSecretKeyData_EncryptionOnlySubkey_IsRejected()
+    {
+        var (_, _, subSecretBytes) = CreateRingWithEncryptionSubkey();
+
+        // The signing wrapper must not select secret material that its matching public
+        // key policy forbids from signing provenance data.
+        Assert.Throws<PgpException>(() => HelmProvenanceSigningKey.FromSecretKeyData(subSecretBytes));
     }
 
     [Fact]

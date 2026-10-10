@@ -75,14 +75,22 @@ public sealed class HelmProvenanceSigningKey : IDisposable
 
     private static PgpSecretKey LoadSecretKey(byte[] data, char[]? passphrase)
     {
-        var keys = ReadSecretKeys(data);
+        var keys = ReadSecretKeyCandidates(data);
         if (keys.Count == 0)
             throw new PgpException("No OpenPGP secret key found in the supplied key material.");
 
-        foreach (var key in keys)
+        var hasSigningCandidate = false;
+        foreach (var candidate in keys)
         {
+            var key = candidate.Key;
+            if (!HelmProvenanceTrustedKey.IsUsableSigningKeyFor(key.PublicKey, candidate.Master))
+                continue;
+            hasSigningCandidate = true;
+
             // ExtractPrivateKey returns null for passphrase-protected keys when the
             // passphrase is missing or wrong; an unencrypted key ignores the passphrase.
+            // Only inspect secret material after the matching public key is authorized
+            // to sign, so certification-only keys are never selected accidentally.
             try
             {
                 if (key.ExtractPrivateKey(passphrase) is not null)
@@ -94,24 +102,29 @@ public sealed class HelmProvenanceSigningKey : IDisposable
             }
         }
 
+        if (!hasSigningCandidate)
+            throw new PgpException("No OpenPGP secret key is authorized to sign provenance data.");
+
         throw new PgpException(
             passphrase is null
                 ? "Secret key is passphrase-protected; a passphrase is required."
                 : "Secret key could not be unlocked with the supplied passphrase.");
     }
 
-    private static List<PgpSecretKey> ReadSecretKeys(byte[] data)
+    private static List<SecretKeyCandidate> ReadSecretKeyCandidates(byte[] data)
     {
-        var result = new List<PgpSecretKey>();
+        var result = new List<SecretKeyCandidate>();
         foreach (var obj in ReadPgpObjects(data))
         {
             switch (obj)
             {
                 case PgpSecretKeyRing ring:
-                    result.AddRange(ring.GetSecretKeys());
+                    var keys = ring.GetSecretKeys().ToList();
+                    var master = keys.FirstOrDefault(k => k.PublicKey.IsMasterKey)?.PublicKey;
+                    result.AddRange(keys.Select(key => new SecretKeyCandidate(key, master)));
                     break;
                 case PgpSecretKey key:
-                    result.Add(key);
+                    result.Add(new SecretKeyCandidate(key, key.PublicKey.IsMasterKey ? key.PublicKey : null));
                     break;
                 case PgpPublicKeyRing pubRing:
                     // Public-only material is never a valid signing key.
@@ -121,6 +134,8 @@ public sealed class HelmProvenanceSigningKey : IDisposable
 
         return result;
     }
+
+    private sealed record SecretKeyCandidate(PgpSecretKey Key, PgpPublicKey? Master);
 
     private static IEnumerable<object> ReadPgpObjects(byte[] data)
     {
