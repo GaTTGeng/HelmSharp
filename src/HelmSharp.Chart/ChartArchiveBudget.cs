@@ -98,6 +98,15 @@ internal sealed class ChartArchiveBudget
             => new(decompressed, this);
 
         /// <summary>
+        /// Checks raw tar headers before TarReader can buffer hidden PAX or GNU metadata.
+        /// Reads are capped at one tar block so a declared oversized metadata record is
+        /// rejected immediately after its header is parsed.
+        /// </summary>
+        /// <param name="metered">The decompressed stream with total-byte and ratio metering.</param>
+        /// <returns>A stream that accounts for every raw tar entry and bounds metadata records.</returns>
+        internal Stream GuardTarStream(Stream metered) => new TarEntryGuardStream(metered, this);
+
+        /// <summary>
         /// Charges one tar entry of any kind — regular file, directory, or other
         /// structural entry — against the shared entry-count budget so header-only
         /// floods cannot evade the count limit.
@@ -111,6 +120,15 @@ internal sealed class ChartArchiveBudget
                     ChartArchiveLimitKind.EntryCount,
                     _budget._limits.MaxEntryCount,
                     _budget._totalEntryCount);
+        }
+
+        private void CheckMetadataSize(long size)
+        {
+            if (size > _budget._limits.MaxEntryBytes)
+                throw new ChartArchiveLimitExceededException(
+                    ChartArchiveLimitKind.EntryBytes,
+                    _budget._limits.MaxEntryBytes,
+                    size);
         }
 
         /// <summary>
@@ -245,6 +263,159 @@ internal sealed class ChartArchiveBudget
             public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 
             // The decompression stream is disposed by its owner; this wrapper only meters reads.
+        }
+
+        private sealed class TarEntryGuardStream : Stream
+        {
+            private const int TarBlockSize = 512;
+            private readonly Stream _inner;
+            private readonly ArchiveScope _scope;
+            private readonly byte[] _header = new byte[TarBlockSize];
+            private int _headerBytes;
+            private long _remainingDataBytes;
+            private int _remainingPaddingBytes;
+
+            internal TarEntryGuardStream(Stream inner, ArchiveScope scope)
+            {
+                _inner = inner;
+                _scope = scope;
+            }
+
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => false;
+            public override long Length => throw new NotSupportedException();
+            public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+            public override void Flush() { }
+
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                var read = _inner.Read(buffer, offset, Math.Min(count, TarBlockSize));
+                if (read > 0)
+                    Process(buffer.AsSpan(offset, read));
+                return read;
+            }
+
+            public override int Read(Span<byte> buffer)
+            {
+                var read = _inner.Read(buffer[..Math.Min(buffer.Length, TarBlockSize)]);
+                if (read > 0)
+                    Process(buffer[..read]);
+                return read;
+            }
+
+            public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+                => ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+            public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+            {
+                var read = await _inner.ReadAsync(buffer[..Math.Min(buffer.Length, TarBlockSize)], cancellationToken).ConfigureAwait(false);
+                if (read > 0)
+                    Process(buffer.Span[..read]);
+                return read;
+            }
+
+            private void Process(ReadOnlySpan<byte> bytes)
+            {
+                var offset = 0;
+                while (offset < bytes.Length)
+                {
+                    if (_remainingDataBytes > 0)
+                    {
+                        var consumed = (int)Math.Min(_remainingDataBytes, bytes.Length - offset);
+                        _remainingDataBytes -= consumed;
+                        offset += consumed;
+                        if (_remainingDataBytes == 0)
+                            _remainingPaddingBytes = (int)((TarBlockSize - (_headerSize % TarBlockSize)) % TarBlockSize);
+                        continue;
+                    }
+
+                    if (_remainingPaddingBytes > 0)
+                    {
+                        var consumed = Math.Min(_remainingPaddingBytes, bytes.Length - offset);
+                        _remainingPaddingBytes -= consumed;
+                        offset += consumed;
+                        continue;
+                    }
+
+                    var headerBytes = Math.Min(TarBlockSize - _headerBytes, bytes.Length - offset);
+                    bytes.Slice(offset, headerBytes).CopyTo(_header.AsSpan(_headerBytes));
+                    _headerBytes += headerBytes;
+                    offset += headerBytes;
+                    if (_headerBytes != TarBlockSize)
+                        continue;
+
+                    _headerBytes = 0;
+                    if (IsEndOfArchiveBlock(_header))
+                        continue;
+
+                    _scope.CountEntry();
+                    var size = ReadTarSize(_header.AsSpan(124, 12));
+                    if (_header[156] is (byte)'x' or (byte)'g' or (byte)'L' or (byte)'K')
+                        _scope.CheckMetadataSize(size);
+                    _headerSize = size;
+                    _remainingDataBytes = size;
+                    if (_remainingDataBytes == 0)
+                        _remainingPaddingBytes = 0;
+                }
+            }
+
+            private long _headerSize;
+
+            private static bool IsEndOfArchiveBlock(ReadOnlySpan<byte> header)
+            {
+                foreach (var value in header)
+                {
+                    if (value != 0)
+                        return false;
+                }
+
+                return true;
+            }
+
+            private static long ReadTarSize(ReadOnlySpan<byte> field)
+            {
+                if ((field[0] & 0x80) != 0)
+                {
+                    if ((field[0] & 0x40) != 0)
+                        return 0;
+
+                    long value = field[0] & 0x3f;
+                    for (var index = 1; index < field.Length; index++)
+                    {
+                        if (value > (long.MaxValue >> 8))
+                            return long.MaxValue;
+                        value = (value << 8) | field[index];
+                    }
+
+                    return value;
+                }
+
+                long octal = 0;
+                var sawDigit = false;
+                foreach (var value in field)
+                {
+                    if (value is 0 or (byte)' ')
+                    {
+                        if (sawDigit)
+                            break;
+                        continue;
+                    }
+
+                    if (value is < (byte)'0' or > (byte)'7')
+                        return 0;
+                    sawDigit = true;
+                    if (octal > (long.MaxValue >> 3))
+                        return long.MaxValue;
+                    octal = (octal << 3) | (long)(value - (byte)'0');
+                }
+
+                return octal;
+            }
+
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
         }
     }
 }

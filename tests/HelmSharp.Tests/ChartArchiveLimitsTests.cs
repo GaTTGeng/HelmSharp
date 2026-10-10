@@ -76,6 +76,37 @@ public sealed class ChartArchiveLimitsTests : IDisposable
     }
 
     [Fact]
+    public async Task LoadArchive_PaxMetadataExceedsEntryByteLimit_ThrowsBeforeTarReaderBuffersIt()
+    {
+        var archive = CreateTgzWithPaxMetadata(new byte[1024], appendChart: false);
+        var limits = new HelmChartArchiveLimits
+        {
+            MaxEntryBytes = 128,
+            MaxTotalExtractedBytes = 1024 * 1024,
+            MaxCompressionRatio = 10_000,
+        };
+
+        var ex = await Assert.ThrowsAsync<ChartArchiveLimitExceededException>(
+            () => LoadArchiveBytesAsync(archive, limits));
+
+        Assert.Equal(ChartArchiveLimitKind.EntryBytes, ex.Limit);
+        Assert.Equal(1024, ex.ObservedValue);
+    }
+
+    [Fact]
+    public async Task LoadArchive_PaxMetadataCountsTowardEntryCountLimit()
+    {
+        var archive = CreateTgzWithPaxMetadata("10 path=x\n"u8.ToArray(), appendChart: true);
+        var limits = new HelmChartArchiveLimits { MaxEntryCount = 1 };
+
+        var ex = await Assert.ThrowsAsync<ChartArchiveLimitExceededException>(
+            () => LoadArchiveBytesAsync(archive, limits));
+
+        Assert.Equal(ChartArchiveLimitKind.EntryCount, ex.Limit);
+        Assert.Equal(1, ex.LimitValue);
+    }
+
+    [Fact]
     public async Task LoadArchive_CompressedInputExceedsBudget_ThrowsCompressedBytesLimit()
     {
         var archive = CreateChartTgz(("file.bin", new byte[64]));
@@ -899,6 +930,46 @@ public sealed class ChartArchiveLimitsTests : IDisposable
         }
 
         return memory.ToArray();
+    }
+
+    private byte[] CreateTgzWithPaxMetadata(byte[] metadata, bool appendChart)
+    {
+        using var tarBytes = new MemoryStream();
+        tarBytes.Write(CreateTarHeader("PaxHeaders/metadata", (byte)'x', metadata.Length));
+        tarBytes.Write(metadata);
+        tarBytes.Write(new byte[(512 - (metadata.Length % 512)) % 512]);
+        if (appendChart)
+        {
+            var chart = CreateChartTgz();
+            using var chartInput = new MemoryStream(chart);
+            using var gzipInput = new GZipStream(chartInput, CompressionMode.Decompress);
+            gzipInput.CopyTo(tarBytes);
+        }
+
+        using var compressed = new MemoryStream();
+        using (var gzip = new GZipStream(compressed, CompressionLevel.Fastest, leaveOpen: true))
+            tarBytes.WriteTo(gzip);
+        return compressed.ToArray();
+    }
+
+    private static byte[] CreateTarHeader(string name, byte type, long size)
+    {
+        var header = new byte[512];
+        Encoding.ASCII.GetBytes(name, 0, Math.Min(name.Length, 100), header, 0);
+        WriteOctal(header, 100, 8, 0x1A4);
+        WriteOctal(header, 108, 8, 0);
+        WriteOctal(header, 116, 8, 0);
+        WriteOctal(header, 124, 12, size);
+        WriteOctal(header, 136, 12, 0);
+        header[156] = type;
+        Encoding.ASCII.GetBytes("ustar", 0, 5, header, 257);
+        header[262] = 0;
+        Encoding.ASCII.GetBytes("00", 0, 2, header, 263);
+        for (var index = 148; index < 156; index++)
+            header[index] = 0x20;
+        WriteOctal(header, 148, 7, header.Sum(value => value));
+        header[155] = 0x20;
+        return header;
     }
 
     /// <summary>

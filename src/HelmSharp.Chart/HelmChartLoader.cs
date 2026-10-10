@@ -514,14 +514,12 @@ public static class HelmChartLoader
         // Meter every decompressed byte the tar reader consumes — headers and padding
         // included — so structural tar data cannot be decompressed outside the budgets.
         using var metered = scope.MeterDecompressedStream(archive);
-        using var reader = new TarReader(metered);
+        using var guarded = scope.GuardTarStream(metered);
+        using var reader = new TarReader(guarded);
         TarEntry? entry;
         while ((entry = reader.GetNextEntry()) is not null)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            // Every entry kind draws on the shared entry-count budget so archives with
-            // huge numbers of directory or other structural headers stay bounded.
-            scope.CountEntry();
             if (entry.EntryType is TarEntryType.Directory || entry.DataStream is null)
                 continue;
 

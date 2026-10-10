@@ -1136,16 +1136,14 @@ public sealed class HelmChartRepository : IDisposable
         // Meter every decompressed byte the tar reader consumes — headers and padding
         // included — so structural tar data cannot be decompressed outside the budgets.
         using var metered = scope.MeterDecompressedStream(gzip);
-        using var tar = new TarReader(metered);
+        using var guarded = scope.GuardTarStream(metered);
+        using var tar = new TarReader(guarded);
 
         var archiveFiles = new List<ArchiveFileEntry>();
         TarEntry? entry;
         while ((entry = tar.GetNextEntry()) is not null)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            // Every entry kind draws on the shared entry-count budget so archives with
-            // huge numbers of directory or other structural headers stay bounded.
-            scope.CountEntry();
             if (entry.EntryType is TarEntryType.Directory || entry.DataStream is null)
                 continue;
 
