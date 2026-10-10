@@ -729,6 +729,34 @@ public class HelmProvenanceTests
     }
 
     [Fact]
+    public void FromKeyringData_DirectKeyCanSignAssertion_AuthorizesPrimary()
+    {
+        var keyGenerator = new RsaKeyPairGenerator();
+        keyGenerator.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
+        var pair = new PgpKeyPair(
+            PublicKeyAlgorithmTag.RsaGeneral,
+            keyGenerator.GenerateKeyPair(),
+            DateTime.UtcNow);
+        var signatureGenerator = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        signatureGenerator.InitSign(PgpSignature.DirectKey, pair.PrivateKey);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        packets.SetKeyFlags(true, PgpKeyFlags.CanSign);
+        signatureGenerator.SetHashedSubpackets(packets.Generate());
+        var signedPrimary = PgpPublicKey.AddCertification(
+            pair.PublicKey,
+            signatureGenerator.GenerateCertification(pair.PublicKey));
+
+        using var keyBytes = new MemoryStream();
+        signedPrimary.Encode(keyBytes);
+
+        var trusted = HelmProvenanceTrustedKey.FromKeyringData(keyBytes.ToArray());
+
+        Assert.Single(trusted);
+        Assert.Equal(Convert.ToHexString(signedPrimary.GetFingerprint()).ToLowerInvariant(), trusted[0].Fingerprint);
+    }
+
+    [Fact]
     public void FromKeyringData_RevokedPrimary_InvalidatesSigningSubkeys()
     {
         var (secretRing, publicRing) = CreateRingWithSigningSubkey();
@@ -1023,6 +1051,31 @@ public class HelmProvenanceTests
         Assert.Equal(
             "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
             HelmProvenance.ExtractSha256(prov));
+    }
+
+    [Fact]
+    public void ExtractSha256_ReadsQuotedFilesKeyContainingColon()
+    {
+        const string archiveName = "chart: prod.tgz";
+        var digest = new string('a', 64);
+        var prov = $"""
+            -----BEGIN PGP SIGNED MESSAGE-----
+            Hash: SHA512
+
+            name: demo
+
+            ...
+            files:
+              {System.Text.Json.JsonSerializer.Serialize(archiveName)}: sha256:{digest}
+
+            -----BEGIN PGP SIGNATURE-----
+
+            AAAA
+            -----END PGP SIGNATURE-----
+            """;
+
+        Assert.Equal(digest, HelmProvenance.ExtractSha256(prov, archiveName));
+        Assert.Equal("sha256:" + digest, HelmProvenance.ExtractMetadata(prov)["files." + archiveName]);
     }
 
     [Fact]
