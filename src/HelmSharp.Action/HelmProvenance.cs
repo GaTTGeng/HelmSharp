@@ -559,7 +559,7 @@ public static class HelmProvenance
         if (headerEnd < 0)
             return false;
 
-        var sigStart = text.IndexOf(SignatureHeader, headerEnd, StringComparison.Ordinal);
+        var sigStart = FindLine(text, SignatureHeader, headerEnd + 2);
         if (sigStart < 0)
             return false;
 
@@ -664,7 +664,7 @@ public static class HelmProvenance
         // a 64-byte digest — inside the PGP SIGNATURE block with a "comment:" header.
         // A real OpenPGP signature packet never has that shape.
         var text = provContent.Replace("\r\n", "\n", StringComparison.Ordinal);
-        var sigStart = text.IndexOf(SignatureHeader, StringComparison.Ordinal);
+        var sigStart = FindLine(text, SignatureHeader);
         if (sigStart < 0)
             return false;
 
@@ -704,11 +704,32 @@ public static class HelmProvenance
         if (headerEnd < 0)
             return null;
 
-        var sigStart = text.IndexOf(SignatureHeader, headerEnd, StringComparison.Ordinal);
+        var sigStart = FindLine(text, SignatureHeader, headerEnd + 2);
         if (sigStart < 0)
             return UnescapeDashLines(text[(headerEnd + 2)..]);
 
         return UnescapeDashLines(text[(headerEnd + 2)..sigStart]);
+    }
+
+    private static int FindLine(string text, string expectedLine, int startIndex = 0)
+    {
+        var searchFrom = startIndex;
+        while (searchFrom < text.Length)
+        {
+            var candidate = text.IndexOf(expectedLine, searchFrom, StringComparison.Ordinal);
+            if (candidate < 0)
+                return -1;
+
+            var beginsLine = candidate == 0 || text[candidate - 1] == '\n';
+            var lineEnd = candidate + expectedLine.Length;
+            var endsLine = lineEnd == text.Length || text[lineEnd] == '\n';
+            if (beginsLine && endsLine)
+                return candidate;
+
+            searchFrom = candidate + 1;
+        }
+
+        return -1;
     }
 
     /// <summary>

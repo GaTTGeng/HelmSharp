@@ -256,9 +256,56 @@ public sealed class HelmProvenanceTrustedKey
     /// </summary>
     private static DateTime? ComputeExpiry(PgpPublicKey key, PgpPublicKey? master)
     {
+        if (key.IsMasterKey)
+        {
+            // Bouncy Castle's parameterless GetValidSeconds reads packet metadata without
+            // proving the self-signature. Only a certification verified by the primary
+            // key may define its lifetime.
+            var primarySelfSignature = GetLatestValidPrimarySelfSignature(key);
+            var primaryLifetime = primarySelfSignature?.GetHashedSubPackets()?.GetKeyExpirationTime() ?? 0;
+            return primaryLifetime <= 0 ? null : key.CreationTime.AddSeconds(primaryLifetime);
+        }
+
         // Zero means the key never expires (RFC 4880 §5.2.3.3).
         long validSeconds = master is null ? key.GetValidSeconds() : key.GetValidSeconds(master);
         return validSeconds <= 0 ? null : key.CreationTime.AddSeconds(validSeconds);
+    }
+
+    private static PgpSignature? GetLatestValidPrimarySelfSignature(PgpPublicKey key)
+    {
+        PgpSignature? latest = null;
+        foreach (var signature in key.GetSignatures())
+        {
+            var isCertification = signature.SignatureType is PgpSignature.PositiveCertification
+                or PgpSignature.CasualCertification or PgpSignature.NoCertification
+                or PgpSignature.DefaultCertification;
+            if (!isCertification && signature.SignatureType != PgpSignature.DirectKey)
+                continue;
+
+            var isValid = isCertification
+                ? HasValidSelfCertification(signature, key)
+                : HasValidDirectKeySignature(signature, key);
+            if (!isValid)
+                continue;
+            if (latest is null || signature.CreationTime > latest.CreationTime)
+                latest = signature;
+        }
+
+        return latest;
+    }
+
+    private static bool HasValidDirectKeySignature(PgpSignature signature, PgpPublicKey key)
+    {
+        try
+        {
+            signature.InitVerify(key);
+            return signature.VerifyCertification(key);
+        }
+        catch (PgpException)
+        {
+            // A forged or malformed direct-key packet cannot set primary-key expiry.
+            return false;
+        }
     }
 
     private static DateTime? ComputeEffectiveExpiry(PgpPublicKey key, PgpPublicKey? master)
