@@ -16,11 +16,13 @@ namespace HelmSharp.Action;
 public sealed class HelmProvenanceTrustedKey
 {
     private readonly PgpPublicKey _publicKey;
+    private readonly PgpPublicKey? _master;
     private readonly DateTime? _expiresAt;
 
-    private HelmProvenanceTrustedKey(PgpPublicKey publicKey, DateTime? expiresAt)
+    private HelmProvenanceTrustedKey(PgpPublicKey publicKey, PgpPublicKey? master, DateTime? expiresAt)
     {
         _publicKey = publicKey;
+        _master = master;
         _expiresAt = expiresAt;
     }
 
@@ -40,11 +42,10 @@ public sealed class HelmProvenanceTrustedKey
     /// not expired, and its key flags (or algorithm) permit signing. Verification must
     /// fail closed when this is false.
     /// </summary>
-    internal bool IsUsableSigningKey =>
-        !HasRevocation()
-        && AlgorithmCanSign(_publicKey.Algorithm)
-        && KeyFlagsPermitSigning(_publicKey)
-        && !IsExpiredAt(DateTime.UtcNow);
+    internal bool IsUsableSigningKey => IsUsableSigningKeyFor(_publicKey, _master);
+
+    internal static bool IsUsableSigningKeyFor(PgpPublicKey key, PgpPublicKey? master)
+        => QualifiesAsSigningKey(key, master);
 
     /// <summary>
     /// Wraps binary or ASCII-armored OpenPGP public-key material (a single public key
@@ -126,7 +127,7 @@ public sealed class HelmProvenanceTrustedKey
         {
             if (!QualifiesAsSigningKey(candidate.Key, candidate.Master))
                 continue;
-            trusted.Add(new HelmProvenanceTrustedKey(candidate.Key, ComputeExpiry(candidate.Key, candidate.Master)));
+            trusted.Add(new HelmProvenanceTrustedKey(candidate.Key, candidate.Master, ComputeExpiry(candidate.Key, candidate.Master)));
         }
 
         if (trusted.Count == 0)
@@ -142,13 +143,15 @@ public sealed class HelmProvenanceTrustedKey
     {
         // A mathematical signature from a revoked or expired key, or from material that
         // is not authorized to sign (encryption-only subkeys), must never be trusted.
-        if (key.HasRevocation())
+        if (key.HasRevocation() || (master is not null && master.HasRevocation()))
+            return false;
+        if (!key.IsMasterKey && (master is null || !master.IsMasterKey))
             return false;
         if (!AlgorithmCanSign(key.Algorithm))
             return false;
         if (IsExpiredAt(ComputeExpiry(key, master), DateTime.UtcNow))
             return false;
-        return KeyFlagsPermitSigning(key);
+        return KeyFlagsPermitSigning(key, master);
     }
 
     /// <summary>
@@ -169,24 +172,37 @@ public sealed class HelmProvenanceTrustedKey
     };
 
     /// <summary>
-    /// Whether the governing key-flags subpacket authorizes signing or certification.
+    /// Whether the governing key-flags subpacket authorizes data signing.
     /// Flags are asserted by self-signatures (user-ID certifications on a primary key,
     /// binding signatures on a subkey); the most recent assertion wins. Keys without a
     /// key-flags subpacket keep their historical unrestricted usage, gated only by
     /// <see cref="AlgorithmCanSign"/>.
     /// </summary>
-    private static bool KeyFlagsPermitSigning(PgpPublicKey key)
+    private static bool KeyFlagsPermitSigning(PgpPublicKey key, PgpPublicKey? master)
     {
         // Third-party certifications must not widen what a key may do, so a primary key
         // only trusts key flags it asserted itself; a subkey is governed by its binding
-        // signature, which is issued by the primary and lives in GetKeySignatures().
+        // signature. A subkey is governed only by a cryptographically verified binding
+        // signature issued by its primary key; raw packet metadata is attacker-controlled.
         var assertions = key.IsMasterKey
             ? key.GetSignatures().Where(s => s.KeyId == key.KeyId)
-            : key.GetKeySignatures();
+            : master is null
+                ? Enumerable.Empty<PgpSignature>()
+                : key.GetKeySignatures().Where(s => s.KeyId == master.KeyId
+                    && s.SignatureType == PgpSignature.SubkeyBinding
+                    && HasValidSubkeyBinding(s, master, key));
 
         PgpSignature? governing = null;
+        var hasValidatedAssertion = false;
         foreach (var sig in assertions)
         {
+            if (key.IsMasterKey && sig.SignatureType is not (PgpSignature.PositiveCertification
+                    or PgpSignature.CasualCertification or PgpSignature.NoCertification
+                    or PgpSignature.DefaultCertification))
+                continue;
+            if (key.IsMasterKey && !HasValidSelfCertification(sig, key))
+                continue;
+            hasValidatedAssertion = true;
             var hashed = sig.GetHashedSubPackets();
             if (hashed is null || !hashed.HasSubpacket(SignatureSubpacketTag.KeyFlags))
                 continue;
@@ -195,10 +211,42 @@ public sealed class HelmProvenanceTrustedKey
         }
 
         if (governing is null)
-            return true;
+            return hasValidatedAssertion;
 
         var flags = governing.GetHashedSubPackets()!.GetKeyFlags();
-        return (flags & (PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify)) != 0;
+        return (flags & PgpKeyFlags.CanSign) != 0;
+    }
+
+    private static bool HasValidSubkeyBinding(PgpSignature signature, PgpPublicKey master, PgpPublicKey subkey)
+    {
+        try
+        {
+            signature.InitVerify(master);
+            return signature.VerifyCertification(master, subkey);
+        }
+        catch (PgpException)
+        {
+            return false;
+        }
+    }
+
+    private static bool HasValidSelfCertification(PgpSignature signature, PgpPublicKey key)
+    {
+        foreach (var userId in key.GetUserIds())
+        {
+            try
+            {
+                signature.InitVerify(key);
+                if (signature.VerifyCertification(userId, key))
+                    return true;
+            }
+            catch (PgpException)
+            {
+                // Malformed or forged self-signatures do not authorize key usage.
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
