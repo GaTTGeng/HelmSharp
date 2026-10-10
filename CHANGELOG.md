@@ -19,6 +19,10 @@ This project follows semantic versioning once stable releases begin.
 - Hardened Kubernetes wait controls by rejecting non-positive waiter timeouts and documenting standard polling, cancellation, Job waiting, and unsupported Helm status-watcher semantics (#233).
 - Retried Kubernetes API discovery briefly on apply when a custom-resource kind is not yet registered, so a CRD and its custom resource can ship in one release without intermittent install failures.
 
+### Security
+
+- Enforced decompressed resource limits for chart archive loading and repository extraction (compressed input size, total extracted bytes, per-entry bytes, entry count, decompression amplification, and packaged dependency depth), counted on bytes actually streamed and shared across nested dependency archives, with explicit trusted-chart options and partial-extraction cleanup on failure (#261).
+
 ### Removed
 
 - Removed the Helm comparison tool and its API server configuration from the documentation site because no supported server is available.

@@ -12,6 +12,8 @@ dotnet add package HelmSharp.Chart --version 1.3.2
 | --- | --- |
 | `HelmChartLoader` | 加载 `Chart.yaml`、模板、文件、CRD、values、依赖和归档。 |
 | `HelmChart` | 传给 values 与渲染 API 的已加载 Chart 对象。 |
+| `HelmChartArchiveLimits` | 读取 Chart 归档时强制执行的解压预算（压缩大小、总解压量、条目大小/数量、放大比、依赖深度）。 |
+| `ChartArchiveLimitExceededException` | 归档超出预算时抛出的稳定异常。 |
 | `HelmValues` | 合并默认值、values 文件、内联 YAML 和 set 风格覆盖项。 |
 | `HelmYaml` | 读写 YAML 兼容对象。 |
 | `HelmChartDependency` / `HelmChartLockEntry` | 检查依赖和 lock 元数据。 |

@@ -1,3 +1,5 @@
+using HelmSharp.Chart;
+
 namespace HelmSharp.Action;
 
 public class HelmExecutionOptions
@@ -37,4 +39,10 @@ public class HelmExecutionOptions
     /// Additional Kubernetes API versions exposed through template capabilities.
     /// </summary>
     public List<string>? ApiVersions { get; set; }
+
+    /// <summary>
+    /// Decompression budgets enforced while loading chart archives. Null applies
+    /// <see cref="HelmChartArchiveLimits.Default"/>; raise them only for trusted chart sources.
+    /// </summary>
+    public HelmChartArchiveLimits? ArchiveLimits { get; set; }
 }

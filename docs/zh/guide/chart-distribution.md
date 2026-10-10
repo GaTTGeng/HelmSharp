@@ -42,6 +42,8 @@ using var repository = new HelmChartRepository(new HelmRepositoryOptions
 
 请求可接受 `repo/chart`、Chart 名加 `RepositoryUrl`，或直接的 `https://…tgz` URL。下载的归档存放在 `Destination` 下。启用 `Untar` 时，`UntarDirectory` 选择解压根目录；未设置时才以 `Destination` 为解压根目录。任何逃逸出所选根目录的条目都会被拒绝。凭据默认只发送给仓库源站；只有可信仓库有意将归档跳转到另一个受认证源站时，才启用 `PassCredentialsAll`。
 
+Chart 归档同时受解压资源上限（`HelmChartArchiveLimits`）约束：压缩输入大小、总解压字节数、单条目字节数、条目数量、解压放大比和打包依赖深度。默认值适用于真实的公开 Chart；仅在可信 Chart 来源下才通过 `HelmRepositoryOptions.ArchiveLimits` 或 `HelmChartLoader.LoadAsync` 重载调高。超出预算会抛出 `ChartArchiveLimitExceededException`，失败时会清理已解压的输出。
+
 ## 让依赖构建可复现
 
 和 Helm 一样在 `Chart.yaml` 中声明别名和本地引用：

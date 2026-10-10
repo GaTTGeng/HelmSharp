@@ -196,7 +196,7 @@ public class HelmClient : IHelmClient
         // --- 2. Load chart and collect the user-supplied values overrides ---
         yield return $"Loading chart {request.Chart}";
         var chartPath = await ResolveChartPathAsync(request.Chart, request.Version, options, operationToken);
-        var chart = await HelmChartLoader.LoadAsync(chartPath, operationToken);
+        var chart = await LoadChartAsync(chartPath, operationToken);
 
         // Validate kubeVersion compatibility
         if (!string.IsNullOrWhiteSpace(chart.KubeVersion) && !string.IsNullOrWhiteSpace(options.KubeVersion))
@@ -1440,7 +1440,7 @@ public class HelmClient : IHelmClient
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
         var ns = request.Namespace ?? options.DefaultNamespace ?? "default";
         var chartPath = await ResolveChartPathAsync(request.Chart, null, options, cancellationToken);
-        var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
+        var chart = await LoadChartAsync(chartPath, cancellationToken);
         var valuesFiles = CombineValuesFiles(request.ValuesFile, request.ValuesFiles);
         var values = await HelmValues.BuildAsync(chart, valuesFiles, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
         var renderer = new HelmTemplateRenderer(
@@ -1491,7 +1491,7 @@ public class HelmClient : IHelmClient
     {
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
         var ns = request.Namespace ?? options.DefaultNamespace ?? "default";
-        var chart = await HelmChartLoader.LoadAsync(request.Chart, cancellationToken);
+        var chart = await LoadChartAsync(request.Chart, cancellationToken);
         var valuesFiles = CombineValuesFiles(request.ValuesFile, request.ValuesFiles);
         var values = await HelmValues.BuildAsync(chart, valuesFiles, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
         var renderer = new HelmTemplateRenderer(
@@ -1861,7 +1861,7 @@ public class HelmClient : IHelmClient
             .FirstOrDefault() ?? string.Empty;
 
         // --- 2. New side: render with the same install/upgrade render-state rules ---
-        var chart = await HelmChartLoader.LoadAsync(request.Chart, cancellationToken);
+        var chart = await LoadChartAsync(request.Chart, cancellationToken);
         var valuesFiles = CombineValuesFiles(request.ValuesFile, request.ValuesFiles);
         var values = await HelmValues.BuildAsync(chart, valuesFiles, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
         var newManifest = RenderDiffManifest(chart, releaseName, ns, values, options, history);
@@ -1915,7 +1915,7 @@ public class HelmClient : IHelmClient
 
         try
         {
-            var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
+            var chart = await LoadChartAsync(chartPath, cancellationToken);
 
             // Validate Chart.yaml
             if (string.IsNullOrWhiteSpace(chart.Name))
@@ -1985,7 +1985,7 @@ public class HelmClient : IHelmClient
     {
         var chartPathResolved = await ResolveChartPathAsync(chartPath, version,
             await _optionsProvider.GetHelmAsync(cancellationToken), cancellationToken);
-        var chart = await HelmChartLoader.LoadAsync(chartPathResolved, cancellationToken);
+        var chart = await LoadChartAsync(chartPathResolved, cancellationToken);
         var values = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, valuesContent, setValues, null, null, null, cancellationToken);
         var renderer = new HelmTemplateRenderer(chart, "show", "default", values);
         return Ok(renderer.Render());
@@ -1996,7 +1996,7 @@ public class HelmClient : IHelmClient
         string chartPath,
         CancellationToken cancellationToken = default)
     {
-        var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
+        var chart = await LoadChartAsync(chartPath, cancellationToken);
         var info = new
         {
             name = chart.Name,
@@ -2020,7 +2020,7 @@ public class HelmClient : IHelmClient
         string chartPath,
         CancellationToken cancellationToken = default)
     {
-        var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
+        var chart = await LoadChartAsync(chartPath, cancellationToken);
         return Ok(chart.ValuesYaml);
     }
 
@@ -2139,7 +2139,7 @@ public class HelmClient : IHelmClient
     {
         ArgumentNullException.ThrowIfNull(request);
         var chartPath = Path.GetFullPath(request.ChartPath);
-        var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
+        var chart = await LoadChartAsync(chartPath, cancellationToken);
         if (chart.Dependencies.Count == 0)
             return Ok("No dependencies found in Chart.yaml");
 
@@ -2490,7 +2490,7 @@ public class HelmClient : IHelmClient
         string chartPath,
         CancellationToken cancellationToken = default)
     {
-        var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
+        var chart = await LoadChartAsync(chartPath, cancellationToken);
 
         foreach (var (path, content) in chart.Templates)
         {
@@ -2512,7 +2512,7 @@ public class HelmClient : IHelmClient
         string chartPath,
         CancellationToken cancellationToken = default)
     {
-        var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
+        var chart = await LoadChartAsync(chartPath, cancellationToken);
         if (chart.Crds.Count == 0)
             return Ok("No CRDs found in this chart.");
 
@@ -2616,7 +2616,7 @@ public class HelmClient : IHelmClient
         string chartPath,
         CancellationToken cancellationToken = default)
     {
-        var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
+        var chart = await LoadChartAsync(chartPath, cancellationToken);
 
         var output = new StringBuilder();
 
@@ -2947,7 +2947,7 @@ public class HelmClient : IHelmClient
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var chart = await HelmChartLoader.LoadAsync(request.ChartPath, cancellationToken);
+        var chart = await LoadChartAsync(request.ChartPath, cancellationToken);
         if (chart.Dependencies.Count == 0)
             return Ok($"WARNING: no dependencies at {Path.Combine(request.ChartPath, "charts")}{Environment.NewLine}");
 
@@ -2969,6 +2969,17 @@ public class HelmClient : IHelmClient
     }
 
     /// <summary>
+    /// Loads a chart with the decompression budgets configured on
+    /// <see cref="HelmExecutionOptions.ArchiveLimits"/>, falling back to
+    /// <see cref="HelmChartArchiveLimits.Default"/> so untrusted archives are always bounded.
+    /// </summary>
+    private async Task<HelmChart> LoadChartAsync(string chartPath, CancellationToken cancellationToken)
+    {
+        var options = await _optionsProvider.GetHelmAsync(cancellationToken);
+        return await HelmChartLoader.LoadAsync(chartPath, options.ArchiveLimits, cancellationToken);
+    }
+
+    /// <summary>
     /// Resolves a chart reference to a local path: existing paths pass through, http(s)/oci
     /// references are pulled first. Remote "repo/chart" shorthand is returned unchanged for
     /// downstream resolution.
@@ -2987,7 +2998,10 @@ public class HelmClient : IHelmClient
         if (chartRef.StartsWith("http", StringComparison.OrdinalIgnoreCase) ||
             chartRef.StartsWith("oci://", StringComparison.OrdinalIgnoreCase))
         {
-            using var repo = new HelmChartRepository();
+            using var repo = new HelmChartRepository(new HelmRepositoryOptions
+            {
+                ArchiveLimits = options.ArchiveLimits
+            });
             return await repo.PullChartAsync(chartRef, version, cancellationToken);
         }
 

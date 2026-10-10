@@ -1,3 +1,5 @@
+using HelmSharp.Chart;
+
 namespace HelmSharp.Repo;
 
 /// <summary>
@@ -21,4 +23,11 @@ public sealed class HelmRepositoryOptions
     /// <c>HELM_REPOSITORY_CONFIG</c>.
     /// </summary>
     public string? RepositoryConfigPath { get; init; }
+
+    /// <summary>
+    /// Gets or sets the decompression budgets enforced when downloading and extracting
+    /// chart archives. Null applies <see cref="HelmChartArchiveLimits.Default"/>; raise
+    /// them only for trusted chart sources.
+    /// </summary>
+    public HelmChartArchiveLimits? ArchiveLimits { get; init; }
 }
