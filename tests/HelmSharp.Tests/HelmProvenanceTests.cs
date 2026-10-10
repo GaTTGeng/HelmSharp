@@ -380,12 +380,70 @@ public class HelmProvenanceTests
     }
 
     [Fact]
+    public async Task SignAndVerify_MetadataContainingSignatureDelimiter_Succeeds()
+    {
+        var work = TempDir();
+        try
+        {
+            var chartYaml = """
+                apiVersion: v2
+                name: provchart
+                description: "-----BEGIN PGP SIGNATURE-----"
+                type: application
+                version: 0.1.0
+                appVersion: "1.0"
+                """;
+            var tgz = await CreateTestChartArchiveAsync(work, chartYaml);
+            var (_, _, signingKey, trustedKey) = CreateTestKeys();
+
+            await HelmProvenance.SignAsync(tgz, signingKey);
+            var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
+
+            Assert.True(result.IsValid, result.FailureReason);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
     public void FromKeyringData_ExpiredPrimaryRejectsOtherwiseValidSigningSubkey()
     {
         var (_, publicRing) = CreateRingWithSigningSubkey(expiredPrimary: true);
         using var ms = new MemoryStream();
         publicRing.Encode(ms);
 
+        var exception = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
+
+        Assert.Contains("No usable", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FromKeyringData_ForgedPrimaryCertificationCannotExtendExpiry()
+    {
+        const string userId = "Signing subkey <subkey@example.com>";
+        var (secretRing, publicRing) = CreateRingWithSigningSubkey(userId, expiredPrimary: true);
+        var signingSecret = secretRing.GetSecretKeys().Last();
+        var primaryPublic = publicRing.GetPublicKeys().First(key => key.IsMasterKey);
+
+        // A compromised subkey can attach an apparent newer self-certification that
+        // claims the primary key ID. The issuer hint is not cryptographic proof.
+        var forged = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        forged.InitSign(PgpSignature.PositiveCertification, signingSecret.ExtractPrivateKey(null)!);
+        var hashed = new PgpSignatureSubpacketGenerator();
+        hashed.SetSignatureCreationTime(false, DateTime.UtcNow);
+        hashed.SetKeyExpirationTime(false, 3600);
+        forged.SetHashedSubpackets(hashed.Generate());
+        var unhashed = new PgpSignatureSubpacketGenerator();
+        unhashed.SetIssuerKeyID(false, primaryPublic.KeyId);
+        forged.SetUnhashedSubpackets(unhashed.Generate());
+        var forgedPrimary = PgpPublicKey.AddCertification(primaryPublic, userId, forged.GenerateCertification(userId, primaryPublic));
+        var forgedRing = PgpPublicKeyRing.InsertPublicKey(publicRing, forgedPrimary);
+
+        using var ms = new MemoryStream();
+        forgedRing.Encode(ms);
         var exception = Assert.Throws<ArgumentException>(
             () => HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
 
