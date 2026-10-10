@@ -21,7 +21,7 @@ This project follows semantic versioning once stable releases begin.
 
 ### Security
 
-- Enforced decompressed resource limits for chart archive loading and repository extraction (compressed input size, total extracted bytes, per-entry bytes, entry count, decompression amplification, and packaged dependency depth), counted on bytes actually streamed and shared across nested dependency archives, with explicit trusted-chart options and partial-extraction cleanup on failure (#261).
+- Enforced decompressed resource limits for chart archive loading and repository extraction (compressed input size, total decompressed bytes, per-entry bytes, entry count, decompression amplification, and packaged dependency depth), metered on every decompressed byte and every tar entry and shared across nested dependency archives. Repository downloads abort mid-stream at the compressed-input limit instead of buffering oversized responses, and pull/extraction applies the budgets before any archive traversal. Explicit trusted-chart options and partial-extraction cleanup on failure (#261).
 
 ### Removed
 

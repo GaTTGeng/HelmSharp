@@ -4,7 +4,8 @@ namespace HelmSharp.Chart;
 /// Cumulative decompression budget shared by one chart tree load: root archive, nested
 /// packaged dependency archives, and directory-sourced dependency archives all draw from
 /// the same counters so a tree of small archives cannot evade total-size and entry-count
-/// limits by resetting per child.
+/// limits by resetting per child. Every decompressed byte the tar reader consumes and
+/// every tar entry (including directory and other structural entries) is metered.
 /// </summary>
 internal sealed class ChartArchiveBudget
 {
@@ -37,15 +38,15 @@ internal sealed class ChartArchiveBudget
     }
 
     /// <summary>
-    /// Validates the compressed size of one archive stream and opens a scope whose entry
-    /// reads enforce per-entry, total-extracted, and compression-ratio budgets on the
-    /// actual bytes streamed.
+    /// Validates the compressed size of one archive stream and opens a scope whose
+    /// metered decompression stream and entry reads enforce per-entry, total-extracted,
+    /// entry-count, and compression-ratio budgets on the actual bytes produced.
     /// </summary>
     /// <param name="compressedBytes">
     /// Compressed size of this archive stream when known (file or byte-array length);
     /// pass 0 when unknown so only extracted-side budgets apply.
     /// </param>
-    /// <returns>A scope that budgets bytes as entries are read.</returns>
+    /// <returns>A scope that budgets bytes as the archive is read.</returns>
     /// <exception cref="ChartArchiveLimitExceededException">Thrown when the compressed input limit is exceeded.</exception>
     internal ArchiveScope BeginArchive(long compressedBytes)
     {
@@ -59,8 +60,9 @@ internal sealed class ChartArchiveBudget
     }
 
     /// <summary>
-    /// Per-archive read scope. Tracks bytes extracted from one compressed stream for the
-    /// ratio bound while charging every byte to the shared tree-wide budget.
+    /// Per-archive read scope. Tracks bytes decompressed from one compressed stream for
+    /// the ratio bound while charging every byte and every entry to the shared
+    /// tree-wide budget.
     /// </summary>
     internal sealed class ArchiveScope
     {
@@ -75,26 +77,45 @@ internal sealed class ChartArchiveBudget
         }
 
         /// <summary>
-        /// Reads one tar entry's content into memory, counting bytes as they are streamed
-        /// and stopping at the first exceeded budget. Tar header size fields are treated
-        /// as untrusted metadata; only bytes actually delivered are charged.
+        /// Wraps the decompressed stream presented to the tar reader so every byte it
+        /// consumes — tar headers, padding, and entry payloads alike — is charged to the
+        /// extracted-byte and compression-ratio budgets. Without this meter, structural
+        /// tar data would be decompressed outside any budget.
         /// </summary>
-        /// <param name="source">The tar entry data stream.</param>
-        /// <param name="cancellationToken">Cancels the read.</param>
-        /// <returns>The entry content.</returns>
-        /// <exception cref="ChartArchiveLimitExceededException">Thrown when any budget is exceeded.</exception>
-        /// <exception cref="OperationCanceledException">Thrown when <paramref name="cancellationToken"/> is cancelled.</exception>
-        internal async Task<byte[]> ReadEntryAsync(Stream source, CancellationToken cancellationToken)
+        /// <param name="decompressed">The decompressed archive stream (for example a gzip stream).</param>
+        /// <returns>A stream that meters every byte read.</returns>
+        internal MeteredDecompressionStream MeterDecompressedStream(Stream decompressed)
+            => new(decompressed, this);
+
+        /// <summary>
+        /// Charges one tar entry of any kind — regular file, directory, or other
+        /// structural entry — against the shared entry-count budget so header-only
+        /// floods cannot evade the count limit.
+        /// </summary>
+        /// <exception cref="ChartArchiveLimitExceededException">Thrown when the entry-count limit is exceeded.</exception>
+        internal void CountEntry()
         {
-            // --- Stage 1: charge the entry against the shared entry-count budget ---
             _budget._totalEntryCount++;
             if (_budget._totalEntryCount > _budget._limits.MaxEntryCount)
                 throw new ChartArchiveLimitExceededException(
                     ChartArchiveLimitKind.EntryCount,
                     _budget._limits.MaxEntryCount,
                     _budget._totalEntryCount);
+        }
 
-            // --- Stage 2: stream content and enforce byte budgets on actual reads ---
+        /// <summary>
+        /// Reads one tar entry's content into memory under the per-entry byte budget.
+        /// Tar header size fields are treated as untrusted metadata; only bytes actually
+        /// delivered are charged. Total extracted bytes and amplification are charged by
+        /// the metered decompression stream, not here.
+        /// </summary>
+        /// <param name="source">The tar entry data stream.</param>
+        /// <param name="cancellationToken">Cancels the read.</param>
+        /// <returns>The entry content.</returns>
+        /// <exception cref="ChartArchiveLimitExceededException">Thrown when the per-entry byte budget is exceeded.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when <paramref name="cancellationToken"/> is cancelled.</exception>
+        internal async Task<byte[]> ReadEntryAsync(Stream source, CancellationToken cancellationToken)
+        {
             using var buffer = new MemoryStream();
             var chunk = new byte[64 * 1024];
             long entryBytes = 0;
@@ -102,38 +123,118 @@ internal sealed class ChartArchiveBudget
             while ((read = await source.ReadAsync(chunk.AsMemory(), cancellationToken).ConfigureAwait(false)) > 0)
             {
                 entryBytes += read;
-                _archiveExtractedBytes += read;
-                _budget._totalExtractedBytes += read;
-
                 if (entryBytes > _budget._limits.MaxEntryBytes)
                     throw new ChartArchiveLimitExceededException(
                         ChartArchiveLimitKind.EntryBytes,
                         _budget._limits.MaxEntryBytes,
                         entryBytes);
 
-                if (_budget._totalExtractedBytes > _budget._limits.MaxTotalExtractedBytes)
-                    throw new ChartArchiveLimitExceededException(
-                        ChartArchiveLimitKind.TotalExtractedBytes,
-                        _budget._limits.MaxTotalExtractedBytes,
-                        _budget._totalExtractedBytes);
-
-                // Amplification bound per compressed stream. A nested dependency archive is
-                // its own stream (its .tgz bytes), so parent and child each get a ratio check
-                // while sharing the total extracted budget. Compared in double space so a
-                // near-unbounded ratio (trusted-chart profile) cannot overflow the bound.
-                if (_compressedBytes > 0 &&
-                    (double)_archiveExtractedBytes > _compressedBytes * _budget._limits.MaxCompressionRatio)
-                {
-                    throw new ChartArchiveLimitExceededException(
-                        ChartArchiveLimitKind.CompressionRatio,
-                        (long)Math.Min(_compressedBytes * _budget._limits.MaxCompressionRatio, long.MaxValue),
-                        _archiveExtractedBytes);
-                }
-
                 buffer.Write(chunk, 0, read);
             }
 
             return buffer.ToArray();
+        }
+
+        /// <summary>
+        /// Charges decompressed bytes to the tree-wide total and to this archive's
+        /// amplification bound, stopping at the first exceeded budget.
+        /// </summary>
+        /// <param name="count">Number of decompressed bytes just delivered.</param>
+        /// <exception cref="ChartArchiveLimitExceededException">Thrown when a byte budget is exceeded.</exception>
+        private void ChargeDecompressedBytes(int count)
+        {
+            _archiveExtractedBytes += count;
+            _budget._totalExtractedBytes += count;
+
+            if (_budget._totalExtractedBytes > _budget._limits.MaxTotalExtractedBytes)
+                throw new ChartArchiveLimitExceededException(
+                    ChartArchiveLimitKind.TotalExtractedBytes,
+                    _budget._limits.MaxTotalExtractedBytes,
+                    _budget._totalExtractedBytes);
+
+            // Amplification bound per compressed stream. A nested dependency archive is
+            // its own stream (its .tgz bytes), so parent and child each get a ratio check
+            // while sharing the total extracted budget. Compared in double space so a
+            // near-unbounded ratio (trusted-chart profile) cannot overflow the bound.
+            if (_compressedBytes > 0 &&
+                (double)_archiveExtractedBytes > _compressedBytes * _budget._limits.MaxCompressionRatio)
+            {
+                throw new ChartArchiveLimitExceededException(
+                    ChartArchiveLimitKind.CompressionRatio,
+                    (long)Math.Min(_compressedBytes * _budget._limits.MaxCompressionRatio, long.MaxValue),
+                    _archiveExtractedBytes);
+            }
+        }
+
+        /// <summary>
+        /// Read-only stream wrapper that charges every byte consumed from a decompression
+        /// stream to the archive budget. The tar reader consumes headers, padding, and
+        /// entry payloads through this stream, so no decompressed byte escapes the
+        /// extracted-byte and amplification budgets.
+        /// </summary>
+        internal sealed class MeteredDecompressionStream : Stream
+        {
+            private readonly Stream _inner;
+            private readonly ArchiveScope _scope;
+
+            internal MeteredDecompressionStream(Stream inner, ArchiveScope scope)
+            {
+                _inner = inner;
+                _scope = scope;
+            }
+
+            public override bool CanRead => true;
+
+            public override bool CanSeek => false;
+
+            public override bool CanWrite => false;
+
+            public override long Length => throw new NotSupportedException();
+
+            public override long Position
+            {
+                get => throw new NotSupportedException();
+                set => throw new NotSupportedException();
+            }
+
+            public override void Flush()
+            {
+            }
+
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                var read = _inner.Read(buffer, offset, count);
+                if (read > 0)
+                    _scope.ChargeDecompressedBytes(read);
+                return read;
+            }
+
+            public override int Read(Span<byte> buffer)
+            {
+                var read = _inner.Read(buffer);
+                if (read > 0)
+                    _scope.ChargeDecompressedBytes(read);
+                return read;
+            }
+
+            public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+                => ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+            public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+            {
+                var read = await _inner.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+                if (read > 0)
+                    _scope.ChargeDecompressedBytes(read);
+                return read;
+            }
+
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+            public override void SetLength(long value) => throw new NotSupportedException();
+
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+            // The decompression stream is disposed by its owner; this wrapper only meters reads.
         }
     }
 }

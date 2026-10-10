@@ -654,17 +654,27 @@ public sealed class HelmChartRepository : IDisposable
             ? destination
             : request.UntarDirectory);
         Directory.CreateDirectory(extractionRoot);
-        var archiveRoot = GetChartArchiveRoot(chartBytes) ?? chartName;
-        var extractDirectory = HelmArchivePath.ResolveSafeDestination(extractionRoot, archiveRoot);
-        var tempExtractDirectory = $"{extractDirectory}.tmp-{Guid.NewGuid():N}";
+        // The budgeted extraction pass discovers the chart root while it extracts.
+        // A separate unbounded pre-scan of the archive is intentionally avoided: on a
+        // non-seekable gzip stream it would fully decompress hostile input before any
+        // limit applied.
+        var tempExtractDirectory = Path.Combine(extractionRoot, $".tmp-extract-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempExtractDirectory);
         try
         {
-            await ExtractChartArchiveAsync(chartBytes, tempExtractDirectory, _archiveLimits, cancellationToken);
+            var extractedRoot = await ExtractChartArchiveAsync(
+                chartBytes,
+                tempExtractDirectory,
+                _archiveLimits,
+                cancellationToken);
+            var archiveRoot = extractedRoot ?? chartName;
+            // ResolveSafeDestination rejects root names that would escape the extraction root.
+            var extractDirectory = HelmArchivePath.ResolveSafeDestination(extractionRoot, archiveRoot);
             if (Directory.Exists(extractDirectory))
                 Directory.Delete(extractDirectory, recursive: true);
 
             Directory.Move(tempExtractDirectory, extractDirectory);
+            return extractDirectory;
         }
         catch
         {
@@ -672,8 +682,6 @@ public sealed class HelmChartRepository : IDisposable
                 Directory.Delete(tempExtractDirectory, recursive: true);
             throw;
         }
-
-        return extractDirectory;
     }
 
     private async Task<string> PullFromHttpToCacheAsync(
@@ -929,11 +937,14 @@ public sealed class HelmChartRepository : IDisposable
             request.Headers.Authorization = new AuthenticationHeaderValue("Basic", credentials);
         }
 
-        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        // Headers-only completion keeps an oversized or unending response body from being
+        // buffered before the compressed-input budget can reject it.
+        using var response = await _httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
         response.EnsureSuccessStatusCode();
-        var chartBytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
-        EnforceCompressedInputLimit(chartBytes.Length);
-        return chartBytes;
+        return await ReadChartArchiveContentAsync(response.Content, cancellationToken);
     }
 
     private async Task<byte[]> DownloadConfiguredChartArchiveAsync(
@@ -961,13 +972,14 @@ public sealed class HelmChartRepository : IDisposable
                 request.Headers.Authorization = new AuthenticationHeaderValue("Basic", credentials);
             }
 
-            using var response = await client.SendAsync(request, cancellationToken);
+            using var response = await client.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
             if (!IsRedirect(response.StatusCode))
             {
                 response.EnsureSuccessStatusCode();
-                var chartBytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
-                EnforceCompressedInputLimit(chartBytes.Length);
-                return chartBytes;
+                return await ReadChartArchiveContentAsync(response.Content, cancellationToken);
             }
 
             var location = response.Headers.Location;
@@ -990,6 +1002,43 @@ public sealed class HelmChartRepository : IDisposable
                 ChartArchiveLimitKind.CompressedBytes,
                 _archiveLimits.MaxCompressedBytes,
                 compressedBytes);
+    }
+
+    /// <summary>
+    /// Streams a chart archive response body into memory under the compressed-input
+    /// budget. Bytes are copied through a bounded buffer that aborts as soon as the
+    /// configured limit is crossed, so an oversized or unending response can never be
+    /// fully buffered. A declared <c>Content-Length</c> over the limit fails before any
+    /// body byte is read.
+    /// </summary>
+    /// <param name="content">The response content to read.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The archive bytes.</returns>
+    /// <exception cref="ChartArchiveLimitExceededException">Thrown when the compressed input limit is exceeded.</exception>
+    private async Task<byte[]> ReadChartArchiveContentAsync(HttpContent content, CancellationToken cancellationToken)
+    {
+        if (content.Headers.ContentLength is long declaredLength)
+            EnforceCompressedInputLimit(declaredLength);
+
+        await using var source = await content.ReadAsStreamAsync(cancellationToken);
+        using var buffer = new MemoryStream();
+        var chunk = new byte[64 * 1024];
+        long totalRead = 0;
+        int read;
+        while ((read = await source.ReadAsync(chunk.AsMemory(), cancellationToken).ConfigureAwait(false)) > 0)
+        {
+            totalRead += read;
+            // Abort mid-stream: never hold more than the configured compressed budget.
+            if (totalRead > _archiveLimits.MaxCompressedBytes)
+                throw new ChartArchiveLimitExceededException(
+                    ChartArchiveLimitKind.CompressedBytes,
+                    _archiveLimits.MaxCompressedBytes,
+                    totalRead);
+
+            buffer.Write(chunk, 0, read);
+        }
+
+        return buffer.ToArray();
     }
 
     private static void VerifyArchiveDigest(byte[] chartBytes, string expectedDigest, string chartName)
@@ -1033,25 +1082,7 @@ public sealed class HelmChartRepository : IDisposable
         }
     }
 
-    private static string? GetChartArchiveRoot(byte[] chartBytes)
-    {
-        using var memoryStream = new MemoryStream(chartBytes);
-        using var gzip = new GZipStream(memoryStream, CompressionMode.Decompress);
-        using var tar = new TarReader(gzip);
-
-        var entryNames = new List<string>();
-        TarEntry? entry;
-        while ((entry = tar.GetNextEntry(copyData: false)) is not null)
-        {
-            if (entry.EntryType is TarEntryType.Directory)
-                continue;
-            entryNames.Add(HelmArchivePath.NormalizeEntryName(entry.Name));
-        }
-
-        return HelmArchivePath.FindChartRoot(entryNames);
-    }
-
-    internal static Task ExtractChartArchiveAsync(
+    internal static Task<string?> ExtractChartArchiveAsync(
         byte[] chartBytes,
         string extractDir,
         CancellationToken cancellationToken)
@@ -1059,15 +1090,18 @@ public sealed class HelmChartRepository : IDisposable
 
     /// <summary>
     /// Extracts a chart archive into <paramref name="extractDir"/> with chart-root stripping,
-    /// enforcing the given decompression budgets on bytes actually streamed.
+    /// enforcing the given decompression budgets on every decompressed byte and every entry.
+    /// The chart root is discovered during this budgeted pass, so no unbounded pre-scan of
+    /// the archive happens before the limits apply.
     /// </summary>
     /// <param name="chartBytes">Compressed chart archive bytes.</param>
     /// <param name="extractDir">Destination directory; callers should use a temp directory and rename on success.</param>
     /// <param name="archiveLimits">Resource budgets enforced while reading the archive.</param>
     /// <param name="cancellationToken">Cancels extraction.</param>
+    /// <returns>The archive's chart root folder name, or null when entries are not uniformly rooted.</returns>
     /// <exception cref="ChartArchiveLimitExceededException">Thrown when a decompression resource limit is exceeded.</exception>
     /// <exception cref="InvalidDataException">Thrown when an entry would escape the extraction directory.</exception>
-    internal static async Task ExtractChartArchiveAsync(
+    internal static async Task<string?> ExtractChartArchiveAsync(
         byte[] chartBytes,
         string extractDir,
         HelmChartArchiveLimits archiveLimits,
@@ -1077,20 +1111,26 @@ public sealed class HelmChartRepository : IDisposable
         var budget = new ChartArchiveBudget(archiveLimits);
         using var memoryStream = new MemoryStream(chartBytes, writable: false);
         using var gzip = new GZipStream(memoryStream, CompressionMode.Decompress);
-        using var tar = new TarReader(gzip);
         var scope = budget.BeginArchive(chartBytes.Length);
+        // Meter every decompressed byte the tar reader consumes — headers and padding
+        // included — so structural tar data cannot be decompressed outside the budgets.
+        using var metered = scope.MeterDecompressedStream(gzip);
+        using var tar = new TarReader(metered);
 
         var archiveFiles = new List<ArchiveFileEntry>();
         TarEntry? entry;
         while ((entry = tar.GetNextEntry()) is not null)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            // Every entry kind draws on the shared entry-count budget so archives with
+            // huge numbers of directory or other structural headers stay bounded.
+            scope.CountEntry();
             if (entry.EntryType is TarEntryType.Directory || entry.DataStream is null)
                 continue;
 
             var entryName = HelmArchivePath.NormalizeEntryName(entry.Name);
-            // Stream actual bytes under the shared budget; tar header size fields are
-            // untrusted metadata and never used as the size of truth.
+            // Per-entry budget enforcement counts payload bytes as they stream; tar
+            // header size fields are untrusted metadata and never used as the size of truth.
             var content = await scope.ReadEntryAsync(entry.DataStream, cancellationToken);
             archiveFiles.Add(new ArchiveFileEntry(entryName, content));
         }
@@ -1130,6 +1170,8 @@ public sealed class HelmChartRepository : IDisposable
             }
             throw;
         }
+
+        return chartRoot;
     }
 
     private sealed record ArchiveFileEntry(string Name, byte[] Content);

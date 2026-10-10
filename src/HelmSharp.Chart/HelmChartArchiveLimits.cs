@@ -3,8 +3,10 @@ namespace HelmSharp.Chart;
 /// <summary>
 /// Resource budgets enforced while reading chart archives (packaged <c>.tgz</c> charts and
 /// embedded dependency archives), covering decompression amplification (CWE-400/CWE-409).
-/// Limits apply to bytes actually streamed while extracting entries, not to tar header
-/// size fields, so archives with misleading size metadata cannot bypass enforcement.
+/// Extracted-byte and ratio budgets meter every decompressed byte the tar reader consumes
+/// (headers, padding, and payloads alike), and the entry-count budget covers every tar
+/// entry including directory and other structural entries, so archives with misleading
+/// size metadata or header-only floods cannot bypass enforcement.
 /// </summary>
 /// <remarks>
 /// The <see cref="Default"/> profile fits real-world public charts (for example the
@@ -26,8 +28,9 @@ public sealed class HelmChartArchiveLimits
     public long MaxCompressedBytes { get; init; } = 100L * 1024 * 1024;
 
     /// <summary>
-    /// Gets or sets the maximum total extracted bytes across the whole chart tree,
-    /// including nested packaged dependency archives. Default: 200 MiB.
+    /// Gets or sets the maximum total decompressed bytes across the whole chart tree,
+    /// including tar headers, padding, and nested packaged dependency archives.
+    /// Default: 200 MiB.
     /// </summary>
     public long MaxTotalExtractedBytes { get; init; } = 200L * 1024 * 1024;
 
@@ -37,14 +40,15 @@ public sealed class HelmChartArchiveLimits
     public long MaxEntryBytes { get; init; } = 10L * 1024 * 1024;
 
     /// <summary>
-    /// Gets or sets the maximum number of regular file entries across the whole chart tree.
-    /// Default: 10,000.
+    /// Gets or sets the maximum number of tar entries across the whole chart tree,
+    /// counting every entry kind (regular files, directories, and other structural
+    /// entries). Default: 10,000.
     /// </summary>
     public int MaxEntryCount { get; init; } = 10_000;
 
     /// <summary>
     /// Gets or sets the maximum decompression amplification for one archive stream,
-    /// expressed as extracted-bytes ÷ compressed-bytes. Default: 200.
+    /// expressed as decompressed-bytes ÷ compressed-bytes. Default: 200.
     /// </summary>
     public double MaxCompressionRatio { get; init; } = 200;
 
@@ -62,7 +66,7 @@ public sealed class HelmChartArchiveLimits
     /// <param name="maxCompressedBytes">Compressed archive cap in bytes, or null for no cap.</param>
     /// <param name="maxTotalExtractedBytes">Total extracted-byte cap, or null for no cap.</param>
     /// <param name="maxEntryBytes">Per-entry extracted-byte cap, or null for no cap.</param>
-    /// <param name="maxEntryCount">Regular-entry count cap, or null for no cap.</param>
+    /// <param name="maxEntryCount">Tar entry count cap (all entry kinds), or null for no cap.</param>
     /// <param name="maxCompressionRatio">Per-archive amplification ratio cap, or null for no cap.</param>
     /// <param name="maxDependencyDepth">Packaged dependency depth cap, or null for no cap.</param>
     /// <returns>A limits instance with the requested raised budgets.</returns>

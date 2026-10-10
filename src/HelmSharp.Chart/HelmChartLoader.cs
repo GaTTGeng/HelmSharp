@@ -503,17 +503,23 @@ public static class HelmChartLoader
             ? new GZipStream(input, CompressionMode.Decompress)
             : input;
 
-        using var reader = new TarReader(archive);
+        // Meter every decompressed byte the tar reader consumes — headers and padding
+        // included — so structural tar data cannot be decompressed outside the budgets.
+        using var metered = scope.MeterDecompressedStream(archive);
+        using var reader = new TarReader(metered);
         TarEntry? entry;
         while ((entry = reader.GetNextEntry()) is not null)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            // Every entry kind draws on the shared entry-count budget so archives with
+            // huge numbers of directory or other structural headers stay bounded.
+            scope.CountEntry();
             if (entry.EntryType is TarEntryType.Directory || entry.DataStream is null)
                 continue;
 
             var entryName = HelmArchivePath.NormalizeEntryName(entry.Name);
-            // Budget enforcement counts bytes as they stream; tar header size fields are
-            // untrusted metadata and never used as the size of truth.
+            // Per-entry budget enforcement counts payload bytes as they stream; tar
+            // header size fields are untrusted metadata and never used as the size of truth.
             var content = await scope.ReadEntryAsync(entry.DataStream, cancellationToken);
             archiveFiles.Add(new ArchiveFileEntry(entryName, content));
         }

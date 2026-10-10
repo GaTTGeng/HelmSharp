@@ -6,13 +6,13 @@ public enum ChartArchiveLimitKind
     /// <summary>The compressed archive input exceeded <see cref="HelmChartArchiveLimits.MaxCompressedBytes"/>.</summary>
     CompressedBytes,
 
-    /// <summary>Cumulative extracted bytes exceeded <see cref="HelmChartArchiveLimits.MaxTotalExtractedBytes"/>.</summary>
+    /// <summary>Decompressed bytes (headers, padding, and payloads) exceeded <see cref="HelmChartArchiveLimits.MaxTotalExtractedBytes"/>.</summary>
     TotalExtractedBytes,
 
     /// <summary>A single entry's extracted bytes exceeded <see cref="HelmChartArchiveLimits.MaxEntryBytes"/>.</summary>
     EntryBytes,
 
-    /// <summary>The regular-entry count exceeded <see cref="HelmChartArchiveLimits.MaxEntryCount"/>.</summary>
+    /// <summary>The tar entry count (all entry kinds) exceeded <see cref="HelmChartArchiveLimits.MaxEntryCount"/>.</summary>
     EntryCount,
 
     /// <summary>One archive stream expanded past <see cref="HelmChartArchiveLimits.MaxCompressionRatio"/> times its compressed size.</summary>

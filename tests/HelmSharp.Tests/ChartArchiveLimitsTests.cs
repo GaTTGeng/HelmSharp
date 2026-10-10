@@ -1,5 +1,6 @@
 using System.Formats.Tar;
 using System.IO.Compression;
+using System.Net;
 using System.Text;
 using HelmSharp.Chart;
 using HelmSharp.Repo;
@@ -408,6 +409,237 @@ public sealed class ChartArchiveLimitsTests : IDisposable
         Assert.Equal("cert-manager", chart.Name);
     }
 
+    // --- Streaming download enforcement ---
+
+    [Fact]
+    public async Task PullChartAsync_DownloadExceedingCompressedLimit_AbortsWithoutBufferingWholeResponse()
+    {
+        // A 256 KiB response under a 64 KiB compressed budget: the bounded download must
+        // stop consuming body bytes shortly after the limit instead of buffering it all.
+        var payload = new byte[256 * 1024];
+        var content = new InstrumentedContent(payload, declareLength: false);
+        var handler = new SingleResponseHandler(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
+        var limits = new HelmChartArchiveLimits { MaxCompressedBytes = 64 * 1024 };
+        using var repository = new HelmChartRepository(CreateRepositoryOptions(limits), handler);
+
+        var ex = await Assert.ThrowsAsync<ChartArchiveLimitExceededException>(() => repository.PullChartAsync(
+            new HelmPullRequest
+            {
+                ChartReference = "https://repo.example.test/oversized-1.0.0.tgz",
+                Destination = Path.Combine(_tempDir, "download-destination"),
+            },
+            CancellationToken.None));
+
+        Assert.Equal(ChartArchiveLimitKind.CompressedBytes, ex.Limit);
+        Assert.True(
+            content.BytesDelivered < payload.Length,
+            $"delivered {content.BytesDelivered} of {payload.Length} bytes; the whole response must not be buffered");
+        Assert.True(
+            content.BytesDelivered <= limits.MaxCompressedBytes + 64 * 1024,
+            $"delivered {content.BytesDelivered} bytes before abort; expected at most the limit plus one read chunk");
+    }
+
+    [Fact]
+    public async Task PullChartAsync_DeclaredContentLengthOverCompressedLimit_FailsBeforeReadingBody()
+    {
+        var payload = new byte[256 * 1024];
+        var content = new InstrumentedContent(payload, declareLength: true);
+        var handler = new SingleResponseHandler(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
+        var limits = new HelmChartArchiveLimits { MaxCompressedBytes = 1024 };
+        using var repository = new HelmChartRepository(CreateRepositoryOptions(limits), handler);
+
+        var ex = await Assert.ThrowsAsync<ChartArchiveLimitExceededException>(() => repository.PullChartAsync(
+            new HelmPullRequest
+            {
+                ChartReference = "https://repo.example.test/oversized-1.0.0.tgz",
+                Destination = Path.Combine(_tempDir, "declared-length-destination"),
+            },
+            CancellationToken.None));
+
+        Assert.Equal(ChartArchiveLimitKind.CompressedBytes, ex.Limit);
+        Assert.Equal(0, content.BytesDelivered);
+    }
+
+    [Fact]
+    public async Task PullChartAsync_ConfiguredRepositoryDownloadExceedingCompressedLimit_AbortsWithoutBufferingWholeResponse()
+    {
+        // The configured-repository download path must enforce the same mid-stream abort
+        // as the direct archive URL path.
+        var payload = new byte[256 * 1024];
+        var content = new InstrumentedContent(payload, declareLength: false);
+        var archiveHandler = new SingleResponseHandler(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
+        var limits = new HelmChartArchiveLimits { MaxCompressedBytes = 64 * 1024 };
+        var options = CreateRepositoryOptions(limits);
+        Directory.CreateDirectory(options.ConfigDirectory!);
+        await File.WriteAllTextAsync(Path.Combine(options.ConfigDirectory!, "repositories.yaml"), """
+            apiVersion: v1
+            repositories:
+              - name: stable
+                url: https://repo.example.test
+            """);
+        Directory.CreateDirectory(options.CacheDirectory!);
+        await File.WriteAllTextAsync(
+            Path.Combine(options.CacheDirectory!, HelmChartRepository.GetRepositoryIndexCacheFileName("stable")),
+            """
+            apiVersion: v1
+            entries:
+              mychart:
+                - name: mychart
+                  version: 1.0.0
+                  urls:
+                    - https://repo.example.test/charts/mychart-1.0.0.tgz
+            """);
+        // The primary handler must never serve the archive; only the repository handler does.
+        using var repository = new HelmChartRepository(
+            options,
+            new SingleResponseHandler(),
+            _ => archiveHandler);
+
+        var ex = await Assert.ThrowsAsync<ChartArchiveLimitExceededException>(() => repository.PullChartAsync(
+            new HelmPullRequest
+            {
+                ChartReference = "stable/mychart",
+                Version = "1.0.0",
+                Destination = Path.Combine(_tempDir, "configured-download-destination"),
+            },
+            CancellationToken.None));
+
+        Assert.Equal(ChartArchiveLimitKind.CompressedBytes, ex.Limit);
+        Assert.True(
+            content.BytesDelivered < payload.Length,
+            $"delivered {content.BytesDelivered} of {payload.Length} bytes; the whole response must not be buffered");
+        Assert.True(
+            content.BytesDelivered <= limits.MaxCompressedBytes + 64 * 1024,
+            $"delivered {content.BytesDelivered} bytes before abort; expected at most the limit plus one read chunk");
+    }
+
+    // --- Structural tar entries are metered ---
+
+    [Fact]
+    public async Task LoadArchive_DirectoryEntryFlood_ExceedsEntryCountBudget()
+    {
+        // Directory entries have no file payload; counting only regular files would leave
+        // a header-only flood at zero counted entries.
+        var archive = CreateChartTgzWithDirectoryEntries(directoryCount: 50);
+        var limits = new HelmChartArchiveLimits
+        {
+            MaxEntryCount = 10,
+            MaxTotalExtractedBytes = 1024 * 1024,
+            MaxCompressionRatio = 10_000,
+        };
+
+        var ex = await Assert.ThrowsAsync<ChartArchiveLimitExceededException>(
+            () => LoadArchiveBytesAsync(archive, limits));
+
+        Assert.Equal(ChartArchiveLimitKind.EntryCount, ex.Limit);
+        Assert.Equal(10, ex.LimitValue);
+    }
+
+    [Fact]
+    public async Task LoadArchive_DirectoryEntryFlood_MetersDecompressedBytes()
+    {
+        // Structural headers decompress to hundreds of kilobytes while file payloads stay
+        // tiny; the decompressed-byte meter must charge them anyway.
+        var archive = CreateChartTgzWithDirectoryEntries(directoryCount: 200);
+        var limits = new HelmChartArchiveLimits
+        {
+            MaxEntryCount = 10_000,
+            MaxTotalExtractedBytes = 8 * 1024,
+            MaxCompressionRatio = 10_000,
+        };
+
+        var ex = await Assert.ThrowsAsync<ChartArchiveLimitExceededException>(
+            () => LoadArchiveBytesAsync(archive, limits));
+
+        Assert.Equal(ChartArchiveLimitKind.TotalExtractedBytes, ex.Limit);
+        Assert.Equal(8 * 1024, ex.LimitValue);
+    }
+
+    [Fact]
+    public async Task LoadArchive_DirectoryEntryFlood_MetersCompressionRatio()
+    {
+        // A high-amplification archive made only of directory headers has zero file
+        // payload; the ratio bound must still fire on decompressed structural bytes.
+        var archive = CreateChartTgzWithDirectoryEntries(directoryCount: 200);
+        Assert.True(archive.Length < 16 * 1024, $"compressed size should be tiny, was {archive.Length}");
+        var limits = new HelmChartArchiveLimits
+        {
+            MaxEntryCount = 10_000,
+            MaxTotalExtractedBytes = 1024 * 1024,
+            MaxCompressionRatio = 5,
+        };
+
+        var ex = await Assert.ThrowsAsync<ChartArchiveLimitExceededException>(
+            () => LoadArchiveBytesAsync(archive, limits));
+
+        Assert.Equal(ChartArchiveLimitKind.CompressionRatio, ex.Limit);
+    }
+
+    // --- Pull/untar applies limits before any archive traversal ---
+
+    [Fact]
+    public async Task PullChartAsync_UntarHighRatioArchive_ThrowsRatioLimitBeforeReachingTrailingUnsafeEntry()
+    {
+        // The archive holds a high-amplification payload followed by an entry whose name
+        // is unsafe. A full unbounded pre-scan would reach the trailing name and throw
+        // InvalidDataException; budgeted extraction must reject the amplification first.
+        var archive = CreateHighRatioTgzWithUnsafeTail();
+        var handler = new SingleResponseHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new InstrumentedContent(archive, declareLength: true)
+        });
+        var limits = new HelmChartArchiveLimits
+        {
+            MaxEntryBytes = 1024 * 1024,
+            MaxTotalExtractedBytes = 1024 * 1024,
+            MaxCompressionRatio = 5,
+            MaxEntryCount = 100,
+        };
+        using var repository = new HelmChartRepository(CreateRepositoryOptions(limits), handler);
+
+        var ex = await Assert.ThrowsAsync<ChartArchiveLimitExceededException>(() => repository.PullChartAsync(
+            new HelmPullRequest
+            {
+                ChartReference = "https://repo.example.test/hostile-1.0.0.tgz",
+                Destination = Path.Combine(_tempDir, "untar-hostile-destination"),
+                Untar = true,
+                UntarDirectory = Path.Combine(_tempDir, "untar-hostile-extraction"),
+            },
+            CancellationToken.None));
+
+        Assert.Equal(ChartArchiveLimitKind.CompressionRatio, ex.Limit);
+    }
+
+    [Fact]
+    public async Task PullChartAsync_UntarHighRatioArchive_ThrowsExtractedByteLimitBeforeReachingTrailingUnsafeEntry()
+    {
+        var archive = CreateHighRatioTgzWithUnsafeTail();
+        var handler = new SingleResponseHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new InstrumentedContent(archive, declareLength: true)
+        });
+        var limits = new HelmChartArchiveLimits
+        {
+            MaxEntryBytes = 1024 * 1024,
+            MaxTotalExtractedBytes = 8 * 1024,
+            MaxCompressionRatio = 10_000,
+            MaxEntryCount = 100,
+        };
+        using var repository = new HelmChartRepository(CreateRepositoryOptions(limits), handler);
+
+        var ex = await Assert.ThrowsAsync<ChartArchiveLimitExceededException>(() => repository.PullChartAsync(
+            new HelmPullRequest
+            {
+                ChartReference = "https://repo.example.test/hostile-1.0.0.tgz",
+                Destination = Path.Combine(_tempDir, "untar-bytes-destination"),
+                Untar = true,
+                UntarDirectory = Path.Combine(_tempDir, "untar-bytes-extraction"),
+            },
+            CancellationToken.None));
+
+        Assert.Equal(ChartArchiveLimitKind.TotalExtractedBytes, ex.Limit);
+    }
+
     // --- Helpers ---
 
     private static string FixturesRoot => Path.Combine(AppContext.BaseDirectory, "Fixtures", "Charts");
@@ -543,9 +775,173 @@ public sealed class ChartArchiveLimitsTests : IDisposable
         return CreateTgz(entries.ToArray());
     }
 
+    private HelmRepositoryOptions CreateRepositoryOptions(HelmChartArchiveLimits? archiveLimits = null)
+        => new()
+        {
+            ConfigDirectory = Path.Combine(_tempDir, "config"),
+            CacheDirectory = Path.Combine(_tempDir, "cache"),
+            ArchiveLimits = archiveLimits,
+        };
+
+    /// <summary>
+    /// Builds a chart tgz whose structural directory entries dominate the archive:
+    /// each directory header decompresses to 512 bytes while carrying no file payload.
+    /// </summary>
+    private static byte[] CreateChartTgzWithDirectoryEntries(int directoryCount)
+    {
+        using var memory = new MemoryStream();
+        using (var gzip = new GZipStream(memory, CompressionLevel.Fastest, leaveOpen: true))
+        using (var tar = new TarWriter(gzip))
+        {
+            tar.WriteEntry(new GnuTarEntry(TarEntryType.RegularFile, "chart/Chart.yaml")
+            {
+                DataStream = new MemoryStream(Encoding.UTF8.GetBytes("""
+                    apiVersion: v2
+                    name: limit-test
+                    version: 1.0.0
+                    """))
+            });
+            for (var i = 0; i < directoryCount; i++)
+                tar.WriteEntry(new GnuTarEntry(TarEntryType.Directory, $"chart/dir-{i}"));
+        }
+
+        return memory.ToArray();
+    }
+
+    /// <summary>
+    /// Builds a high-amplification chart tgz whose trailing entry name is unsafe.
+    /// An unbounded full scan of this archive must throw <see cref="InvalidDataException"/>
+    /// on the trailing name, while budgeted extraction must reject the amplification
+    /// before that entry is reached.
+    /// </summary>
+    private static byte[] CreateHighRatioTgzWithUnsafeTail()
+    {
+        using var memory = new MemoryStream();
+        using (var gzip = new GZipStream(memory, CompressionLevel.Fastest, leaveOpen: true))
+        using (var tar = new TarWriter(gzip))
+        {
+            tar.WriteEntry(new GnuTarEntry(TarEntryType.RegularFile, "chart/Chart.yaml")
+            {
+                DataStream = new MemoryStream(Encoding.UTF8.GetBytes("""
+                    apiVersion: v2
+                    name: hostile
+                    version: 1.0.0
+                    """))
+            });
+            tar.WriteEntry(new GnuTarEntry(TarEntryType.RegularFile, "chart/zeros.bin")
+            {
+                DataStream = new MemoryStream(new byte[64 * 1024])
+            });
+            tar.WriteEntry(new GnuTarEntry(TarEntryType.RegularFile, "../evil.txt")
+            {
+                DataStream = new MemoryStream("evil"u8.ToArray())
+            });
+        }
+
+        return memory.ToArray();
+    }
+
     public void Dispose()
     {
         try { Directory.Delete(_tempDir, recursive: true); }
         catch { }
+    }
+
+    private sealed class SingleResponseHandler(params HttpResponseMessage[] responses) : HttpMessageHandler
+    {
+        private readonly Queue<HttpResponseMessage> _responses = new(responses);
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+            => Task.FromResult(_responses.Dequeue());
+    }
+
+    /// <summary>
+    /// Test response content that counts how many body bytes are delivered to the client,
+    /// so download tests can prove an oversized response is aborted instead of buffered.
+    /// </summary>
+    private sealed class InstrumentedContent : HttpContent
+    {
+        private readonly byte[] _payload;
+        private readonly bool _declareLength;
+
+        public InstrumentedContent(byte[] payload, bool declareLength)
+        {
+            _payload = payload;
+            _declareLength = declareLength;
+            if (declareLength)
+                Headers.ContentLength = payload.Length;
+        }
+
+        public long BytesDelivered { get; private set; }
+
+        protected override Task<Stream> CreateContentReadStreamAsync()
+            => Task.FromResult<Stream>(new CountingStream(_payload, this));
+
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+            => SerializeAsync(stream);
+
+        private async Task SerializeAsync(Stream stream)
+        {
+            await stream.WriteAsync(_payload);
+            BytesDelivered += _payload.Length;
+        }
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = _declareLength ? _payload.Length : 0;
+            return _declareLength;
+        }
+
+        private sealed class CountingStream(byte[] payload, InstrumentedContent owner) : Stream
+        {
+            private int _position;
+
+            public override bool CanRead => true;
+
+            public override bool CanSeek => false;
+
+            public override bool CanWrite => false;
+
+            public override long Length => payload.Length;
+
+            public override long Position
+            {
+                get => _position;
+                set => throw new NotSupportedException();
+            }
+
+            public override void Flush()
+            {
+            }
+
+            public override int Read(byte[] buffer, int offset, int count)
+                => Read(buffer.AsSpan(offset, count));
+
+            public override int Read(Span<byte> buffer)
+            {
+                var available = Math.Min(buffer.Length, payload.Length - _position);
+                if (available <= 0)
+                    return 0;
+
+                payload.AsSpan(_position, available).CopyTo(buffer);
+                _position += available;
+                owner.BytesDelivered += available;
+                return available;
+            }
+
+            public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+                => Task.FromResult(Read(buffer, offset, count));
+
+            public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+                => new(Read(buffer.Span));
+
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+            public override void SetLength(long value) => throw new NotSupportedException();
+
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        }
     }
 }
