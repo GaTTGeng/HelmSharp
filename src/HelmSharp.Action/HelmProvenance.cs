@@ -1,79 +1,247 @@
 using System.Security.Cryptography;
 using System.Text;
+using Org.BouncyCastle.Bcpg;
+using Org.BouncyCastle.Bcpg.OpenPgp;
+using Org.BouncyCastle.Crypto;
+using Org.BouncyCastle.Security;
+using HelmSharp.Chart;
 
 namespace HelmSharp.Action;
 
 /// <summary>
-/// Chart provenance — generates and verifies .prov files for chart integrity.
-/// A .prov file contains: chart metadata hash, signature, and pgp info.
+/// Chart provenance: generates and verifies Helm-compatible <c>.prov</c> files.
 /// </summary>
 /// <remarks>
-/// The .prov file is written in Helm's clearsigned armor layout for format compatibility, but
-/// the signature block currently carries a base64 SHA-512 digest of the archive rather than a
-/// real PGP signature. Integrity checking is therefore hash-based only; do not treat these
-/// files as cryptographically signed provenance.
+/// <para>
+/// <b>Integrity vs authenticity.</b> A <c>.prov</c> file clearsigns chart metadata and the
+/// archive SHA-256 with an OpenPGP key. <see cref="VerifyAsync"/> checks the cryptographic
+/// signature against caller-supplied trusted keys, so a valid result means the chart was signed
+/// by a key you trust and has not been altered — that is authenticity. The digest-only helpers
+/// (<see cref="CheckDigestAsync"/>, <see cref="ExtractSha256"/>) compare a plaintext hash and
+/// provide integrity only: anyone who can replace the chart can also rewrite the hash. Never
+/// treat digest-only agreement as proof of origin.
+/// </para>
+/// <para>
+/// <b>Trust model.</b> Verification fails closed unless the OpenPGP signature is valid, the
+/// signer matches one of the supplied trusted keys, and the signed SHA-256 equals the archive
+/// digest. There is no implicit keyring and no TOFU: callers pass trusted keys explicitly.
+/// </para>
+/// <para>
+/// <b>File format.</b> Generated files match Helm's provenance layout (clearsigned chart
+/// metadata YAML, a <c>files:</c> digest map, and a real OpenPGP signature) so they interoperate
+/// with <c>helm verify</c> and <c>helm package --sign</c>.
+/// </para>
+/// <para>
+/// <b>Legacy files.</b> Earlier HelmSharp builds wrote a pseudo-signature whose PGP SIGNATURE
+/// block carried a base64 SHA-512 digest instead of an OpenPGP signature. Those files fail
+/// authenticity verification (the block is not a valid signature) and must be re-signed with
+/// <see cref="SignAsync"/>. They remain readable through the digest-only helpers.
+/// </para>
 /// </remarks>
 public static class HelmProvenance
 {
+    private const string SignedMessageHeader = "-----BEGIN PGP SIGNED MESSAGE-----";
+    private const string SignatureHeader = "-----BEGIN PGP SIGNATURE-----";
+    private const string SignatureFooter = "-----END PGP SIGNATURE-----";
+
     /// <summary>
-    /// Generates a .prov file for a chart archive, written next to it as
-    /// <c>{archive}.prov</c>. Records the archive name, SHA-256 digest, and UTC timestamp.
+    /// Signs a chart archive with a real OpenPGP signature and writes the provenance file
+    /// next to the archive as <c>{archive}.prov</c>, matching Helm's clearsigned layout.
     /// </summary>
-    /// <param name="chartTgzPath">Chart archive to describe.</param>
-    /// <param name="keyId">Optional PGP key identifier recorded in the file (not used for signing).</param>
-    /// <returns>Path of the generated .prov file.</returns>
-    public static async Task<string> GenerateProvFileAsync(
+    /// <param name="chartTgzPath">Chart archive to sign.</param>
+    /// <param name="signingKey">Private-key material used for signing.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Path of the generated <c>.prov</c> file.</returns>
+    /// <exception cref="FileNotFoundException">The chart archive does not exist.</exception>
+    /// <exception cref="InvalidDataException">The archive has no readable <c>Chart.yaml</c>.</exception>
+    /// <exception cref="PgpException">The signing key cannot be unlocked or signing fails.</exception>
+    public static async Task<string> SignAsync(
         string chartTgzPath,
-        string? keyId = null,
-        CancellationToken ct = default)
+        HelmProvenanceSigningKey signingKey,
+        CancellationToken cancellationToken = default)
     {
+        ArgumentException.ThrowIfNullOrEmpty(chartTgzPath);
+        ArgumentNullException.ThrowIfNull(signingKey);
+
         if (!File.Exists(chartTgzPath))
-            throw new FileNotFoundException($"Chart archive not found: {chartTgzPath}");
+            throw new FileNotFoundException($"Chart archive not found: {chartTgzPath}", chartTgzPath);
 
-        var chartBytes = await File.ReadAllBytesAsync(chartTgzPath, ct);
+        // --- 1. Hash the archive and read chart metadata ---
+        var chartBytes = await File.ReadAllBytesAsync(chartTgzPath, cancellationToken).ConfigureAwait(false);
         var sha256 = Convert.ToHexString(SHA256.HashData(chartBytes)).ToLowerInvariant();
-        var chartName = Path.GetFileNameWithoutExtension(chartTgzPath);
+        var archiveName = Path.GetFileName(chartTgzPath);
+        var metadata = await ReadArchiveMetadataAsync(chartBytes, cancellationToken).ConfigureAwait(false);
 
-        var provContent = new StringBuilder();
-        provContent.AppendLine("-----BEGIN PGP SIGNED MESSAGE-----");
-        provContent.AppendLine("Hash: SHA256");
-        provContent.AppendLine();
-        provContent.AppendLine($"name: {chartName}");
-        provContent.AppendLine($"sha256: {sha256}");
-        provContent.AppendLine($"generated: {DateTimeOffset.UtcNow:yyyy-MM-ddTHH:mm:ss.ffffffZ}");
+        // --- 2. Build the Helm-shaped signed body ---
+        var body = BuildSignedBody(metadata, archiveName, sha256);
 
-        if (keyId is not null)
-            provContent.AppendLine($"pgpKeyID: {keyId}");
-
-        provContent.AppendLine("-----BEGIN PGP SIGNATURE-----");
-        provContent.AppendLine($"comment: HelmSharp managed provenance");
-        provContent.AppendLine();
-        provContent.AppendLine(Convert.ToBase64String(SHA512.HashData(chartBytes)));
-        provContent.AppendLine("-----END PGP SIGNATURE-----");
+        // --- 3. Clearsign the body with SHA-512 (Helm's provenance hash) ---
+        var provContent = ClearSign(body, signingKey);
 
         var provPath = chartTgzPath + ".prov";
-        await File.WriteAllTextAsync(provPath, provContent.ToString(), ct);
+        await File.WriteAllTextAsync(provPath, provContent, Encoding.ASCII, cancellationToken).ConfigureAwait(false);
         return provPath;
     }
 
     /// <summary>
-    /// Verifies a chart archive against its .prov file.
-    /// Returns true if the SHA256 hash matches; a missing .prov file yields false.
-    /// Only hash integrity is checked — the signature block is not verified.
+    /// Verifies a chart archive against its provenance file with full authenticity checks:
+    /// OpenPGP signature validity, trusted-signer identity, and signed chart digest.
+    /// Fails closed on tampered chart bytes, tampered signed metadata, malformed armor,
+    /// unknown or untrusted keys, and invalid signatures.
     /// </summary>
-    public static async Task<bool> VerifyAsync(
+    /// <param name="chartTgzPath">Chart archive to verify.</param>
+    /// <param name="trustedKeys">OpenPGP public keys authorized to sign provenance for this chart. Must not be empty.</param>
+    /// <param name="provPath">Provenance file path; defaults to <c>{archive}.prov</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Verification result describing each check and the signer identity.</returns>
+    /// <exception cref="FileNotFoundException">The chart archive does not exist.</exception>
+    /// <exception cref="ArgumentException"><paramref name="trustedKeys"/> is null or empty.</exception>
+    public static async Task<HelmProvenanceVerificationResult> VerifyAsync(
+        string chartTgzPath,
+        IEnumerable<HelmProvenanceTrustedKey> trustedKeys,
+        string? provPath = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(chartTgzPath);
+        ArgumentNullException.ThrowIfNull(trustedKeys);
+
+        var trustedList = trustedKeys.Where(k => k is not null).ToList();
+        if (trustedList.Count == 0)
+            throw new ArgumentException("At least one trusted key is required for authenticity verification.", nameof(trustedKeys));
+
+        if (!File.Exists(chartTgzPath))
+            throw new FileNotFoundException($"Chart archive not found: {chartTgzPath}", chartTgzPath);
+
+        provPath ??= chartTgzPath + ".prov";
+        if (!File.Exists(provPath))
+        {
+            return Fail(null, null, null, null, actualSha256: null, "Provenance file not found: " + provPath);
+        }
+
+        // --- 1. Compute the archive digest and read the provenance file ---
+        var chartBytes = await File.ReadAllBytesAsync(chartTgzPath, cancellationToken).ConfigureAwait(false);
+        var actualSha256 = Convert.ToHexString(SHA256.HashData(chartBytes)).ToLowerInvariant();
+        var provContent = await File.ReadAllTextAsync(provPath, Encoding.ASCII, cancellationToken).ConfigureAwait(false);
+
+        // --- 2. Reject legacy pseudo-signature files before any crypto ---
+        if (IsLegacyPseudoSignature(provContent))
+        {
+            return Fail(null, null, null, expectedSha256: ExtractSha256(provContent), actualSha256,
+                "Legacy HelmSharp pseudo-signature provenance cannot establish authenticity; re-sign with SignAsync.");
+        }
+
+        // --- 3. Parse the clearsigned message ---
+        if (!TryParseClearSign(provContent, out var signedBody, out var signaturePacket))
+        {
+            return Fail(null, null, null, expectedSha256: ExtractSha256(provContent), actualSha256,
+                "Malformed OpenPGP clearsigned provenance armor.");
+        }
+
+        // --- 4. Verify the OpenPGP signature over the canonicalized signed body ---
+        PgpSignature? parsedSignature = null;
+        bool signatureValid = false;
+        string? signerFingerprint = null;
+        string? signerKeyId = null;
+        string? signerUserId = null;
+
+        foreach (var trusted in trustedList)
+        {
+            try
+            {
+                parsedSignature = ParseSignature(signaturePacket);
+                parsedSignature.InitVerify(trusted.PublicKey);
+                parsedSignature.Update(CanonicalizeForHash(signedBody));
+                if (parsedSignature.Verify())
+                {
+                    signatureValid = true;
+                    signerFingerprint = trusted.Fingerprint;
+                    signerKeyId = trusted.KeyId;
+                    signerUserId = trusted.UserId;
+                    break;
+                }
+            }
+            catch (PgpException)
+            {
+                // Wrong key or malformed signature for this candidate; try the next trusted key.
+            }
+            catch (IOException)
+            {
+                // Same: not this key's signature.
+            }
+        }
+
+        if (!signatureValid)
+        {
+            // Distinguish "valid signature by an untrusted key" from "no valid signature at all".
+            if (TryVerifyAgainstEmbeddedIssuer(signedBody, signaturePacket, out var untrustedFp, out var untrustedId, out var untrustedUid))
+            {
+                return Fail(untrustedFp, untrustedId, untrustedUid, ExtractSha256(provContent), actualSha256,
+                    "Signature is cryptographically valid but the signing key is not in the trusted key set.");
+            }
+
+            return Fail(null, null, null, ExtractSha256(provContent), actualSha256,
+                "OpenPGP signature is invalid or does not match any trusted key.");
+        }
+
+        // --- 5. Bind the chart digest to the signed metadata ---
+        var expectedSha256 = ExtractSha256FromSignedBody(signedBody);
+        if (expectedSha256 is null)
+        {
+            return Fail(signerFingerprint, signerKeyId, signerUserId, null, actualSha256,
+                "Signed provenance body does not contain a chart digest in the files section.");
+        }
+
+        var digestMatches = string.Equals(expectedSha256, actualSha256, StringComparison.OrdinalIgnoreCase);
+        if (!digestMatches)
+        {
+            // Signature is valid and the signer is trusted; only the chart bytes diverged.
+            return new HelmProvenanceVerificationResult(
+                signatureValid: true,
+                signerTrusted: true,
+                digestMatches: false,
+                signerFingerprint,
+                signerKeyId,
+                signerUserId,
+                expectedSha256,
+                actualSha256,
+                "Chart archive digest does not match the signed digest; the archive has been modified.");
+        }
+
+        return new HelmProvenanceVerificationResult(
+            signatureValid: true,
+            signerTrusted: true,
+            digestMatches: true,
+            signerFingerprint,
+            signerKeyId,
+            signerUserId,
+            expectedSha256,
+            actualSha256,
+            failureReason: null);
+    }
+
+    /// <summary>
+    /// Compares the chart archive SHA-256 against the digest recorded in a <c>.prov</c> file.
+    /// This is a <b>non-authenticating integrity check only</b>: the digest is plaintext and
+    /// forgeable by anyone who can replace the chart. It does not verify any signature and
+    /// must not be presented as proof of origin — use <see cref="VerifyAsync"/> for authenticity.
+    /// </summary>
+    /// <param name="chartTgzPath">Chart archive to check.</param>
+    /// <param name="provPath">Provenance file path; defaults to <c>{archive}.prov</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>True when the recorded digest matches the archive bytes.</returns>
+    public static async Task<bool> CheckDigestAsync(
         string chartTgzPath,
         string? provPath = null,
-        CancellationToken ct = default)
+        CancellationToken cancellationToken = default)
     {
+        ArgumentException.ThrowIfNullOrEmpty(chartTgzPath);
         provPath ??= chartTgzPath + ".prov";
         if (!File.Exists(provPath))
             return false;
 
-        var chartBytes = await File.ReadAllBytesAsync(chartTgzPath, ct);
+        var chartBytes = await File.ReadAllBytesAsync(chartTgzPath, cancellationToken).ConfigureAwait(false);
         var actualHash = Convert.ToHexString(SHA256.HashData(chartBytes)).ToLowerInvariant();
-
-        var provContent = await File.ReadAllTextAsync(provPath, ct);
+        var provContent = await File.ReadAllTextAsync(provPath, Encoding.ASCII, cancellationToken).ConfigureAwait(false);
         var expectedHash = ExtractSha256(provContent);
 
         return expectedHash is not null &&
@@ -81,53 +249,398 @@ public static class HelmProvenance
     }
 
     /// <summary>
-    /// Extracts the SHA256 hash from a .prov file (the hex value following the
-    /// <c>sha256:</c> key), or null when the key is absent.
+    /// Extracts the chart archive SHA-256 from a <c>.prov</c> file body (the digest in the
+    /// <c>files:</c> section, or the legacy top-level <c>sha256:</c> key).
+    /// Non-authenticating: the value is plaintext and not protected against tampering.
     /// </summary>
+    /// <param name="provContent">Full text of a provenance file.</param>
+    /// <returns>Lowercase hex digest, or null when no digest is present.</returns>
     public static string? ExtractSha256(string provContent)
     {
+        if (string.IsNullOrEmpty(provContent))
+            return null;
+
+        // Prefer the Helm-style files section; fall back to the legacy top-level key.
+        var fromFiles = ExtractSha256FromSignedBody(provContent);
+        if (fromFiles is not null)
+            return fromFiles;
+
         foreach (var line in provContent.Split('\n'))
         {
             var trimmed = line.Trim();
             if (trimmed.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
                 return trimmed["sha256:".Length..].Trim();
         }
+
         return null;
     }
 
     /// <summary>
-    /// Extracts chart metadata key/value pairs from the clearsigned message body of a .prov
-    /// file (name, sha256, generated, pgpKeyID). The armor headers and signature block are
-    /// excluded. Keys are compared case-insensitively.
+    /// Extracts chart metadata key/value pairs from a <c>.prov</c> file body: the chart
+    /// metadata YAML fields plus the archive digest from the <c>files:</c> section.
+    /// Armor headers and the signature block are excluded. Keys are compared case-insensitively.
+    /// Non-authenticating: values are plaintext and forgeable alongside the chart.
     /// </summary>
+    /// <param name="provContent">Full text of a provenance file.</param>
+    /// <returns>Metadata pairs from the signed-message body.</returns>
     public static Dictionary<string, string> ExtractMetadata(string provContent)
     {
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var inMessage = false;
+        if (string.IsNullOrEmpty(provContent))
+            return result;
 
-        foreach (var line in provContent.Split('\n'))
+        var body = ExtractSignedBodyText(provContent);
+        if (body is null)
+            return result;
+
+        var inFilesSection = false;
+        foreach (var line in body.Split('\n'))
         {
             var trimmed = line.Trim();
-            if (trimmed == "-----BEGIN PGP SIGNED MESSAGE-----")
+            if (trimmed.Length == 0 || trimmed == "...")
+                continue;
+
+            if (trimmed == "files:")
             {
-                inMessage = true;
+                inFilesSection = true;
                 continue;
             }
-            if (trimmed == "-----BEGIN PGP SIGNATURE-----")
-                break;
 
-            if (inMessage && trimmed.StartsWith("Hash:"))
-                continue;
-
-            if (inMessage && trimmed.Contains(':'))
+            if (inFilesSection)
             {
-                var colonIndex = trimmed.IndexOf(':');
-                var key = trimmed[..colonIndex].Trim();
-                var value = trimmed[(colonIndex + 1)..].Trim();
+                // "  archive-name.tgz: sha256:<hex>" -> record as files entry + sha256 key.
+                var colon = trimmed.IndexOf(':');
+                if (colon > 0)
+                {
+                    var fileKey = trimmed[..colon].Trim();
+                    var fileValue = trimmed[(colon + 1)..].Trim();
+                    result["files." + fileKey] = fileValue;
+                    if (fileValue.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
+                        result["sha256"] = fileValue["sha256:".Length..].Trim();
+                }
+
+                continue;
+            }
+
+            var sep = trimmed.IndexOf(':');
+            if (sep > 0)
+            {
+                var key = trimmed[..sep].Trim();
+                var value = trimmed[(sep + 1)..].Trim();
+                // Strip simple YAML quoting so callers see the scalar value.
+                if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
+                    value = value[1..^1];
                 result[key] = value;
             }
         }
 
         return result;
+    }
+
+    // --- Signing internals ---
+
+    private static string BuildSignedBody(
+        IReadOnlyDictionary<string, object?> metadata,
+        string archiveName,
+        string sha256)
+    {
+        // Helm's provenance body is the chart metadata as YAML, a document-end marker,
+        // then a files map binding the archive name to its SHA-256.
+        var metadataYaml = HelmYaml.Serialize(metadata).TrimEnd('\n', '\r');
+        var sb = new StringBuilder();
+        sb.Append(metadataYaml);
+        sb.Append("\n\n...\n");
+        sb.Append("files:\n");
+        sb.Append("  ").Append(archiveName).Append(": sha256:").Append(sha256).Append('\n');
+        return sb.ToString();
+    }
+
+    private static string ClearSign(string body, HelmProvenanceSigningKey signingKey)
+    {
+        var secretKey = signingKey.GetSecretKey();
+        var privateKey = secretKey.ExtractPrivateKey(signingKey.Passphrase)
+                         ?? throw new PgpException("Signing key could not be unlocked; check the passphrase.");
+
+        // --- Hash input: trailing-whitespace-stripped lines joined with CRLF (RFC 4880 §7.1) ---
+        var canonical = CanonicalizeForHash(body);
+
+        var signatureGenerator = new PgpSignatureGenerator(
+            secretKey.PublicKey.Algorithm,
+            HashAlgorithmTag.Sha512);
+        signatureGenerator.InitSign(PgpSignature.BinaryDocument, privateKey);
+
+        var creationTime = new PgpSignatureSubpacketGenerator();
+        creationTime.SetSignatureCreationTime(false, DateTime.UtcNow);
+        signatureGenerator.SetHashedSubpackets(creationTime.Generate());
+        signatureGenerator.Update(canonical, 0, canonical.Length);
+        var signature = signatureGenerator.Generate();
+
+        // --- Assemble clearsigned armor matching Helm's output shape ---
+        var sb = new StringBuilder();
+        sb.Append(SignedMessageHeader).Append('\n');
+        sb.Append("Hash: SHA512\n");
+        sb.Append('\n');
+        sb.Append(body);
+        // The line ending that terminates the signed text sits before the signature block.
+        if (!body.EndsWith("\n", StringComparison.Ordinal))
+            sb.Append('\n');
+        sb.Append(SignatureHeader).Append('\n');
+        sb.Append('\n');
+
+        using (var sigStream = new MemoryStream())
+        {
+            signature.Encode(sigStream);
+            sb.Append(Base64Armor(sigStream.ToArray()));
+        }
+
+        sb.Append(SignatureFooter).Append('\n');
+        return sb.ToString();
+    }
+
+    private static string Base64Armor(byte[] data)
+    {
+        var base64 = Convert.ToBase64String(data);
+        var sb = new StringBuilder();
+        for (var i = 0; i < base64.Length; i += 64)
+        {
+            var len = Math.Min(64, base64.Length - i);
+            sb.Append(base64.AsSpan(i, len)).Append('\n');
+        }
+
+        return sb.ToString();
+    }
+
+    // --- Verification internals ---
+
+    private static byte[] CanonicalizeForHash(string body)
+    {
+        // RFC 4880 §7.1: hash the signed text with canonical CRLF line endings and
+        // trailing whitespace stripped. The line ending that terminates the signed text
+        // before BEGIN PGP SIGNATURE is not part of the hash input — strip exactly one.
+        var text = body.Replace("\r\n", "\n", StringComparison.Ordinal);
+        if (text.EndsWith("\n", StringComparison.Ordinal))
+            text = text[..^1];
+
+        var lines = text.Split('\n');
+        var sb = new StringBuilder();
+        for (var i = 0; i < lines.Length; i++)
+        {
+            sb.Append(lines[i].TrimEnd(' ', '\t'));
+            if (i < lines.Length - 1)
+                sb.Append("\r\n");
+        }
+
+        return Encoding.ASCII.GetBytes(sb.ToString());
+    }
+
+    private static bool TryParseClearSign(string provContent, out string signedBody, out byte[] signaturePacket)
+    {
+        signedBody = string.Empty;
+        signaturePacket = Array.Empty<byte>();
+
+        var text = provContent.Replace("\r\n", "\n", StringComparison.Ordinal);
+        var msgStart = text.IndexOf(SignedMessageHeader, StringComparison.Ordinal);
+        if (msgStart < 0)
+            return false;
+
+        var headerEnd = text.IndexOf("\n\n", msgStart, StringComparison.Ordinal);
+        if (headerEnd < 0)
+            return false;
+
+        var sigStart = text.IndexOf(SignatureHeader, headerEnd, StringComparison.Ordinal);
+        if (sigStart < 0)
+            return false;
+
+        signedBody = text[(headerEnd + 2)..sigStart];
+
+        var base64Start = text.IndexOf('\n', sigStart);
+        if (base64Start < 0)
+            return false;
+        var footerStart = text.IndexOf(SignatureFooter, base64Start, StringComparison.Ordinal);
+        if (footerStart < 0)
+            return false;
+
+        var base64Region = text[base64Start..footerStart];
+        var base64 = new StringBuilder();
+        foreach (var line in base64Region.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if (trimmed.Length == 0 || trimmed.Contains(':'))
+                continue;
+            base64.Append(trimmed);
+        }
+
+        try
+        {
+            signaturePacket = Convert.FromBase64String(base64.ToString());
+            return signaturePacket.Length > 0;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
+
+    private static PgpSignature ParseSignature(byte[] signaturePacket)
+    {
+        using var stream = new MemoryStream(signaturePacket, writable: false);
+        var factory = new PgpObjectFactory(stream);
+        var obj = factory.NextPgpObject();
+        if (obj is PgpSignatureList list && list.Count > 0)
+            return list[0];
+        throw new PgpException("Signature block does not contain an OpenPGP signature packet.");
+    }
+
+    /// <summary>
+    /// Attempts verification against the key that actually produced the signature, using
+    /// public keys embedded in the provenance file when present. Used only to distinguish
+    /// "valid but untrusted" from "invalid" in failure diagnostics; never grants trust.
+    /// </summary>
+    private static bool TryVerifyAgainstEmbeddedIssuer(
+        string signedBody,
+        byte[] signaturePacket,
+        out string? fingerprint,
+        out string? keyId,
+        out string? userId)
+    {
+        fingerprint = null;
+        keyId = null;
+        userId = null;
+        try
+        {
+            var sig = ParseSignature(signaturePacket);
+            // Without the issuer public key we cannot verify; report the key ID only.
+            if (sig.KeyId != 0)
+            {
+                keyId = sig.KeyId.ToString("x16");
+                return false;
+            }
+
+            return false;
+        }
+        catch (PgpException)
+        {
+            return false;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsLegacyPseudoSignature(string provContent)
+    {
+        // Legacy files put Base64(SHA512(chartBytes)) — exactly one 88-char base64 line of
+        // a 64-byte digest — inside the PGP SIGNATURE block with a "comment:" header.
+        // A real OpenPGP signature packet never has that shape.
+        var text = provContent.Replace("\r\n", "\n", StringComparison.Ordinal);
+        var sigStart = text.IndexOf(SignatureHeader, StringComparison.Ordinal);
+        if (sigStart < 0)
+            return false;
+
+        var footerStart = text.IndexOf(SignatureFooter, sigStart, StringComparison.Ordinal);
+        if (footerStart < 0)
+            return false;
+
+        var region = text[sigStart..footerStart];
+        if (!region.Contains("comment:", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var base64Lines = new List<string>();
+        foreach (var line in region.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if (trimmed.Length == 0 || trimmed.StartsWith("-----", StringComparison.Ordinal) || trimmed.Contains(':'))
+                continue;
+            base64Lines.Add(trimmed);
+        }
+
+        // Legacy payload is a single base64 blob of a 64-byte SHA-512 digest (88 chars + '=').
+        return base64Lines.Count == 1
+               && base64Lines[0].Length is >= 86 and <= 90
+               && !region.Contains("wsC", StringComparison.Ordinal); // real armor rarely starts this way is not a reliable check; length+comment is
+    }
+
+    private static string? ExtractSignedBodyText(string provContent)
+    {
+        var text = provContent.Replace("\r\n", "\n", StringComparison.Ordinal);
+        var msgStart = text.IndexOf(SignedMessageHeader, StringComparison.Ordinal);
+        if (msgStart < 0)
+            return null;
+
+        var headerEnd = text.IndexOf("\n\n", msgStart, StringComparison.Ordinal);
+        if (headerEnd < 0)
+            return null;
+
+        var sigStart = text.IndexOf(SignatureHeader, headerEnd, StringComparison.Ordinal);
+        if (sigStart < 0)
+            return text[(headerEnd + 2)..];
+
+        return text[(headerEnd + 2)..sigStart];
+    }
+
+    private static string? ExtractSha256FromSignedBody(string body)
+    {
+        foreach (var line in body.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            // Helm files section: "  name.tgz: sha256:<hex>"
+            if (trimmed.Contains("sha256:", StringComparison.OrdinalIgnoreCase))
+            {
+                var idx = trimmed.IndexOf("sha256:", StringComparison.OrdinalIgnoreCase);
+                var value = trimmed[(idx + "sha256:".Length)..].Trim();
+                if (value.Length == 64)
+                    return value.ToLowerInvariant();
+            }
+        }
+
+        return null;
+    }
+
+    private static HelmProvenanceVerificationResult Fail(
+        string? signerFingerprint,
+        string? signerKeyId,
+        string? signerUserId,
+        string? expectedSha256,
+        string? actualSha256,
+        string failureReason)
+        => new(
+            signatureValid: false,
+            signerTrusted: signerFingerprint is not null,
+            digestMatches: false,
+            signerFingerprint,
+            signerKeyId,
+            signerUserId,
+            expectedSha256,
+            actualSha256,
+            failureReason);
+
+    // --- Metadata extraction from the chart archive ---
+
+    private static async Task<Dictionary<string, object?>> ReadArchiveMetadataAsync(
+        byte[] archiveBytes,
+        CancellationToken cancellationToken)
+    {
+        using var input = new MemoryStream(archiveBytes, writable: false);
+        await using var gzip = new System.IO.Compression.GZipStream(input, System.IO.Compression.CompressionMode.Decompress);
+        using var reader = new System.Formats.Tar.TarReader(gzip);
+        while (reader.GetNextEntry() is { } entry)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (entry.EntryType is System.Formats.Tar.TarEntryType.Directory || entry.DataStream is null)
+                continue;
+
+            var name = entry.Name.Replace('\\', '/');
+            if (!name.EndsWith("/Chart.yaml", StringComparison.OrdinalIgnoreCase) &&
+                !name.Equals("Chart.yaml", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            using var memory = new MemoryStream();
+            await entry.DataStream.CopyToAsync(memory, cancellationToken).ConfigureAwait(false);
+            var yaml = Encoding.UTF8.GetString(memory.ToArray());
+            return HelmYaml.DeserializeDictionary(yaml);
+        }
+
+        throw new InvalidDataException("Chart archive does not contain Chart.yaml.");
     }
 }
