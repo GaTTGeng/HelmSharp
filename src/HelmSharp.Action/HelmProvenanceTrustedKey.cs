@@ -33,7 +33,7 @@ public sealed class HelmProvenanceTrustedKey
     public string KeyId => _publicKey.KeyId.ToString("x16");
 
     /// <summary>Primary user ID on the key, when present.</summary>
-    public string? UserId => GetUserId(_publicKey);
+    public string? UserId => GetUserId(_master ?? _publicKey);
 
     internal PgpPublicKey PublicKey => _publicKey;
 
@@ -149,7 +149,7 @@ public sealed class HelmProvenanceTrustedKey
             return false;
         if (!AlgorithmCanSign(key.Algorithm))
             return false;
-        if (IsExpiredAt(ComputeExpiry(key, master), DateTime.UtcNow))
+        if (IsExpiredAt(ComputeEffectiveExpiry(key, master), DateTime.UtcNow))
             return false;
         return KeyFlagsPermitSigning(key, master);
     }
@@ -261,6 +261,18 @@ public sealed class HelmProvenanceTrustedKey
         return validSeconds <= 0 ? null : key.CreationTime.AddSeconds(validSeconds);
     }
 
+    private static DateTime? ComputeEffectiveExpiry(PgpPublicKey key, PgpPublicKey? master)
+    {
+        var keyExpiry = ComputeExpiry(key, master);
+        if (master is null || key.IsMasterKey)
+            return keyExpiry;
+
+        var primaryExpiry = ComputeExpiry(master, null);
+        return keyExpiry is null ? primaryExpiry
+            : primaryExpiry is null ? keyExpiry
+            : keyExpiry < primaryExpiry ? keyExpiry : primaryExpiry;
+    }
+
     private static bool IsExpiredAt(DateTime? expiresAt, DateTime at)
         => expiresAt is not null && at >= expiresAt.Value;
 
@@ -329,8 +341,10 @@ public sealed class HelmProvenanceTrustedKey
                 break;
             }
 
-            if (next is null or PgpMarker)
+            if (next is null)
                 break;
+            if (next is PgpMarker)
+                continue;
             yield return next;
         }
     }

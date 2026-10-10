@@ -380,7 +380,7 @@ public static class HelmProvenance
     private static string ClearSign(string body, HelmProvenanceSigningKey signingKey)
     {
         var secretKey = signingKey.GetSecretKey();
-        var privateKey = secretKey.ExtractPrivateKey(signingKey.Passphrase)
+        var privateKey = secretKey.ExtractPrivateKeyUtf8(signingKey.Passphrase)
                          ?? throw new PgpException("Signing key could not be unlocked; check the passphrase.");
 
         // --- Hash input: trailing-whitespace-stripped lines joined with CRLF (RFC 4880 §7.1) ---
