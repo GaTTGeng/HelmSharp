@@ -290,7 +290,7 @@ internal sealed class ChartArchiveBudget
 
             public override int Read(byte[] buffer, int offset, int count)
             {
-                var read = _inner.Read(buffer, offset, Math.Min(count, TarBlockSize));
+                var read = _inner.Read(buffer, offset, GetReadLimit(count));
                 if (read > 0)
                     Process(buffer.AsSpan(offset, read));
                 return read;
@@ -298,7 +298,7 @@ internal sealed class ChartArchiveBudget
 
             public override int Read(Span<byte> buffer)
             {
-                var read = _inner.Read(buffer[..Math.Min(buffer.Length, TarBlockSize)]);
+                var read = _inner.Read(buffer[..GetReadLimit(buffer.Length)]);
                 if (read > 0)
                     Process(buffer[..read]);
                 return read;
@@ -309,10 +309,21 @@ internal sealed class ChartArchiveBudget
 
             public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
             {
-                var read = await _inner.ReadAsync(buffer[..Math.Min(buffer.Length, TarBlockSize)], cancellationToken).ConfigureAwait(false);
+                var read = await _inner.ReadAsync(buffer[..GetReadLimit(buffer.Length)], cancellationToken).ConfigureAwait(false);
                 if (read > 0)
                     Process(buffer.Span[..read]);
                 return read;
+            }
+
+            private int GetReadLimit(int requested)
+            {
+                if (_remainingDataBytes > 0)
+                    return (int)Math.Min(requested, Math.Min(_remainingDataBytes, int.MaxValue));
+
+                if (_remainingPaddingBytes > 0)
+                    return Math.Min(requested, _remainingPaddingBytes);
+
+                return Math.Min(requested, TarBlockSize - _headerBytes);
             }
 
             private void Process(ReadOnlySpan<byte> bytes)
