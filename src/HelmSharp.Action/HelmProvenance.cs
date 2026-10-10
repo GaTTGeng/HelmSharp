@@ -29,7 +29,10 @@ namespace HelmSharp.Action;
 /// <para>
 /// <b>File format.</b> Generated files match Helm's provenance layout (clearsigned chart
 /// metadata YAML, a <c>files:</c> digest map, and a real OpenPGP signature) so they interoperate
-/// with <c>helm verify</c> and <c>helm package --sign</c>.
+/// with <c>helm verify</c> and <c>helm package --sign</c>. The file is UTF-8 without a BOM;
+/// cleartext lines starting with <c>-</c> are dash-escaped in the armor while the signature
+/// covers the unescaped text, and the signature block carries the RFC 4880 CRC-24 armor
+/// checksum. Verification accepts Helm's checksum-less armor as well.
 /// </para>
 /// <para>
 /// <b>Legacy files.</b> Earlier HelmSharp builds wrote a pseudo-signature whose PGP SIGNATURE
@@ -43,6 +46,11 @@ public static class HelmProvenance
     private const string SignedMessageHeader = "-----BEGIN PGP SIGNED MESSAGE-----";
     private const string SignatureHeader = "-----BEGIN PGP SIGNATURE-----";
     private const string SignatureFooter = "-----END PGP SIGNATURE-----";
+
+    // Provenance files are UTF-8 without a BOM, matching Helm's Go writer. Reading or
+    // hashing as ASCII would replace non-ASCII metadata bytes with '?' and invalidate
+    // the signature over otherwise untouched chart text.
+    private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 
     /// <summary>
     /// Signs a chart archive with a real OpenPGP signature and writes the provenance file
@@ -79,7 +87,7 @@ public static class HelmProvenance
         var provContent = ClearSign(body, signingKey);
 
         var provPath = chartTgzPath + ".prov";
-        await File.WriteAllTextAsync(provPath, provContent, Encoding.ASCII, cancellationToken).ConfigureAwait(false);
+        await File.WriteAllTextAsync(provPath, provContent, Utf8NoBom, cancellationToken).ConfigureAwait(false);
         return provPath;
     }
 
@@ -121,7 +129,7 @@ public static class HelmProvenance
         // --- 1. Compute the archive digest and read the provenance file ---
         var chartBytes = await File.ReadAllBytesAsync(chartTgzPath, cancellationToken).ConfigureAwait(false);
         var actualSha256 = Convert.ToHexString(SHA256.HashData(chartBytes)).ToLowerInvariant();
-        var provContent = await File.ReadAllTextAsync(provPath, Encoding.ASCII, cancellationToken).ConfigureAwait(false);
+        var provContent = await File.ReadAllTextAsync(provPath, Utf8NoBom, cancellationToken).ConfigureAwait(false);
 
         // --- 2. Reject legacy pseudo-signature files before any crypto ---
         if (IsLegacyPseudoSignature(provContent))
@@ -241,7 +249,7 @@ public static class HelmProvenance
 
         var chartBytes = await File.ReadAllBytesAsync(chartTgzPath, cancellationToken).ConfigureAwait(false);
         var actualHash = Convert.ToHexString(SHA256.HashData(chartBytes)).ToLowerInvariant();
-        var provContent = await File.ReadAllTextAsync(provPath, Encoding.ASCII, cancellationToken).ConfigureAwait(false);
+        var provContent = await File.ReadAllTextAsync(provPath, Utf8NoBom, cancellationToken).ConfigureAwait(false);
         var expectedHash = ExtractSha256(provContent);
 
         return expectedHash is not null &&
@@ -380,9 +388,12 @@ public static class HelmProvenance
         sb.Append(SignedMessageHeader).Append('\n');
         sb.Append("Hash: SHA512\n");
         sb.Append('\n');
-        sb.Append(body);
+        // Dash-escape the written cleartext (RFC 4880 §7.1); the hash above covers the
+        // unescaped text, so YAML sequence items like "- name: Bob" survive as "- - name: Bob".
+        var escapedBody = EscapeDashLines(body);
+        sb.Append(escapedBody);
         // The line ending that terminates the signed text sits before the signature block.
-        if (!body.EndsWith("\n", StringComparison.Ordinal))
+        if (!escapedBody.EndsWith("\n", StringComparison.Ordinal))
             sb.Append('\n');
         sb.Append(SignatureHeader).Append('\n');
         sb.Append('\n');
@@ -390,7 +401,10 @@ public static class HelmProvenance
         using (var sigStream = new MemoryStream())
         {
             signature.Encode(sigStream);
-            sb.Append(Base64Armor(sigStream.ToArray()));
+            var signatureBytes = sigStream.ToArray();
+            sb.Append(Base64Armor(signatureBytes));
+            // RFC 4880 §6.1 armor checksum; GnuPG-standard armor always carries it.
+            sb.Append('=').Append(Convert.ToBase64String(ComputeCrc24(signatureBytes))).Append('\n');
         }
 
         sb.Append(SignatureFooter).Append('\n');
@@ -410,6 +424,88 @@ public static class HelmProvenance
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Dash-escapes cleartext lines for armor output: every line starting with <c>-</c>
+    /// gains a <c>- </c> prefix so YAML sequence items cannot be mistaken for armor
+    /// framing (RFC 4880 §7.1). The signature covers the unescaped text.
+    /// </summary>
+    private static string EscapeDashLines(string body) => TransformDashLines(body, escape: true);
+
+    /// <summary>
+    /// Reverses <see cref="EscapeDashLines"/> on cleartext read from armor: strips a leading
+    /// <c>- </c> so the recovered text is exactly what the signer hashed (RFC 4880 §7.1).
+    /// </summary>
+    private static string UnescapeDashLines(string body) => TransformDashLines(body, escape: false);
+
+    private static string TransformDashLines(string body, bool escape)
+    {
+        if (body.Length == 0)
+            return body;
+
+        var lines = body.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var sb = new StringBuilder(body.Length + 16);
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (escape)
+            {
+                if (line.StartsWith('-'))
+                    sb.Append("- ");
+                sb.Append(line);
+            }
+            else
+            {
+                // Only "- " (dash + space) is the escape prefix; "-x" is ordinary text.
+                sb.Append(line.Length >= 2 && line[0] == '-' && line[1] == ' ' ? line[2..] : line);
+            }
+
+            if (i < lines.Length - 1)
+                sb.Append('\n');
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Computes the OpenPGP armor CRC-24 (RFC 4880 §6.1): init 0xB704CE, poly 0x1864CFB.
+    /// </summary>
+    private static byte[] ComputeCrc24(byte[] data)
+    {
+        uint crc = 0xB704CE;
+        foreach (var b in data)
+        {
+            crc ^= (uint)b << 16;
+            for (var i = 0; i < 8; i++)
+            {
+                crc <<= 1;
+                if ((crc & 0x1000000) != 0)
+                    crc ^= 0x1864CFB;
+            }
+        }
+
+        return [(byte)(crc >> 16), (byte)(crc >> 8), (byte)crc];
+    }
+
+    /// <summary>
+    /// Validates the optional <c>=</c>-prefixed armor checksum line against the decoded
+    /// payload. Absence of a checksum is legal (Helm omits it); presence of a wrong one
+    /// means the armor was corrupted in transit.
+    /// </summary>
+    private static bool ArmorChecksumMatches(byte[] payload, string checksumLine)
+    {
+        byte[] expected;
+        try
+        {
+            expected = Convert.FromBase64String(checksumLine[1..]);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+
+        return expected.AsSpan().SequenceEqual(ComputeCrc24(payload));
+    }
+
     // --- Verification internals ---
 
     private static byte[] CanonicalizeForHash(string body)
@@ -417,6 +513,8 @@ public static class HelmProvenance
         // RFC 4880 §7.1: hash the signed text with canonical CRLF line endings and
         // trailing whitespace stripped. The line ending that terminates the signed text
         // before BEGIN PGP SIGNATURE is not part of the hash input — strip exactly one.
+        // The body is dash-unescaped text; encode as UTF-8 so non-ASCII metadata keeps
+        // its original bytes instead of collapsing to ASCII '?'.
         var text = body.Replace("\r\n", "\n", StringComparison.Ordinal);
         if (text.EndsWith("\n", StringComparison.Ordinal))
             text = text[..^1];
@@ -430,7 +528,7 @@ public static class HelmProvenance
                 sb.Append("\r\n");
         }
 
-        return Encoding.ASCII.GetBytes(sb.ToString());
+        return Utf8NoBom.GetBytes(sb.ToString());
     }
 
     private static bool TryParseClearSign(string provContent, out string signedBody, out byte[] signaturePacket)
@@ -462,23 +560,41 @@ public static class HelmProvenance
 
         var base64Region = text[base64Start..footerStart];
         var base64 = new StringBuilder();
+        string? checksumLine = null;
         foreach (var line in base64Region.Split('\n'))
         {
             var trimmed = line.Trim();
             if (trimmed.Length == 0 || trimmed.Contains(':'))
                 continue;
+            // RFC 4880 §6.1: the armor checksum is a single '='-prefixed Base64(CRC-24)
+            // line. Keep it out of the signature payload — mixing it in breaks decoding.
+            if (trimmed[0] == '=')
+            {
+                checksumLine = trimmed;
+                continue;
+            }
+
             base64.Append(trimmed);
         }
 
         try
         {
             signaturePacket = Convert.FromBase64String(base64.ToString());
-            return signaturePacket.Length > 0;
         }
         catch (FormatException)
         {
             return false;
         }
+
+        if (signaturePacket.Length == 0)
+            return false;
+
+        if (checksumLine is not null && !ArmorChecksumMatches(signaturePacket, checksumLine))
+            return false;
+
+        // Helm/GPG emit dash-escaped cleartext; the signature covers the unescaped text.
+        signedBody = UnescapeDashLines(signedBody);
+        return true;
     }
 
     private static PgpSignature ParseSignature(byte[] signaturePacket)
@@ -552,6 +668,8 @@ public static class HelmProvenance
             var trimmed = line.Trim();
             if (trimmed.Length == 0 || trimmed.StartsWith("-----", StringComparison.Ordinal) || trimmed.Contains(':'))
                 continue;
+            if (trimmed[0] == '=')
+                continue; // armor checksum line, not signature payload
             base64Lines.Add(trimmed);
         }
 
@@ -574,9 +692,9 @@ public static class HelmProvenance
 
         var sigStart = text.IndexOf(SignatureHeader, headerEnd, StringComparison.Ordinal);
         if (sigStart < 0)
-            return text[(headerEnd + 2)..];
+            return UnescapeDashLines(text[(headerEnd + 2)..]);
 
-        return text[(headerEnd + 2)..sigStart];
+        return UnescapeDashLines(text[(headerEnd + 2)..sigStart]);
     }
 
     private static string? ExtractSha256FromSignedBody(string body)
