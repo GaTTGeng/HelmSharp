@@ -664,6 +664,35 @@ public sealed class ChartArchiveLimitsTests : IDisposable
         Assert.Equal(ChartArchiveLimitKind.CompressedBytes, ex.Limit);
     }
 
+    [Theory]
+    [InlineData("dep-1.0.0.tgz")]
+    [InlineData("dep-1.0.0.tar.gz")]
+    public async Task LoadAsync_NestedDirectoryDependencyArchiveOverCompressedLimit_ThrowsCompressedBytesLimit(string archiveName)
+    {
+        var chartDir = Path.Combine(_tempDir, "dir-chart-nested-oversized-dep");
+        var childDir = Path.Combine(chartDir, "charts", "child");
+        var nestedChartsDir = Path.Combine(childDir, "charts");
+        Directory.CreateDirectory(nestedChartsDir);
+        await File.WriteAllTextAsync(
+            Path.Combine(chartDir, "Chart.yaml"),
+            "apiVersion: v2\nname: parent\nversion: 1.0.0\n");
+        await File.WriteAllTextAsync(
+            Path.Combine(childDir, "Chart.yaml"),
+            "apiVersion: v2\nname: child\nversion: 1.0.0\n");
+        var payload = new byte[16 * 1024];
+        new Random(12345).NextBytes(payload);
+        var dependencyArchive = CreateChartTgz(("blob.bin", payload));
+        Assert.True(dependencyArchive.Length > 4 * 1024);
+        await File.WriteAllBytesAsync(Path.Combine(nestedChartsDir, archiveName), dependencyArchive);
+        var limits = new HelmChartArchiveLimits { MaxCompressedBytes = 4 * 1024 };
+
+        var ex = await Assert.ThrowsAsync<ChartArchiveLimitExceededException>(
+            () => HelmChartLoader.LoadAsync(chartDir, limits, CancellationToken.None));
+
+        Assert.Equal(ChartArchiveLimitKind.CompressedBytes, ex.Limit);
+        Assert.Equal(dependencyArchive.Length, ex.ObservedValue);
+    }
+
     // --- Extraction cache honors the active limit profile ---
 
     [Fact]

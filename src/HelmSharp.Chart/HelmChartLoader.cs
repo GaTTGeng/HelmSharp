@@ -462,10 +462,10 @@ public static class HelmChartLoader
         {
             cancellationToken.ThrowIfCancellationRequested();
             var relative = NormalizePath(Path.GetRelativePath(chartPath, file));
-            // Packaged dependency archives are loaded and budgeted separately from disk;
-            // flattening them here would buffer an oversized charts/*.tgz twice before any
-            // compressed-size budget could reject it.
-            if (IsEmbeddedDependencyArchivePath(relative))
+            // Each directory subchart loads its own charts/ tree, while packaged
+            // dependencies are checked against the compressed-size budget before
+            // buffering. Flattening this subtree would read nested archives early.
+            if (relative.StartsWith("charts/", StringComparison.Ordinal))
                 continue;
             files[relative] = await File.ReadAllBytesAsync(file, cancellationToken);
         }
