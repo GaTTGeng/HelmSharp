@@ -127,6 +127,7 @@ public static class HelmProvenance
         }
 
         // --- 1. Compute the archive digest and read the provenance file ---
+        var archiveName = Path.GetFileName(chartTgzPath);
         var chartBytes = await File.ReadAllBytesAsync(chartTgzPath, cancellationToken).ConfigureAwait(false);
         var actualSha256 = Convert.ToHexString(SHA256.HashData(chartBytes)).ToLowerInvariant();
         var provContent = await File.ReadAllTextAsync(provPath, Utf8NoBom, cancellationToken).ConfigureAwait(false);
@@ -134,14 +135,14 @@ public static class HelmProvenance
         // --- 2. Reject legacy pseudo-signature files before any crypto ---
         if (IsLegacyPseudoSignature(provContent))
         {
-            return Fail(null, null, null, expectedSha256: ExtractSha256(provContent), actualSha256,
+            return Fail(null, null, null, expectedSha256: ExtractSha256(provContent, archiveName), actualSha256,
                 "Legacy HelmSharp pseudo-signature provenance cannot establish authenticity; re-sign with SignAsync.");
         }
 
         // --- 3. Parse the clearsigned message ---
         if (!TryParseClearSign(provContent, out var signedBody, out var signaturePacket))
         {
-            return Fail(null, null, null, expectedSha256: ExtractSha256(provContent), actualSha256,
+            return Fail(null, null, null, expectedSha256: ExtractSha256(provContent, archiveName), actualSha256,
                 "Malformed OpenPGP clearsigned provenance armor.");
         }
 
@@ -161,6 +162,16 @@ public static class HelmProvenance
                 parsedSignature.Update(CanonicalizeForHash(signedBody));
                 if (parsedSignature.Verify())
                 {
+                    // A mathematical signature is not enough: OpenPGP policy must also
+                    // authorize this key to sign. Fail closed on revoked, expired, and
+                    // non-signing keys (e.g. encryption-only subkeys).
+                    if (!trusted.IsUsableSigningKey)
+                    {
+                        return Fail(trusted.Fingerprint, trusted.KeyId, trusted.UserId,
+                            ExtractSha256(provContent, archiveName), actualSha256,
+                            "Signature is cryptographically valid but the signing key is revoked, expired, or not authorized to sign.");
+                    }
+
                     signatureValid = true;
                     signerFingerprint = trusted.Fingerprint;
                     signerKeyId = trusted.KeyId;
@@ -183,16 +194,16 @@ public static class HelmProvenance
             // Distinguish "valid signature by an untrusted key" from "no valid signature at all".
             if (TryVerifyAgainstEmbeddedIssuer(signedBody, signaturePacket, out var untrustedFp, out var untrustedId, out var untrustedUid))
             {
-                return Fail(untrustedFp, untrustedId, untrustedUid, ExtractSha256(provContent), actualSha256,
+                return Fail(untrustedFp, untrustedId, untrustedUid, ExtractSha256(provContent, archiveName), actualSha256,
                     "Signature is cryptographically valid but the signing key is not in the trusted key set.");
             }
 
-            return Fail(null, null, null, ExtractSha256(provContent), actualSha256,
+            return Fail(null, null, null, ExtractSha256(provContent, archiveName), actualSha256,
                 "OpenPGP signature is invalid or does not match any trusted key.");
         }
 
         // --- 5. Bind the chart digest to the signed metadata ---
-        var expectedSha256 = ExtractSha256FromSignedBody(signedBody);
+        var expectedSha256 = ExtractSha256(signedBody, archiveName);
         if (expectedSha256 is null)
         {
             return Fail(signerFingerprint, signerKeyId, signerUserId, null, actualSha256,
@@ -250,37 +261,40 @@ public static class HelmProvenance
         var chartBytes = await File.ReadAllBytesAsync(chartTgzPath, cancellationToken).ConfigureAwait(false);
         var actualHash = Convert.ToHexString(SHA256.HashData(chartBytes)).ToLowerInvariant();
         var provContent = await File.ReadAllTextAsync(provPath, Utf8NoBom, cancellationToken).ConfigureAwait(false);
-        var expectedHash = ExtractSha256(provContent);
+        var expectedHash = ExtractSha256(provContent, Path.GetFileName(chartTgzPath));
 
         return expectedHash is not null &&
                string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
-    /// Extracts the chart archive SHA-256 from a <c>.prov</c> file body (the digest in the
-    /// <c>files:</c> section, or the legacy top-level <c>sha256:</c> key).
+    /// Extracts the chart archive SHA-256 from a <c>.prov</c> file body: the digest in the
+    /// <c>files:</c> section (selected by archive filename), or the legacy top-level
+    /// <c>sha256:</c> key. Chart metadata scalars that merely look like digests (for
+    /// example an annotation value <c>sha256:&lt;64 hex&gt;</c>) are never returned,
+    /// because only the <c>files:</c> map binds an archive name to its digest.
     /// Non-authenticating: the value is plaintext and not protected against tampering.
     /// </summary>
     /// <param name="provContent">Full text of a provenance file.</param>
-    /// <returns>Lowercase hex digest, or null when no digest is present.</returns>
-    public static string? ExtractSha256(string provContent)
+    /// <param name="archiveName">
+    /// Archive filename (for example <c>mychart-1.0.0.tgz</c>) selecting the entry in a
+    /// multi-file <c>files:</c> map. When null, a single-entry map is used and multi-entry
+    /// maps are treated as ambiguous rather than guessing the wrong digest.
+    /// </param>
+    /// <returns>Lowercase hex digest, or null when no digest is present for the archive.</returns>
+    public static string? ExtractSha256(string provContent, string? archiveName = null)
     {
         if (string.IsNullOrEmpty(provContent))
             return null;
 
         // Prefer the Helm-style files section; fall back to the legacy top-level key.
-        var fromFiles = ExtractSha256FromSignedBody(provContent);
+        var fromFiles = ExtractSha256FromFilesSection(provContent, archiveName, out var sawFilesSection);
         if (fromFiles is not null)
             return fromFiles;
 
-        foreach (var line in provContent.Split('\n'))
-        {
-            var trimmed = line.Trim();
-            if (trimmed.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
-                return trimmed["sha256:".Length..].Trim();
-        }
-
-        return null;
+        // A files section without a digest for this archive must not fall through to a
+        // legacy or metadata scalar: that would reintroduce the wrong-digest confusion.
+        return sawFilesSection ? null : ExtractLegacyTopLevelSha256(provContent);
     }
 
     /// <summary>
@@ -697,19 +711,102 @@ public static class HelmProvenance
         return UnescapeDashLines(text[(headerEnd + 2)..sigStart]);
     }
 
-    private static string? ExtractSha256FromSignedBody(string body)
+    /// <summary>
+    /// Reads the archive digest from the <c>files:</c> map of a provenance body. The map
+    /// is located after the YAML document-end marker (<c>...</c>) that Helm writes between
+    /// chart metadata and the files map, so an earlier metadata scalar such as an
+    /// annotation value <c>sha256:&lt;64 hex&gt;</c> can never be mistaken for the digest.
+    /// </summary>
+    private static string? ExtractSha256FromFilesSection(string text, string? archiveName, out bool sawFilesSection)
     {
-        foreach (var line in body.Split('\n'))
+        sawFilesSection = false;
+
+        var lines = text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var start = FindFilesSectionStart(lines);
+        if (start < 0)
+            return null;
+
+        sawFilesSection = true;
+        string? sole = null;
+        var entryCount = 0;
+        for (var i = start; i < lines.Length; i++)
         {
+            var line = lines[i];
+            if (line.Length == 0)
+                continue;
+
+            // Entries are indented "  name.tgz: sha256:<hex>"; any non-indented line
+            // (the signature block, a further section) ends the map.
+            if (!char.IsWhiteSpace(line[0]))
+                break;
+
             var trimmed = line.Trim();
-            // Helm files section: "  name.tgz: sha256:<hex>"
-            if (trimmed.Contains("sha256:", StringComparison.OrdinalIgnoreCase))
+            var colon = trimmed.IndexOf(':');
+            if (colon <= 0)
+                continue;
+
+            var key = trimmed[..colon].Trim();
+            var value = trimmed[(colon + 1)..].Trim();
+            if (!value.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            // Helm files values are "sha256:" followed by exactly 64 hex characters.
+            var digest = value["sha256:".Length..].Trim();
+            if (digest.Length != 64)
+                continue;
+
+            entryCount++;
+            sole = digest.ToLowerInvariant();
+            if (archiveName is not null && string.Equals(key, archiveName, StringComparison.OrdinalIgnoreCase))
+                return sole;
+        }
+
+        // Without a filename a single-entry map is unambiguous; a multi-entry map is
+        // ambiguous and the caller must name the archive instead of guessing.
+        return archiveName is null && entryCount == 1 ? sole : null;
+    }
+
+    /// <summary>
+    /// Index of the first entry line under the top-level <c>files:</c> map, or -1 when the
+    /// body has no such map. Anchors on the YAML document-end marker (<c>...</c>) that
+    /// Helm writes before <c>files:</c> so chart metadata keys cannot impersonate the map.
+    /// </summary>
+    private static int FindFilesSectionStart(string[] lines)
+    {
+        var searchFrom = 0;
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (lines[i] == "...")
             {
-                var idx = trimmed.IndexOf("sha256:", StringComparison.OrdinalIgnoreCase);
-                var value = trimmed[(idx + "sha256:".Length)..].Trim();
-                if (value.Length == 64)
-                    return value.ToLowerInvariant();
+                searchFrom = i + 1;
+                break;
             }
+        }
+
+        for (var i = searchFrom; i < lines.Length; i++)
+        {
+            if (lines[i] == "files:")
+                return i + 1;
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// Legacy provenance recorded a single unindented <c>sha256: &lt;hex&gt;</c> key with
+    /// no <c>files:</c> map. Requiring column 0 keeps nested metadata scalars out of the
+    /// match.
+    /// </summary>
+    private static string? ExtractLegacyTopLevelSha256(string text)
+    {
+        foreach (var line in text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
+        {
+            if (line.Length == 0 || char.IsWhiteSpace(line[0]))
+                continue;
+
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
+                return trimmed["sha256:".Length..].Trim();
         }
 
         return null;

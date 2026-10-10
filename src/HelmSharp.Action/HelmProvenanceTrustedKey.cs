@@ -7,13 +7,21 @@ namespace HelmSharp.Action;
 /// A trusted OpenPGP public key used to authenticate <c>.prov</c> signatures.
 /// Verification fails closed unless the signer matches one of the supplied trusted keys.
 /// </summary>
+/// <remarks>
+/// Only keys that OpenPGP policy authorizes to sign become trusted keys: revoked keys,
+/// expired keys, and encryption-only or otherwise non-signing material are rejected at
+/// import, and <see cref="HelmProvenance.VerifyAsync"/> refuses signatures from any key
+/// that is not a valid signing key even when the signature mathematics check out.
+/// </remarks>
 public sealed class HelmProvenanceTrustedKey
 {
     private readonly PgpPublicKey _publicKey;
+    private readonly DateTime? _expiresAt;
 
-    private HelmProvenanceTrustedKey(PgpPublicKey publicKey)
+    private HelmProvenanceTrustedKey(PgpPublicKey publicKey, DateTime? expiresAt)
     {
         _publicKey = publicKey;
+        _expiresAt = expiresAt;
     }
 
     /// <summary>Hex-encoded OpenPGP V4 key fingerprint (40 hex characters).</summary>
@@ -28,30 +36,39 @@ public sealed class HelmProvenanceTrustedKey
     internal PgpPublicKey PublicKey => _publicKey;
 
     /// <summary>
+    /// Whether this key is a valid OpenPGP signing key right now: it is not revoked, has
+    /// not expired, and its key flags (or algorithm) permit signing. Verification must
+    /// fail closed when this is false.
+    /// </summary>
+    internal bool IsUsableSigningKey =>
+        !HasRevocation()
+        && AlgorithmCanSign(_publicKey.Algorithm)
+        && KeyFlagsPermitSigning(_publicKey)
+        && !IsExpiredAt(DateTime.UtcNow);
+
+    /// <summary>
     /// Wraps binary or ASCII-armored OpenPGP public-key material (a single public key
     /// or a public keyring).
     /// </summary>
     /// <param name="publicKeyData">Encoded public key bytes.</param>
     /// <returns>Trusted key wrapper.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="publicKeyData"/> is null.</exception>
-    /// <exception cref="ArgumentException"><paramref name="publicKeyData"/> is empty or contains no public key.</exception>
+    /// <exception cref="ArgumentException"><paramref name="publicKeyData"/> is empty or contains no usable signing key.</exception>
     public static HelmProvenanceTrustedKey FromPublicKeyData(byte[] publicKeyData)
     {
-        var keys = ReadPublicKeys(publicKeyData);
-        if (keys.Count == 0)
-            throw new ArgumentException("No OpenPGP public key found in the supplied key material.", nameof(publicKeyData));
-
-        return new HelmProvenanceTrustedKey(keys[0]);
+        var keys = LoadTrustedSigningKeys(publicKeyData, nameof(publicKeyData));
+        return keys[0];
     }
 
     /// <summary>
     /// Loads binary or ASCII-armored OpenPGP public-key material from a file.
-    /// When the file is a keyring containing several keys, the first is returned;
-    /// use <see cref="FromKeyringFile"/> to load every key.
+    /// When the file is a keyring containing several keys, the first usable signing key
+    /// is returned; use <see cref="FromKeyringFile"/> to load every key.
     /// </summary>
     /// <param name="path">Path to a public key or keyring file.</param>
     /// <returns>Trusted key wrapper.</returns>
     /// <exception cref="FileNotFoundException">The file does not exist.</exception>
+    /// <exception cref="ArgumentException">The file contains no usable signing key.</exception>
     public static HelmProvenanceTrustedKey FromPublicKeyFile(string path)
     {
         if (!File.Exists(path))
@@ -61,64 +78,185 @@ public sealed class HelmProvenanceTrustedKey
     }
 
     /// <summary>
-    /// Loads every OpenPGP public key from a keyring file (binary or ASCII-armored).
+    /// Loads every usable OpenPGP signing key from a keyring file (binary or ASCII-armored).
     /// Secret keyrings are also accepted; only their public halves are retained.
+    /// Revoked, expired, and non-signing keys (for example encryption-only subkeys) are
+    /// skipped so they can never act as trusted signers.
     /// </summary>
     /// <param name="path">Path to a keyring file.</param>
-    /// <returns>One wrapper per public key found.</returns>
+    /// <returns>One wrapper per usable signing key found.</returns>
     /// <exception cref="FileNotFoundException">The file does not exist.</exception>
-    /// <exception cref="ArgumentException">The file contains no public keys.</exception>
+    /// <exception cref="ArgumentException">The file contains no usable signing key.</exception>
     public static IReadOnlyList<HelmProvenanceTrustedKey> FromKeyringFile(string path)
     {
         if (!File.Exists(path))
             throw new FileNotFoundException($"Keyring file not found: {path}", path);
 
-        var keys = ReadPublicKeys(File.ReadAllBytes(path));
-        if (keys.Count == 0)
-            throw new ArgumentException($"No OpenPGP public keys found in keyring: {path}", nameof(path));
-
-        return keys.Select(k => new HelmProvenanceTrustedKey(k)).ToList();
+        return LoadTrustedSigningKeys(File.ReadAllBytes(path), nameof(path));
     }
 
     /// <summary>
-    /// Loads every OpenPGP public key from keyring bytes (binary or ASCII-armored).
+    /// Loads every usable OpenPGP signing key from keyring bytes (binary or ASCII-armored).
+    /// Revoked, expired, and non-signing keys are skipped so they can never act as
+    /// trusted signers.
     /// </summary>
     /// <param name="keyringData">Encoded keyring bytes.</param>
-    /// <returns>One wrapper per public key found.</returns>
+    /// <returns>One wrapper per usable signing key found.</returns>
+    /// <exception cref="ArgumentException">The data contains no usable signing key.</exception>
     public static IReadOnlyList<HelmProvenanceTrustedKey> FromKeyringData(byte[] keyringData)
     {
-        var keys = ReadPublicKeys(keyringData);
-        return keys.Select(k => new HelmProvenanceTrustedKey(k)).ToList();
+        return LoadTrustedSigningKeys(keyringData, nameof(keyringData));
     }
 
-    private static List<PgpPublicKey> ReadPublicKeys(byte[] data)
+    /// <summary>
+    /// Imports only keys OpenPGP policy authorizes to sign. Fails closed with
+    /// <see cref="ArgumentException"/> when the material contains keys but none of them
+    /// is a valid signing key (revoked, expired, or encryption-only).
+    /// </summary>
+    private static List<HelmProvenanceTrustedKey> LoadTrustedSigningKeys(byte[] data, string paramName)
     {
-        var result = new List<PgpPublicKey>();
+        ArgumentNullException.ThrowIfNull(data);
+
+        var candidates = ReadKeyCandidates(data);
+        if (candidates.Count == 0)
+            throw new ArgumentException("No OpenPGP public key found in the supplied key material.", paramName);
+
+        var trusted = new List<HelmProvenanceTrustedKey>();
+        foreach (var candidate in candidates)
+        {
+            if (!QualifiesAsSigningKey(candidate.Key, candidate.Master))
+                continue;
+            trusted.Add(new HelmProvenanceTrustedKey(candidate.Key, ComputeExpiry(candidate.Key, candidate.Master)));
+        }
+
+        if (trusted.Count == 0)
+            throw new ArgumentException(
+                "No usable OpenPGP signing key found in the supplied key material; revoked, expired, and non-signing keys cannot be trusted signers.",
+                paramName);
+
+        return trusted;
+    }
+
+    /// <summary>OpenPGP policy check: may this key produce a trusted signature at all?</summary>
+    private static bool QualifiesAsSigningKey(PgpPublicKey key, PgpPublicKey? master)
+    {
+        // A mathematical signature from a revoked or expired key, or from material that
+        // is not authorized to sign (encryption-only subkeys), must never be trusted.
+        if (key.HasRevocation())
+            return false;
+        if (!AlgorithmCanSign(key.Algorithm))
+            return false;
+        if (IsExpiredAt(ComputeExpiry(key, master), DateTime.UtcNow))
+            return false;
+        return KeyFlagsPermitSigning(key);
+    }
+
+    /// <summary>
+    /// Algorithms whose keys can produce OpenPGP signatures. Encryption-only algorithms
+    /// (ElGamal, ECDH, RSA encrypt-only, X25519/X448) are excluded so an encryption
+    /// subkey cannot be mistaken for a signer even without key flags.
+    /// </summary>
+    private static bool AlgorithmCanSign(PublicKeyAlgorithmTag algorithm) => algorithm switch
+    {
+        PublicKeyAlgorithmTag.RsaGeneral or
+        PublicKeyAlgorithmTag.RsaSign or
+        PublicKeyAlgorithmTag.Dsa or
+        PublicKeyAlgorithmTag.ECDsa or
+        PublicKeyAlgorithmTag.EdDsa_Legacy or
+        PublicKeyAlgorithmTag.Ed25519 or
+        PublicKeyAlgorithmTag.Ed448 => true,
+        _ => false,
+    };
+
+    /// <summary>
+    /// Whether the governing key-flags subpacket authorizes signing or certification.
+    /// Flags are asserted by self-signatures (user-ID certifications on a primary key,
+    /// binding signatures on a subkey); the most recent assertion wins. Keys without a
+    /// key-flags subpacket keep their historical unrestricted usage, gated only by
+    /// <see cref="AlgorithmCanSign"/>.
+    /// </summary>
+    private static bool KeyFlagsPermitSigning(PgpPublicKey key)
+    {
+        // Third-party certifications must not widen what a key may do, so a primary key
+        // only trusts key flags it asserted itself; a subkey is governed by its binding
+        // signature, which is issued by the primary and lives in GetKeySignatures().
+        var assertions = key.IsMasterKey
+            ? key.GetSignatures().Where(s => s.KeyId == key.KeyId)
+            : key.GetKeySignatures();
+
+        PgpSignature? governing = null;
+        foreach (var sig in assertions)
+        {
+            var hashed = sig.GetHashedSubPackets();
+            if (hashed is null || !hashed.HasSubpacket(SignatureSubpacketTag.KeyFlags))
+                continue;
+            if (governing is null || sig.CreationTime > governing.CreationTime)
+                governing = sig;
+        }
+
+        if (governing is null)
+            return true;
+
+        var flags = governing.GetHashedSubPackets()!.GetKeyFlags();
+        return (flags & (PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify)) != 0;
+    }
+
+    /// <summary>
+    /// Absolute expiry of the key, or null when it never expires. The master-key overload
+    /// of <c>GetValidSeconds</c> verifies a subkey's binding signature before trusting
+    /// its expiration, so a forged binding packet cannot extend a subkey's lifetime.
+    /// </summary>
+    private static DateTime? ComputeExpiry(PgpPublicKey key, PgpPublicKey? master)
+    {
+        // Zero means the key never expires (RFC 4880 §5.2.3.3).
+        long validSeconds = master is null ? key.GetValidSeconds() : key.GetValidSeconds(master);
+        return validSeconds <= 0 ? null : key.CreationTime.AddSeconds(validSeconds);
+    }
+
+    private static bool IsExpiredAt(DateTime? expiresAt, DateTime at)
+        => expiresAt is not null && at >= expiresAt.Value;
+
+    private bool IsExpiredAt(DateTime at) => IsExpiredAt(_expiresAt, at);
+
+    private bool HasRevocation() => _publicKey.HasRevocation();
+
+    private sealed record KeyCandidate(PgpPublicKey Key, PgpPublicKey? Master);
+
+    private static List<KeyCandidate> ReadKeyCandidates(byte[] data)
+    {
+        var result = new List<KeyCandidate>();
         foreach (var obj in ReadPgpObjects(data))
         {
             switch (obj)
             {
                 case PgpPublicKeyRing ring:
-                    result.AddRange(ring.GetPublicKeys());
+                    AddRing(result, ring.GetPublicKeys());
                     break;
                 case PgpPublicKey key:
-                    result.Add(key);
+                    result.Add(new KeyCandidate(key, key.IsMasterKey ? key : null));
                     break;
                 case PgpSecretKeyRing secretRing:
-                    foreach (var secret in secretRing.GetSecretKeys())
-                        result.Add(secret.PublicKey);
+                    AddRing(result, secretRing.GetSecretKeys().Select(s => s.PublicKey));
                     break;
                 case PgpSecretKey secretKey:
-                    result.Add(secretKey.PublicKey);
+                    result.Add(new KeyCandidate(secretKey.PublicKey, secretKey.PublicKey.IsMasterKey ? secretKey.PublicKey : null));
                     break;
             }
         }
 
         // De-duplicate by key ID; keyrings can repeat the primary key across packets.
         return result
-            .GroupBy(k => k.KeyId)
+            .GroupBy(c => c.Key.KeyId)
             .Select(g => g.First())
             .ToList();
+    }
+
+    private static void AddRing(List<KeyCandidate> result, IEnumerable<PgpPublicKey> keys)
+    {
+        var ringKeys = keys.ToList();
+        var master = ringKeys.FirstOrDefault(k => k.IsMasterKey) ?? (ringKeys.Count > 0 ? ringKeys[0] : null);
+        foreach (var key in ringKeys)
+            result.Add(new KeyCandidate(key, master));
     }
 
     private static IEnumerable<object> ReadPgpObjects(byte[] data)

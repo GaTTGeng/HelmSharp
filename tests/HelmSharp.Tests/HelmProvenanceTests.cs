@@ -22,7 +22,9 @@ public class HelmProvenanceTests
 
     private static (PgpSecretKeyRing SecretRing, PgpPublicKeyRing PublicRing, HelmProvenanceSigningKey SigningKey, HelmProvenanceTrustedKey TrustedKey) CreateTestKeys(
         string userId = "HelmSharp Test <test@example.com>",
-        char[]? passphrase = null)
+        char[]? passphrase = null,
+        long? validitySeconds = null,
+        DateTime? createdAt = null)
     {
         var kpg = new RsaKeyPairGenerator();
         kpg.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
@@ -32,8 +34,10 @@ public class HelmProvenanceTests
         hashed.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
         hashed.SetPreferredSymmetricAlgorithms(true, [(int)SymmetricKeyAlgorithmTag.Aes256]);
         hashed.SetPreferredHashAlgorithms(true, [(int)HashAlgorithmTag.Sha512, (int)HashAlgorithmTag.Sha256]);
+        if (validitySeconds is not null)
+            hashed.SetKeyExpirationTime(false, validitySeconds.Value);
 
-        var keyPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, kp, DateTime.UtcNow);
+        var keyPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, kp, createdAt ?? DateTime.UtcNow);
         var encAlgo = passphrase is null ? SymmetricKeyAlgorithmTag.Null : SymmetricKeyAlgorithmTag.Aes256;
         var krg = new PgpKeyRingGenerator(
             (int)PgpSignature.PositiveCertification,
@@ -66,6 +70,133 @@ public class HelmProvenanceTests
         var signingKey = HelmProvenanceSigningKey.FromSecretKeyData(secretBytes, passphrase);
         var trustedKey = HelmProvenanceTrustedKey.FromPublicKeyData(publicBytes);
         return (secretRing, publicRing, signingKey, trustedKey);
+    }
+
+    /// <summary>
+    /// Primary key authorized to sign, plus an encryption-only subkey. The subkey's
+    /// private half is re-wrapped as a standalone secret key so tests can craft
+    /// signatures that are mathematically valid under the subkey but not authorized by
+    /// OpenPGP key flags (the attack under test).
+    /// </summary>
+    private static (PgpSecretKeyRing SecretRing, PgpPublicKeyRing PublicRing, byte[] EncryptionSubkeySecret) CreateRingWithEncryptionSubkey(
+        string userId = "Primary <primary@example.com>")
+    {
+        var kpg = new RsaKeyPairGenerator();
+        kpg.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
+        var createdAt = DateTime.UtcNow;
+        var primaryPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, kpg.GenerateKeyPair(), createdAt);
+
+        var primaryHashed = new PgpSignatureSubpacketGenerator();
+        primaryHashed.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
+        var krg = new PgpKeyRingGenerator(
+            (int)PgpSignature.PositiveCertification,
+            primaryPair,
+            userId,
+            SymmetricKeyAlgorithmTag.Null,
+            (char[])null!,
+            false,
+            primaryHashed.Generate(),
+            null,
+            new SecureRandom());
+
+        // Encryption-only subkey: the key flags deny signing, which OpenPGP policy must
+        // honor even though the RSA key material can produce a mathematical signature.
+        var subKp = kpg.GenerateKeyPair();
+        var encPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, subKp, createdAt);
+        var encHashed = new PgpSignatureSubpacketGenerator();
+        encHashed.SetKeyFlags(true, PgpKeyFlags.CanEncryptCommunications | PgpKeyFlags.CanEncryptStorage);
+        krg.AddSubKey(encPair, encHashed.Generate(), null);
+
+        var secretRing = krg.GenerateSecretKeyRing();
+        var publicRing = krg.GeneratePublicKeyRing();
+
+        // A bare subkey secret encoding does not parse as a secret key ring, so the
+        // subkey's private material is re-wrapped as a standalone secret key. The RSA
+        // key pair (and creation time) is identical, so the resulting signature is
+        // mathematically valid under the encryption-only subkey in the ring above.
+        var attackPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, subKp, createdAt);
+        var attackSecret = new PgpSecretKey(
+            (int)PgpSignature.PositiveCertification,
+            attackPair,
+            "attacker",
+            SymmetricKeyAlgorithmTag.Null,
+            (char[])null!,
+            false,
+            encHashed.Generate(),
+            null,
+            new SecureRandom());
+
+        byte[] attackSecretBytes;
+        using (var ms = new MemoryStream())
+        {
+            attackSecret.Encode(ms);
+            attackSecretBytes = ms.ToArray();
+        }
+
+        return (secretRing, publicRing, attackSecretBytes);
+    }
+
+    /// <summary>Binary public keyring containing a single signing key that is revoked.</summary>
+    private static byte[] CreateRevokedSigningKeyring(string userId = "Revoked <revoked@example.com>")
+    {
+        var kpg = new RsaKeyPairGenerator();
+        kpg.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
+        var pair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, kpg.GenerateKeyPair(), DateTime.UtcNow);
+        var hashed = new PgpSignatureSubpacketGenerator();
+        hashed.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
+        var krg = new PgpKeyRingGenerator(
+            (int)PgpSignature.PositiveCertification,
+            pair,
+            userId,
+            SymmetricKeyAlgorithmTag.Null,
+            (char[])null!,
+            false,
+            hashed.Generate(),
+            null,
+            new SecureRandom());
+        var secretRing = krg.GenerateSecretKeyRing();
+        var secret = secretRing.GetSecretKeys().First();
+        var privateKey = secret.ExtractPrivateKey(null)!;
+        var publicKeyToRevoke = secret.PublicKey;
+
+        var revGen = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        revGen.InitSign(PgpSignature.KeyRevocation, privateKey);
+        var revSub = new PgpSignatureSubpacketGenerator();
+        revSub.SetSignatureCreationTime(false, DateTime.UtcNow);
+        revSub.SetRevocationReason(false, RevocationReasonTag.KeySuperseded, "test revocation");
+        revGen.SetHashedSubpackets(revSub.Generate());
+        var revoked = PgpPublicKey.AddCertification(publicKeyToRevoke, revGen.GenerateCertification(publicKeyToRevoke));
+
+        using var ms = new MemoryStream();
+        // Bare key encoding parses back as a single-key ring.
+        revoked.Encode(ms);
+        return ms.ToArray();
+    }
+
+    /// <summary>Binary public keyring containing a single signing key that is already expired.</summary>
+    private static byte[] CreateExpiredSigningKeyring(string userId = "Expired <expired@example.com>")
+    {
+        var kpg = new RsaKeyPairGenerator();
+        kpg.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
+        // Created 10 seconds ago with 1 second of validity: expired before import.
+        var pair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, kpg.GenerateKeyPair(), DateTime.UtcNow.AddSeconds(-10));
+        var hashed = new PgpSignatureSubpacketGenerator();
+        hashed.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
+        hashed.SetKeyExpirationTime(false, 1L);
+        var krg = new PgpKeyRingGenerator(
+            (int)PgpSignature.PositiveCertification,
+            pair,
+            userId,
+            SymmetricKeyAlgorithmTag.Null,
+            (char[])null!,
+            false,
+            hashed.Generate(),
+            null,
+            new SecureRandom());
+
+        using var ms = new MemoryStream();
+        krg.GeneratePublicKeyRing().Encode(ms);
+        return ms.ToArray();
     }
 
     private static async Task<string> CreateTestChartArchiveAsync(string workDir, string? chartYaml = null)
@@ -393,6 +524,128 @@ public class HelmProvenanceTests
         }
     }
 
+    // --- Trusted-key policy: only valid signing keys may be trusted ---
+
+    [Fact]
+    public void FromKeyringData_PrimaryWithEncryptionOnlySubkey_KeepsPrimaryOnly()
+    {
+        var (_, publicRing, _) = CreateRingWithEncryptionSubkey();
+        byte[] publicBytes;
+        using (var ms = new MemoryStream())
+        {
+            publicRing.Encode(ms);
+            publicBytes = ms.ToArray();
+        }
+
+        var trusted = HelmProvenanceTrustedKey.FromKeyringData(publicBytes);
+        // The encryption-only subkey must not become a trusted signer alongside the primary.
+        Assert.Single(trusted);
+        Assert.Equal(
+            Convert.ToHexString(publicRing.GetPublicKeys().First().GetFingerprint()).ToLowerInvariant(),
+            trusted[0].Fingerprint);
+    }
+
+    [Fact]
+    public void FromKeyringData_EncryptionOnlySubkeyAlone_IsRejected()
+    {
+        var (_, publicRing, _) = CreateRingWithEncryptionSubkey();
+        var encryptionSubkey = publicRing.GetPublicKeys().Last();
+
+        byte[] subkeyBytes;
+        using (var ms = new MemoryStream())
+        {
+            // Bare key encoding parses back as a single-key ring.
+            encryptionSubkey.Encode(ms);
+            subkeyBytes = ms.ToArray();
+        }
+
+        // Possession of an encryption subkey must never produce a trusted signer.
+        var ex = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(subkeyBytes));
+        Assert.Contains("signing key", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Verify_SignatureByEncryptionOnlySubkey_FailsClosed()
+    {
+        var work = TempDir();
+        try
+        {
+            var tgz = await CreateTestChartArchiveAsync(work);
+            var (_, publicRing, subSecretBytes) = CreateRingWithEncryptionSubkey();
+
+            // Attacker signs with the encryption-only subkey's private key: the signature
+            // is mathematically valid, but OpenPGP does not authorize that key to sign.
+            using var attackKey = HelmProvenanceSigningKey.FromSecretKeyData(subSecretBytes);
+            await HelmProvenance.SignAsync(tgz, attackKey);
+
+            byte[] publicBytes;
+            using (var ms = new MemoryStream())
+            {
+                publicRing.Encode(ms);
+                publicBytes = ms.ToArray();
+            }
+
+            // Victim trusts the full keyring; only the primary may act as a signer.
+            var trusted = HelmProvenanceTrustedKey.FromKeyringData(publicBytes);
+            var result = await HelmProvenance.VerifyAsync(tgz, trusted);
+            Assert.False(result.IsValid);
+            Assert.False(result.SignatureValid);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FromKeyringData_RevokedSigningKey_IsRejected()
+    {
+        var revokedBytes = CreateRevokedSigningKeyring();
+
+        // A revoked key must never become a trusted signer even though its private half
+        // can still produce a mathematical signature.
+        var ex = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(revokedBytes));
+        Assert.Contains("signing key", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void FromKeyringData_ExpiredSigningKey_IsRejected()
+    {
+        var expiredBytes = CreateExpiredSigningKeyring();
+
+        var ex = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(expiredBytes));
+        Assert.Contains("signing key", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Verify_ExpiredTrustedKey_FailsClosed()
+    {
+        var work = TempDir();
+        try
+        {
+            var tgz = await CreateTestChartArchiveAsync(work);
+            // The key is imported while still valid, then expires before verification.
+            var (_, _, signingKey, trustedKey) = CreateTestKeys(validitySeconds: 4);
+            await HelmProvenance.SignAsync(tgz, signingKey);
+
+            var early = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
+            Assert.True(early.IsValid, early.FailureReason);
+
+            await Task.Delay(TimeSpan.FromSeconds(4.5));
+
+            var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
+            Assert.False(result.IsValid);
+            Assert.Contains("expired", result.FailureReason, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
     // --- Legacy pseudo-signature rejection ---
 
     [Fact]
@@ -575,6 +828,170 @@ public class HelmProvenanceTests
         Assert.Equal(
             "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
             meta["sha256"]);
+    }
+
+    // --- Digest extraction scoped to the files section ---
+
+    [Fact]
+    public void ExtractSha256_MetadataDigestAnnotation_DoesNotConfuseLookup()
+    {
+        var annotationHash = new string('a', 64);
+        var archiveHash = new string('b', 64);
+        // Chart metadata precedes the files section; an annotation value shaped like a
+        // digest must never be returned as the archive digest.
+        var prov = $"""
+            -----BEGIN PGP SIGNED MESSAGE-----
+            Hash: SHA512
+
+            annotations:
+              example.com/digest: sha256:{annotationHash}
+            name: demo
+            version: 1.0.0
+
+            ...
+            files:
+              demo-1.0.0.tgz: sha256:{archiveHash}
+
+            -----BEGIN PGP SIGNATURE-----
+
+            AAAA
+            -----END PGP SIGNATURE-----
+            """;
+
+        Assert.Equal(archiveHash, HelmProvenance.ExtractSha256(prov, "demo-1.0.0.tgz"));
+        Assert.Equal(archiveHash, HelmProvenance.ExtractSha256(prov));
+    }
+
+    [Fact]
+    public void ExtractSha256_MultiFileMap_SelectsNamedArchive()
+    {
+        var hashAlpha = new string('a', 64);
+        var hashBeta = new string('b', 64);
+        var prov = $"""
+            -----BEGIN PGP SIGNED MESSAGE-----
+            Hash: SHA512
+
+            name: demo
+
+            ...
+            files:
+              alpha-1.0.0.tgz: sha256:{hashAlpha}
+              beta-2.0.0.tgz: sha256:{hashBeta}
+
+            -----BEGIN PGP SIGNATURE-----
+
+            AAAA
+            -----END PGP SIGNATURE-----
+            """;
+
+        Assert.Equal(hashAlpha, HelmProvenance.ExtractSha256(prov, "alpha-1.0.0.tgz"));
+        Assert.Equal(hashBeta, HelmProvenance.ExtractSha256(prov, "beta-2.0.0.tgz"));
+        // Without a filename a multi-entry map is ambiguous; guessing would pick the
+        // wrong archive.
+        Assert.Null(HelmProvenance.ExtractSha256(prov));
+    }
+
+    [Fact]
+    public async Task CheckDigestAsync_MetadataDigestAnnotation_UsesArchiveDigest()
+    {
+        var work = TempDir();
+        try
+        {
+            // An annotation whose value is shaped like sha256:<64 hex> sits in the
+            // metadata before the files section.
+            var tgz = await CreateTestChartArchiveAsync(work, chartYaml: $$"""
+                apiVersion: v2
+                name: provchart
+                description: provenance test chart
+                type: application
+                version: 0.1.0
+                appVersion: "1.0"
+                annotations:
+                  example.com/digest: "sha256:{{new string('a', 64)}}"
+                """);
+            var (_, _, signingKey, _) = CreateTestKeys();
+            await HelmProvenance.SignAsync(tgz, signingKey);
+
+            Assert.True(await HelmProvenance.CheckDigestAsync(tgz));
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CheckDigestAsync_MultiFileMap_UsesNamedArchiveEntry()
+    {
+        var work = TempDir();
+        try
+        {
+            var tgz = await CreateTestChartArchiveAsync(work);
+            var actualHash = Convert.ToHexString(
+                SHA256.HashData(await File.ReadAllBytesAsync(tgz))).ToLowerInvariant();
+            var siblingHash = new string('c', 64);
+
+            // The sibling entry carries this archive's digest under the wrong name; the
+            // entry keyed by the archive filename carries a different digest.
+            var prov = $"""
+                -----BEGIN PGP SIGNED MESSAGE-----
+                Hash: SHA512
+
+                name: provchart
+
+                ...
+                files:
+                  sibling-0.0.1.tgz: sha256:{actualHash}
+                  {Path.GetFileName(tgz)}: sha256:{siblingHash}
+
+                -----BEGIN PGP SIGNATURE-----
+
+                AAAA
+                -----END PGP SIGNATURE-----
+                """;
+            await File.WriteAllTextAsync(tgz + ".prov", prov);
+
+            Assert.False(await HelmProvenance.CheckDigestAsync(tgz));
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SignAndVerify_MetadataDigestAnnotation_RoundTrips()
+    {
+        var work = TempDir();
+        try
+        {
+            var annotationHash = new string('a', 64);
+            var tgz = await CreateTestChartArchiveAsync(work, chartYaml: $$"""
+                apiVersion: v2
+                name: provchart
+                description: provenance test chart
+                type: application
+                version: 0.1.0
+                appVersion: "1.0"
+                annotations:
+                  example.com/digest: "sha256:{{annotationHash}}"
+                """);
+            var (_, _, signingKey, trustedKey) = CreateTestKeys();
+            await HelmProvenance.SignAsync(tgz, signingKey);
+
+            var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
+            Assert.True(result.IsValid, result.FailureReason);
+
+            // The signed digest is the archive digest, not the metadata annotation.
+            var actualHash = Convert.ToHexString(
+                SHA256.HashData(await File.ReadAllBytesAsync(tgz))).ToLowerInvariant();
+            Assert.Equal(actualHash, result.ExpectedSha256);
+            Assert.NotEqual(annotationHash, result.ExpectedSha256);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
     }
 
     // --- Helm CLI interoperability ---
