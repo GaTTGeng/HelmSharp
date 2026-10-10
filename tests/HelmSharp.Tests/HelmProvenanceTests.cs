@@ -44,6 +44,7 @@ public class HelmProvenanceTests
             keyPair,
             userId,
             encAlgo,
+            true,
             passphrase ?? (char[])null!,
             false,
             hashed.Generate(),
@@ -137,14 +138,17 @@ public class HelmProvenanceTests
     }
 
     private static (PgpSecretKeyRing SecretRing, PgpPublicKeyRing PublicRing) CreateRingWithSigningSubkey(
-        string userId = "Signing subkey <subkey@example.com>")
+        string userId = "Signing subkey <subkey@example.com>",
+        bool expiredPrimary = false)
     {
         var kpg = new RsaKeyPairGenerator();
         kpg.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
-        var createdAt = DateTime.UtcNow;
+        var createdAt = expiredPrimary ? DateTime.UtcNow.AddSeconds(-10) : DateTime.UtcNow;
         var primaryPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, kpg.GenerateKeyPair(), createdAt);
         var primaryFlags = new PgpSignatureSubpacketGenerator();
         primaryFlags.SetKeyFlags(true, PgpKeyFlags.CanCertify);
+        if (expiredPrimary)
+            primaryFlags.SetKeyExpirationTime(false, 1);
         var keyRingGenerator = new PgpKeyRingGenerator(
             (int)PgpSignature.PositiveCertification,
             primaryPair,
@@ -162,6 +166,8 @@ public class HelmProvenanceTests
             createdAt);
         var signingFlags = new PgpSignatureSubpacketGenerator();
         signingFlags.SetKeyFlags(true, PgpKeyFlags.CanSign);
+        if (expiredPrimary)
+            signingFlags.SetKeyExpirationTime(false, 3600);
         keyRingGenerator.AddSubKey(signingPair, signingFlags.Generate(), null);
         return (keyRingGenerator.GenerateSecretKeyRing(), keyRingGenerator.GeneratePublicKeyRing());
     }
@@ -360,7 +366,7 @@ public class HelmProvenanceTests
         try
         {
             var tgz = await CreateTestChartArchiveAsync(work);
-            var passphrase = "s3cret-pass".ToCharArray();
+            var passphrase = "sécret-秘密".ToCharArray();
             var (_, _, signingKey, trustedKey) = CreateTestKeys(passphrase: passphrase);
 
             var provPath = await HelmProvenance.SignAsync(tgz, signingKey);
@@ -371,6 +377,63 @@ public class HelmProvenanceTests
         {
             Directory.Delete(work, recursive: true);
         }
+    }
+
+    [Fact]
+    public void FromKeyringData_ExpiredPrimaryRejectsOtherwiseValidSigningSubkey()
+    {
+        var (_, publicRing) = CreateRingWithSigningSubkey(expiredPrimary: true);
+        using var ms = new MemoryStream();
+        publicRing.Encode(ms);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
+
+        Assert.Contains("No usable", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FromKeyringData_SigningSubkeyUsesPrimaryUserId()
+    {
+        const string userId = "Signing subkey owner <owner@example.com>";
+        var (_, publicRing) = CreateRingWithSigningSubkey(userId);
+        using var ms = new MemoryStream();
+        publicRing.Encode(ms);
+
+        var trustedKey = Assert.Single(HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
+
+        Assert.Equal(userId, trustedKey.UserId);
+    }
+
+    [Fact]
+    public void FromKeyringData_MarkerBeforeKeyringIsSkipped()
+    {
+        var (_, publicRing) = CreateRingWithSigningSubkey();
+        using var ring = new MemoryStream();
+        publicRing.Encode(ring);
+
+        var trustedKey = Assert.Single(HelmProvenanceTrustedKey.FromKeyringData(PrependMarkerPacket(ring.ToArray())));
+
+        Assert.NotNull(trustedKey.UserId);
+    }
+
+    [Fact]
+    public void FromSecretKeyData_MarkerBeforeKeyringIsSkipped()
+    {
+        var (secretRing, _) = CreateRingWithSigningSubkey();
+        using var ring = new MemoryStream();
+        secretRing.Encode(ring);
+
+        using var signingKey = HelmProvenanceSigningKey.FromSecretKeyData(PrependMarkerPacket(ring.ToArray()));
+
+        Assert.NotNull(signingKey.GetSecretKey());
+    }
+
+    private static byte[] PrependMarkerPacket(byte[] encoded)
+    {
+        // OpenPGP marker packets use tag 10 and carry the three literal bytes "PGP".
+        var marker = new byte[] { 0xCA, 0x03, (byte)'P', (byte)'G', (byte)'P' };
+        return [.. marker, .. encoded];
     }
 
     [Fact]

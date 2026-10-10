@@ -93,7 +93,7 @@ public sealed class HelmProvenanceSigningKey : IDisposable
             // to sign, so certification-only keys are never selected accidentally.
             try
             {
-                if (key.ExtractPrivateKey(passphrase) is not null)
+                if (key.ExtractPrivateKeyUtf8(passphrase) is not null)
                     return key;
             }
             catch (PgpException)
@@ -159,8 +159,10 @@ public sealed class HelmProvenanceSigningKey : IDisposable
                         break;
                     }
 
-                    if (next is null or PgpMarker)
+                    if (next is null)
                         break;
+                    if (next is PgpMarker)
+                        continue;
                     yield return next;
                 }
             }
@@ -179,8 +181,10 @@ public sealed class HelmProvenanceSigningKey : IDisposable
                         break;
                     }
 
-                    if (next is null or PgpMarker)
+                    if (next is null)
                         break;
+                    if (next is PgpMarker)
+                        continue;
                     yield return next;
                 }
             }
