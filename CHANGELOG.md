@@ -10,6 +10,7 @@ This project follows semantic versioning once stable releases begin.
 
 - Documented the public API surface and key implementation notes with English XML documentation and comments so IntelliSense and source readers can understand Helm equivalence, constraints, and non-obvious behavior without reverse-engineering the code.
 - Added an opt-in kind-backed Kubernetes lifecycle integration lane covering install-through-uninstall, namespace identity, CRD discovery, readiness, hook Jobs, rollback after failure, retained uninstall, wait timeout post-state, and Helm v3 release Secret storage contract (#27).
+- Added real OpenPGP clear-signing and verification for chart provenance (`HelmProvenance.SignAsync` / `VerifyAsync`) with explicit private-key and trusted-key inputs, signer fingerprint reporting, and Helm-compatible `.prov` files (#262).
 
 ### Changed
 
@@ -26,6 +27,7 @@ This project follows semantic versioning once stable releases begin.
 ### Security
 
 - Enforced decompressed resource limits for chart archive loading and repository extraction (compressed input size, total decompressed bytes, per-entry bytes, entry count, decompression amplification, and packaged dependency depth), metered on every decompressed byte and every tar entry and shared across nested dependency archives. Repository downloads abort mid-stream at the compressed-input limit instead of buffering oversized responses, pull/extraction applies the budgets before any archive traversal, directory-sourced dependency archives are size-checked before buffering, cached extractions are scoped to the active limit profile, and dependency and pull operations honor the configured limits. Explicit trusted-chart options and partial-extraction cleanup on failure (#261).
+- Replaced the HelmProvenance pseudo-signature (a Base64 SHA-512 digest presented as a PGP signature) with real OpenPGP verification that binds chart digest, signed metadata, and trusted signer identity ([GHSA-p8v5-2m72-3hrw](https://github.com/GaTTGeng/HelmSharp/security/advisories/GHSA-p8v5-2m72-3hrw)). Authenticity verification now requires explicit trusted keys and fails closed on tampered charts, tampered signed metadata, malformed armor, unknown keys, and invalid signatures. **Breaking API change:** `GenerateProvFileAsync` and the hash-only `VerifyAsync` overload are removed; legacy pseudo-signature `.prov` files no longer pass authenticity checks and must be re-signed. Hash-only integrity remains available under the explicitly non-authenticating `CheckDigestAsync` (#262).
 
 ### Removed
 

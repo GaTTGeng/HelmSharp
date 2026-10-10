@@ -3,7 +3,7 @@
 HelmSharp supports the traditional HTTP chart-repository workflow in managed code: package a chart, produce `index.yaml`, manage isolated repository state, pull an archive, and resolve dependencies. It does not require the Helm CLI at runtime.
 
 ::: warning Scope of this guide
-OCI authentication and push/pull parity, provenance files, signing, and signature verification are not part of this workflow. See [Compatibility](../helm-compatibility.md) before building a production repository service around those capabilities.
+OCI authentication and push/pull parity are not part of this workflow. For chart signing and signature verification, see [Chart provenance and signing](chart-provenance.md). See [Compatibility](../helm-compatibility.md) before building a production repository service around unsupported capabilities.
 :::
 
 ## Package a chart
