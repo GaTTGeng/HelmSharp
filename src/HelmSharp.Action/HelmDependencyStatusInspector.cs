@@ -21,10 +21,17 @@ internal static class HelmDependencyStatusInspector
     /// Inspects a dependency against the chart's <c>charts/</c> directory (archives first,
     /// then unpacked directories) and falls back to charts embedded in the loaded parent.
     /// </summary>
+    /// <param name="chartPath">Chart directory containing the dependency artifacts.</param>
+    /// <param name="parent">Already-loaded parent chart, used for embedded subcharts.</param>
+    /// <param name="dependency">Dependency declaration being inspected.</param>
+    /// <param name="archiveLimits">Decompression budgets applied when reading dependency archives; null applies the defaults.</param>
+    /// <param name="cancellationToken">Cancels chart loading.</param>
+    /// <returns>The helm-style dependency status text.</returns>
     public static async Task<string> InspectAsync(
         string chartPath,
         HelmChart parent,
         HelmChartDependency dependency,
+        HelmChartArchiveLimits? archiveLimits,
         CancellationToken cancellationToken)
     {
         var expectedVersion = dependency.Version;
@@ -35,6 +42,7 @@ internal static class HelmDependencyStatusInspector
                 chartsDirectory,
                 dependency,
                 expectedVersion,
+                archiveLimits,
                 cancellationToken);
             if (archiveStatus is not null)
                 return archiveStatus;
@@ -43,6 +51,7 @@ internal static class HelmDependencyStatusInspector
                 chartsDirectory,
                 dependency,
                 expectedVersion,
+                archiveLimits,
                 cancellationToken);
             if (directoryStatus is not null)
                 return directoryStatus;
@@ -58,6 +67,7 @@ internal static class HelmDependencyStatusInspector
         string chartsDirectory,
         HelmChartDependency dependency,
         string? expectedVersion,
+        HelmChartArchiveLimits? archiveLimits,
         CancellationToken cancellationToken)
     {
         if (!Directory.Exists(chartsDirectory))
@@ -93,8 +103,14 @@ internal static class HelmDependencyStatusInspector
 
         try
         {
-            var chart = await HelmChartLoader.LoadAsync(archives[0], cancellationToken);
+            var chart = await HelmChartLoader.LoadAsync(archives[0], archiveLimits, cancellationToken);
             return InspectChart(chart, dependency, expectedVersion, "ok");
+        }
+        catch (ChartArchiveLimitExceededException)
+        {
+            // Resource budgets are operation-wide; never report a budget violation as a
+            // damaged package and continue past it.
+            throw;
         }
         catch (OperationCanceledException)
         {
@@ -126,6 +142,7 @@ internal static class HelmDependencyStatusInspector
         string chartsDirectory,
         HelmChartDependency dependency,
         string? expectedVersion,
+        HelmChartArchiveLimits? archiveLimits,
         CancellationToken cancellationToken)
     {
         if (!Directory.Exists(chartsDirectory))
@@ -155,7 +172,7 @@ internal static class HelmDependencyStatusInspector
             HelmChart chart;
             try
             {
-                chart = await HelmChartLoader.LoadAsync(directory, cancellationToken);
+                chart = await HelmChartLoader.LoadAsync(directory, archiveLimits, cancellationToken);
             }
             catch (OperationCanceledException)
             {

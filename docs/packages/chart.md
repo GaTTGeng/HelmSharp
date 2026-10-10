@@ -12,6 +12,8 @@ dotnet add package HelmSharp.Chart --version 1.3.2
 | --- | --- |
 | `HelmChartLoader` | Load `Chart.yaml`, templates, files, CRDs, values, dependencies, and archives. |
 | `HelmChart` | The loaded chart object passed to values and rendering APIs. |
+| `HelmChartArchiveLimits` | Decompression budgets (compressed size, extracted totals, entry size/count, ratio, dependency depth) enforced while reading chart archives. |
+| `ChartArchiveLimitExceededException` | Stable failure raised when an archive exceeds a configured budget. |
 | `HelmValues` | Merge defaults, values files, inline YAML, and set-style overrides. |
 | `HelmYaml` | Read or write YAML-compatible values. |
 | `HelmChartDependency` / `HelmChartLockEntry` | Inspect dependency and lock metadata. |

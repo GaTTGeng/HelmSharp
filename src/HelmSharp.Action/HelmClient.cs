@@ -196,7 +196,7 @@ public class HelmClient : IHelmClient
         // --- 2. Load chart and collect the user-supplied values overrides ---
         yield return $"Loading chart {request.Chart}";
         var chartPath = await ResolveChartPathAsync(request.Chart, request.Version, options, operationToken);
-        var chart = await HelmChartLoader.LoadAsync(chartPath, operationToken);
+        var chart = await LoadChartAsync(chartPath, operationToken);
 
         // Validate kubeVersion compatibility
         if (!string.IsNullOrWhiteSpace(chart.KubeVersion) && !string.IsNullOrWhiteSpace(options.KubeVersion))
@@ -1440,7 +1440,7 @@ public class HelmClient : IHelmClient
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
         var ns = request.Namespace ?? options.DefaultNamespace ?? "default";
         var chartPath = await ResolveChartPathAsync(request.Chart, null, options, cancellationToken);
-        var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
+        var chart = await LoadChartAsync(chartPath, cancellationToken);
         var valuesFiles = CombineValuesFiles(request.ValuesFile, request.ValuesFiles);
         var values = await HelmValues.BuildAsync(chart, valuesFiles, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
         var renderer = new HelmTemplateRenderer(
@@ -1491,7 +1491,7 @@ public class HelmClient : IHelmClient
     {
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
         var ns = request.Namespace ?? options.DefaultNamespace ?? "default";
-        var chart = await HelmChartLoader.LoadAsync(request.Chart, cancellationToken);
+        var chart = await LoadChartAsync(request.Chart, cancellationToken);
         var valuesFiles = CombineValuesFiles(request.ValuesFile, request.ValuesFiles);
         var values = await HelmValues.BuildAsync(chart, valuesFiles, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
         var renderer = new HelmTemplateRenderer(
@@ -1861,7 +1861,7 @@ public class HelmClient : IHelmClient
             .FirstOrDefault() ?? string.Empty;
 
         // --- 2. New side: render with the same install/upgrade render-state rules ---
-        var chart = await HelmChartLoader.LoadAsync(request.Chart, cancellationToken);
+        var chart = await LoadChartAsync(request.Chart, cancellationToken);
         var valuesFiles = CombineValuesFiles(request.ValuesFile, request.ValuesFiles);
         var values = await HelmValues.BuildAsync(chart, valuesFiles, request.ValuesContent, request.SetValues, request.SetFileValues, request.SetStringValues, request.SetJsonValues, cancellationToken);
         var newManifest = RenderDiffManifest(chart, releaseName, ns, values, options, history);
@@ -1915,7 +1915,7 @@ public class HelmClient : IHelmClient
 
         try
         {
-            var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
+            var chart = await LoadChartAsync(chartPath, cancellationToken);
 
             // Validate Chart.yaml
             if (string.IsNullOrWhiteSpace(chart.Name))
@@ -1985,7 +1985,7 @@ public class HelmClient : IHelmClient
     {
         var chartPathResolved = await ResolveChartPathAsync(chartPath, version,
             await _optionsProvider.GetHelmAsync(cancellationToken), cancellationToken);
-        var chart = await HelmChartLoader.LoadAsync(chartPathResolved, cancellationToken);
+        var chart = await LoadChartAsync(chartPathResolved, cancellationToken);
         var values = await HelmValues.BuildAsync(chart, (IEnumerable<string>?)null, valuesContent, setValues, null, null, null, cancellationToken);
         var renderer = new HelmTemplateRenderer(chart, "show", "default", values);
         return Ok(renderer.Render());
@@ -1996,7 +1996,7 @@ public class HelmClient : IHelmClient
         string chartPath,
         CancellationToken cancellationToken = default)
     {
-        var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
+        var chart = await LoadChartAsync(chartPath, cancellationToken);
         var info = new
         {
             name = chart.Name,
@@ -2020,7 +2020,7 @@ public class HelmClient : IHelmClient
         string chartPath,
         CancellationToken cancellationToken = default)
     {
-        var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
+        var chart = await LoadChartAsync(chartPath, cancellationToken);
         return Ok(chart.ValuesYaml);
     }
 
@@ -2048,7 +2048,11 @@ public class HelmClient : IHelmClient
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        using var repo = _createChartRepository(null);
+        var options = await _optionsProvider.GetHelmAsync(cancellationToken);
+        using var repo = _createChartRepository(new HelmRepositoryOptions
+        {
+            ArchiveLimits = options.ArchiveLimits
+        });
         var path = await repo.PullChartAsync(request, cancellationToken);
         return Ok($"Chart pulled to: {path}");
     }
@@ -2139,7 +2143,8 @@ public class HelmClient : IHelmClient
     {
         ArgumentNullException.ThrowIfNull(request);
         var chartPath = Path.GetFullPath(request.ChartPath);
-        var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
+        var options = await _optionsProvider.GetHelmAsync(cancellationToken);
+        var chart = await LoadChartAsync(chartPath, cancellationToken);
         if (chart.Dependencies.Count == 0)
             return Ok("No dependencies found in Chart.yaml");
 
@@ -2158,11 +2163,15 @@ public class HelmClient : IHelmClient
         try
         {
             using var repo = request.RepositoryConfigPath is null && request.RepositoryCachePath is null
-                ? _createChartRepository(null)
+                ? _createChartRepository(new HelmRepositoryOptions
+                {
+                    ArchiveLimits = options.ArchiveLimits
+                })
                 : _createChartRepository(new HelmRepositoryOptions
                 {
                     RepositoryConfigPath = request.RepositoryConfigPath,
-                    CacheDirectory = request.RepositoryCachePath
+                    CacheDirectory = request.RepositoryCachePath,
+                    ArchiveLimits = options.ArchiveLimits
                 });
             var configuredRepositories = await repo.ListRepositoriesAsync(cancellationToken);
             var refreshedRepositories = new HashSet<string>(StringComparer.Ordinal);
@@ -2182,6 +2191,7 @@ public class HelmClient : IHelmClient
                             dependency.Name,
                             dependency.Version,
                             exactVersion: false,
+                            options.ArchiveLimits,
                             cancellationToken);
                         output.AppendLine(
                             $"Resolved local dependency: {dependency.Name} ({local.Version}) from charts/{dependency.Name}");
@@ -2205,6 +2215,7 @@ public class HelmClient : IHelmClient
                         refreshConfiguredRepository: !request.SkipRepositoryRefresh,
                         requireConfiguredCache: request.SkipRepositoryRefresh,
                         exactVersion: false,
+                        options.ArchiveLimits,
                         cancellationToken);
                     output.AppendLine(
                         $"Resolved dependency: {dependency.Name} ({staged.Version}) from {dependency.Repository}");
@@ -2240,6 +2251,7 @@ public class HelmClient : IHelmClient
                 stagedArchives,
                 localDependencyNames,
                 output,
+                options.ArchiveLimits,
                 cancellationToken);
 
             var lockChanged = await HelmDependencyLockFile.WriteIfChangedAsync(
@@ -2288,6 +2300,7 @@ public class HelmClient : IHelmClient
         IReadOnlyList<string> stagedArchives,
         IReadOnlySet<string> localDependencyNames,
         StringBuilder output,
+        HelmChartArchiveLimits? archiveLimits,
         CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(chartsDirectory);
@@ -2320,7 +2333,7 @@ public class HelmClient : IHelmClient
         {
             if (!desiredArchiveNames.Contains(Path.GetFileName(existingArchive)))
             {
-                var existingChart = await HelmChartLoader.LoadAsync(existingArchive, cancellationToken);
+                var existingChart = await HelmChartLoader.LoadAsync(existingArchive, archiveLimits, cancellationToken);
                 if (localDependencyNames.Contains(existingChart.Name))
                     continue;
 
@@ -2490,7 +2503,7 @@ public class HelmClient : IHelmClient
         string chartPath,
         CancellationToken cancellationToken = default)
     {
-        var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
+        var chart = await LoadChartAsync(chartPath, cancellationToken);
 
         foreach (var (path, content) in chart.Templates)
         {
@@ -2512,7 +2525,7 @@ public class HelmClient : IHelmClient
         string chartPath,
         CancellationToken cancellationToken = default)
     {
-        var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
+        var chart = await LoadChartAsync(chartPath, cancellationToken);
         if (chart.Crds.Count == 0)
             return Ok("No CRDs found in this chart.");
 
@@ -2558,6 +2571,8 @@ public class HelmClient : IHelmClient
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var options = await _optionsProvider.GetHelmAsync(cancellationToken);
+        request.ArchiveLimits ??= options.ArchiveLimits;
         var indexPath = await HelmRepoIndexer.GenerateIndexAsync(request, cancellationToken);
         return Ok($"Index generated at: {indexPath}");
     }
@@ -2616,7 +2631,7 @@ public class HelmClient : IHelmClient
         string chartPath,
         CancellationToken cancellationToken = default)
     {
-        var chart = await HelmChartLoader.LoadAsync(chartPath, cancellationToken);
+        var chart = await LoadChartAsync(chartPath, cancellationToken);
 
         var output = new StringBuilder();
 
@@ -2708,6 +2723,7 @@ public class HelmClient : IHelmClient
     {
         ArgumentNullException.ThrowIfNull(request);
         var chartPath = Path.GetFullPath(request.ChartPath);
+        var options = await _optionsProvider.GetHelmAsync(cancellationToken);
 
         // --- Stage: validate Chart.lock exists and matches Chart.yaml ---
         // Build never re-resolves constraints; an out-of-sync lock must be fixed by
@@ -2763,11 +2779,15 @@ public class HelmClient : IHelmClient
         try
         {
             using var repository = request.RepositoryConfigPath is null && request.RepositoryCachePath is null
-                ? _createChartRepository(null)
+                ? _createChartRepository(new HelmRepositoryOptions
+                {
+                    ArchiveLimits = options.ArchiveLimits
+                })
                 : _createChartRepository(new HelmRepositoryOptions
                 {
                     RepositoryConfigPath = request.RepositoryConfigPath,
-                    CacheDirectory = request.RepositoryCachePath
+                    CacheDirectory = request.RepositoryCachePath,
+                    ArchiveLimits = options.ArchiveLimits
                 });
             var configuredRepositories = await repository.ListRepositoriesAsync(cancellationToken);
             var refreshedRepositories = new HashSet<string>(StringComparer.Ordinal);
@@ -2787,6 +2807,7 @@ public class HelmClient : IHelmClient
                             dependency.Name,
                             dependency.Version,
                             exactVersion: false,
+                            options.ArchiveLimits,
                             cancellationToken);
                         output.AppendLine(
                             $"Using local locked dependency: {dependency.Name} ({dependency.Version}) " +
@@ -2810,6 +2831,7 @@ public class HelmClient : IHelmClient
                         refreshConfiguredRepository: false,
                         requireConfiguredCache: true,
                         exactVersion: true,
+                        options.ArchiveLimits,
                         cancellationToken);
                     var archivePath = staged.ArchivePath;
                     if (!File.Exists(archivePath))
@@ -2844,6 +2866,7 @@ public class HelmClient : IHelmClient
                 stagedArchives,
                 localDependencyNames,
                 output,
+                options.ArchiveLimits,
                 cancellationToken);
             output.AppendLine("Dependencies rebuilt from Chart.lock.");
             return Ok(output.ToString());
@@ -2898,6 +2921,7 @@ public class HelmClient : IHelmClient
         string dependencyName,
         string? requestedVersion,
         bool exactVersion,
+        HelmChartArchiveLimits? archiveLimits,
         CancellationToken cancellationToken)
     {
         var dependencyPath = Path.Combine(parentChartPath, "charts", dependencyName);
@@ -2907,7 +2931,7 @@ public class HelmClient : IHelmClient
                 $"Local dependency directory was not found: {dependencyPath}");
         }
 
-        var chart = await HelmChartLoader.LoadAsync(dependencyPath, cancellationToken);
+        var chart = await HelmChartLoader.LoadAsync(dependencyPath, archiveLimits, cancellationToken);
         if (!string.Equals(chart.Name, dependencyName, StringComparison.Ordinal))
         {
             throw new InvalidDataException(
@@ -2947,7 +2971,8 @@ public class HelmClient : IHelmClient
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var chart = await HelmChartLoader.LoadAsync(request.ChartPath, cancellationToken);
+        var options = await _optionsProvider.GetHelmAsync(cancellationToken);
+        var chart = await LoadChartAsync(request.ChartPath, cancellationToken);
         if (chart.Dependencies.Count == 0)
             return Ok($"WARNING: no dependencies at {Path.Combine(request.ChartPath, "charts")}{Environment.NewLine}");
 
@@ -2960,12 +2985,24 @@ public class HelmClient : IHelmClient
                 request.ChartPath,
                 chart,
                 dep,
+                options.ArchiveLimits,
                 cancellationToken);
             output.AppendLine($"{dep.Name}\t{dep.Version ?? string.Empty}\t{dep.Repository ?? string.Empty}\t{status}");
         }
 
         output.AppendLine();
         return Ok(output.ToString());
+    }
+
+    /// <summary>
+    /// Loads a chart with the decompression budgets configured on
+    /// <see cref="HelmExecutionOptions.ArchiveLimits"/>, falling back to
+    /// <see cref="HelmChartArchiveLimits.Default"/> so untrusted archives are always bounded.
+    /// </summary>
+    private async Task<HelmChart> LoadChartAsync(string chartPath, CancellationToken cancellationToken)
+    {
+        var options = await _optionsProvider.GetHelmAsync(cancellationToken);
+        return await HelmChartLoader.LoadAsync(chartPath, options.ArchiveLimits, cancellationToken);
     }
 
     /// <summary>
@@ -2987,7 +3024,10 @@ public class HelmClient : IHelmClient
         if (chartRef.StartsWith("http", StringComparison.OrdinalIgnoreCase) ||
             chartRef.StartsWith("oci://", StringComparison.OrdinalIgnoreCase))
         {
-            using var repo = new HelmChartRepository();
+            using var repo = new HelmChartRepository(new HelmRepositoryOptions
+            {
+                ArchiveLimits = options.ArchiveLimits
+            });
             return await repo.PullChartAsync(chartRef, version, cancellationToken);
         }
 
