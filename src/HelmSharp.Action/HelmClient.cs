@@ -2571,6 +2571,8 @@ public class HelmClient : IHelmClient
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var options = await _optionsProvider.GetHelmAsync(cancellationToken);
+        request.ArchiveLimits ??= options.ArchiveLimits;
         var indexPath = await HelmRepoIndexer.GenerateIndexAsync(request, cancellationToken);
         return Ok($"Index generated at: {indexPath}");
     }
