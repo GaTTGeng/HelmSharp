@@ -1154,6 +1154,37 @@ public class HelmProvenanceTests
     }
 
     [Fact]
+    public void FromKeyringData_RejectsRsaSigningKeyBelow2048Bits()
+    {
+        var keyGenerator = new RsaKeyPairGenerator();
+        keyGenerator.Init(new KeyGenerationParameters(new SecureRandom(), 1024));
+        var pair = new PgpKeyPair(
+            PublicKeyAlgorithmTag.RsaGeneral,
+            keyGenerator.GenerateKeyPair(),
+            DateTime.UtcNow);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
+        var ringGenerator = new PgpKeyRingGenerator(
+            (int)PgpSignature.PositiveCertification,
+            pair,
+            "Weak RSA <weak-rsa@example.com>",
+            SymmetricKeyAlgorithmTag.Null,
+            HashAlgorithmTag.Sha512,
+            (char[])null!,
+            false,
+            packets.Generate(),
+            null,
+            new SecureRandom());
+        using var keyBytes = new MemoryStream();
+        ringGenerator.GeneratePublicKeyRing().Encode(keyBytes);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(keyBytes.ToArray()));
+
+        Assert.Contains("No usable", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void FromKeyringData_DirectKeyCanSignAssertion_AuthorizesPrimary()
     {
         var keyGenerator = new RsaKeyPairGenerator();

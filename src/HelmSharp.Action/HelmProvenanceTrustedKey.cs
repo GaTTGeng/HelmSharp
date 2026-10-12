@@ -152,7 +152,7 @@ public sealed class HelmProvenanceTrustedKey
         var primary = master ?? key;
         if (primary.IsMasterKey && primary.Version == 6 && GetLatestValidPrimaryDirectKeySignature(primary) is null)
             return false;
-        if (!AlgorithmCanSign(key.Algorithm))
+        if (!AlgorithmCanSign(key))
             return false;
         if (IsExpiredAt(ComputeEffectiveExpiry(key, master), DateTime.UtcNow))
             return false;
@@ -160,15 +160,12 @@ public sealed class HelmProvenanceTrustedKey
     }
 
     /// <summary>
-    /// Algorithms whose keys can produce OpenPGP signatures. Encryption-only algorithms
-    /// (ElGamal, ECDH, RSA encrypt-only, X25519/X448) are excluded so an encryption
-    /// subkey cannot be mistaken for a signer even without key flags.
+    /// Algorithms and key sizes permitted for OpenPGP signing. RSA keys below 2048 bits,
+    /// DSA, and encryption-only algorithms are excluded even when key flags claim otherwise.
     /// </summary>
-    private static bool AlgorithmCanSign(PublicKeyAlgorithmTag algorithm) => algorithm switch
+    private static bool AlgorithmCanSign(PgpPublicKey key) => key.Algorithm switch
     {
-        PublicKeyAlgorithmTag.RsaGeneral or
-        PublicKeyAlgorithmTag.RsaSign or
-        PublicKeyAlgorithmTag.Dsa or
+        PublicKeyAlgorithmTag.RsaGeneral or PublicKeyAlgorithmTag.RsaSign => key.BitStrength >= 2048,
         PublicKeyAlgorithmTag.ECDsa or
         PublicKeyAlgorithmTag.EdDsa_Legacy or
         PublicKeyAlgorithmTag.Ed25519 or
@@ -245,7 +242,7 @@ public sealed class HelmProvenanceTrustedKey
                 ? hashed.GetKeyFlags()
                 : 0;
             var permitsSigning = (keyFlags & PgpKeyFlags.CanSign) != 0
-                || (keyFlags == 0 && AlgorithmCanSign(subkey.Algorithm));
+                || (keyFlags == 0 && AlgorithmCanSign(subkey));
             return !permitsSigning || HasValidBackSignature(signature, master, subkey);
         }
         catch (Exception exception) when (exception is PgpException or ArgumentOutOfRangeException)
