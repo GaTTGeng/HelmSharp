@@ -151,6 +151,7 @@ public static class HelmProvenance
         // --- 4. Verify the OpenPGP signature over the canonicalized signed body ---
         PgpSignature? parsedSignature = null;
         bool signatureValid = false;
+        bool weakHashSignature = false;
         bool trustedKeyMatchedExpiredSignature = false;
         bool trustedKeyMatchedButUnusable = false;
         string? signerFingerprint = null;
@@ -168,6 +169,12 @@ public static class HelmProvenance
             try
             {
                 parsedSignature = ParseSignature(signaturePacket);
+                if (IsWeakHashAlgorithm(parsedSignature.HashAlgorithm))
+                {
+                    weakHashSignature = true;
+                    continue;
+                }
+
                 parsedSignature.InitVerify(trusted.PublicKey);
                 parsedSignature.Update(CanonicalizeForHash(signedBody));
                 if (parsedSignature.Verify())
@@ -212,6 +219,13 @@ public static class HelmProvenance
 
         if (!signatureValid)
         {
+            if (weakHashSignature)
+            {
+                return Fail(null, null, null,
+                    ExtractSha256(provContent, archiveName), actualSha256,
+                    "OpenPGP provenance signatures using MD5, SHA-1, or RIPEMD-160 are not accepted.");
+            }
+
             if (trustedKeyMatchedExpiredSignature)
             {
                 return Fail(expiredFingerprint, expiredKeyId, expiredUserId,
@@ -660,6 +674,9 @@ public static class HelmProvenance
             return list[0];
         throw new PgpException("Signature block does not contain an OpenPGP signature packet.");
     }
+
+    private static bool IsWeakHashAlgorithm(HashAlgorithmTag algorithm)
+        => algorithm is HashAlgorithmTag.MD5 or HashAlgorithmTag.Sha1 or HashAlgorithmTag.RipeMD160;
 
     /// <summary>
     /// Attempts verification against the key that actually produced the signature, using

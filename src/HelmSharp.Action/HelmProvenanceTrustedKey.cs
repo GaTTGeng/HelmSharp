@@ -542,6 +542,7 @@ public sealed class HelmProvenanceTrustedKey
 
     private static string? GetUserId(PgpPublicKey key)
     {
+        var validUserIds = new List<(string UserId, PgpSignature Certification, bool IsPrimary)>();
         foreach (var userId in key.GetUserIds())
         {
             PgpSignature? latestCertification = null;
@@ -569,10 +570,20 @@ public sealed class HelmProvenanceTrustedKey
             // subsequently been revoked. On ties, prefer revocation and fail closed.
             if (latestCertification is not null &&
                 (latestRevocation is null || latestCertification.CreationTime > latestRevocation.CreationTime))
-                return userId;
+            {
+                var isPrimary = latestCertification.GetHashedSubPackets()?.IsPrimaryUserId() == true;
+                validUserIds.Add((userId, latestCertification, isPrimary));
+            }
         }
 
-        return null;
+        // Honor the newest valid certification that explicitly marks its UID primary;
+        // when a certificate has no primary marker, retain the first valid packet order.
+        return validUserIds
+            .Where(candidate => candidate.IsPrimary)
+            .OrderByDescending(candidate => candidate.Certification.CreationTime)
+            .Select(candidate => candidate.UserId)
+            .FirstOrDefault()
+            ?? validUserIds.FirstOrDefault().UserId;
     }
 
     private static bool HasValidUserIdSignature(PgpSignature signature, string userId, PgpPublicKey key)

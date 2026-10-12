@@ -723,6 +723,34 @@ public class HelmProvenanceTests
     }
 
     [Fact]
+    public void FromKeyringData_PrefersCertifiedPrimaryUserId()
+    {
+        const string secondaryUserId = "Secondary <secondary@example.com>";
+        const string primaryUserId = "Primary <primary@example.com>";
+        var (secretRing, publicRing, _, _) = CreateTestKeys(secondaryUserId);
+        var secretKey = secretRing.GetSecretKeys().First();
+        var primary = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+        var certification = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        certification.InitSign(PgpSignature.PositiveCertification, secretKey.ExtractPrivateKey(null)!);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, DateTime.UtcNow.AddMinutes(1));
+        packets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
+        packets.SetPrimaryUserId(false, true);
+        certification.SetHashedSubpackets(packets.Generate());
+        var updated = PgpPublicKey.AddCertification(
+            primary,
+            primaryUserId,
+            certification.GenerateCertification(primaryUserId, primary));
+        var updatedRing = PgpPublicKeyRing.InsertPublicKey(publicRing, updated);
+        using var ms = new MemoryStream();
+        updatedRing.Encode(ms);
+
+        var trustedKey = Assert.Single(HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
+
+        Assert.Equal(primaryUserId, trustedKey.UserId);
+    }
+
+    [Fact]
     public void FromKeyringData_MarkerBeforeKeyringIsSkipped()
     {
         var (_, publicRing) = CreateRingWithSigningSubkey();
@@ -834,6 +862,47 @@ public class HelmProvenanceTests
             var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
             Assert.False(result.IsValid);
             Assert.False(result.SignatureValid);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Verify_WeakHashSignature_FailsClosed()
+    {
+        var work = TempDir();
+        try
+        {
+            var tgz = await CreateTestChartArchiveAsync(work);
+            var (secretRing, _, signingKey, trustedKey) = CreateTestKeys();
+            var provenancePath = await HelmProvenance.SignAsync(tgz, signingKey);
+            var provenance = await File.ReadAllTextAsync(provenancePath);
+            var signedBodyStart = provenance.IndexOf("\n\n", StringComparison.Ordinal) + 2;
+            var signatureStart = provenance.IndexOf("-----BEGIN PGP SIGNATURE-----", signedBodyStart, StringComparison.Ordinal);
+            var signedBody = provenance[signedBodyStart..signatureStart];
+            var canonical = Encoding.UTF8.GetBytes(
+                string.Join("\r\n", signedBody.TrimEnd('\n').Split('\n').Select(line => line.TrimEnd(' ', '\t'))));
+            var privateKey = secretRing.GetSecretKeys().First().ExtractPrivateKey(null)!;
+            var signatureGenerator = new PgpSignatureGenerator(
+                secretRing.GetSecretKeys().First().PublicKey.Algorithm,
+                HashAlgorithmTag.Sha1);
+            signatureGenerator.InitSign(PgpSignature.CanonicalTextDocument, privateKey);
+            signatureGenerator.SetHashedSubpackets(new PgpSignatureSubpacketGenerator().Generate());
+            signatureGenerator.Update(canonical, 0, canonical.Length);
+            var signature = signatureGenerator.Generate();
+            using var armoredBytes = new MemoryStream();
+            using (var armored = new ArmoredOutputStream(armoredBytes))
+                signature.Encode(armored);
+            var weakProvenance = provenance[..signatureStart] + Encoding.ASCII.GetString(armoredBytes.ToArray());
+            await File.WriteAllTextAsync(provenancePath, weakProvenance);
+
+            var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
+
+            Assert.False(result.IsValid);
+            Assert.False(result.SignatureValid);
+            Assert.Contains("SHA-1", result.FailureReason, StringComparison.Ordinal);
         }
         finally
         {
