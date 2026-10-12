@@ -94,26 +94,59 @@ public sealed class HelmChart
 public static class HelmChartLoader
 {
     /// <summary>
-    /// Loads a chart from a directory or a <c>.tgz</c>/<c>.tar.gz</c> archive.
+    /// Loads a chart from a directory or a <c>.tgz</c>/<c>.tar.gz</c> archive using
+    /// <see cref="HelmChartArchiveLimits.Default"/>.
     /// </summary>
     /// <param name="chartPath">Chart directory path, or path to a packaged chart archive.</param>
     /// <param name="cancellationToken">Cancels file reads and recursive subchart loading.</param>
     /// <returns>The fully loaded chart, including subcharts and CRDs.</returns>
     /// <exception cref="InvalidOperationException">Thrown when Chart.yaml is missing from the chart.</exception>
     /// <exception cref="InvalidDataException">Thrown when an archive entry lies outside the chart root or a dependency archive is corrupt.</exception>
-    public static async Task<HelmChart> LoadAsync(string chartPath, CancellationToken cancellationToken)
+    /// <exception cref="ChartArchiveLimitExceededException">Thrown when a decompression resource limit is exceeded.</exception>
+    public static Task<HelmChart> LoadAsync(string chartPath, CancellationToken cancellationToken)
+        => LoadAsync(chartPath, HelmChartArchiveLimits.Default, cancellationToken);
+
+    /// <summary>
+    /// Loads a chart from a directory or a <c>.tgz</c>/<c>.tar.gz</c> archive with explicit
+    /// decompression budgets. Null applies <see cref="HelmChartArchiveLimits.Default"/>. Use
+    /// <see cref="HelmChartArchiveLimits.ForTrustedCharts"/> or a custom instance for trusted
+    /// archives that exceed the default profile.
+    /// </summary>
+    /// <param name="chartPath">Chart directory path, or path to a packaged chart archive.</param>
+    /// <param name="archiveLimits">Resource budgets enforced while reading chart archives; null applies the defaults.</param>
+    /// <param name="cancellationToken">Cancels file reads and recursive subchart loading.</param>
+    /// <returns>The fully loaded chart, including subcharts and CRDs.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when Chart.yaml is missing from the chart.</exception>
+    /// <exception cref="InvalidDataException">Thrown when an archive entry lies outside the chart root or a dependency archive is corrupt.</exception>
+    /// <exception cref="ChartArchiveLimitExceededException">Thrown when a decompression resource limit is exceeded.</exception>
+    public static async Task<HelmChart> LoadAsync(
+        string chartPath,
+        HelmChartArchiveLimits? archiveLimits,
+        CancellationToken cancellationToken)
+    {
+        var budget = new ChartArchiveBudget(archiveLimits ?? HelmChartArchiveLimits.Default);
+        return await LoadAsync(chartPath, budget, depth: 0, cancellationToken);
+    }
+
+    private static async Task<HelmChart> LoadAsync(
+        string chartPath,
+        ChartArchiveBudget budget,
+        int depth,
+        CancellationToken cancellationToken)
     {
         // Stage 1: flatten the chart to a path→bytes map — directory walk or tar
         // extraction with the archive's chart root re-rooted — then share one loader.
         var isDirectory = Directory.Exists(chartPath);
         var files = isDirectory
             ? await LoadDirectoryAsync(chartPath, cancellationToken)
-            : await LoadArchiveFileAsync(chartPath, cancellationToken);
+            : await LoadArchiveFileAsync(chartPath, budget, cancellationToken);
 
         return await LoadFromFilesAsync(
             chartPath,
             files,
             isDirectory ? chartPath : null,
+            budget,
+            depth,
             cancellationToken);
     }
 
@@ -121,6 +154,8 @@ public static class HelmChartLoader
         string chartPath,
         Dictionary<string, byte[]> files,
         string? chartDir,
+        ChartArchiveBudget budget,
+        int depth,
         CancellationToken cancellationToken)
     {
         // Load stages, in order:
@@ -270,8 +305,13 @@ public static class HelmChartLoader
                     var subchartName = Path.GetFileName(subchartDir);
                     try
                     {
-                        var subchart = await LoadAsync(subchartDir, cancellationToken);
+                        var subchart = await LoadAsync(subchartDir, budget, depth, cancellationToken);
                         chart.Subcharts[subchartName] = subchart;
+                    }
+                    catch (ChartArchiveLimitExceededException)
+                    {
+                        // Resource budgets are operation-wide; never skip and continue past them.
+                        throw;
                     }
                     catch
                     {
@@ -289,11 +329,16 @@ public static class HelmChartLoader
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     var dependencyPath = NormalizePath(Path.GetRelativePath(chartDir, dependencyArchive));
+                    // Validate the known file size before allocating the archive bytes so an
+                    // oversized dependency is rejected without ever being buffered in memory.
+                    budget.CheckCompressedBytes(new FileInfo(dependencyArchive).Length);
                     var archiveBytes = await File.ReadAllBytesAsync(dependencyArchive, cancellationToken);
                     var subchart = await LoadDependencyArchiveAsync(
                         chartPath,
                         dependencyPath,
                         archiveBytes,
+                        budget,
+                        depth + 1,
                         cancellationToken);
                     AddPackagedDependencyChart(chart, new PackagedDependencyChart(subchart));
                 }
@@ -310,6 +355,8 @@ public static class HelmChartLoader
                     chartPath,
                     dependencyPath,
                     archiveBytes,
+                    budget,
+                    depth + 1,
                     cancellationToken);
                 AddPackagedDependencyChart(chart, new PackagedDependencyChart(subchart));
             }
@@ -343,8 +390,15 @@ public static class HelmChartLoader
                         $"{chartPath}!{prefix.TrimEnd('/')}",
                         subchartFiles,
                         null,
+                        budget,
+                        depth,
                         cancellationToken);
                     chart.Subcharts[subchartName] = subchart;
+                }
+                catch (ChartArchiveLimitExceededException)
+                {
+                    // Resource budgets are operation-wide; never skip and continue past them.
+                    throw;
                 }
                 catch
                 {
@@ -408,33 +462,48 @@ public static class HelmChartLoader
         {
             cancellationToken.ThrowIfCancellationRequested();
             var relative = NormalizePath(Path.GetRelativePath(chartPath, file));
+            // Each directory subchart loads its own charts/ tree, while packaged
+            // dependencies are checked against the compressed-size budget before
+            // buffering. Flattening this subtree would read nested archives early.
+            if (relative.StartsWith("charts/", StringComparison.Ordinal))
+                continue;
             files[relative] = await File.ReadAllBytesAsync(file, cancellationToken);
         }
 
         return files;
     }
 
-    private static async Task<Dictionary<string, byte[]>> LoadArchiveFileAsync(string chartPath, CancellationToken cancellationToken)
+    private static async Task<Dictionary<string, byte[]>> LoadArchiveFileAsync(
+        string chartPath,
+        ChartArchiveBudget budget,
+        CancellationToken cancellationToken)
     {
         await using var file = File.OpenRead(chartPath);
-        return await LoadArchiveAsync(file, chartPath, cancellationToken);
+        return await LoadArchiveAsync(file, chartPath, budget, cancellationToken);
     }
 
     private static async Task<Dictionary<string, byte[]>> LoadArchiveBytesAsync(
         byte[] archiveBytes,
         string chartPath,
+        ChartArchiveBudget budget,
         CancellationToken cancellationToken)
     {
         await using var memory = new MemoryStream(archiveBytes, writable: false);
-        return await LoadArchiveAsync(memory, chartPath, cancellationToken);
+        return await LoadArchiveAsync(memory, chartPath, budget, cancellationToken);
     }
 
     private static async Task<Dictionary<string, byte[]>> LoadArchiveAsync(
         Stream input,
         string chartPath,
+        ChartArchiveBudget budget,
         CancellationToken cancellationToken)
     {
         var archiveFiles = new List<ArchiveFileEntry>();
+        // Compressed size is the archive stream's own length (file or byte array); nested
+        // dependency archives pass their in-memory .tgz bytes so each stream gets its own
+        // ratio bound while sharing the tree-wide extracted budget.
+        var compressedBytes = input.CanSeek ? input.Length - input.Position : 0;
+        var scope = budget.BeginArchive(compressedBytes);
         // Packaged charts are gzipped tarballs; bare tar input is tolerated for
         // dependency archives that omit the gzip layer.
         await using Stream archive = chartPath.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase) ||
@@ -442,7 +511,11 @@ public static class HelmChartLoader
             ? new GZipStream(input, CompressionMode.Decompress)
             : input;
 
-        using var reader = new TarReader(archive);
+        // Meter every decompressed byte the tar reader consumes — headers and padding
+        // included — so structural tar data cannot be decompressed outside the budgets.
+        using var metered = scope.MeterDecompressedStream(archive);
+        using var guarded = scope.GuardTarStream(metered);
+        using var reader = new TarReader(guarded);
         TarEntry? entry;
         while ((entry = reader.GetNextEntry()) is not null)
         {
@@ -451,10 +524,10 @@ public static class HelmChartLoader
                 continue;
 
             var entryName = HelmArchivePath.NormalizeEntryName(entry.Name);
-
-            using var memory = new MemoryStream();
-            await entry.DataStream.CopyToAsync(memory, cancellationToken);
-            archiveFiles.Add(new ArchiveFileEntry(entryName, memory.ToArray()));
+            // Per-entry budget enforcement counts payload bytes as they stream; tar
+            // header size fields are untrusted metadata and never used as the size of truth.
+            var content = await scope.ReadEntryAsync(entry.DataStream, cancellationToken);
+            archiveFiles.Add(new ArchiveFileEntry(entryName, content));
         }
 
         // Helm packages charts under a single top-level folder (chartname/version);
@@ -477,20 +550,34 @@ public static class HelmChartLoader
         string parentChartPath,
         string dependencyPath,
         byte[] archiveBytes,
+        ChartArchiveBudget budget,
+        int depth,
         CancellationToken cancellationToken)
     {
+        // Packaged dependency archives consume one nesting level; the shared budget is
+        // not reset for the child so cumulative extracted bytes stay tree-bounded.
+        budget.CheckDependencyDepth(depth);
         try
         {
             var subchartFiles = await LoadArchiveBytesAsync(
                 archiveBytes,
                 dependencyPath,
+                budget,
                 cancellationToken);
 
             return await LoadFromFilesAsync(
                 $"{parentChartPath}!{dependencyPath}",
                 subchartFiles,
                 null,
+                budget,
+                depth,
                 cancellationToken);
+        }
+        // Limit violations keep their stable exception type so callers can react to
+        // budgets without unwrapping; corrupt-archive errors are rephrased with context.
+        catch (ChartArchiveLimitExceededException)
+        {
+            throw;
         }
         catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or IOException)
         {

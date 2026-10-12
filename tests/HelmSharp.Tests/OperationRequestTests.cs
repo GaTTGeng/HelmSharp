@@ -1,4 +1,5 @@
 using HelmSharp.Action;
+using HelmSharp.Chart;
 using HelmSharp.Repo;
 
 namespace HelmSharp.Tests;
@@ -227,6 +228,36 @@ public sealed class OperationRequestTests : IDisposable
     }
 
     [Fact]
+    public async Task RepoIndexAsync_UsesConfiguredArchiveLimits()
+    {
+        var packages = Path.Combine(_tempDirectory, "limited-repository");
+        Directory.CreateDirectory(packages);
+        var sourceChart = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Charts", "minimal"));
+        var packager = new HelmClient(new StaticHelmOptionsProvider());
+        var packageResult = await packager.PackageAsync(new HelmPackageRequest
+        {
+            ChartPath = sourceChart,
+            Destination = packages
+        });
+        Assert.True(packageResult.Succeeded, packageResult.StandardError);
+
+        var strictClient = new HelmClient(new StaticHelmOptionsProvider(new HelmChartArchiveLimits
+        {
+            MaxEntryBytes = 1
+        }));
+        var result = await strictClient.RepoIndexAsync(new HelmRepoIndexRequest { DirectoryPath = packages });
+
+        Assert.True(result.Succeeded, result.StandardError);
+        Assert.DoesNotContain("minimal", await File.ReadAllTextAsync(Path.Combine(packages, "index.yaml")), StringComparison.Ordinal);
+
+        var trustedClient = new HelmClient(new StaticHelmOptionsProvider(HelmChartArchiveLimits.ForTrustedCharts()));
+        result = await trustedClient.RepoIndexAsync(new HelmRepoIndexRequest { DirectoryPath = packages });
+
+        Assert.True(result.Succeeded, result.StandardError);
+        Assert.Contains("minimal", await File.ReadAllTextAsync(Path.Combine(packages, "index.yaml")), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task RepoIndexAsync_FailOnInvalidPackagePreservesExistingIndex()
     {
         var packages = Path.Combine(_tempDirectory, "invalid-repository");
@@ -288,8 +319,19 @@ public sealed class OperationRequestTests : IDisposable
 
     private sealed class StaticHelmOptionsProvider : IHelmOptionsProvider
     {
+        private readonly HelmChartArchiveLimits? _archiveLimits;
+
+        public StaticHelmOptionsProvider(HelmChartArchiveLimits? archiveLimits = null)
+        {
+            _archiveLimits = archiveLimits;
+        }
+
         public ValueTask<HelmExecutionOptions> GetHelmAsync(CancellationToken cancellationToken = default)
-            => ValueTask.FromResult(new HelmExecutionOptions { DefaultNamespace = "default" });
+            => ValueTask.FromResult(new HelmExecutionOptions
+            {
+                DefaultNamespace = "default",
+                ArchiveLimits = _archiveLimits
+            });
     }
 
     private static void AssertOverloads(

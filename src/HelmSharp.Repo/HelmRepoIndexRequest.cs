@@ -1,3 +1,5 @@
+using HelmSharp.Chart;
+
 namespace HelmSharp.Repo;
 
 /// <summary>
@@ -19,4 +21,7 @@ public sealed class HelmRepoIndexRequest
 
     /// <summary>Gets or sets whether an invalid chart archive fails generation. Invalid archives are skipped by default.</summary>
     public bool FailOnInvalidPackage { get; set; }
+
+    /// <summary>Gets or sets the decompression budgets used to inspect chart archives; null applies the defaults.</summary>
+    public HelmChartArchiveLimits? ArchiveLimits { get; set; }
 }

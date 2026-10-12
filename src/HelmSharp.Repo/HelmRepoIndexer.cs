@@ -45,7 +45,8 @@ public static class HelmRepoIndexer
                 request.Url,
                 cancellationToken,
                 request.MergeIndexPath,
-                scratchPath);
+                scratchPath,
+                request.ArchiveLimits);
 
             if (request.FailOnInvalidPackage && result.Diagnostics.Count > 0)
             {
@@ -137,14 +138,39 @@ public static class HelmRepoIndexer
             url,
             ct,
             mergeIndexPath,
-            Path.Combine(dirPath, "index.yaml"));
+            Path.Combine(dirPath, "index.yaml"),
+            archiveLimits: null);
+
+    /// <summary>
+    /// Generates an index.yaml and returns diagnostics using explicit chart archive budgets.
+    /// Invalid packages are skipped and reported rather than failing the run.
+    /// </summary>
+    /// <param name="dirPath">Directory containing <c>.tgz</c> chart packages.</param>
+    /// <param name="url">Optional base URL prepended to each package's download URL.</param>
+    /// <param name="ct">Cancels package reads and index writing.</param>
+    /// <param name="mergeIndexPath">Existing index whose version entries are preserved when not regenerated locally.</param>
+    /// <param name="archiveLimits">Archive decompression budgets; null applies the defaults.</param>
+    public static Task<HelmRepoIndexGenerationResult> GenerateIndexWithDiagnosticsAsync(
+        string dirPath,
+        string? url,
+        CancellationToken ct,
+        string? mergeIndexPath,
+        HelmChartArchiveLimits? archiveLimits)
+        => GenerateIndexWithDiagnosticsAsync(
+            dirPath,
+            url,
+            ct,
+            mergeIndexPath,
+            Path.Combine(dirPath, "index.yaml"),
+            archiveLimits);
 
     private static async Task<HelmRepoIndexGenerationResult> GenerateIndexWithDiagnosticsAsync(
         string dirPath,
         string? url,
         CancellationToken ct,
         string? mergeIndexPath,
-        string outputPath)
+        string outputPath,
+        HelmChartArchiveLimits? archiveLimits)
     {
         if (!Directory.Exists(dirPath))
             throw new DirectoryNotFoundException($"Directory not found: {dirPath}");
@@ -157,7 +183,7 @@ public static class HelmRepoIndexer
             ct.ThrowIfCancellationRequested();
             try
             {
-                var chart = await HelmChartLoader.LoadAsync(tgzFile, ct);
+                var chart = await HelmChartLoader.LoadAsync(tgzFile, archiveLimits, ct);
                 var fileInfo = new FileInfo(tgzFile);
                 // Digest is the SHA-256 of the .tgz bytes (lowercase hex, no prefix),
                 // the same value pull-time verification compares against.

@@ -1939,10 +1939,14 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
 
     private HelmChartRepository CreateNoProxyRepository(string name, HelmRepositoryOptions? options = null)
     {
-        options ??= new HelmRepositoryOptions
+        // Keep tests isolated in temp directories even when the caller supplies options
+        // that only set some fields (for example archive limits with default locations).
+        options = new HelmRepositoryOptions
         {
-            ConfigDirectory = Path.Combine(_tempDir, name, "config"),
-            CacheDirectory = Path.Combine(_tempDir, name, "cache")
+            ConfigDirectory = options?.ConfigDirectory ?? Path.Combine(_tempDir, name, "config"),
+            CacheDirectory = options?.CacheDirectory ?? Path.Combine(_tempDir, name, "cache"),
+            RepositoryConfigPath = options?.RepositoryConfigPath,
+            ArchiveLimits = options?.ArchiveLimits
         };
         return new HelmChartRepository(
             options,
