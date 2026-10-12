@@ -18,12 +18,18 @@ public sealed class HelmProvenanceTrustedKey
     private readonly PgpPublicKey _publicKey;
     private readonly PgpPublicKey? _master;
     private readonly DateTime? _expiresAt;
+    private readonly IReadOnlyList<PgpPublicKey> _certificateKeys;
 
-    private HelmProvenanceTrustedKey(PgpPublicKey publicKey, PgpPublicKey? master, DateTime? expiresAt)
+    private HelmProvenanceTrustedKey(
+        PgpPublicKey publicKey,
+        PgpPublicKey? master,
+        DateTime? expiresAt,
+        IReadOnlyList<PgpPublicKey> certificateKeys)
     {
         _publicKey = publicKey;
         _master = master;
         _expiresAt = expiresAt;
+        _certificateKeys = certificateKeys;
     }
 
     /// <summary>Hex-encoded OpenPGP V4 key fingerprint (40 hex characters).</summary>
@@ -42,10 +48,16 @@ public sealed class HelmProvenanceTrustedKey
     /// not expired, and its key flags (or algorithm) permit signing. Verification must
     /// fail closed when this is false.
     /// </summary>
-    internal bool IsUsableSigningKey => IsUsableSigningKeyFor(_publicKey, _master);
+    internal bool IsUsableSigningKey => IsUsableSigningKeyFor(_publicKey, _master, _certificateKeys);
 
     internal static bool IsUsableSigningKeyFor(PgpPublicKey key, PgpPublicKey? master)
-        => QualifiesAsSigningKey(key, master);
+        => IsUsableSigningKeyFor(key, master, master is null ? [key] : [key, master]);
+
+    private static bool IsUsableSigningKeyFor(
+        PgpPublicKey key,
+        PgpPublicKey? master,
+        IReadOnlyList<PgpPublicKey> certificateKeys)
+        => QualifiesAsSigningKey(key, master, certificateKeys);
 
     /// <summary>
     /// Wraps binary or ASCII-armored OpenPGP public-key material (a single public key
@@ -118,16 +130,26 @@ public sealed class HelmProvenanceTrustedKey
     {
         ArgumentNullException.ThrowIfNull(data);
 
-        var candidates = ReadKeyCandidates(data);
+        var candidates = MergeKeyCandidates(ReadKeyCandidates(data));
         if (candidates.Count == 0)
             throw new ArgumentException("No OpenPGP public key found in the supplied key material.", paramName);
 
+        var certificateKeys = candidates
+            .SelectMany(candidate => candidate.Master is null
+                ? new[] { candidate.Key }
+                : new[] { candidate.Key, candidate.Master })
+            .DistinctBy(key => Convert.ToHexString(key.GetFingerprint()), StringComparer.Ordinal)
+            .ToArray();
         var trusted = new List<HelmProvenanceTrustedKey>();
         foreach (var candidate in candidates)
         {
-            if (!QualifiesAsSigningKey(candidate.Key, candidate.Master))
+            if (!QualifiesAsSigningKey(candidate.Key, candidate.Master, certificateKeys))
                 continue;
-            trusted.Add(new HelmProvenanceTrustedKey(candidate.Key, candidate.Master, ComputeExpiry(candidate.Key, candidate.Master)));
+            trusted.Add(new HelmProvenanceTrustedKey(
+                candidate.Key,
+                candidate.Master,
+                ComputeExpiry(candidate.Key, candidate.Master),
+                certificateKeys));
         }
 
         if (trusted.Count == 0)
@@ -139,11 +161,15 @@ public sealed class HelmProvenanceTrustedKey
     }
 
     /// <summary>OpenPGP policy check: may this key produce a trusted signature at all?</summary>
-    private static bool QualifiesAsSigningKey(PgpPublicKey key, PgpPublicKey? master)
+    private static bool QualifiesAsSigningKey(
+        PgpPublicKey key,
+        PgpPublicKey? master,
+        IReadOnlyList<PgpPublicKey> certificateKeys)
     {
         // A mathematical signature from a revoked or expired key, or from material that
         // is not authorized to sign (encryption-only subkeys), must never be trusted.
-        if (key.HasRevocation() || (master is not null && master.HasRevocation()))
+        if (HasValidRevocation(key, master, certificateKeys) ||
+            (master is not null && HasValidRevocation(master, null, certificateKeys)))
             return false;
         if (!key.IsMasterKey && (master is null || !master.IsMasterKey))
             return false;
@@ -227,7 +253,7 @@ public sealed class HelmProvenanceTrustedKey
     {
         try
         {
-            if (IsWeakHashAlgorithm(signature.HashAlgorithm))
+            if (IsWeakHashAlgorithm(signature.HashAlgorithm) || !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, master))
                 return false;
 
             signature.InitVerify(master);
@@ -264,6 +290,7 @@ public sealed class HelmProvenanceTrustedKey
                 var embedded = embeddedSignatures[index];
                 if (embedded.SignatureType != PgpSignature.PrimaryKeyBinding ||
                     IsWeakHashAlgorithm(embedded.HashAlgorithm) ||
+                    !HelmProvenance.HasSufficientSignatureHash(embedded.HashAlgorithm, subkey) ||
                     IsSignatureExpired(embedded, DateTime.UtcNow))
                     continue;
 
@@ -394,7 +421,8 @@ public sealed class HelmProvenanceTrustedKey
     {
         try
         {
-            if (signature.SignatureType != signatureType || IsWeakHashAlgorithm(signature.HashAlgorithm))
+            if (signature.SignatureType != signatureType || IsWeakHashAlgorithm(signature.HashAlgorithm) ||
+                !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, key))
                 return false;
 
             signature.InitVerify(key);
@@ -468,7 +496,70 @@ public sealed class HelmProvenanceTrustedKey
 
     private bool IsExpiredAt(DateTime at) => IsExpiredAt(_expiresAt, at);
 
-    private bool HasRevocation() => _publicKey.HasRevocation();
+    private static bool HasValidRevocation(
+        PgpPublicKey key,
+        PgpPublicKey? master,
+        IReadOnlyList<PgpPublicKey> certificateKeys)
+    {
+        var primary = master ?? key;
+        var allowedFingerprints = GetAuthorizedRevokerFingerprints(primary);
+        allowedFingerprints.Add(Convert.ToHexString(primary.GetFingerprint()));
+
+        var revokers = certificateKeys
+            .Where(candidate => allowedFingerprints.Contains(Convert.ToHexString(candidate.GetFingerprint())))
+            .ToArray();
+        var revocationType = key.IsMasterKey ? PgpSignature.KeyRevocation : PgpSignature.SubkeyRevocation;
+        foreach (var signature in key.GetKeySignatures())
+        {
+            if (signature.SignatureType != revocationType || IsWeakHashAlgorithm(signature.HashAlgorithm))
+                continue;
+
+            foreach (var revoker in revokers)
+            {
+                try
+                {
+                    if (!HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, revoker))
+                        continue;
+
+                    signature.InitVerify(revoker);
+                    var valid = key.IsMasterKey
+                        ? signature.VerifyCertification(key)
+                        : master is not null && signature.VerifyCertification(master, key);
+                    if (valid)
+                        return true;
+                }
+                catch (Exception exception) when (exception is PgpException or IOException
+                    or InvalidOperationException or ArgumentException)
+                {
+                    // Packet presence alone cannot revoke a trusted key.
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static HashSet<string> GetAuthorizedRevokerFingerprints(PgpPublicKey primary)
+    {
+        var fingerprints = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var signature in primary.GetSignatures())
+        {
+            var isValidAssertion = signature.SignatureType == PgpSignature.DirectKey
+                ? HasValidDirectKeySignature(signature, primary)
+                : (signature.SignatureType is PgpSignature.PositiveCertification
+                    or PgpSignature.CasualCertification
+                    or PgpSignature.NoCertification
+                    or PgpSignature.DefaultCertification)
+                    && HasValidSelfCertification(signature, primary);
+            if (!isValidAssertion)
+                continue;
+
+            foreach (var revocationKey in signature.GetHashedSubPackets()?.GetRevocationKeys() ?? [])
+                fingerprints.Add(Convert.ToHexString(revocationKey.GetFingerprint()));
+        }
+
+        return fingerprints;
+    }
 
     private sealed record KeyCandidate(PgpPublicKey Key, PgpPublicKey? Master);
 
@@ -494,11 +585,41 @@ public sealed class HelmProvenanceTrustedKey
             }
         }
 
-        // De-duplicate by key ID; keyrings can repeat the primary key across packets.
-        return result
-            .GroupBy(c => c.Key.KeyId)
-            .Select(g => g.First())
+        return result;
+    }
+
+    private static List<KeyCandidate> MergeKeyCandidates(List<KeyCandidate> candidates)
+    {
+        // Renewed copies of one certificate can carry different verified self-signatures.
+        // Merge by full fingerprints so a stale packet copy cannot hide the renewal and
+        // distinct keys that collide on the short key ID remain separate.
+        return candidates
+            .GroupBy(candidate => string.Concat(
+                candidate.Master is null ? string.Empty : Convert.ToHexString(candidate.Master.GetFingerprint()),
+                ":",
+                Convert.ToHexString(candidate.Key.GetFingerprint())), StringComparer.Ordinal)
+            .Select(group =>
+            {
+                var key = MergePublicKeys(group.Select(candidate => candidate.Key));
+                var masters = group.Where(candidate => candidate.Master is not null)
+                    .Select(candidate => candidate.Master!)
+                    .ToArray();
+                var master = key.IsMasterKey ? key : masters.Length == 0 ? null : MergePublicKeys(masters);
+                return new KeyCandidate(key, master);
+            })
             .ToList();
+    }
+
+    private static PgpPublicKey MergePublicKeys(IEnumerable<PgpPublicKey> keys)
+    {
+        using var enumerator = keys.GetEnumerator();
+        if (!enumerator.MoveNext())
+            throw new InvalidOperationException("A key candidate must contain public key material.");
+
+        var merged = enumerator.Current;
+        while (enumerator.MoveNext())
+            merged = PgpPublicKey.Join(merged, enumerator.Current, joinTrustPackets: false, allowSubkeySigsOnNonSubkey: false);
+        return merged;
     }
 
     private static void AddRing(List<KeyCandidate> result, IEnumerable<PgpPublicKey> keys)
@@ -589,7 +710,8 @@ public sealed class HelmProvenanceTrustedKey
     {
         try
         {
-            if (IsWeakHashAlgorithm(signature.HashAlgorithm))
+            if (IsWeakHashAlgorithm(signature.HashAlgorithm) ||
+                !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, key))
                 return false;
 
             signature.InitVerify(key);

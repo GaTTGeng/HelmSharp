@@ -8,6 +8,7 @@ using Org.BouncyCastle.Crypto.Generators;
 using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Security;
 using HelmSharp.Action;
+using HelmSharp.Chart;
 
 namespace HelmSharp.Tests;
 
@@ -1182,6 +1183,151 @@ public class HelmProvenanceTests
             () => HelmProvenanceTrustedKey.FromKeyringData(keyBytes.ToArray()));
 
         Assert.Contains("No usable", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SignatureHashStrength_RequiresCurveSpecificDigestSize()
+    {
+        var ecdsaGenerator = new ECKeyPairGenerator();
+        var curveOid = Org.BouncyCastle.Asn1.Nist.NistNamedCurves.GetOid("P-521");
+        ecdsaGenerator.Init(new ECKeyGenerationParameters(curveOid, new SecureRandom()));
+        var ecdsaPair = new PgpKeyPair(
+            PublicKeyAlgorithmTag.ECDsa,
+            ecdsaGenerator.GenerateKeyPair(),
+            DateTime.UtcNow);
+        var ed448Generator = new Ed448KeyPairGenerator();
+        ed448Generator.Init(new Ed448KeyGenerationParameters(new SecureRandom()));
+        var ed448Pair = new PgpKeyPair(
+            PublicKeyAlgorithmTag.Ed448,
+            ed448Generator.GenerateKeyPair(),
+            DateTime.UtcNow);
+
+        Assert.False(HelmProvenance.HasSufficientSignatureHash(HashAlgorithmTag.Sha256, ecdsaPair.PublicKey));
+        Assert.True(HelmProvenance.HasSufficientSignatureHash(HashAlgorithmTag.Sha512, ecdsaPair.PublicKey));
+        Assert.False(HelmProvenance.HasSufficientSignatureHash(HashAlgorithmTag.Sha384, ed448Pair.PublicKey));
+        Assert.True(HelmProvenance.HasSufficientSignatureHash(HashAlgorithmTag.Sha512, ed448Pair.PublicKey));
+    }
+
+    [Fact]
+    public async Task FromKeyringData_MergesRenewedCertificateCopiesBeforeFiltering()
+    {
+        const string userId = "Renewed signer <renewed@example.com>";
+        var (secretRing, publicRing, _, _) = CreateTestKeys(
+            userId,
+            createdAt: DateTime.UtcNow.AddSeconds(-10));
+        var secret = secretRing.GetSecretKeys().First();
+        var expiredPrimary = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+        foreach (var existing in expiredPrimary.GetSignaturesForId(userId).ToArray())
+            expiredPrimary = PgpPublicKey.RemoveCertification(expiredPrimary, userId, existing);
+        var staleCertification = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha512);
+        staleCertification.InitSign(PgpSignature.PositiveCertification, secret.ExtractPrivateKey(null)!);
+        var stalePackets = new PgpSignatureSubpacketGenerator();
+        stalePackets.SetSignatureCreationTime(false, DateTime.UtcNow.AddSeconds(-9));
+        stalePackets.SetSignatureExpirationTime(false, 1);
+        stalePackets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
+        staleCertification.SetHashedSubpackets(stalePackets.Generate());
+        expiredPrimary = PgpPublicKey.AddCertification(
+            expiredPrimary,
+            userId,
+            staleCertification.GenerateCertification(userId, expiredPrimary));
+        var expiredRing = PgpPublicKeyRing.InsertPublicKey(publicRing, expiredPrimary);
+        var renewal = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha512);
+        renewal.InitSign(PgpSignature.PositiveCertification, secret.ExtractPrivateKey(null)!);
+        var renewalPackets = new PgpSignatureSubpacketGenerator();
+        renewalPackets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        renewalPackets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
+        renewal.SetHashedSubpackets(renewalPackets.Generate());
+        var renewedPrimary = PgpPublicKey.AddCertification(
+            expiredPrimary,
+            userId,
+            renewal.GenerateCertification(userId, expiredPrimary));
+        var renewedRing = PgpPublicKeyRing.InsertPublicKey(expiredRing, renewedPrimary);
+
+        using var keyBytes = new MemoryStream();
+        expiredRing.Encode(keyBytes);
+        renewedRing.Encode(keyBytes);
+
+        var imported = HelmProvenanceTrustedKey.FromKeyringData(keyBytes.ToArray());
+
+        var trusted = Assert.Single(imported);
+        Assert.Equal(Convert.ToHexString(renewedPrimary.GetFingerprint()).ToLowerInvariant(), trusted.Fingerprint);
+    }
+
+    [Fact]
+    public void FromKeyringData_IgnoresForgedPrimaryKeyRevocation()
+    {
+        const string userId = "Victim <victim@example.com>";
+        var (_, publicRing, _, _) = CreateTestKeys(userId);
+        var primary = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+        var (attackerSecretRing, _, _, _) = CreateTestKeys("Attacker <attacker@example.com>");
+        var forgedRevocation = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        forgedRevocation.InitSign(PgpSignature.KeyRevocation,
+            attackerSecretRing.GetSecretKeys().First().ExtractPrivateKey(null)!);
+        forgedRevocation.SetHashedSubpackets(new PgpSignatureSubpacketGenerator().Generate());
+        var forgedPrimary = PgpPublicKey.AddCertification(primary, forgedRevocation.GenerateCertification(primary));
+        var forgedRing = PgpPublicKeyRing.InsertPublicKey(publicRing, forgedPrimary);
+        using var keyBytes = new MemoryStream();
+        forgedRing.Encode(keyBytes);
+
+        var imported = HelmProvenanceTrustedKey.FromKeyringData(keyBytes.ToArray());
+
+        Assert.Single(imported);
+        Assert.Equal(Convert.ToHexString(primary.GetFingerprint()).ToLowerInvariant(), imported[0].Fingerprint);
+    }
+
+    [Fact]
+    public void FromKeyringData_IgnoresForgedSubkeyRevocation()
+    {
+        var (_, publicRing) = CreateRingWithSigningSubkey();
+        var primary = publicRing.GetPublicKeys().First(key => key.IsMasterKey);
+        var signingSubkey = publicRing.GetPublicKeys().First(key => !key.IsMasterKey);
+        var (attackerSecretRing, _, _, _) = CreateTestKeys("Attacker <attacker@example.com>");
+        var forgedRevocation = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        forgedRevocation.InitSign(PgpSignature.SubkeyRevocation,
+            attackerSecretRing.GetSecretKeys().First().ExtractPrivateKey(null)!);
+        forgedRevocation.SetHashedSubpackets(new PgpSignatureSubpacketGenerator().Generate());
+        var forgedSubkey = PgpPublicKey.AddCertification(signingSubkey,
+            forgedRevocation.GenerateCertification(primary, signingSubkey));
+        var forgedRing = PgpPublicKeyRing.InsertPublicKey(publicRing, forgedSubkey);
+        using var keyBytes = new MemoryStream();
+        forgedRing.Encode(keyBytes);
+
+        var imported = HelmProvenanceTrustedKey.FromKeyringData(keyBytes.ToArray());
+
+        Assert.Contains(imported, key => key.Fingerprint ==
+            Convert.ToHexString(signingSubkey.GetFingerprint()).ToLowerInvariant());
+    }
+
+    [Fact]
+    public async Task SignAsync_RejectsOversizedChartMetadataBeforeBuffering()
+    {
+        var work = TempDir();
+        try
+        {
+            var archivePath = Path.Combine(work, "oversized-chart.tgz");
+            var oversizedMetadata = RandomNumberGenerator.GetBytes((int)HelmChartArchiveLimits.Default.MaxEntryBytes + 1);
+            await using (var file = File.Create(archivePath))
+            await using (var gzip = new System.IO.Compression.GZipStream(file, System.IO.Compression.CompressionLevel.Optimal))
+            using (var tar = new System.Formats.Tar.TarWriter(gzip))
+            {
+                await tar.WriteEntryAsync(new System.Formats.Tar.PaxTarEntry(
+                    System.Formats.Tar.TarEntryType.RegularFile,
+                    "oversized-chart/Chart.yaml")
+                {
+                    DataStream = new MemoryStream(oversizedMetadata, writable: false)
+                });
+            }
+
+            var (_, _, signingKey, _) = CreateTestKeys();
+            var exception = await Assert.ThrowsAsync<ChartArchiveLimitExceededException>(
+                () => HelmProvenance.SignAsync(archivePath, signingKey));
+
+            Assert.Equal(ChartArchiveLimitKind.EntryBytes, exception.Limit);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
     }
 
     [Fact]

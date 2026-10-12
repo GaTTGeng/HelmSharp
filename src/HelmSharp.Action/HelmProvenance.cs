@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Formats.Tar;
+using System.IO.Compression;
 using Org.BouncyCastle.Bcpg;
 using Org.BouncyCastle.Bcpg.OpenPgp;
 using Org.BouncyCastle.Crypto;
@@ -77,11 +79,22 @@ public static class HelmProvenance
         if (!File.Exists(chartTgzPath))
             throw new FileNotFoundException($"Chart archive not found: {chartTgzPath}", chartTgzPath);
 
-        // --- 1. Hash the archive and read chart metadata ---
-        var chartBytes = await File.ReadAllBytesAsync(chartTgzPath, cancellationToken).ConfigureAwait(false);
-        var sha256 = Convert.ToHexString(SHA256.HashData(chartBytes)).ToLowerInvariant();
+        // --- 1. Hash the archive and read chart metadata under the shared archive budget ---
+        var archiveLength = new FileInfo(chartTgzPath).Length;
+        var archiveLimits = HelmChartArchiveLimits.Default;
+        if (archiveLength > archiveLimits.MaxCompressedBytes)
+            throw new ChartArchiveLimitExceededException(
+                ChartArchiveLimitKind.CompressedBytes,
+                archiveLimits.MaxCompressedBytes,
+                archiveLength);
+
+        await using var archive = new FileStream(
+            chartTgzPath, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, useAsync: true);
+        var sha256 = Convert.ToHexString(await SHA256.HashDataAsync(archive, cancellationToken).ConfigureAwait(false))
+            .ToLowerInvariant();
+        archive.Position = 0;
         var archiveName = Path.GetFileName(chartTgzPath);
-        var metadata = await ReadArchiveMetadataAsync(chartBytes, cancellationToken).ConfigureAwait(false);
+        var metadata = await ReadArchiveMetadataAsync(archive, archiveLength, cancellationToken).ConfigureAwait(false);
 
         // --- 2. Build the Helm-shaped signed body ---
         var body = BuildSignedBody(metadata, archiveName, sha256);
@@ -153,6 +166,7 @@ public static class HelmProvenance
         PgpSignature? parsedSignature = null;
         bool signatureValid = false;
         bool weakHashSignature = false;
+        bool understrengthHashSignature = false;
         bool trustedKeyMatchedExpiredSignature = false;
         bool trustedKeyMatchedButUnusable = false;
         string? signerFingerprint = null;
@@ -173,6 +187,12 @@ public static class HelmProvenance
                 if (IsWeakHashAlgorithm(parsedSignature.HashAlgorithm))
                 {
                     weakHashSignature = true;
+                    continue;
+                }
+
+                if (!HasSufficientSignatureHash(parsedSignature.HashAlgorithm, trusted.PublicKey))
+                {
+                    understrengthHashSignature = true;
                     continue;
                 }
 
@@ -225,6 +245,13 @@ public static class HelmProvenance
                 return Fail(null, null, null,
                     ExtractSha256(provContent, archiveName), actualSha256,
                     "OpenPGP provenance signatures using MD5, SHA-1, or RIPEMD-160 are not accepted.");
+            }
+
+            if (understrengthHashSignature)
+            {
+                return Fail(null, null, null,
+                    ExtractSha256(provContent, archiveName), actualSha256,
+                    "OpenPGP provenance signature hash is too weak for the signing key algorithm and curve.");
             }
 
             if (trustedKeyMatchedExpiredSignature)
@@ -682,6 +709,36 @@ public static class HelmProvenance
     private static bool IsWeakHashAlgorithm(HashAlgorithmTag algorithm)
         => algorithm is HashAlgorithmTag.MD5 or HashAlgorithmTag.Sha1 or HashAlgorithmTag.RipeMD160;
 
+    internal static bool HasSufficientSignatureHash(HashAlgorithmTag hash, PgpPublicKey key)
+        => GetHashOutputBits(hash) >= GetMinimumSignatureHashBits(key);
+
+    private static int GetMinimumSignatureHashBits(PgpPublicKey key) => key.Algorithm switch
+    {
+        PublicKeyAlgorithmTag.RsaGeneral or PublicKeyAlgorithmTag.RsaSign => 256,
+        PublicKeyAlgorithmTag.ECDsa or PublicKeyAlgorithmTag.EdDsa_Legacy => key.BitStrength switch
+        {
+            <= 256 => 256,
+            <= 384 => 384,
+            _ => 512,
+        },
+        PublicKeyAlgorithmTag.Ed25519 => 256,
+        PublicKeyAlgorithmTag.Ed448 => 512,
+        _ => int.MaxValue,
+    };
+
+    private static int GetHashOutputBits(HashAlgorithmTag hash) => hash switch
+    {
+        HashAlgorithmTag.MD5 or HashAlgorithmTag.MD2 => 128,
+        HashAlgorithmTag.Sha1 or HashAlgorithmTag.RipeMD160 or HashAlgorithmTag.DoubleSha
+            or HashAlgorithmTag.Haval5pass160 => 160,
+        HashAlgorithmTag.Tiger192 => 192,
+        HashAlgorithmTag.Sha224 => 224,
+        HashAlgorithmTag.Sha256 or HashAlgorithmTag.Sha3_256 => 256,
+        HashAlgorithmTag.Sha384 => 384,
+        HashAlgorithmTag.Sha512 => 512,
+        _ => 0,
+    };
+
     /// <summary>
     /// Attempts verification against the key that actually produced the signature, using
     /// public keys embedded in the provenance file when present. Used only to distinguish
@@ -981,15 +1038,20 @@ public static class HelmProvenance
     // --- Metadata extraction from the chart archive ---
 
     private static async Task<Dictionary<string, object?>> ReadArchiveMetadataAsync(
-        byte[] archiveBytes,
+        Stream archive,
+        long compressedBytes,
         CancellationToken cancellationToken)
     {
-        using var input = new MemoryStream(archiveBytes, writable: false);
-        await using var gzip = new System.IO.Compression.GZipStream(input, System.IO.Compression.CompressionMode.Decompress);
-        using var reader = new System.Formats.Tar.TarReader(gzip);
+        var budget = new ChartArchiveBudget(HelmChartArchiveLimits.Default);
+        var scope = budget.BeginArchive(compressedBytes);
+        await using var gzip = new GZipStream(archive, CompressionMode.Decompress, leaveOpen: true);
+        using var metered = scope.MeterDecompressedStream(gzip);
+        using var guarded = scope.GuardTarStream(metered);
+        using var reader = new TarReader(guarded, leaveOpen: true);
         Dictionary<string, object?>? chartMetadata = null;
         var rootChartMetadataCount = 0;
-        while (reader.GetNextEntry() is { } entry)
+        TarEntry? entry;
+        while ((entry = reader.GetNextEntry()) is not null)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (entry.EntryType is System.Formats.Tar.TarEntryType.Directory || entry.DataStream is null)
@@ -1006,9 +1068,8 @@ public static class HelmProvenance
             if (rootChartMetadataCount > 1)
                 throw new InvalidDataException("Chart archive contains multiple root Chart.yaml entries.");
 
-            using var memory = new MemoryStream();
-            await entry.DataStream.CopyToAsync(memory, cancellationToken).ConfigureAwait(false);
-            var yaml = Encoding.UTF8.GetString(memory.ToArray());
+            var chartYaml = await scope.ReadEntryAsync(entry.DataStream, cancellationToken).ConfigureAwait(false);
+            var yaml = Encoding.UTF8.GetString(chartYaml);
             chartMetadata = HelmYaml.DeserializeDictionary(yaml);
         }
 
