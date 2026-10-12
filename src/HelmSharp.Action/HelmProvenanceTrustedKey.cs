@@ -228,9 +228,15 @@ public sealed class HelmProvenanceTrustedKey
         try
         {
             signature.InitVerify(master);
-            return signature.VerifyCertification(master, subkey);
+            if (!signature.VerifyCertification(master, subkey))
+                return false;
+
+            var validitySeconds = signature.GetHashedSubPackets()?.GetSignatureExpirationTime() ?? 0;
+            return validitySeconds <= 0 || !IsExpiredAt(
+                signature.CreationTime.AddSeconds(validitySeconds),
+                DateTime.UtcNow);
         }
-        catch (PgpException)
+        catch (Exception exception) when (exception is PgpException or ArgumentOutOfRangeException)
         {
             return false;
         }

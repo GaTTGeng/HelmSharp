@@ -151,9 +151,13 @@ public static class HelmProvenance
         // --- 4. Verify the OpenPGP signature over the canonicalized signed body ---
         PgpSignature? parsedSignature = null;
         bool signatureValid = false;
+        bool trustedKeyMatchedButUnusable = false;
         string? signerFingerprint = null;
         string? signerKeyId = null;
         string? signerUserId = null;
+        string? unusableFingerprint = null;
+        string? unusableKeyId = null;
+        string? unusableUserId = null;
 
         foreach (var trusted in trustedList)
         {
@@ -169,9 +173,11 @@ public static class HelmProvenance
                     // non-signing keys (e.g. encryption-only subkeys).
                     if (!trusted.IsUsableSigningKey)
                     {
-                        return Fail(trusted.Fingerprint, trusted.KeyId, trusted.UserId,
-                            ExtractSha256(provContent, archiveName), actualSha256,
-                            "Signature is cryptographically valid but the signing key is revoked, expired, or not authorized to sign.");
+                        trustedKeyMatchedButUnusable = true;
+                        unusableFingerprint ??= trusted.Fingerprint;
+                        unusableKeyId ??= trusted.KeyId;
+                        unusableUserId ??= trusted.UserId;
+                        continue;
                     }
 
                     signatureValid = true;
@@ -193,6 +199,13 @@ public static class HelmProvenance
 
         if (!signatureValid)
         {
+            if (trustedKeyMatchedButUnusable)
+            {
+                return Fail(unusableFingerprint, unusableKeyId, unusableUserId,
+                    ExtractSha256(provContent, archiveName), actualSha256,
+                    "Signature is cryptographically valid but the signing key is revoked, expired, or not authorized to sign.");
+            }
+
             // Distinguish "valid signature by an untrusted key" from "no valid signature at all".
             if (TryVerifyAgainstEmbeddedIssuer(signedBody, signaturePacket, out var untrustedFp, out var untrustedId, out var untrustedUid))
             {

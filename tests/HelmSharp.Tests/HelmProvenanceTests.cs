@@ -139,11 +139,14 @@ public class HelmProvenanceTests
 
     private static (PgpSecretKeyRing SecretRing, PgpPublicKeyRing PublicRing) CreateRingWithSigningSubkey(
         string userId = "Signing subkey <subkey@example.com>",
-        bool expiredPrimary = false)
+        bool expiredPrimary = false,
+        bool expiredBinding = false)
     {
         var kpg = new RsaKeyPairGenerator();
         kpg.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
-        var createdAt = expiredPrimary ? DateTime.UtcNow.AddSeconds(-10) : DateTime.UtcNow;
+        var createdAt = expiredPrimary
+            ? DateTime.UtcNow.AddSeconds(-10)
+            : expiredBinding ? DateTime.UtcNow.AddMinutes(-2) : DateTime.UtcNow;
         var primaryPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, kpg.GenerateKeyPair(), createdAt);
         var primaryFlags = new PgpSignatureSubpacketGenerator();
         primaryFlags.SetKeyFlags(true, PgpKeyFlags.CanCertify);
@@ -166,6 +169,11 @@ public class HelmProvenanceTests
             createdAt);
         var signingFlags = new PgpSignatureSubpacketGenerator();
         signingFlags.SetKeyFlags(true, PgpKeyFlags.CanSign);
+        if (expiredBinding)
+        {
+            signingFlags.SetSignatureCreationTime(false, DateTime.UtcNow.AddMinutes(-1));
+            signingFlags.SetSignatureExpirationTime(false, 30);
+        }
         if (expiredPrimary)
             signingFlags.SetKeyExpirationTime(false, 3600);
         keyRingGenerator.AddSubKey(signingPair, signingFlags.Generate(), null);
@@ -461,6 +469,19 @@ public class HelmProvenanceTests
         var trustedKey = Assert.Single(HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
 
         Assert.Equal(userId, trustedKey.UserId);
+    }
+
+    [Fact]
+    public void FromKeyringData_ExpiredSubkeyBindingCannotAuthorizeSigning()
+    {
+        var (_, publicRing) = CreateRingWithSigningSubkey(expiredBinding: true);
+        using var ms = new MemoryStream();
+        publicRing.Encode(ms);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
+
+        Assert.Contains("No usable", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1662,6 +1683,46 @@ public class HelmProvenanceTests
                 publicRing.Encode(fs);
             var (exitCode, stdout, stderr) = await RunHelmAsync("verify", tgz, "--keyring", pubPath);
             Assert.True(exitCode == 0, $"helm verify failed ({exitCode}): {stderr}\n{stdout}");
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Verify_ContinuesPastExpiredTrustedCopyWhenRenewedKeyMatches()
+    {
+        var work = TempDir();
+        try
+        {
+            const string userId = "Rotated signer <rotate@example.com>";
+            var (secretRing, publicRing, signingKey, staleTrustedKey) = CreateTestKeys(
+                userId,
+                validitySeconds: 5);
+            var primarySecret = secretRing.GetSecretKeys().First();
+            var primary = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+            var renewal = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+            renewal.InitSign(PgpSignature.PositiveCertification, primarySecret.ExtractPrivateKey(null)!);
+            var renewalPackets = new PgpSignatureSubpacketGenerator();
+            renewalPackets.SetSignatureCreationTime(false, DateTime.UtcNow.AddSeconds(2));
+            renewalPackets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
+            renewal.SetHashedSubpackets(renewalPackets.Generate());
+            var renewedPrimary = PgpPublicKey.AddCertification(primary, userId,
+                renewal.GenerateCertification(userId, primary));
+            var renewedRing = PgpPublicKeyRing.InsertPublicKey(publicRing, renewedPrimary);
+            using var keyBytes = new MemoryStream();
+            renewedRing.Encode(keyBytes);
+            var renewedTrustedKey = Assert.Single(HelmProvenanceTrustedKey.FromKeyringData(keyBytes.ToArray()));
+
+            var tgz = await CreateTestChartArchiveAsync(work);
+            await HelmProvenance.SignAsync(tgz, signingKey);
+            await Task.Delay(TimeSpan.FromSeconds(6));
+
+            var result = await HelmProvenance.VerifyAsync(tgz, [staleTrustedKey, renewedTrustedKey]);
+
+            Assert.True(result.IsValid, result.FailureReason);
+            Assert.Equal(renewedTrustedKey.Fingerprint, result.SignerFingerprint);
         }
         finally
         {
