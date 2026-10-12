@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using HelmSharp.Kube;
 
 namespace HelmSharp.Tests;
 
@@ -26,7 +27,7 @@ public sealed class KubernetesReadyCheckerParityTests
 
         var timeProvider = new DeterministicTimeProvider(DateTimeOffset.UnixEpoch);
         var polling = new DeterministicPolling(timeProvider);
-        var waiter = new HelmSharp.Kube.KubernetesResourceWaiter(
+        var waiter = new KubernetesResourceWaiter(
             KubernetesTestClientBuilder.Create(handler),
             timeoutSeconds: 1,
             timeProvider,
@@ -59,9 +60,9 @@ public sealed class KubernetesReadyCheckerParityTests
     {
         // Helm v3.17.3 ReadyChecker reference: https://github.com/helm/helm/blob/v3.17.3/pkg/kube/ready.go
         yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(),
-            "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("1", 4), ("2", 3)), ReadinessOutcome.Ready)];
+            "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("1", 4), ("2", 3)))];
         yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(paused: true),
-            "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("2", 0)), ReadinessOutcome.Ready)];
+            "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("2", 0)))];
         yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(observedGeneration: 0),
             "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("2", 4)), ReadinessOutcome.Pending)];
         yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(),
@@ -69,89 +70,87 @@ public sealed class KubernetesReadyCheckerParityTests
         yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(exceededProgressDeadline: true),
             "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("2", 2)), ReadinessOutcome.Pending)];
         yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(maxUnavailable: "50%"),
-            "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("2", 2)), ReadinessOutcome.Ready)];
+            "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("2", 2)))];
         yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(replicas: 2, maxSurge: "0%", maxUnavailable: "1%"),
-            "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("2", 1)), ReadinessOutcome.Ready)];
+            "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("2", 1)))];
         yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(strategyType: "Recreate"),
             "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("2", 3)), ReadinessOutcome.Pending)];
         yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(strategyType: "Recreate"),
-            "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("2", 4)), ReadinessOutcome.Ready)];
+            "/apis/apps/v1/namespaces/ns/replicasets", ReplicaSetList(("2", 4)))];
         yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(),
-            "/apis/apps/v1/namespaces/ns/replicasets", DuplicateTemplateReplicaSetList(), ReadinessOutcome.Ready)];
+            "/apis/apps/v1/namespaces/ns/replicasets", DuplicateTemplateReplicaSetList())];
         yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(),
-            "/apis/apps/v1/namespaces/ns/replicasets", EqualTimestampReplicaSetList(), ReadinessOutcome.Ready)];
+            "/apis/apps/v1/namespaces/ns/replicasets", EqualTimestampReplicaSetList())];
         yield return [CreateCase("Deployment", "apps/v1", "/apis/apps/v1/namespaces/ns/deployments/demo", Deployment(),
             "/apis/apps/v1/namespaces/ns/replicasets", NonControllerReplicaSetList(), ReadinessOutcome.Pending)];
-        yield return [CreateCase("DaemonSet", "apps/v1", "/apis/apps/v1/namespaces/ns/daemonsets/demo", DaemonSet(4, 4, 3, numberAvailable: 0),
-            outcome: ReadinessOutcome.Ready)];
-        yield return [CreateCase("DaemonSet", "apps/v1", "/apis/apps/v1/namespaces/ns/daemonsets/demo", DaemonSet(4, 4, 2, maxUnavailable: "50%"),
-            outcome: ReadinessOutcome.Ready)];
-        yield return [CreateCase("DaemonSet", "apps/v1", "/apis/apps/v1/namespaces/ns/daemonsets/demo", DaemonSet(4, 4, 0, maxUnavailable: "invalid"),
-            outcome: ReadinessOutcome.Ready)];
+        yield return [CreateCase("DaemonSet", "apps/v1", "/apis/apps/v1/namespaces/ns/daemonsets/demo", DaemonSet(4, 4, 3, numberAvailable: 0)
+            )];
+        yield return [CreateCase("DaemonSet", "apps/v1", "/apis/apps/v1/namespaces/ns/daemonsets/demo", DaemonSet(4, 4, 2, maxUnavailable: "50%")
+            )];
+        yield return [CreateCase("DaemonSet", "apps/v1", "/apis/apps/v1/namespaces/ns/daemonsets/demo", DaemonSet(4, 4, 0, maxUnavailable: "invalid")
+            )];
         yield return [CreateCase("DaemonSet", "apps/v1", "/apis/apps/v1/namespaces/ns/daemonsets/demo", DaemonSet(4, 3, 4),
             outcome: ReadinessOutcome.Pending)];
-        yield return [CreateCase("DaemonSet", "apps/v1", "/apis/apps/v1/namespaces/ns/daemonsets/demo", DaemonSet(4, 0, 0, strategy: "OnDelete"),
-            outcome: ReadinessOutcome.Ready)];
-        yield return [CreateCase("StatefulSet", "apps/v1", "/apis/apps/v1/namespaces/ns/statefulsets/demo", StatefulSet(5, 5, 3, partition: 2),
-            outcome: ReadinessOutcome.Ready)];
+        yield return [CreateCase("DaemonSet", "apps/v1", "/apis/apps/v1/namespaces/ns/daemonsets/demo", DaemonSet(4, 0, 0, strategy: "OnDelete")
+            )];
+        yield return [CreateCase("StatefulSet", "apps/v1", "/apis/apps/v1/namespaces/ns/statefulsets/demo", StatefulSet(5, 5, 3, partition: 2)
+            )];
         yield return [CreateCase("StatefulSet", "apps/v1", "/apis/apps/v1/namespaces/ns/statefulsets/demo", StatefulSet(5, 5, 2, partition: 2),
             outcome: ReadinessOutcome.Pending)];
         yield return [CreateCase("StatefulSet", "apps/v1", "/apis/apps/v1/namespaces/ns/statefulsets/demo", StatefulSet(3, 3, 3, currentRevision: "old", updateRevision: "new"),
             outcome: ReadinessOutcome.Pending)];
-        yield return [CreateCase("StatefulSet", "apps/v1", "/apis/apps/v1/namespaces/ns/statefulsets/demo", StatefulSet(3, 0, 0, strategy: "OnDelete"),
-            outcome: ReadinessOutcome.Ready)];
+        yield return [CreateCase("StatefulSet", "apps/v1", "/apis/apps/v1/namespaces/ns/statefulsets/demo", StatefulSet(3, 0, 0, strategy: "OnDelete")
+            )];
         yield return [CreateCase("ReplicaSet", "apps/v1", "/apis/apps/v1/namespaces/ns/replicasets/demo", ReplicaSet(),
-            "/api/v1/namespaces/ns/pods", PodList(ready: true), ReadinessOutcome.Ready)];
+            "/api/v1/namespaces/ns/pods", PodList(ready: true))];
         yield return [CreateCase("ReplicaSet", "apps/v1", "/apis/apps/v1/namespaces/ns/replicasets/demo", ReplicaSet(observedGeneration: 0),
             "/api/v1/namespaces/ns/pods", PodList(ready: true), ReadinessOutcome.Pending)];
         yield return [CreateCase("ReplicaSet", "apps/v1", "/apis/apps/v1/namespaces/ns/replicasets/demo", ReplicaSet(2),
             "/api/v1/namespaces/ns/pods", PodList(ready: false), ReadinessOutcome.Pending)];
         yield return [CreateCase("ReplicationController", "v1", "/api/v1/namespaces/ns/replicationcontrollers/demo", ReplicationController(),
-            "/api/v1/namespaces/ns/pods", PodList(ready: true), ReadinessOutcome.Ready)];
+            "/api/v1/namespaces/ns/pods", PodList(ready: true))];
         yield return [CreateCase("ReplicationController", "v1", "/api/v1/namespaces/ns/replicationcontrollers/demo", ReplicationController(observedGeneration: 0),
             "/api/v1/namespaces/ns/pods", PodList(ready: true), ReadinessOutcome.Pending)];
         yield return [CreateCase("ReplicationController", "v1", "/api/v1/namespaces/ns/replicationcontrollers/demo", ReplicationController(),
             "/api/v1/namespaces/ns/pods", PodList(ready: false), ReadinessOutcome.Pending)];
-        yield return [CreateCase("Pod", "v1", "/api/v1/namespaces/ns/pods/demo", Pod("Running", ready: true), outcome: ReadinessOutcome.Ready)];
-        yield return [CreateCase("Pod", "v1", "/api/v1/namespaces/ns/pods/demo", Pod("Succeeded", ready: true), outcome: ReadinessOutcome.Ready)];
+        yield return [CreateCase("Pod", "v1", "/api/v1/namespaces/ns/pods/demo", Pod("Running", ready: true))];
+        yield return [CreateCase("Pod", "v1", "/api/v1/namespaces/ns/pods/demo", Pod("Succeeded", ready: true))];
         yield return [CreateCase("Pod", "v1", "/api/v1/namespaces/ns/pods/demo", Pod("Pending", ready: false), outcome: ReadinessOutcome.Pending)];
         yield return [CreateCase("Pod", "v1", "/api/v1/namespaces/ns/pods/demo", Pod("Failed", ready: false), outcome: ReadinessOutcome.Failed)];
-        yield return [CreateCase("PersistentVolumeClaim", "v1", "/api/v1/namespaces/ns/persistentvolumeclaims/demo", Pvc("Bound"), outcome: ReadinessOutcome.Ready)];
+        yield return [CreateCase("PersistentVolumeClaim", "v1", "/api/v1/namespaces/ns/persistentvolumeclaims/demo", Pvc("Bound"))];
         yield return [CreateCase("PersistentVolumeClaim", "v1", "/api/v1/namespaces/ns/persistentvolumeclaims/demo", Pvc("Pending"), outcome: ReadinessOutcome.Pending)];
         yield return [CreateCase("PersistentVolumeClaim", "v1", "/api/v1/namespaces/ns/persistentvolumeclaims/demo", Pvc("Lost"), outcome: ReadinessOutcome.Failed)];
-        yield return [CreateCase("Endpoints", "v1", "/api/v1/namespaces/ns/endpoints/demo", Endpoints(ready: true), outcome: ReadinessOutcome.Ready)];
+        yield return [CreateCase("Endpoints", "v1", "/api/v1/namespaces/ns/endpoints/demo", Endpoints(ready: true))];
         yield return [CreateCase("Endpoints", "v1", "/api/v1/namespaces/ns/endpoints/demo", Endpoints(ready: false), outcome: ReadinessOutcome.Pending)];
 
-        // Helm v3.17.3 serviceReady: ExternalName is ready immediately; ClusterIP must
+        // Helm v3.17.3 serviceReady: ExternalName is ready immediately; clusterIp must
         // be assigned; LoadBalancer waits for ExternalIPs or LoadBalancer ingress.
         yield return [CreateCase("Service", "v1", "/api/v1/namespaces/ns/services/demo",
-            Service(type: "ExternalName", clusterIP: ""), outcome: ReadinessOutcome.Ready)];
+            Service(type: "ExternalName", clusterIp: ""))];
         yield return [CreateCase("Service", "v1", "/api/v1/namespaces/ns/services/demo",
-            Service(type: "ClusterIP", clusterIP: ""), outcome: ReadinessOutcome.Pending)];
+            Service(type: "ClusterIP", clusterIp: ""), outcome: ReadinessOutcome.Pending)];
         yield return [CreateCase("Service", "v1", "/api/v1/namespaces/ns/services/demo",
-            Service(type: "ClusterIP", clusterIP: "10.0.0.1"), outcome: ReadinessOutcome.Ready)];
+            Service(type: "ClusterIP", clusterIp: "10.0.0.1"))];
         yield return [CreateCase("Service", "v1", "/api/v1/namespaces/ns/services/demo",
-            Service(type: "LoadBalancer", clusterIP: "10.0.0.1"), outcome: ReadinessOutcome.Pending)];
+            Service(type: "LoadBalancer", clusterIp: "10.0.0.1"), outcome: ReadinessOutcome.Pending)];
         yield return [CreateCase("Service", "v1", "/api/v1/namespaces/ns/services/demo",
-            Service(type: "LoadBalancer", clusterIP: "10.0.0.1", externalIPs: ["203.0.113.10"]),
-            outcome: ReadinessOutcome.Ready)];
+            Service(type: "LoadBalancer", clusterIp: "10.0.0.1", externalIPs: ["203.0.113.10"]))];
         yield return [CreateCase("Service", "v1", "/api/v1/namespaces/ns/services/demo",
-            Service(type: "LoadBalancer", clusterIP: "10.0.0.1", loadBalancerIngress: true),
-            outcome: ReadinessOutcome.Ready)];
+            Service(type: "LoadBalancer", clusterIp: "10.0.0.1", loadBalancerIngress: true))];
         yield return [CreateCase("Service", "v1", "/api/v1/namespaces/ns/services/demo",
-            Service(type: "LoadBalancer", clusterIP: ""), outcome: ReadinessOutcome.Pending)];
+            Service(type: "LoadBalancer", clusterIp: ""), outcome: ReadinessOutcome.Pending)];
 
         // Helm v3.17.3 crdReady: Established=True is ready; NamesAccepted=False is
         // deliberately ready (naming conflict does not block install); else pending.
         // Reads go through the declared apiVersion so beta-only clusters still answer.
         yield return [CreateCase("CustomResourceDefinition", "apiextensions.k8s.io/v1",
             "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/demo",
-            Crd(apiVersion: "apiextensions.k8s.io/v1", conditions: [("Established", "True")]),
-            outcome: ReadinessOutcome.Ready)];
+            Crd(apiVersion: "apiextensions.k8s.io/v1", conditions: [("Established", "True")])
+            )];
         yield return [CreateCase("CustomResourceDefinition", "apiextensions.k8s.io/v1",
             "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/demo",
-            Crd(apiVersion: "apiextensions.k8s.io/v1", conditions: [("NamesAccepted", "False")]),
-            outcome: ReadinessOutcome.Ready)];
+            Crd(apiVersion: "apiextensions.k8s.io/v1", conditions: [("NamesAccepted", "False")])
+            )];
         yield return [CreateCase("CustomResourceDefinition", "apiextensions.k8s.io/v1",
             "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/demo",
             Crd(apiVersion: "apiextensions.k8s.io/v1", conditions: [("NamesAccepted", "True")]),
@@ -162,12 +161,12 @@ public sealed class KubernetesReadyCheckerParityTests
             outcome: ReadinessOutcome.Pending)];
         yield return [CreateCase("CustomResourceDefinition", "apiextensions.k8s.io/v1beta1",
             "/apis/apiextensions.k8s.io/v1beta1/customresourcedefinitions/demo",
-            Crd(apiVersion: "apiextensions.k8s.io/v1beta1", conditions: [("Established", "True")]),
-            outcome: ReadinessOutcome.Ready)];
+            Crd(apiVersion: "apiextensions.k8s.io/v1beta1", conditions: [("Established", "True")])
+            )];
         yield return [CreateCase("CustomResourceDefinition", "apiextensions.k8s.io/v1beta1",
             "/apis/apiextensions.k8s.io/v1beta1/customresourcedefinitions/demo",
-            Crd(apiVersion: "apiextensions.k8s.io/v1beta1", conditions: [("NamesAccepted", "False")]),
-            outcome: ReadinessOutcome.Ready)];
+            Crd(apiVersion: "apiextensions.k8s.io/v1beta1", conditions: [("NamesAccepted", "False")])
+            )];
         yield return [CreateCase("CustomResourceDefinition", "apiextensions.k8s.io/v1beta1",
             "/apis/apiextensions.k8s.io/v1beta1/customresourcedefinitions/demo",
             Crd(apiVersion: "apiextensions.k8s.io/v1beta1", conditions: []),
@@ -176,11 +175,11 @@ public sealed class KubernetesReadyCheckerParityTests
         // Helm v3.17.3 jobReady: fail only when failed > backoffLimit; otherwise wait
         // for Succeeded >= Completions (skipped when completions is unset).
         yield return [CreateCase("Job", "batch/v1", "/apis/batch/v1/namespaces/ns/jobs/demo",
-            Job(completions: 1, succeeded: 1), waitForJobs: true, outcome: ReadinessOutcome.Ready)];
+            Job(completions: 1, succeeded: 1), waitForJobs: true)];
         yield return [CreateCase("Job", "batch/v1", "/apis/batch/v1/namespaces/ns/jobs/demo",
             Job(completions: 1, succeeded: 0), waitForJobs: true, outcome: ReadinessOutcome.Pending)];
         yield return [CreateCase("Job", "batch/v1", "/apis/batch/v1/namespaces/ns/jobs/demo",
-            Job(completions: null, succeeded: 0), waitForJobs: true, outcome: ReadinessOutcome.Ready)];
+            Job(completions: null, succeeded: 0), waitForJobs: true)];
         yield return [CreateCase("Job", "batch/v1", "/apis/batch/v1/namespaces/ns/jobs/demo",
             Job(completions: 2, succeeded: 1), waitForJobs: true, outcome: ReadinessOutcome.Pending)];
         yield return [CreateCase("Job", "batch/v1", "/apis/batch/v1/namespaces/ns/jobs/demo",
@@ -404,7 +403,7 @@ public sealed class KubernetesReadyCheckerParityTests
 
     private static string Service(
         string type,
-        string clusterIP,
+        string clusterIp,
         string[]? externalIPs = null,
         bool loadBalancerIngress = false)
     {
@@ -422,7 +421,7 @@ public sealed class KubernetesReadyCheckerParityTests
             spec = new
             {
                 type,
-                clusterIP,
+                clusterIP = clusterIp,
                 externalIPs
             },
             status = new { loadBalancer }

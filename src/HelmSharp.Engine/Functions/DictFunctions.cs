@@ -1,3 +1,5 @@
+// Feature folders share the stable HelmSharp.Engine namespace.
+// ReSharper disable once CheckNamespace
 namespace HelmSharp.Engine;
 
 /// <summary>
@@ -58,7 +60,7 @@ internal static class DictFunctions
     /// Sprig <c>merge</c>: deep-merges every dict argument into a new dict
     /// (first source wins at conflicting leaves — see <see cref="CollectionsHelpers.MergeInto"/>).
     /// </summary>
-    public static object? MergeDicts(IReadOnlyList<string> tokens, TemplateContext context, IEvaluationContext eval)
+    public static object MergeDicts(IReadOnlyList<string> tokens, TemplateContext context, IEvaluationContext eval)
     {
         var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
         foreach (var t in tokens.Skip(1))
@@ -75,7 +77,7 @@ internal static class DictFunctions
     /// Signature: <c>pick DICT KEY…</c> or <c>DICT | pick KEY…</c> (keys shift
     /// earlier in the token stream when a pipeline value is present).
     /// </summary>
-    public static object? Pick(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    public static object Pick(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
         var dict = pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(1), context);
         var keys = tokens.Skip(2).Select(t => TypeConverters.ToTemplateString(eval.EvaluateToken(t, context))).ToHashSet(StringComparer.Ordinal);
@@ -92,7 +94,7 @@ internal static class DictFunctions
     }
 
     /// <summary>Sprig <c>omit</c>: new dict excluding the listed keys (pipeline form shifts key tokens as in <see cref="Pick"/>).</summary>
-    public static object? Omit(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    public static object Omit(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
         var dict = pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(1), context);
         var keys = tokens.Skip(2).Select(t => TypeConverters.ToTemplateString(eval.EvaluateToken(t, context))).ToHashSet(StringComparer.Ordinal);
@@ -112,7 +114,7 @@ internal static class DictFunctions
     /// Sprig <c>pluck</c>: collects the value of KEY from each dict argument into a
     /// list, skipping dicts that lack the key. Signature: <c>plucks KEY DICT…</c>.
     /// </summary>
-    public static object? Pluck(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    public static object Pluck(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
         var key = TypeConverters.ToTemplateString(eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));
         var dicts = tokens.Skip(2).Select(t => eval.EvaluateToken(t, context));
@@ -200,7 +202,7 @@ internal static class DictFunctions
     /// dict — no live cluster access happens during template rendering. Templates that
     /// branch on lookup results will see "resource not found" behavior.
     /// </summary>
-    public static object? Lookup(IReadOnlyList<string> tokens, TemplateContext context, IEvaluationContext eval)
+    public static object Lookup(IReadOnlyList<string> tokens, TemplateContext context, IEvaluationContext eval)
     {
         // In managed mode, return empty dict — no cluster access during template rendering
         return new Dictionary<string, object?>(StringComparer.Ordinal);

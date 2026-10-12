@@ -1,5 +1,7 @@
 using System.Globalization;
 
+// Feature folders share the stable HelmSharp.Engine namespace.
+// ReSharper disable once CheckNamespace
 namespace HelmSharp.Engine;
 
 /// <summary>
@@ -33,7 +35,18 @@ internal static class DateTimeFunctions
             if (value is DateTimeOffset dto) return TimeZoneInfo.ConvertTime(dto, tz).ToString(format, CultureInfo.InvariantCulture);
             if (value is DateTime dt) return TimeZoneInfo.ConvertTime(dt, tz).ToString(format, CultureInfo.InvariantCulture);
         }
-        catch { }
+        catch (TimeZoneNotFoundException)
+        {
+            // Helm's dateInZone falls back to the current time for unknown zones.
+        }
+        catch (InvalidTimeZoneException)
+        {
+            // Treat malformed zone data like an unavailable zone.
+        }
+        catch (ArgumentException)
+        {
+            // Empty or malformed identifiers are unavailable time zones too.
+        }
         return DateTimeOffset.UtcNow.ToString(format, CultureInfo.InvariantCulture);
     }
 

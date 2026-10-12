@@ -1065,15 +1065,11 @@ public class ChartOperationsTests : IDisposable
             TimeoutSeconds = 1
         }));
 
-        Assert.Collection(
-            releaseState.Records("rollback-wait-failure"),
-            record => Assert.Equal((1, "superseded"), (record.Revision, record.Status)),
-            record => Assert.Equal((2, "deployed"), (record.Revision, record.Status)),
-            record =>
-            {
-                Assert.Equal((3, "failed"), (record.Revision, record.Status));
-                Assert.StartsWith("Rollback failed:", record.Description);
-            });
+        var records = releaseState.Records("rollback-wait-failure");
+        Assert.Equal((1, "superseded"), (records[0].Revision, records[0].Status));
+        Assert.Equal((2, "deployed"), (records[1].Revision, records[1].Status));
+        Assert.Equal((3, "failed"), (records[2].Revision, records[2].Status));
+        Assert.StartsWith("Rollback failed:", records[2].Description);
     }
 
     [Fact]
@@ -1890,14 +1886,10 @@ public class ChartOperationsTests : IDisposable
                 Chart = chartDir
             })));
 
-        Assert.Collection(
-            releaseState.Records("save-failure"),
-            record => Assert.Equal((1, "deployed"), (record.Revision, record.Status)),
-            record =>
-            {
-                Assert.Equal((2, "failed"), (record.Revision, record.Status));
-                Assert.StartsWith("Upgrade failed:", record.Description);
-            });
+        var records = releaseState.Records("save-failure");
+        Assert.Equal((1, "deployed"), (records[0].Revision, records[0].Status));
+        Assert.Equal((2, "failed"), (records[1].Revision, records[1].Status));
+        Assert.StartsWith("Upgrade failed:", records[1].Description);
     }
 
     [Fact]
@@ -1999,7 +1991,7 @@ public class ChartOperationsTests : IDisposable
         var firstHooks = await client.GetHooksAsync("revision-inspection", "test-ns", revision: 1);
         var firstAll = await client.GetAllAsync("revision-inspection", "test-ns", revision: 1);
         var firstStatus = await client.StatusRevisionAsync("revision-inspection", revision: 1, @namespace: "test-ns");
-        var legacyDefaultStatus = await client.StatusAsync("revision-inspection", default);
+        var legacyDefaultStatus = await client.StatusAsync("revision-inspection");
         var history = await client.HistoryAsync("revision-inspection", "test-ns");
 
         Assert.All([firstManifest, firstValues, firstNotes, firstHooks, firstAll, firstStatus, legacyDefaultStatus, history], result => Assert.Equal(0, result.ExitCode));
@@ -2075,11 +2067,11 @@ public class ChartOperationsTests : IDisposable
         var invalidRevision = await client.GetManifestAsync("missing-revision", "test-ns", revision: -1);
         var missingHistory = await client.HistoryAsync("does-not-exist", "test-ns");
 
-        Assert.All([missingManifest, missingNotes, missingHooks, missingAll, missingStatus, missingValues], result =>
+        foreach (var result in new[] { missingManifest, missingNotes, missingHooks, missingAll, missingStatus, missingValues })
         {
             Assert.Equal(1, result.ExitCode);
             Assert.Equal("release: revision 99 not found: missing-revision", result.StandardError);
-        });
+        }
         Assert.Equal("release: revision must be zero or a positive integer: -1", invalidRevision.StandardError);
         Assert.Equal("release: not found: does-not-exist", missingHistory.StandardError);
     }
@@ -2919,13 +2911,13 @@ public class ChartOperationsTests : IDisposable
             => new(statusCode)
             {
                 RequestMessage = request,
-                Content = new StringContent(content, System.Text.Encoding.UTF8, "application/json")
+                Content = new StringContent(content, Encoding.UTF8, "application/json")
             };
     }
 
     public void Dispose()
     {
-        try { Directory.Delete(_tempDir, recursive: true); }
-        catch { }
+        if (Directory.Exists(_tempDir))
+            Directory.Delete(_tempDir, recursive: true);
     }
 }

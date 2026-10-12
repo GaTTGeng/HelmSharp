@@ -1,3 +1,5 @@
+// Feature folders share the stable HelmSharp.Engine namespace.
+// ReSharper disable once CheckNamespace
 namespace HelmSharp.Engine;
 
 /// <summary>
@@ -16,11 +18,11 @@ internal static class CollectionsHelpers
         => value is IList<object?> { Count: > 0 } list ? list[^1] : null;
 
     /// <summary>Sprig <c>rest</c>: all but the first element; empty input yields an empty list (not null).</summary>
-    public static object? Rest(object? value)
+    public static object Rest(object? value)
         => value is IList<object?> { Count: > 0 } list ? list.Skip(1).ToList() : new List<object?>();
 
     /// <summary>Sprig <c>initial</c>: all but the last element; empty input yields an empty list (not null).</summary>
-    public static object? Initial(object? value)
+    public static object Initial(object? value)
         => value is IList<object?> { Count: > 0 } list ? list.Take(list.Count - 1).ToList() : new List<object?>();
 
     /// <summary>Sprig <c>reverse</c>: new reversed copy; non-list values pass through unchanged.</summary>
@@ -87,7 +89,7 @@ internal static class CollectionsHelpers
     // ── Dict helpers ──
 
     /// <summary>Sprig <c>keys</c>: sorted key list; non-dicts yield an empty list.</summary>
-    public static object? Keys(object? value)
+    public static object Keys(object? value)
     {
         if (value is IDictionary<string, object?> dict)
             return dict.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
@@ -98,7 +100,7 @@ internal static class CollectionsHelpers
     /// Sprig <c>values</c>: values ordered by their keys (so each position lines up
     /// with <see cref="Keys"/>), not dictionary enumeration order.
     /// </summary>
-    public static object? Values(object? value)
+    public static object Values(object? value)
     {
         if (value is IDictionary<string, object?> dict)
             return dict.Keys.OrderBy(k => k, StringComparer.Ordinal).Select(k => dict[k]).ToList();
@@ -163,7 +165,7 @@ internal static class CollectionsHelpers
     /// </summary>
     public static Dictionary<string, object?> Split(string input, string separator)
     {
-        var parts = input.Split(separator, StringSplitOptions.None);
+        var parts = input.Split(separator);
         var dict = new Dictionary<string, object?>(StringComparer.Ordinal);
         for (var i = 0; i < parts.Length; i++)
             dict[$"_{i}"] = parts[i];
@@ -173,7 +175,7 @@ internal static class CollectionsHelpers
     /// <summary>Sprig <c>splitList</c>: splits on a literal separator into a list.</summary>
     public static List<object?> SplitList(string input, string separator)
     {
-        var parts = input.Split(separator, StringSplitOptions.None);
+        var parts = input.Split(separator);
         return parts.Cast<object?>().ToList();
     }
 
@@ -182,7 +184,7 @@ internal static class CollectionsHelpers
     /// count from the end; omitted END means "to the end". Out-of-range or inverted
     /// bounds yield an empty list rather than an error (unlike <c>substr</c>).
     /// </summary>
-    public static object? Slice(object? value, int start, int? end)
+    public static object Slice(object? value, int start, int? end)
     {
         var list = ToList(value);
         if (start >= list.Count) return new List<object?>();
@@ -235,7 +237,7 @@ internal static class CollectionsHelpers
     // invalid input instead of silently degrading. Keep pairs in sync.
 
     /// <summary>Sprig <c>mustReverse</c>: like <see cref="Reverse"/> but throws when the value is not a list.</summary>
-    public static object? MustReverse(object? value)
+    public static object MustReverse(object? value)
     {
         if (value is IList<object?> list)
         {
@@ -247,7 +249,7 @@ internal static class CollectionsHelpers
     }
 
     /// <summary>Sprig <c>mustSortAlpha</c>: like <see cref="SortAlpha"/> but throws when the value is not a list.</summary>
-    public static object? MustSortAlpha(object? value)
+    public static object MustSortAlpha(object? value)
     {
         if (value is IList<object?> list)
             return list.OrderBy(x => TypeConverters.ToTemplateString(x), StringComparer.Ordinal).ToList();
@@ -255,7 +257,7 @@ internal static class CollectionsHelpers
     }
 
     /// <summary>Sprig <c>mustCompact</c>: like <see cref="Compact"/> but throws when the value is not a list.</summary>
-    public static object? MustCompact(object? value)
+    public static object MustCompact(object? value)
     {
         if (value is IList<object?> list)
             return list.Where(TypeConverters.IsTruthy).ToList();
@@ -263,7 +265,7 @@ internal static class CollectionsHelpers
     }
 
     /// <summary>Sprig <c>mustUniq</c>: like <see cref="Uniq"/> but throws when the value is not a list.</summary>
-    public static object? MustUniq(object? value)
+    public static object MustUniq(object? value)
     {
         if (value is IList<object?> list)
         {

@@ -167,7 +167,10 @@ internal static class HelmSchemaValidator
                     if (!System.Text.RegularExpressions.Regex.IsMatch(s, pattern.GetString() ?? ""))
                         errors.Add($"{path.TrimEnd('.')}: value does not match pattern '{pattern.GetString()}'");
                 }
-                catch { }
+                catch (ArgumentException ex)
+                {
+                    errors.Add($"{path.TrimEnd('.')}: schema pattern is invalid: {ex.Message}");
+                }
             }
         }
     }

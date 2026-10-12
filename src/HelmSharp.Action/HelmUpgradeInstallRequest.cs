@@ -1,5 +1,6 @@
 namespace HelmSharp.Action;
 
+// ReSharper disable UnusedAutoPropertyAccessor.Global // Public request setters are consumed by library callers.
 /// <summary>Options for installing a release or upgrading an existing one.</summary>
 public class HelmUpgradeInstallRequest
 {
@@ -101,6 +102,7 @@ public class HelmUpgradeInstallRequest
     /// <summary>
     /// If true, skip CRD installation.
     /// </summary>
+    // ReSharper disable once InconsistentNaming // Preserve the Helm CLI spelling in the public API.
     public bool SkipCRDs { get; set; }
 
     /// <summary>
@@ -258,3 +260,4 @@ public class HelmUpgradeInstallRequest
     /// </summary>
     public bool DependencyUpdate { get; set; }
 }
+// ReSharper restore UnusedAutoPropertyAccessor.Global

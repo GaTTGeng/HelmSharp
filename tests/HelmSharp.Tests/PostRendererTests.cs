@@ -1,3 +1,7 @@
+using HelmSharp.PostRenderer;
+using HelmSharp.Registry;
+using HelmSharp.Storage;
+
 namespace HelmSharp.Tests;
 
 /// <summary>
@@ -9,7 +13,7 @@ public class PostRendererTests
     [Fact]
     public void HelmSharp_PostRenderer_ProjectExists()
     {
-        var assembly = typeof(HelmSharp.PostRenderer.IPostRenderer).Assembly;
+        var assembly = typeof(IPostRenderer).Assembly;
         Assert.NotNull(assembly);
         Assert.Contains("HelmSharp.PostRenderer", assembly.FullName);
     }
@@ -17,7 +21,7 @@ public class PostRendererTests
     [Fact]
     public void HelmSharp_Storage_ProjectExists()
     {
-        var assembly = typeof(HelmSharp.Storage.IHelmReleaseStore).Assembly;
+        var assembly = typeof(IHelmReleaseStore).Assembly;
         Assert.NotNull(assembly);
         Assert.Contains("HelmSharp.Storage", assembly.FullName);
     }
@@ -25,7 +29,7 @@ public class PostRendererTests
     [Fact]
     public void HelmSharp_Registry_ProjectExists()
     {
-        var assembly = typeof(HelmSharp.Registry.IOciRegistryClient).Assembly;
+        var assembly = typeof(IOciRegistryClient).Assembly;
         Assert.NotNull(assembly);
         Assert.Contains("HelmSharp.Registry", assembly.FullName);
     }

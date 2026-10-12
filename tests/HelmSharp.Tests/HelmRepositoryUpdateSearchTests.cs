@@ -21,27 +21,31 @@ public sealed class HelmRepositoryUpdateSearchTests : IDisposable
     [Fact]
     public async Task RepoUpdateAndSearchRepo_UsesNamedCachesOfflineAcrossConfiguredRepositories()
     {
-        await using var server = LocalIndexServer.Start(new Dictionary<string, string>
+        string baseUrl;
+        var options = CreateOptions();
+        HelmClient client;
+        CommandResult update;
+        await using (var server = LocalIndexServer.Start(new Dictionary<string, string>
         {
             ["/first/index.yaml"] = FirstIndex,
             ["/second/index.yaml"] = SecondIndex
-        });
-        var options = CreateOptions();
-        using (var repository = CreateNoProxyRepository(options))
+        }))
         {
-            await repository.AddRepositoryAsync("first", server.BaseUrl + "first");
-            await repository.AddRepositoryAsync("second", server.BaseUrl + "second");
-        }
+            baseUrl = server.BaseUrl;
+            using (var repository = CreateNoProxyRepository(options))
+            {
+                await repository.AddRepositoryAsync("first", baseUrl + "first");
+                await repository.AddRepositoryAsync("second", baseUrl + "second");
+            }
 
-        var client = CreateClient(options);
-        var update = await client.RepoUpdateAsync();
+            client = CreateClient(options);
+            update = await client.RepoUpdateAsync();
+        }
 
         Assert.True(update.Succeeded);
         Assert.Contains("Update complete. 2 updated, 0 failed.", update.StandardOutput, StringComparison.Ordinal);
         Assert.True(File.Exists(Path.Combine(options.CacheDirectory!, "first-index.yaml")));
         Assert.True(File.Exists(Path.Combine(options.CacheDirectory!, "second-index.yaml")));
-
-        await server.DisposeAsync();
 
         var search = await client.SearchRepoAsync("shared");
         var results = JsonSerializer.Deserialize<List<HelmChartSearchResult>>(
@@ -50,17 +54,9 @@ public sealed class HelmRepositoryUpdateSearchTests : IDisposable
 
         Assert.True(search.Succeeded);
         Assert.NotNull(results);
-        Assert.Collection(results,
-            result =>
-            {
-                Assert.Equal("first/shared", result.Name);
-                Assert.Equal("1.10.0", result.Version);
-            },
-            result =>
-            {
-                Assert.Equal("second/shared", result.Name);
-                Assert.Equal("2.0.0", result.Version);
-            });
+        Assert.Equal(
+            new[] { ("first/shared", "1.10.0"), ("second/shared", "2.0.0") },
+            results.Select(result => (result.Name, result.Version)));
 
         var descriptionSearch = await client.SearchRepoAsync("database");
         var descriptionResults = JsonSerializer.Deserialize<List<HelmChartSearchResult>>(
@@ -236,8 +232,7 @@ public sealed class HelmRepositoryUpdateSearchTests : IDisposable
             using (var reader = new StreamReader(stream, Encoding.ASCII, leaveOpen: true))
             {
                 var requestLine = await reader.ReadLineAsync(cancellationToken);
-                string? line;
-                while (!string.IsNullOrEmpty(line = await reader.ReadLineAsync(cancellationToken)))
+                while (!string.IsNullOrEmpty(await reader.ReadLineAsync(cancellationToken)))
                 {
                 }
 

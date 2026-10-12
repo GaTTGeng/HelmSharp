@@ -166,10 +166,7 @@ public sealed class TemplateTokenizer
 
         // {{- : the trim marker is part of the delimiter, not the expression.
         if (_pos + 2 < _input.Length && _input[_pos + 2] == '-')
-        {
             leftTrim = true;
-            return true;
-        }
 
         return true;
     }
@@ -205,7 +202,6 @@ public sealed class TemplateTokenizer
             // Check for }}
             if (_input[_pos] == '}' && _pos + 1 < _input.Length && _input[_pos + 1] == '}')
             {
-                rightTrim = false;
                 _pos += 2;
                 _col += 2;
                 return (sb.ToString(), rightTrim);

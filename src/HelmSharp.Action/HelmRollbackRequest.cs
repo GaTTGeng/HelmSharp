@@ -1,5 +1,6 @@
 namespace HelmSharp.Action;
 
+// ReSharper disable UnusedAutoPropertyAccessor.Global // Public request setters are consumed by library callers.
 /// <summary>
 /// Options for rolling a release back to a stored revision.
 /// </summary>
@@ -46,3 +47,4 @@ public sealed class HelmRollbackRequest
 
     public string? KubeConfigContent { get; set; }
 }
+// ReSharper restore UnusedAutoPropertyAccessor.Global

@@ -14,6 +14,7 @@ namespace HelmSharp.Action;
 /// </remarks>
 public class HelmPluginManager
 {
+    private static readonly HttpClient SharedHttpClient = new();
     private readonly string _pluginsDir;
 
     /// <summary>
@@ -62,8 +63,7 @@ public class HelmPluginManager
         else if (Uri.TryCreate(source, UriKind.Absolute, out var uri))
         {
             // Download from URL
-            using var http = new HttpClient();
-            var response = await http.GetAsync(uri, ct);
+            var response = await SharedHttpClient.GetAsync(uri, ct);
             response.EnsureSuccessStatusCode();
 
             if (uri.AbsolutePath.EndsWith(".tgz") || uri.AbsolutePath.EndsWith(".tar.gz"))
@@ -124,7 +124,9 @@ public class HelmPluginManager
                     if (doc.TryGetProperty("version", out var v)) version = v.GetString() ?? "unknown";
                     if (doc.TryGetProperty("description", out var d)) description = d.GetString() ?? "";
                 }
-                catch { }
+                catch (JsonException) { }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
             }
 
             plugins.Add(new HelmPluginInfo
@@ -314,6 +316,7 @@ public class HelmPluginManager
 }
 
 /// <summary>Metadata describing an installed plugin.</summary>
+// ReSharper disable UnusedAutoPropertyAccessor.Global // Public result getters are consumed by library callers.
 public class HelmPluginInfo
 {
     /// <summary>Plugin directory name; the identifier used with run/uninstall.</summary>
@@ -328,3 +331,4 @@ public class HelmPluginInfo
     /// <summary>Full path of the plugin directory.</summary>
     public string Path { get; set; } = string.Empty;
 }
+// ReSharper restore UnusedAutoPropertyAccessor.Global

@@ -82,11 +82,6 @@ internal static class ThreeWayMerge
                     mergedChildDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
                     merged[key] = mergedChildDict;
                 }
-                else
-                {
-                    mergedChildDict = (IDictionary<string, object?>)mergedChild;
-                }
-
                 DeepThreeWayMerge(lastDict, newDict, liveDict, mergedChildDict);
                 continue;
             }
@@ -145,8 +140,8 @@ internal static class ThreeWayMerge
         if (a is double da && b is double db) return Math.Abs(da - db) < 1e-10;
         if (a is long l1 && b is int i1) return l1 == i1;
         if (a is int i2 && b is long l2) return i2 == l2;
-        if (a is long l3 && b is double d1) return l3 == d1;
-        if (a is double d2 && b is long l4) return d2 == l4;
+        if (a is long l3 && b is double d1) return Math.Abs(l3 - d1) < 1e-10;
+        if (a is double d2 && b is long l4) return Math.Abs(d2 - l4) < 1e-10;
 
         // Dictionary comparison
         if (a is IDictionary<string, object?> dictA && b is IDictionary<string, object?> dictB)

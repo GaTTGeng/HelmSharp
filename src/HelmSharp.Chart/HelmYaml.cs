@@ -204,7 +204,7 @@ public static class HelmYaml
         return value switch
         {
             IDictionary<string, object?> dict => new SortedDictionary<string, object?>(
-                dict.ToDictionary(kvp => kvp.Key, kvp => SortKeys(kvp.Value))!,
+                dict.ToDictionary(kvp => kvp.Key, kvp => SortKeys(kvp.Value)),
                 StringComparer.Ordinal),
             // Dictionary<object, object> is already normalized by Normalize()
             // before Serialize is called — skip it to avoid key-collision crash.
@@ -296,7 +296,7 @@ public static class HelmYaml
     {
         public bool Accepts(Type type) => type == typeof(QuotedYamlString);
 
-        public object? ReadYaml(IParser parser, Type type, ObjectDeserializer rootDeserializer)
+        public object ReadYaml(IParser parser, Type type, ObjectDeserializer rootDeserializer)
             => throw new NotSupportedException();
 
         public void WriteYaml(IEmitter emitter, object? value, Type type, ObjectSerializer serializer)

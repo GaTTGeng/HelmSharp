@@ -311,7 +311,7 @@ public class RealChartGoldenTests
     {
         var normalized = HelmCliRunner.NormalizeLineEndings(output);
         // Remove helm source comments
-        normalized = System.Text.RegularExpressions.Regex.Replace(
+        normalized = Regex.Replace(
             normalized, @"(?m)^# Source: .+\n", string.Empty);
         return normalized.TrimEnd() + "\n";
     }
@@ -386,13 +386,13 @@ public class RealChartGoldenTests
 
     private static string ExtractKind(string yaml)
     {
-        var m = System.Text.RegularExpressions.Regex.Match(yaml, @"(?m)^kind:\s*(.+)$");
+        var m = Regex.Match(yaml, @"(?m)^kind:\s*(.+)$");
         return m.Success ? m.Groups[1].Value.Trim() : "Unknown";
     }
 
     private static string ExtractName(string yaml)
     {
-        var m = System.Text.RegularExpressions.Regex.Match(yaml, @"(?m)^\s+name:\s*(.+)$");
+        var m = Regex.Match(yaml, @"(?m)^\s+name:\s*(.+)$");
         return m.Success ? m.Groups[1].Value.Trim('"') : "Unknown";
     }
 }
@@ -449,6 +449,13 @@ public sealed record GoldenResult(
             durationMs = DurationMs,
             fullRenderError = FullRenderError,
             errorTypes = ErrorTypes,
-            summary = Summary
+            summary = Summary,
+            templateResults = TemplateResults.Select(result => new
+            {
+                path = result.Path,
+                success = result.Success,
+                output = result.Output,
+                error = result.Error
+            })
         }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
 }

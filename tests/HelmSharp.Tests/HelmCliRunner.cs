@@ -367,14 +367,8 @@ internal static class HelmCliRunner
 
         public void Dispose()
         {
-            try
-            {
-                if (Directory.Exists(_root))
-                    Directory.Delete(_root, recursive: true);
-            }
-            catch
-            {
-            }
+            if (Directory.Exists(_root))
+                Directory.Delete(_root, recursive: true);
         }
     }
 }

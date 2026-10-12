@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
 
+// Feature folders share the stable HelmSharp.Engine namespace.
+// ReSharper disable once CheckNamespace
 namespace HelmSharp.Engine;
 
 /// <summary>
@@ -17,7 +19,6 @@ internal static class TextFunctions
     /// </summary>
     public static string Plural(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
-        var word = TypeConverters.ToTemplateString(pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(3), context));
         var plural = TypeConverters.ToTemplateString(eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));
         var singular = TypeConverters.ToTemplateString(eval.EvaluateToken(tokens.ElementAtOrDefault(2), context));
         var count = (int)TypeConverters.ToLong(eval.EvaluateToken(tokens.ElementAtOrDefault(4), context));

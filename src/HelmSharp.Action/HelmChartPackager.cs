@@ -35,6 +35,7 @@ internal static class HelmChartPackager
     /// <param name="destination">Output directory; defaults to the current directory.</param>
     /// <param name="version">Overrides Chart.yaml's version (validated as SemVer) and renames the archive accordingly.</param>
     /// <param name="appVersion">Overrides Chart.yaml's appVersion.</param>
+    /// <param name="cancellationToken">Token used to cancel packaging.</param>
     /// <returns>Path of the created archive.</returns>
     /// <exception cref="DirectoryNotFoundException">The chart directory does not exist.</exception>
     /// <exception cref="FileNotFoundException">Chart.yaml is missing.</exception>

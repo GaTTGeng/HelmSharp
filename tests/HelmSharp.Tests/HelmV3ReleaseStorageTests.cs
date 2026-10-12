@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
+using HelmSharp.Chart;
 using HelmSharp.Release;
 using k8s.Models;
 
@@ -275,7 +276,7 @@ public class HelmV3ReleaseStorageTests
     [Fact]
     public void CreateChartSnapshot_MapsCompleteFreshHelmChartShape()
     {
-        var chart = new HelmSharp.Chart.HelmChart
+        var chart = new HelmChart
         {
             ApiVersion = "v2",
             Name = "fresh-chart",
@@ -305,7 +306,7 @@ public class HelmV3ReleaseStorageTests
             LockGenerated = "2026-07-17T00:00:00Z",
             ValuesYaml = "message: default\nnested:\n  enabled: true\n"
         };
-        chart.Dependencies.Add(new HelmSharp.Chart.HelmChartDependency
+        chart.Dependencies.Add(new HelmChartDependency
         {
             Name = "child",
             Version = "1.2.0",
@@ -316,7 +317,7 @@ public class HelmV3ReleaseStorageTests
             ImportValues = ["exports.data"],
             Alias = "child-alias"
         });
-        chart.LockEntries.Add(new HelmSharp.Chart.HelmChartLockEntry
+        chart.LockEntries.Add(new HelmChartLockEntry
         {
             Name = "child",
             Version = "1.2.0",
@@ -328,7 +329,7 @@ public class HelmV3ReleaseStorageTests
         chart.Files["README.md"] = Encoding.UTF8.GetBytes("# Fresh chart\n");
         chart.Files["assets/blob.bin"] = [0x00, 0x7f, 0xff];
         chart.Files["Chart.lock"] = Encoding.UTF8.GetBytes("digest: sha256:lock\n");
-        var child = new HelmSharp.Chart.HelmChart
+        var child = new HelmChart
         {
             ApiVersion = "v2",
             Name = "child",

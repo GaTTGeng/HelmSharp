@@ -1,5 +1,6 @@
 namespace HelmSharp.Action;
 
+// ReSharper disable UnusedAutoPropertyAccessor.Global // Public request setters are consumed by library callers.
 /// <summary>Options for rendering a chart's templates without applying them.</summary>
 public class HelmTemplateRequest
 {
@@ -53,6 +54,7 @@ public class HelmTemplateRequest
     /// <summary>
     /// If true, include CRDs in the output.
     /// </summary>
+    // ReSharper disable once InconsistentNaming // Preserve the Helm CLI spelling in the public API.
     public bool IncludeCRDs { get; set; }
 
     /// <summary>
@@ -73,6 +75,7 @@ public class HelmTemplateRequest
     /// <summary>
     /// API versions to use for Capabilities.
     /// </summary>
+    // ReSharper disable once CollectionNeverUpdated.Global // Callers populate this capability list.
     public List<string>? ApiVersions { get; set; }
 
     /// <summary>
@@ -80,3 +83,4 @@ public class HelmTemplateRequest
     /// </summary>
     public bool IsUpgrade { get; set; }
 }
+// ReSharper restore UnusedAutoPropertyAccessor.Global

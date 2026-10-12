@@ -1,5 +1,7 @@
 using System.Text.RegularExpressions;
 
+// Feature folders share the stable HelmSharp.Engine namespace.
+// ReSharper disable once CheckNamespace
 namespace HelmSharp.Engine;
 
 /// <summary>

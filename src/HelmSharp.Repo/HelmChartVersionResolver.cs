@@ -476,9 +476,6 @@ internal static class HelmChartVersionResolver
         return true;
     }
 
-    private static bool TryParseConstraintVersion(string text, out SemanticVersion version)
-        => TryParseConstraintVersion(text, out version, out _);
-
     private static bool TryParseConstraintVersion(string text, out SemanticVersion version, out int specifiedParts)
     {
         if (TryParseVersionPattern(text, out version, out specifiedParts, out var wildcardIndex) &&

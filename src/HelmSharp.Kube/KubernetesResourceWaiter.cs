@@ -13,7 +13,7 @@ namespace HelmSharp.Kube;
 /// </summary>
 public sealed class KubernetesResourceWaiter
 {
-    private readonly k8s.Kubernetes _client;
+    private readonly Kubernetes _client;
     private readonly int _timeoutSeconds;
     private readonly TimeProvider _timeProvider;
     private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
@@ -22,13 +22,13 @@ public sealed class KubernetesResourceWaiter
     /// <param name="client">Kubernetes client used for readiness reads.</param>
     /// <param name="timeoutSeconds">Maximum wait duration. Must be greater than zero.</param>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when the timeout is zero or negative.</exception>
-    public KubernetesResourceWaiter(k8s.Kubernetes client, int timeoutSeconds = 300)
+    public KubernetesResourceWaiter(Kubernetes client, int timeoutSeconds = 300)
         : this(client, timeoutSeconds, TimeProvider.System, Task.Delay)
     {
     }
 
     internal KubernetesResourceWaiter(
-        k8s.Kubernetes client,
+        Kubernetes client,
         int timeoutSeconds,
         TimeProvider timeProvider,
         Func<TimeSpan, CancellationToken, Task> delayAsync)

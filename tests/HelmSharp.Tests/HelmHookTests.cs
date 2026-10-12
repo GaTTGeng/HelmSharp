@@ -1,5 +1,6 @@
 using HelmSharp.Action;
 using HelmSharp.Kube;
+using HelmSharp.Release;
 using System.Diagnostics;
 using System.Net;
 using System.Text;
@@ -32,7 +33,7 @@ public class HelmHookTests
               key: value
             """;
 
-        var (remaining, hooks) = HelmHookExecutor.ExtractHooks(manifest, "default");
+        var (_, hooks) = HelmHookExecutor.ExtractHooks(manifest, "default");
 
         Assert.Single(hooks);
         Assert.Contains(HelmHookEvent.PreInstall, hooks[0].Events);
@@ -244,12 +245,12 @@ public class HelmHookTests
             metadata:
               name: delete-hook
             """;
-        var record = new HelmSharp.Release.HelmReleaseRecord
+        var record = new HelmReleaseRecord
         {
             Manifest = mainManifest,
             Hooks =
             [
-                new HelmSharp.Release.HelmReleaseHookRecord
+                new HelmReleaseHookRecord
                 {
                     Name = "delete-hook",
                     Kind = "Job",
@@ -276,7 +277,7 @@ public class HelmHookTests
     [Fact]
     public void ResolveStoredManifest_FallsBackToLegacyCombinedManifest()
     {
-        var record = new HelmSharp.Release.HelmReleaseRecord
+        var record = new HelmReleaseRecord
         {
             Manifest = """
                 apiVersion: v1
@@ -312,12 +313,12 @@ public class HelmHookTests
     [Fact]
     public void ResolveStoredManifest_UsesExplicitHookNamespace()
     {
-        var record = new HelmSharp.Release.HelmReleaseRecord
+        var record = new HelmReleaseRecord
         {
             Manifest = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: main\n",
             Hooks =
             [
-                new HelmSharp.Release.HelmReleaseHookRecord
+                new HelmReleaseHookRecord
                 {
                     Name = "namespace-hook",
                     Kind = "Pod",

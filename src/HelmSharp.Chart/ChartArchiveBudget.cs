@@ -185,7 +185,7 @@ internal sealed class ChartArchiveBudget
             // while sharing the total extracted budget. Compared in double space so a
             // near-unbounded ratio (trusted-chart profile) cannot overflow the bound.
             if (_compressedBytes > 0 &&
-                (double)_archiveExtractedBytes > _compressedBytes * _budget._limits.MaxCompressionRatio)
+                _archiveExtractedBytes > _compressedBytes * _budget._limits.MaxCompressionRatio)
             {
                 throw new ChartArchiveLimitExceededException(
                     ChartArchiveLimitKind.CompressionRatio,
@@ -498,7 +498,7 @@ internal sealed class ChartArchiveBudget
                     sawDigit = true;
                     if (octal > (long.MaxValue >> 3))
                         return long.MaxValue;
-                    octal = (octal << 3) | (long)(value - (byte)'0');
+                    octal = (octal << 3) + (uint)(value - (byte)'0');
                 }
 
                 return octal;

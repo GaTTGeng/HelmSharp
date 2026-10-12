@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
 
+// Feature folders share the stable HelmSharp.Engine namespace.
+// ReSharper disable once CheckNamespace
 namespace HelmSharp.Engine;
 
 /// <summary>
@@ -66,11 +68,11 @@ internal static class EncodingHelpers
         var i = 0;
         while (i < bytes.Length)
         {
-            var b0 = (int)(bytes[i] & 0xFF);
-            var b1 = i + 1 < bytes.Length ? (int)(bytes[i + 1] & 0xFF) : 0;
-            var b2 = i + 2 < bytes.Length ? (int)(bytes[i + 2] & 0xFF) : 0;
-            var b3 = i + 3 < bytes.Length ? (int)(bytes[i + 3] & 0xFF) : 0;
-            var b4 = i + 4 < bytes.Length ? (int)(bytes[i + 4] & 0xFF) : 0;
+            var b0 = bytes[i];
+            var b1 = i + 1 < bytes.Length ? bytes[i + 1] : 0;
+            var b2 = i + 2 < bytes.Length ? bytes[i + 2] : 0;
+            var b3 = i + 3 < bytes.Length ? bytes[i + 3] : 0;
+            var b4 = i + 4 < bytes.Length ? bytes[i + 4] : 0;
             sb.Append(alphabet[(b0 >> 3) & 0x1F]);
             sb.Append(alphabet[((b0 << 2) | (b1 >> 6)) & 0x1F]);
             if (i + 1 < bytes.Length) sb.Append(alphabet[(b1 >> 1) & 0x1F]);
@@ -104,13 +106,19 @@ internal static class EncodingHelpers
             var f = i < value.Length ? alphabet.IndexOf(char.ToUpper(value[i])) : -1; i++;
             var g = i < value.Length ? alphabet.IndexOf(char.ToUpper(value[i])) : -1; i++;
             var h = i < value.Length ? alphabet.IndexOf(char.ToUpper(value[i])) : -1; i++;
+            var hasC = c >= 0;
+            var hasD = d >= 0;
+            var hasE = e >= 0;
+            var hasF = f >= 0;
+            var hasG = g >= 0;
+            var hasH = h >= 0;
             if (a < 0) a = 0; if (b < 0) b = 0; if (c < 0) c = 0; if (d < 0) d = 0;
             if (e < 0) e = 0; if (f < 0) f = 0; if (g < 0) g = 0; if (h < 0) h = 0;
             bytes.Add((byte)((a << 3) | (b >> 2)));
-            if (c >= 0 || d >= 0) bytes.Add((byte)(((b & 3) << 6) | (c << 1) | (d >> 4)));
-            if (e >= 0) bytes.Add((byte)(((d & 0xF) << 4) | (e >> 1)));
-            if (f >= 0 || g >= 0) bytes.Add((byte)(((e & 1) << 7) | (f << 2) | (g >> 3)));
-            if (h >= 0) bytes.Add((byte)(((g & 7) << 5) | h));
+            if (hasC || hasD) bytes.Add((byte)(((b & 3) << 6) | (c << 1) | (d >> 4)));
+            if (hasE) bytes.Add((byte)(((d & 0xF) << 4) | (e >> 1)));
+            if (hasF || hasG) bytes.Add((byte)(((e & 1) << 7) | (f << 2) | (g >> 3)));
+            if (hasH) bytes.Add((byte)(((g & 7) << 5) | h));
         }
         return Encoding.UTF8.GetString(bytes.ToArray());
     }

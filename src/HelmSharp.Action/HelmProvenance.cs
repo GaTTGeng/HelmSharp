@@ -21,6 +21,7 @@ public static class HelmProvenance
     /// </summary>
     /// <param name="chartTgzPath">Chart archive to describe.</param>
     /// <param name="keyId">Optional PGP key identifier recorded in the file (not used for signing).</param>
+    /// <param name="ct">Token used to cancel provenance generation.</param>
     /// <returns>Path of the generated .prov file.</returns>
     public static async Task<string> GenerateProvFileAsync(
         string chartTgzPath,

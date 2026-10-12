@@ -1153,8 +1153,8 @@ public sealed class ChartArchiveLimitsTests : IDisposable
 
     public void Dispose()
     {
-        try { Directory.Delete(_tempDir, recursive: true); }
-        catch { }
+        if (Directory.Exists(_tempDir))
+            Directory.Delete(_tempDir, recursive: true);
     }
 
     private sealed class SingleResponseHandler(params HttpResponseMessage[] responses) : HttpMessageHandler

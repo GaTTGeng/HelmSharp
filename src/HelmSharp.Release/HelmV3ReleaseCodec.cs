@@ -251,7 +251,7 @@ internal static class HelmV3ReleaseCodec
                 .ToArray()),
             ["dependencies"] = new JsonArray(chart.Subcharts
                 .OrderBy(pair => pair.Key, StringComparer.Ordinal)
-                .Select(pair => CreateChartSnapshotNode(pair.Value))
+                .Select(pair => (JsonNode?)CreateChartSnapshotNode(pair.Value))
                 .ToArray())
         };
     }
