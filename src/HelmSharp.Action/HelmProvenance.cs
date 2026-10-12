@@ -429,7 +429,7 @@ public static class HelmProvenance
         var signatureGenerator = new PgpSignatureGenerator(
             secretKey.PublicKey.Algorithm,
             HashAlgorithmTag.Sha512);
-        signatureGenerator.InitSign(PgpSignature.BinaryDocument, privateKey);
+        signatureGenerator.InitSign(PgpSignature.CanonicalTextDocument, privateKey);
 
         var creationTime = new PgpSignatureSubpacketGenerator();
         creationTime.SetSignatureCreationTime(false, DateTime.UtcNow);

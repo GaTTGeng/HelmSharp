@@ -147,6 +147,10 @@ public sealed class HelmProvenanceTrustedKey
             return false;
         if (!key.IsMasterKey && (master is null || !master.IsMasterKey))
             return false;
+        // RFC 9580 requires a valid Direct Key signature before a V6 primary is used;
+        // a surviving UID certification cannot replace one stripped from the certificate.
+        if (key.IsMasterKey && key.Version == 6 && GetLatestValidPrimaryDirectKeySignature(key) is null)
+            return false;
         if (!AlgorithmCanSign(key.Algorithm))
             return false;
         if (IsExpiredAt(ComputeEffectiveExpiry(key, master), DateTime.UtcNow))
@@ -229,12 +233,51 @@ public sealed class HelmProvenanceTrustedKey
             if (!signature.VerifyCertification(master, subkey))
                 return false;
 
-            return !IsSignatureExpired(signature, DateTime.UtcNow);
+            if (IsSignatureExpired(signature, DateTime.UtcNow))
+                return false;
+
+            var hashed = signature.GetHashedSubPackets();
+            var keyFlags = hashed is not null && hashed.HasSubpacket(SignatureSubpacketTag.KeyFlags)
+                ? hashed.GetKeyFlags()
+                : 0;
+            var permitsSigning = (keyFlags & PgpKeyFlags.CanSign) != 0
+                || (keyFlags == 0 && AlgorithmCanSign(subkey.Algorithm));
+            return !permitsSigning || HasValidBackSignature(signature, master, subkey);
         }
         catch (Exception exception) when (exception is PgpException or ArgumentOutOfRangeException)
         {
             return false;
         }
+    }
+
+    private static bool HasValidBackSignature(PgpSignature binding, PgpPublicKey master, PgpPublicKey subkey)
+    {
+        try
+        {
+            var embeddedSignatures = binding.GetHashedSubPackets()?.GetEmbeddedSignatures();
+            if (embeddedSignatures is null)
+                return false;
+
+            for (var index = 0; index < embeddedSignatures.Count; index++)
+            {
+                var embedded = embeddedSignatures[index];
+                if (embedded.SignatureType != PgpSignature.PrimaryKeyBinding ||
+                    embedded.KeyId != subkey.KeyId ||
+                    IsSignatureExpired(embedded, DateTime.UtcNow))
+                    continue;
+
+                embedded.InitVerify(subkey);
+                if (embedded.VerifyCertification(master, subkey))
+                    return true;
+            }
+        }
+        catch (Exception exception) when (exception is PgpException or ArgumentOutOfRangeException
+            or IOException or InvalidOperationException or ArgumentException)
+        {
+            // A missing, malformed, expired, or forged back-signature cannot authorize a signing subkey.
+        }
+
+        return false;
     }
 
     private static IEnumerable<PgpSignature> GetValidSubkeyBindings(PgpPublicKey subkey, PgpPublicKey master)
@@ -321,10 +364,39 @@ public sealed class HelmProvenanceTrustedKey
         return latest;
     }
 
+    private static PgpSignature? GetLatestValidPrimaryDirectKeySignature(PgpPublicKey key)
+    {
+        PgpSignature? latest = null;
+        foreach (var signature in key.GetSignatures())
+        {
+            if (signature.SignatureType != PgpSignature.DirectKey || !HasValidDirectKeySignature(signature, key))
+                continue;
+            if (latest is null || signature.CreationTime > latest.CreationTime)
+                latest = signature;
+        }
+
+        return latest;
+    }
+
     private static bool HasValidDirectKeySignature(PgpSignature signature, PgpPublicKey key)
+        => HasValidPrimaryKeySignature(signature, key, PgpSignature.DirectKey)
+            && !IsDirectKeySignatureRevoked(signature, key);
+
+    private static bool IsDirectKeySignatureRevoked(PgpSignature directKeySignature, PgpPublicKey key)
+        // A Certification Revocation is hashed over the same primary-key data as the
+        // Direct Key assertion it cancels, and revocation wins equal creation times.
+        => key.GetSignatures().Any(revocation =>
+            revocation.SignatureType == PgpSignature.CertificationRevocation &&
+            revocation.CreationTime >= directKeySignature.CreationTime &&
+            HasValidPrimaryKeySignature(revocation, key, PgpSignature.CertificationRevocation));
+
+    private static bool HasValidPrimaryKeySignature(PgpSignature signature, PgpPublicKey key, int signatureType)
     {
         try
         {
+            if (signature.SignatureType != signatureType || signature.KeyId != key.KeyId)
+                return false;
+
             signature.InitVerify(key);
             var keyContents = key.PublicKeyPacket.GetEncodedContents();
             byte[] keyPrefix;

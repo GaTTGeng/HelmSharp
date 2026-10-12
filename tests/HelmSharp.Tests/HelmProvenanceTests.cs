@@ -180,6 +180,16 @@ public class HelmProvenanceTests
             signingFlags.SetKeyExpirationTime(false, 30);
         if (expiredPrimary)
             signingFlags.SetKeyExpirationTime(false, 3600);
+        var backSignatureGenerator = new PgpSignatureGenerator(
+            PublicKeyAlgorithmTag.RsaGeneral,
+            HashAlgorithmTag.Sha256);
+        backSignatureGenerator.InitSign(PgpSignature.PrimaryKeyBinding, signingPair.PrivateKey);
+        var backSignaturePackets = new PgpSignatureSubpacketGenerator();
+        backSignaturePackets.SetSignatureCreationTime(false, createdAt);
+        backSignatureGenerator.SetHashedSubpackets(backSignaturePackets.Generate());
+        signingFlags.SetEmbeddedSignature(
+            false,
+            backSignatureGenerator.GenerateCertification(primaryPair.PublicKey, signingPair.PublicKey));
         keyRingGenerator.AddSubKey(signingPair, signingFlags.Generate(), null);
         return (keyRingGenerator.GenerateSecretKeyRing(), keyRingGenerator.GeneratePublicKeyRing());
     }
@@ -1062,6 +1072,70 @@ public class HelmProvenanceTests
     }
 
     [Fact]
+    public void FromKeyringData_RevokedDirectKeyAssertionCannotAuthorizePrimary()
+    {
+        var keyGenerator = new RsaKeyPairGenerator();
+        keyGenerator.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
+        var pair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, keyGenerator.GenerateKeyPair(), DateTime.UtcNow);
+        var primary = pair.PublicKey;
+        var assertionGenerator = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        assertionGenerator.InitSign(PgpSignature.DirectKey, pair.PrivateKey);
+        var assertionPackets = new PgpSignatureSubpacketGenerator();
+        assertionPackets.SetSignatureCreationTime(false, DateTime.UtcNow.AddMinutes(-2));
+        assertionPackets.SetKeyFlags(true, PgpKeyFlags.CanSign);
+        assertionGenerator.SetHashedSubpackets(assertionPackets.Generate());
+        primary = PgpPublicKey.AddCertification(primary, assertionGenerator.GenerateCertification(primary));
+
+        var revocationGenerator = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        revocationGenerator.InitSign(PgpSignature.CertificationRevocation, pair.PrivateKey);
+        var revocationPackets = new PgpSignatureSubpacketGenerator();
+        revocationPackets.SetSignatureCreationTime(false, DateTime.UtcNow.AddMinutes(-1));
+        revocationGenerator.SetHashedSubpackets(revocationPackets.Generate());
+        primary = PgpPublicKey.AddCertification(primary, revocationGenerator.GenerateCertification(primary));
+
+        using var keyBytes = new MemoryStream();
+        primary.Encode(keyBytes);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(keyBytes.ToArray()));
+
+        Assert.Contains("signing key", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void FromKeyringData_Version6PrimaryWithoutDirectKeySignatureIsRejected()
+    {
+        const string userId = "V6 signer <v6@example.com>";
+        var keyGenerator = new RsaKeyPairGenerator();
+        keyGenerator.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
+        var pair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, keyGenerator.GenerateKeyPair(), DateTime.UtcNow);
+        var v6Packet = new PublicKeyPacket(
+            (byte)6,
+            pair.PublicKey.Algorithm,
+            pair.PublicKey.CreationTime,
+            pair.PublicKey.PublicKeyPacket.Key);
+        PgpPublicKey primary = new(v6Packet);
+        var certificationGenerator = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        certificationGenerator.InitSign(PgpSignature.PositiveCertification, pair.PrivateKey);
+        var certificationPackets = new PgpSignatureSubpacketGenerator();
+        certificationPackets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        certificationPackets.SetKeyFlags(true, PgpKeyFlags.CanSign);
+        certificationGenerator.SetHashedSubpackets(certificationPackets.Generate());
+        primary = PgpPublicKey.AddCertification(
+            primary,
+            userId,
+            certificationGenerator.GenerateCertification(userId, primary));
+
+        using var keyBytes = new MemoryStream();
+        primary.Encode(keyBytes);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(keyBytes.ToArray()));
+
+        Assert.Contains("signing key", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void FromKeyringData_RevokedPrimary_InvalidatesSigningSubkeys()
     {
         var (secretRing, publicRing) = CreateRingWithSigningSubkey();
@@ -1115,6 +1189,59 @@ public class HelmProvenanceTests
 
         Assert.Single(trusted);
         Assert.Equal(Convert.ToHexString(master.GetFingerprint()).ToLowerInvariant(), trusted[0].Fingerprint);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FromKeyringData_SigningSubkeyWithoutValidBackSignatureIsRejected(bool forgeBackSignature)
+    {
+        var (secretRing, publicRing) = CreateRingWithSigningSubkey();
+        var primarySecret = secretRing.GetSecretKeys().First();
+        var master = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+        var subkey = publicRing.GetPublicKeys().Single(key => !key.IsMasterKey);
+        foreach (var binding in subkey.GetKeySignatures()
+                     .Where(signature => signature.SignatureType == PgpSignature.SubkeyBinding)
+                     .ToArray())
+        {
+            subkey = PgpPublicKey.RemoveCertification(subkey, binding);
+        }
+
+        var bindingGenerator = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        bindingGenerator.InitSign(PgpSignature.SubkeyBinding, primarySecret.ExtractPrivateKey(null)!);
+        var bindingPackets = new PgpSignatureSubpacketGenerator();
+        bindingPackets.SetSignatureCreationTime(false, DateTime.UtcNow.AddMinutes(1));
+        bindingPackets.SetKeyFlags(true, PgpKeyFlags.CanSign);
+        if (forgeBackSignature)
+        {
+            var attackerGenerator = new RsaKeyPairGenerator();
+            attackerGenerator.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
+            var attackerPair = new PgpKeyPair(
+                PublicKeyAlgorithmTag.RsaGeneral,
+                attackerGenerator.GenerateKeyPair(),
+                DateTime.UtcNow);
+            var backSignatureGenerator = new PgpSignatureGenerator(
+                PublicKeyAlgorithmTag.RsaGeneral,
+                HashAlgorithmTag.Sha256);
+            backSignatureGenerator.InitSign(PgpSignature.PrimaryKeyBinding, attackerPair.PrivateKey);
+            backSignatureGenerator.SetHashedSubpackets(new PgpSignatureSubpacketGenerator().Generate());
+            bindingPackets.SetEmbeddedSignature(
+                false,
+                backSignatureGenerator.GenerateCertification(master, subkey));
+        }
+
+        bindingGenerator.SetHashedSubpackets(bindingPackets.Generate());
+        var forgedSubkey = PgpPublicKey.AddCertification(
+            subkey,
+            bindingGenerator.GenerateCertification(master, subkey));
+        var forgedRing = PgpPublicKeyRing.InsertPublicKey(publicRing, forgedSubkey);
+
+        using var ms = new MemoryStream();
+        forgedRing.Encode(ms);
+        var exception = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
+
+        Assert.Contains("signing key", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -1998,7 +2125,14 @@ public class HelmProvenanceTests
         {
             var tgz = await CreateChartArchiveAsync(work, "provchart", ChartYamlWithMaintainers("provchart"));
             var (_, _, signingKey, trustedKey) = CreateTestKeys();
-            await HelmProvenance.SignAsync(tgz, signingKey);
+            var provenancePath = await HelmProvenance.SignAsync(tgz, signingKey);
+            var provenance = await File.ReadAllTextAsync(provenancePath);
+            var signatureStart = provenance.IndexOf("-----BEGIN PGP SIGNATURE-----", StringComparison.Ordinal);
+            Assert.NotEqual(-1, signatureStart);
+            using var decodedSignature = PgpUtilities.GetDecoderStream(
+                new MemoryStream(Encoding.ASCII.GetBytes(provenance[signatureStart..])));
+            var signatureList = Assert.IsType<PgpSignatureList>(new PgpObjectFactory(decodedSignature).NextPgpObject());
+            Assert.Equal(PgpSignature.CanonicalTextDocument, signatureList[0].SignatureType);
 
             var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
             Assert.True(result.IsValid, result.FailureReason);
