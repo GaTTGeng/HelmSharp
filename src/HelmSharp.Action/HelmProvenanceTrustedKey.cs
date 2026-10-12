@@ -188,9 +188,7 @@ public sealed class HelmProvenanceTrustedKey
             ? key.GetSignatures().Where(s => s.KeyId == key.KeyId)
             : master is null
                 ? Enumerable.Empty<PgpSignature>()
-                : key.GetKeySignatures().Where(s => s.KeyId == master.KeyId
-                    && s.SignatureType == PgpSignature.SubkeyBinding
-                    && HasValidSubkeyBinding(s, master, key));
+                : GetValidSubkeyBindings(key, master);
 
         PgpSignature? governing = null;
         var hasValidatedAssertion = false;
@@ -239,23 +237,38 @@ public sealed class HelmProvenanceTrustedKey
         }
     }
 
+    private static IEnumerable<PgpSignature> GetValidSubkeyBindings(PgpPublicKey subkey, PgpPublicKey master)
+        => subkey.GetKeySignatures().Where(signature => signature.KeyId == master.KeyId
+            && signature.SignatureType == PgpSignature.SubkeyBinding
+            && HasValidSubkeyBinding(signature, master, subkey));
+
     private static bool HasValidSelfCertification(PgpSignature signature, PgpPublicKey key)
     {
         foreach (var userId in key.GetUserIds())
         {
-            try
-            {
-                signature.InitVerify(key);
-                if (signature.VerifyCertification(userId, key))
-                    return !IsSignatureExpired(signature, DateTime.UtcNow);
-            }
-            catch (PgpException)
-            {
-                // Malformed or forged self-signatures do not authorize key usage.
-            }
+            if (HasValidUserIdSignature(signature, userId, key))
+                return !IsCertificationRevoked(key, userId, signature.CreationTime);
         }
 
         return false;
+    }
+
+    private static bool IsCertificationRevoked(PgpPublicKey key, string userId, DateTime certificationTime)
+    {
+        PgpSignature? latestRevocation = null;
+        foreach (var signature in key.GetSignaturesForId(userId))
+        {
+            if (signature.SignatureType != PgpSignature.CertificationRevocation ||
+                !HasValidUserIdSignature(signature, userId, key))
+                continue;
+
+            if (latestRevocation is null || signature.CreationTime > latestRevocation.CreationTime)
+                latestRevocation = signature;
+        }
+
+        // Revocation wins equal timestamps; a later self-certification can reauthorize
+        // the UID while an older or revoked assertion cannot supply policy flags.
+        return latestRevocation is not null && latestRevocation.CreationTime >= certificationTime;
     }
 
     /// <summary>
@@ -275,8 +288,13 @@ public sealed class HelmProvenanceTrustedKey
             return primaryLifetime <= 0 ? null : key.CreationTime.AddSeconds(primaryLifetime);
         }
 
+        // Use the same current, verified binding set as key-flag authorization. The
+        // Bouncy Castle validity overload can consume an expired signature's lifetime.
+        var latestBinding = master is null
+            ? null
+            : GetValidSubkeyBindings(key, master).MaxBy(signature => signature.CreationTime);
         // Zero means the key never expires (RFC 4880 §5.2.3.3).
-        long validSeconds = master is null ? key.GetValidSeconds() : key.GetValidSeconds(master);
+        long validSeconds = latestBinding?.GetHashedSubPackets()?.GetKeyExpirationTime() ?? 0;
         return validSeconds <= 0 ? null : key.CreationTime.AddSeconds(validSeconds);
     }
 

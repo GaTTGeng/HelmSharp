@@ -140,13 +140,14 @@ public class HelmProvenanceTests
     private static (PgpSecretKeyRing SecretRing, PgpPublicKeyRing PublicRing) CreateRingWithSigningSubkey(
         string userId = "Signing subkey <subkey@example.com>",
         bool expiredPrimary = false,
-        bool expiredBinding = false)
+        bool expiredBinding = false,
+        bool expiredSubkeyKeyLifetime = false)
     {
         var kpg = new RsaKeyPairGenerator();
         kpg.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
         var createdAt = expiredPrimary
             ? DateTime.UtcNow.AddSeconds(-10)
-            : expiredBinding ? DateTime.UtcNow.AddMinutes(-2) : DateTime.UtcNow;
+            : expiredBinding || expiredSubkeyKeyLifetime ? DateTime.UtcNow.AddMinutes(-2) : DateTime.UtcNow;
         var primaryPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, kpg.GenerateKeyPair(), createdAt);
         var primaryFlags = new PgpSignatureSubpacketGenerator();
         primaryFlags.SetKeyFlags(true, PgpKeyFlags.CanCertify);
@@ -169,11 +170,14 @@ public class HelmProvenanceTests
             createdAt);
         var signingFlags = new PgpSignatureSubpacketGenerator();
         signingFlags.SetKeyFlags(true, PgpKeyFlags.CanSign);
-        if (expiredBinding)
+        if (expiredBinding || expiredSubkeyKeyLifetime)
         {
-            signingFlags.SetSignatureCreationTime(false, DateTime.UtcNow.AddMinutes(-1));
-            signingFlags.SetSignatureExpirationTime(false, 30);
+            signingFlags.SetSignatureCreationTime(false, createdAt);
         }
+        if (expiredBinding)
+            signingFlags.SetSignatureExpirationTime(false, 30);
+        if (expiredSubkeyKeyLifetime)
+            signingFlags.SetKeyExpirationTime(false, 30);
         if (expiredPrimary)
             signingFlags.SetKeyExpirationTime(false, 3600);
         keyRingGenerator.AddSubKey(signingPair, signingFlags.Generate(), null);
@@ -524,6 +528,60 @@ public class HelmProvenanceTests
         var (_, publicRing) = CreateRingWithSigningSubkey(expiredBinding: true);
         using var ms = new MemoryStream();
         publicRing.Encode(ms);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
+
+        Assert.Contains("No usable", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FromKeyringData_RevokedUserCertificationCannotAuthorizeSigning()
+    {
+        const string userId = "Revoked policy <revoked-policy@example.com>";
+        var (secretRing, publicRing, _, _) = CreateTestKeys(userId);
+        var primarySecret = secretRing.GetSecretKeys().First();
+        var primary = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+        var revocation = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        revocation.InitSign(PgpSignature.CertificationRevocation, primarySecret.ExtractPrivateKey(null)!);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, DateTime.UtcNow.AddMinutes(1));
+        revocation.SetHashedSubpackets(packets.Generate());
+        var revokedPrimary = PgpPublicKey.AddCertification(
+            primary,
+            userId,
+            revocation.GenerateCertification(userId, primary));
+        var revokedRing = PgpPublicKeyRing.InsertPublicKey(publicRing, revokedPrimary);
+        using var ms = new MemoryStream();
+        revokedRing.Encode(ms);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
+
+        Assert.Contains("No usable", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FromKeyringData_ExpiredBindingCannotExtendSubkeyKeyLifetime()
+    {
+        var (secretRing, publicRing) = CreateRingWithSigningSubkey(expiredSubkeyKeyLifetime: true);
+        var primarySecret = secretRing.GetSecretKeys().First();
+        var master = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+        var subkey = publicRing.GetPublicKeys().Single(key => !key.IsMasterKey);
+        var renewedBinding = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        renewedBinding.InitSign(PgpSignature.SubkeyBinding, primarySecret.ExtractPrivateKey(null)!);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, DateTime.UtcNow.AddMinutes(-1));
+        packets.SetSignatureExpirationTime(false, 30);
+        packets.SetKeyExpirationTime(false, 3600);
+        packets.SetKeyFlags(true, PgpKeyFlags.CanSign);
+        renewedBinding.SetHashedSubpackets(packets.Generate());
+        var updatedSubkey = PgpPublicKey.AddCertification(
+            subkey,
+            renewedBinding.GenerateCertification(master, subkey));
+        var updatedRing = PgpPublicKeyRing.InsertPublicKey(publicRing, updatedSubkey);
+        using var ms = new MemoryStream();
+        updatedRing.Encode(ms);
 
         var exception = Assert.Throws<ArgumentException>(
             () => HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
