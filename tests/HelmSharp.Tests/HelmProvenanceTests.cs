@@ -1136,6 +1136,48 @@ public class HelmProvenanceTests
     }
 
     [Fact]
+    public void IsUsableSigningKeyFor_Version6PrimaryWithoutDirectKeySignatureRejectsSigningSubkey()
+    {
+        var (secretRing, publicRing) = CreateRingWithSigningSubkey();
+        var secretKeys = secretRing.GetSecretKeys().ToArray();
+        var primarySecret = secretKeys[0];
+        var subkeySecret = secretKeys[1];
+        var masterV4 = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+        var subkey = publicRing.GetPublicKeys().Single(key => !key.IsMasterKey);
+        var masterV6 = new PgpPublicKey(new PublicKeyPacket(
+            (byte)6,
+            masterV4.Algorithm,
+            masterV4.CreationTime,
+            masterV4.PublicKeyPacket.Key));
+
+        foreach (var oldBinding in subkey.GetKeySignatures()
+                     .Where(signature => signature.SignatureType == PgpSignature.SubkeyBinding)
+                     .ToArray())
+        {
+            subkey = PgpPublicKey.RemoveCertification(subkey, oldBinding);
+        }
+
+        var backSignatureGenerator = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        backSignatureGenerator.InitSign(PgpSignature.PrimaryKeyBinding, subkeySecret.ExtractPrivateKey(null)!);
+        backSignatureGenerator.SetHashedSubpackets(new PgpSignatureSubpacketGenerator().Generate());
+        var bindingGenerator = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        bindingGenerator.InitSign(PgpSignature.SubkeyBinding, primarySecret.ExtractPrivateKey(null)!);
+        var bindingPackets = new PgpSignatureSubpacketGenerator();
+        bindingPackets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        bindingPackets.SetKeyFlags(true, PgpKeyFlags.CanSign);
+        bindingPackets.SetEmbeddedSignature(
+            false,
+            backSignatureGenerator.GenerateCertification(masterV6, subkey));
+        bindingGenerator.SetHashedSubpackets(bindingPackets.Generate());
+        var binding = bindingGenerator.GenerateCertification(masterV6, subkey);
+        binding.InitVerify(masterV6);
+        Assert.True(binding.VerifyCertification(masterV6, subkey));
+        subkey = PgpPublicKey.AddCertification(subkey, binding);
+
+        Assert.False(HelmProvenanceTrustedKey.IsUsableSigningKeyFor(subkey, masterV6));
+    }
+
+    [Fact]
     public void FromKeyringData_RevokedPrimary_InvalidatesSigningSubkeys()
     {
         var (secretRing, publicRing) = CreateRingWithSigningSubkey();

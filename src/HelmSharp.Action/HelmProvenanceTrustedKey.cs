@@ -149,7 +149,8 @@ public sealed class HelmProvenanceTrustedKey
             return false;
         // RFC 9580 requires a valid Direct Key signature before a V6 primary is used;
         // a surviving UID certification cannot replace one stripped from the certificate.
-        if (key.IsMasterKey && key.Version == 6 && GetLatestValidPrimaryDirectKeySignature(key) is null)
+        var primary = master ?? key;
+        if (primary.IsMasterKey && primary.Version == 6 && GetLatestValidPrimaryDirectKeySignature(primary) is null)
             return false;
         if (!AlgorithmCanSign(key.Algorithm))
             return false;
