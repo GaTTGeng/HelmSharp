@@ -190,7 +190,7 @@ public sealed class HelmProvenanceTrustedKey
         // signature. A subkey is governed only by a cryptographically verified binding
         // signature issued by its primary key; raw packet metadata is attacker-controlled.
         var assertions = key.IsMasterKey
-            ? key.GetSignatures().Where(s => s.KeyId == key.KeyId)
+            ? key.GetSignatures()
             : master is null
                 ? Enumerable.Empty<PgpSignature>()
                 : GetValidSubkeyBindings(key, master);
@@ -230,6 +230,9 @@ public sealed class HelmProvenanceTrustedKey
     {
         try
         {
+            if (IsWeakHashAlgorithm(signature.HashAlgorithm))
+                return false;
+
             signature.InitVerify(master);
             if (!signature.VerifyCertification(master, subkey))
                 return false;
@@ -263,7 +266,7 @@ public sealed class HelmProvenanceTrustedKey
             {
                 var embedded = embeddedSignatures[index];
                 if (embedded.SignatureType != PgpSignature.PrimaryKeyBinding ||
-                    embedded.KeyId != subkey.KeyId ||
+                    IsWeakHashAlgorithm(embedded.HashAlgorithm) ||
                     IsSignatureExpired(embedded, DateTime.UtcNow))
                     continue;
 
@@ -282,8 +285,7 @@ public sealed class HelmProvenanceTrustedKey
     }
 
     private static IEnumerable<PgpSignature> GetValidSubkeyBindings(PgpPublicKey subkey, PgpPublicKey master)
-        => subkey.GetKeySignatures().Where(signature => signature.KeyId == master.KeyId
-            && signature.SignatureType == PgpSignature.SubkeyBinding
+        => subkey.GetKeySignatures().Where(signature => signature.SignatureType == PgpSignature.SubkeyBinding
             && HasValidSubkeyBinding(signature, master, subkey));
 
     private static bool HasValidSelfCertification(PgpSignature signature, PgpPublicKey key)
@@ -395,7 +397,7 @@ public sealed class HelmProvenanceTrustedKey
     {
         try
         {
-            if (signature.SignatureType != signatureType || signature.KeyId != key.KeyId)
+            if (signature.SignatureType != signatureType || IsWeakHashAlgorithm(signature.HashAlgorithm))
                 return false;
 
             signature.InitVerify(key);
@@ -590,6 +592,9 @@ public sealed class HelmProvenanceTrustedKey
     {
         try
         {
+            if (IsWeakHashAlgorithm(signature.HashAlgorithm))
+                return false;
+
             signature.InitVerify(key);
             return signature.VerifyCertification(userId, key) && !IsSignatureExpired(signature, DateTime.UtcNow);
         }
@@ -598,4 +603,7 @@ public sealed class HelmProvenanceTrustedKey
             return false;
         }
     }
+
+    private static bool IsWeakHashAlgorithm(HashAlgorithmTag algorithm)
+        => algorithm is HashAlgorithmTag.MD5 or HashAlgorithmTag.Sha1 or HashAlgorithmTag.RipeMD160;
 }

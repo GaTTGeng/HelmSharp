@@ -65,6 +65,7 @@ public static class HelmProvenance
     /// <exception cref="FileNotFoundException">The chart archive does not exist.</exception>
     /// <exception cref="InvalidDataException">The archive has no readable <c>Chart.yaml</c>.</exception>
     /// <exception cref="PgpException">The signing key cannot be unlocked or signing fails.</exception>
+    /// <exception cref="NotSupportedException">The signing key is version 6, which the current signature generator cannot encode.</exception>
     public static async Task<string> SignAsync(
         string chartTgzPath,
         HelmProvenanceSigningKey signingKey,
@@ -434,6 +435,9 @@ public static class HelmProvenance
     private static string ClearSign(string body, HelmProvenanceSigningKey signingKey)
     {
         var secretKey = signingKey.GetSecretKey();
+        if (secretKey.PublicKey.Version == 6)
+            throw new NotSupportedException("OpenPGP version 6 signing keys are not supported by the current provenance signature generator.");
+
         var privateKey = secretKey.ExtractPrivateKeyUtf8(signingKey.Passphrase)
                          ?? throw new PgpException("Signing key could not be unlocked; check the passphrase.");
 
@@ -832,7 +836,7 @@ public static class HelmProvenance
 
             entryCount++;
             sole = digest.ToLowerInvariant();
-            if (archiveName is not null && string.Equals(key, archiveName, StringComparison.OrdinalIgnoreCase))
+            if (archiveName is not null && string.Equals(key, archiveName, StringComparison.Ordinal))
                 return sole;
         }
 

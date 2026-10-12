@@ -44,6 +44,7 @@ public class HelmProvenanceTests
             keyPair,
             userId,
             encAlgo,
+            HashAlgorithmTag.Sha512,
             true,
             passphrase ?? (char[])null!,
             false,
@@ -94,6 +95,7 @@ public class HelmProvenanceTests
             primaryPair,
             userId,
             SymmetricKeyAlgorithmTag.Null,
+            HashAlgorithmTag.Sha512,
             (char[])null!,
             false,
             primaryHashed.Generate(),
@@ -158,6 +160,7 @@ public class HelmProvenanceTests
             primaryPair,
             userId,
             SymmetricKeyAlgorithmTag.Null,
+            HashAlgorithmTag.Sha512,
             (char[])null!,
             false,
             primaryFlags.Generate(),
@@ -190,7 +193,12 @@ public class HelmProvenanceTests
         signingFlags.SetEmbeddedSignature(
             false,
             backSignatureGenerator.GenerateCertification(primaryPair.PublicKey, signingPair.PublicKey));
-        keyRingGenerator.AddSubKey(signingPair, signingFlags.Generate(), null);
+        keyRingGenerator.AddSubKey(
+            signingPair,
+            signingFlags.Generate(),
+            null,
+            HashAlgorithmTag.Sha512,
+            HashAlgorithmTag.Sha512);
         return (keyRingGenerator.GenerateSecretKeyRing(), keyRingGenerator.GeneratePublicKeyRing());
     }
 
@@ -207,6 +215,7 @@ public class HelmProvenanceTests
             pair,
             userId,
             SymmetricKeyAlgorithmTag.Null,
+            HashAlgorithmTag.Sha512,
             (char[])null!,
             false,
             hashed.Generate(),
@@ -246,6 +255,7 @@ public class HelmProvenanceTests
             pair,
             userId,
             SymmetricKeyAlgorithmTag.Null,
+            HashAlgorithmTag.Sha512,
             (char[])null!,
             false,
             hashed.Generate(),
@@ -618,6 +628,7 @@ public class HelmProvenanceTests
             pair,
             userId,
             SymmetricKeyAlgorithmTag.Null,
+            HashAlgorithmTag.Sha512,
             true,
             (char[])null!,
             false,
@@ -733,7 +744,7 @@ public class HelmProvenanceTests
         var certification = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
         certification.InitSign(PgpSignature.PositiveCertification, secretKey.ExtractPrivateKey(null)!);
         var packets = new PgpSignatureSubpacketGenerator();
-        packets.SetSignatureCreationTime(false, DateTime.UtcNow.AddMinutes(1));
+        packets.SetSignatureCreationTime(false, DateTime.UtcNow);
         packets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
         packets.SetPrimaryUserId(false, true);
         certification.SetHashedSubpackets(packets.Generate());
@@ -748,6 +759,36 @@ public class HelmProvenanceTests
         var trustedKey = Assert.Single(HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
 
         Assert.Equal(primaryUserId, trustedKey.UserId);
+    }
+
+    [Fact]
+    public void FromKeyringData_RejectsWeakHashUserCertification()
+    {
+        const string userId = "Weak hash <weak@example.com>";
+        var (secretRing, publicRing, _, _) = CreateTestKeys(userId);
+        var secretKey = secretRing.GetSecretKeys().First();
+        var primary = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+        foreach (var existing in primary.GetSignaturesForId(userId).ToArray())
+            primary = PgpPublicKey.RemoveCertification(primary, userId, existing);
+
+        var certification = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha1);
+        certification.InitSign(PgpSignature.PositiveCertification, secretKey.ExtractPrivateKey(null)!);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        packets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
+        certification.SetHashedSubpackets(packets.Generate());
+        primary = PgpPublicKey.AddCertification(
+            primary,
+            userId,
+            certification.GenerateCertification(userId, primary));
+        var ring = PgpPublicKeyRing.InsertPublicKey(publicRing, primary);
+        using var ms = new MemoryStream();
+        ring.Encode(ms);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
+
+        Assert.Contains("No usable", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1202,6 +1243,41 @@ public class HelmProvenanceTests
             () => HelmProvenanceTrustedKey.FromKeyringData(keyBytes.ToArray()));
 
         Assert.Contains("signing key", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void FromSecretKeyData_Version6SigningKeyIsNotSupported()
+    {
+        var keyGenerator = new RsaKeyPairGenerator();
+        keyGenerator.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
+        var originalPair = new PgpKeyPair(
+            PublicKeyAlgorithmTag.RsaGeneral,
+            keyGenerator.GenerateKeyPair(),
+            DateTime.UtcNow);
+        var version6Public = new PgpPublicKey(new PublicKeyPacket(
+            (byte)6,
+            originalPair.PublicKey.Algorithm,
+            originalPair.PublicKey.CreationTime,
+            originalPair.PublicKey.PublicKeyPacket.Key));
+        var version6Pair = new PgpKeyPair(version6Public, originalPair.PrivateKey);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
+        var secretKey = new PgpSecretKey(
+            (int)PgpSignature.PositiveCertification,
+            version6Pair,
+            "V6 signer <v6@example.com>",
+            SymmetricKeyAlgorithmTag.Null,
+            HashAlgorithmTag.Sha512,
+            (char[])null!,
+            false,
+            packets.Generate(),
+            null,
+            new SecureRandom());
+        using var keyBytes = new MemoryStream();
+        secretKey.Encode(keyBytes);
+
+        Assert.Throws<NotSupportedException>(
+            () => HelmProvenanceSigningKey.FromSecretKeyData(keyBytes.ToArray()));
     }
 
     [Fact]
@@ -1825,9 +1901,11 @@ public class HelmProvenanceTests
             var actualHash = Convert.ToHexString(
                 SHA256.HashData(await File.ReadAllBytesAsync(tgz))).ToLowerInvariant();
             var siblingHash = new string('c', 64);
+            var archiveName = Path.GetFileName(tgz);
+            var caseVariantArchiveName = char.ToUpperInvariant(archiveName[0]) + archiveName[1..];
 
-            // The sibling entry carries this archive's digest under the wrong name; the
-            // entry keyed by the archive filename carries a different digest.
+            // A case-only filename variant carries this archive's digest, but the exact
+            // archive-name entry carries a different digest and must take precedence.
             var prov = $"""
                 -----BEGIN PGP SIGNED MESSAGE-----
                 Hash: SHA512
@@ -1836,8 +1914,8 @@ public class HelmProvenanceTests
 
                 ...
                 files:
-                  sibling-0.0.1.tgz: sha256:{actualHash}
-                  {Path.GetFileName(tgz)}: sha256:{siblingHash}
+                  {caseVariantArchiveName}: sha256:{actualHash}
+                  {archiveName}: sha256:{siblingHash}
 
                 -----BEGIN PGP SIGNATURE-----
 
