@@ -32,7 +32,7 @@ This project follows semantic versioning once stable releases begin.
 - Provenance and key-policy verification reject MD5, SHA-1, and RIPEMD-160 signatures, report the certified primary user ID, match archive names case-sensitively, and exclude DSA and RSA keys below 2048 bits; V6 private keys are rejected until V6 signature generation is supported (#262).
 - Provenance digest lookup now selects the archive entry in the signed `files:` map by filename instead of returning the first `sha256:`-shaped scalar, so chart metadata such as an annotation value that looks like a digest can no longer be mistaken for the archive digest.
 - Provenance verification enforces algorithm-specific signature hash strength, validates key revocation signatures instead of trusting packet presence, merges renewed certificate copies before filtering, and applies the chart archive decompression budget while signing.
-- Clear-signed provenance rejects unsigned text around the signed message, malformed armor headers, non-canonical signature types, and unsupported critical signature subpackets; signing rejects unsafe archive paths while accepting conventional directory records.
+- Clear-signed provenance and trusted-key policy signatures reject unsupported critical subpackets, preventing unknown certificate, direct-key, subkey-binding, and embedded back-signature extensions from granting signing authority. Clear-signed provenance also rejects unsigned text around the signed message, malformed armor headers, and non-canonical signature types; signing rejects unsafe archive paths while accepting conventional directory records.
 
 ### Removed
 

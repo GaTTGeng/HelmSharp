@@ -185,7 +185,10 @@ public static class HelmProvenance
                 "OpenPGP clear-signed provenance must use a canonical-text document signature.");
         }
 
-        if (HasUnsupportedCriticalSubpackets(parsedSignature))
+        if (HasUnsupportedCriticalSubpackets(
+                parsedSignature,
+                SignatureSubpacketTag.CreationTime,
+                SignatureSubpacketTag.ExpireTime))
         {
             return Fail(null, null, null, ExtractSha256(provContent, archiveName), actualSha256,
                 "OpenPGP provenance signature contains an unsupported critical hashed subpacket.");
@@ -780,16 +783,15 @@ public static class HelmProvenance
         throw new PgpException("Signature block does not contain an OpenPGP signature packet.");
     }
 
-    private static bool HasUnsupportedCriticalSubpackets(PgpSignature signature)
+    internal static bool HasUnsupportedCriticalSubpackets(
+        PgpSignature signature,
+        params SignatureSubpacketTag[] supportedTags)
     {
         var criticalTags = signature.GetHashedSubPackets()?.GetCriticalTags();
         if (criticalTags is null)
             return false;
 
-        // Only creation and expiration times have defined meaning in this provenance
-        // verifier; a critical extension we do not process must invalidate the signature.
-        return criticalTags.Any(tag => tag is not SignatureSubpacketTag.CreationTime and
-            not SignatureSubpacketTag.ExpireTime);
+        return criticalTags.Any(tag => !supportedTags.Contains(tag));
     }
 
     private static bool IsWeakHashAlgorithm(HashAlgorithmTag algorithm)

@@ -199,6 +199,53 @@ public sealed class HelmProvenanceTrustedKey
         _ => false,
     };
 
+    private static bool HasSupportedPolicySubpackets(PgpSignature signature)
+    {
+        var supportedTags = signature.SignatureType switch
+        {
+            PgpSignature.PositiveCertification or PgpSignature.CasualCertification or
+                PgpSignature.NoCertification or PgpSignature.DefaultCertification =>
+                new[]
+                {
+                    SignatureSubpacketTag.CreationTime,
+                    SignatureSubpacketTag.ExpireTime,
+                    SignatureSubpacketTag.KeyExpireTime,
+                    SignatureSubpacketTag.KeyFlags,
+                    SignatureSubpacketTag.PrimaryUserId,
+                    SignatureSubpacketTag.RevocationKey,
+                },
+            PgpSignature.DirectKey =>
+                new[]
+                {
+                    SignatureSubpacketTag.CreationTime,
+                    SignatureSubpacketTag.ExpireTime,
+                    SignatureSubpacketTag.KeyExpireTime,
+                    SignatureSubpacketTag.KeyFlags,
+                    SignatureSubpacketTag.RevocationKey,
+                },
+            PgpSignature.SubkeyBinding =>
+                new[]
+                {
+                    SignatureSubpacketTag.CreationTime,
+                    SignatureSubpacketTag.ExpireTime,
+                    SignatureSubpacketTag.KeyExpireTime,
+                    SignatureSubpacketTag.KeyFlags,
+                    SignatureSubpacketTag.EmbeddedSignature,
+                },
+            PgpSignature.PrimaryKeyBinding =>
+                new[]
+                {
+                    SignatureSubpacketTag.CreationTime,
+                    SignatureSubpacketTag.ExpireTime,
+                },
+            PgpSignature.KeyRevocation or PgpSignature.SubkeyRevocation or PgpSignature.CertificationRevocation =>
+                [SignatureSubpacketTag.CreationTime],
+            _ => Array.Empty<SignatureSubpacketTag>(),
+        };
+
+        return !HelmProvenance.HasUnsupportedCriticalSubpackets(signature, supportedTags);
+    }
+
     /// <summary>
     /// Whether the governing key-flags subpacket authorizes data signing.
     /// Flags are asserted by verified direct-key or user-ID signatures on a primary
@@ -253,7 +300,9 @@ public sealed class HelmProvenanceTrustedKey
     {
         try
         {
-            if (IsWeakHashAlgorithm(signature.HashAlgorithm) || !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, master))
+            if (!HasSupportedPolicySubpackets(signature) ||
+                IsWeakHashAlgorithm(signature.HashAlgorithm) ||
+                !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, master))
                 return false;
 
             signature.InitVerify(master);
@@ -289,6 +338,7 @@ public sealed class HelmProvenanceTrustedKey
             {
                 var embedded = embeddedSignatures[index];
                 if (embedded.SignatureType != PgpSignature.PrimaryKeyBinding ||
+                    !HasSupportedPolicySubpackets(embedded) ||
                     IsWeakHashAlgorithm(embedded.HashAlgorithm) ||
                     !HelmProvenance.HasSufficientSignatureHash(embedded.HashAlgorithm, subkey) ||
                     IsSignatureExpired(embedded, DateTime.UtcNow))
@@ -421,7 +471,8 @@ public sealed class HelmProvenanceTrustedKey
     {
         try
         {
-            if (signature.SignatureType != signatureType || IsWeakHashAlgorithm(signature.HashAlgorithm) ||
+            if (signature.SignatureType != signatureType || !HasSupportedPolicySubpackets(signature) ||
+                IsWeakHashAlgorithm(signature.HashAlgorithm) ||
                 !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, key))
                 return false;
 
@@ -511,7 +562,8 @@ public sealed class HelmProvenanceTrustedKey
         var revocationType = key.IsMasterKey ? PgpSignature.KeyRevocation : PgpSignature.SubkeyRevocation;
         foreach (var signature in key.GetKeySignatures())
         {
-            if (signature.SignatureType != revocationType || IsWeakHashAlgorithm(signature.HashAlgorithm))
+            if (signature.SignatureType != revocationType || !HasSupportedPolicySubpackets(signature) ||
+                IsWeakHashAlgorithm(signature.HashAlgorithm))
                 continue;
 
             foreach (var revoker in revokers)
@@ -710,7 +762,8 @@ public sealed class HelmProvenanceTrustedKey
     {
         try
         {
-            if (IsWeakHashAlgorithm(signature.HashAlgorithm) ||
+            if (!HasSupportedPolicySubpackets(signature) ||
+                IsWeakHashAlgorithm(signature.HashAlgorithm) ||
                 !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, key))
                 return false;
 

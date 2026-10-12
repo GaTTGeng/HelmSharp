@@ -33,8 +33,8 @@ public class HelmProvenanceTests
 
         var hashed = new PgpSignatureSubpacketGenerator();
         hashed.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
-        hashed.SetPreferredSymmetricAlgorithms(true, [(int)SymmetricKeyAlgorithmTag.Aes256]);
-        hashed.SetPreferredHashAlgorithms(true, [(int)HashAlgorithmTag.Sha512, (int)HashAlgorithmTag.Sha256]);
+        hashed.SetPreferredSymmetricAlgorithms(false, [(int)SymmetricKeyAlgorithmTag.Aes256]);
+        hashed.SetPreferredHashAlgorithms(false, [(int)HashAlgorithmTag.Sha512, (int)HashAlgorithmTag.Sha256]);
         if (validitySeconds is not null)
             hashed.SetKeyExpirationTime(false, validitySeconds.Value);
 
@@ -202,6 +202,9 @@ public class HelmProvenanceTests
             HashAlgorithmTag.Sha512);
         return (keyRingGenerator.GenerateSecretKeyRing(), keyRingGenerator.GeneratePublicKeyRing());
     }
+
+    private static void AddUnknownCriticalSubpacket(PgpSignatureSubpacketGenerator packets)
+        => AddCriticalSubpacket(packets, (SignatureSubpacketTag)100);
 
     /// <summary>Binary public keyring containing a single signing key that is revoked.</summary>
     private static byte[] CreateRevokedSigningKeyring(string userId = "Revoked <revoked@example.com>")
@@ -382,17 +385,7 @@ public class HelmProvenanceTests
         if (expirationSeconds is not null)
             packets.SetSignatureExpirationTime(false, expirationSeconds.Value);
         if (criticalSubpacketTag is not null)
-        {
-            var subpacketConstructor = typeof(SignatureSubpacket).GetConstructor(
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
-                binder: null,
-                [typeof(SignatureSubpacketTag), typeof(bool), typeof(bool), typeof(byte[])],
-                modifiers: null)
-                ?? throw new InvalidOperationException("Could not find the OpenPGP subpacket test constructor.");
-            var subpacket = (SignatureSubpacket)subpacketConstructor.Invoke(
-                [criticalSubpacketTag.Value, true, false, Array.Empty<byte>()]);
-            packets.AddCustomSubpacket(subpacket);
-        }
+            AddCriticalSubpacket(packets, criticalSubpacketTag.Value);
         signatureGenerator.SetHashedSubpackets(packets.Generate());
 
         var canonical = body.Replace("\r\n", "\n", StringComparison.Ordinal);
@@ -413,6 +406,19 @@ public class HelmProvenanceTests
         return "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\n" + escapedBody +
             (escapedBody.EndsWith("\n", StringComparison.Ordinal) ? string.Empty : "\n") +
             "-----BEGIN PGP SIGNATURE-----\n\n" + wrappedArmor + "\n-----END PGP SIGNATURE-----\n";
+    }
+
+    private static void AddCriticalSubpacket(PgpSignatureSubpacketGenerator packets, SignatureSubpacketTag tag)
+    {
+        var subpacketConstructor = typeof(SignatureSubpacket).GetConstructor(
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
+            binder: null,
+            [typeof(SignatureSubpacketTag), typeof(bool), typeof(bool), typeof(byte[])],
+            modifiers: null)
+            ?? throw new InvalidOperationException("Could not find the OpenPGP subpacket test constructor.");
+        var subpacket = (SignatureSubpacket)subpacketConstructor.Invoke(
+            [tag, true, false, Array.Empty<byte>()]);
+        packets.AddCustomSubpacket(subpacket);
     }
 
     private static string TempDir()
@@ -510,6 +516,36 @@ public class HelmProvenanceTests
 
         var exception = Assert.Throws<ArgumentException>(
             () => HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
+
+        Assert.Contains("No usable", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FromKeyringData_UnknownCriticalSelfCertificationIsRejected()
+    {
+        var keyGenerator = new RsaKeyPairGenerator();
+        keyGenerator.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
+        var pair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, keyGenerator.GenerateKeyPair(), DateTime.UtcNow);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
+        AddUnknownCriticalSubpacket(packets);
+        var keyRingGenerator = new PgpKeyRingGenerator(
+            (int)PgpSignature.PositiveCertification,
+            pair,
+            "Critical extension <critical@example.com>",
+            SymmetricKeyAlgorithmTag.Null,
+            HashAlgorithmTag.Sha512,
+            (char[])null!,
+            false,
+            packets.Generate(),
+            null,
+            new SecureRandom());
+        var publicRing = keyRingGenerator.GeneratePublicKeyRing();
+        using var keyBytes = new MemoryStream();
+        publicRing.Encode(keyBytes);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(keyBytes.ToArray()));
 
         Assert.Contains("No usable", exception.Message, StringComparison.Ordinal);
     }
@@ -1488,6 +1524,34 @@ public class HelmProvenanceTests
     }
 
     [Fact]
+    public void FromKeyringData_UnknownCriticalDirectKeyAssertionIsRejected()
+    {
+        var keyGenerator = new RsaKeyPairGenerator();
+        keyGenerator.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
+        var pair = new PgpKeyPair(
+            PublicKeyAlgorithmTag.RsaGeneral,
+            keyGenerator.GenerateKeyPair(),
+            DateTime.UtcNow);
+        var signatureGenerator = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        signatureGenerator.InitSign(PgpSignature.DirectKey, pair.PrivateKey);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        packets.SetKeyFlags(true, PgpKeyFlags.CanSign);
+        AddUnknownCriticalSubpacket(packets);
+        signatureGenerator.SetHashedSubpackets(packets.Generate());
+        var signedPrimary = PgpPublicKey.AddCertification(
+            pair.PublicKey,
+            signatureGenerator.GenerateCertification(pair.PublicKey));
+        using var keyBytes = new MemoryStream();
+        signedPrimary.Encode(keyBytes);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(keyBytes.ToArray()));
+
+        Assert.Contains("No usable", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void FromKeyringData_RevokedDirectKeyAssertionCannotAuthorizePrimary()
     {
         var keyGenerator = new RsaKeyPairGenerator();
@@ -1682,6 +1746,108 @@ public class HelmProvenanceTests
 
         Assert.Single(trusted);
         Assert.Equal(Convert.ToHexString(master.GetFingerprint()).ToLowerInvariant(), trusted[0].Fingerprint);
+    }
+
+    [Fact]
+    public void FromKeyringData_UnknownCriticalSubkeyBindingCannotAuthorizeSigning()
+    {
+        var (secretRing, publicRing) = CreateRingWithSigningSubkey();
+        var masterSecret = secretRing.GetSecretKeys().First(key => key.IsMasterKey);
+        var master = publicRing.GetPublicKeys().First(key => key.IsMasterKey);
+        var subkey = publicRing.GetPublicKeys().First(key => !key.IsMasterKey);
+        var priorBinding = subkey.GetKeySignatures().First(signature => signature.SignatureType == PgpSignature.SubkeyBinding);
+        var backSignature = priorBinding.GetHashedSubPackets()!.GetEmbeddedSignatures()[0];
+
+        var bindingGenerator = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha512);
+        bindingGenerator.InitSign(PgpSignature.SubkeyBinding, masterSecret.ExtractPrivateKey(null)!);
+        var bindingPackets = new PgpSignatureSubpacketGenerator();
+        bindingPackets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        bindingPackets.SetKeyFlags(true, PgpKeyFlags.CanSign);
+        AddUnknownCriticalSubpacket(bindingPackets);
+        bindingPackets.AddEmbeddedSignature(false, backSignature);
+        bindingGenerator.SetHashedSubpackets(bindingPackets.Generate());
+        var binding = bindingGenerator.GenerateCertification(master, subkey);
+        foreach (var previousBinding in subkey.GetKeySignatures()
+                     .Where(signature => signature.SignatureType == PgpSignature.SubkeyBinding)
+                     .ToArray())
+        {
+            subkey = PgpPublicKey.RemoveCertification(subkey, previousBinding);
+        }
+        subkey = PgpPublicKey.AddCertification(subkey, binding);
+        publicRing = PgpPublicKeyRing.InsertPublicKey(publicRing, subkey);
+        using var keyBytes = new MemoryStream();
+        publicRing.Encode(keyBytes);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(keyBytes.ToArray()));
+
+        Assert.Contains("No usable", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FromKeyringData_UnknownCriticalEmbeddedBackSignatureCannotAuthorizeSigning()
+    {
+        var keyGenerator = new RsaKeyPairGenerator();
+        keyGenerator.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
+        var primaryPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, keyGenerator.GenerateKeyPair(), DateTime.UtcNow);
+        var signingPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, keyGenerator.GenerateKeyPair(), primaryPair.PublicKey.CreationTime);
+        var primaryFlags = new PgpSignatureSubpacketGenerator();
+        primaryFlags.SetKeyFlags(true, PgpKeyFlags.CanCertify);
+        var keyRingGenerator = new PgpKeyRingGenerator(
+            (int)PgpSignature.PositiveCertification,
+            primaryPair,
+            "Back signature <backsignature@example.com>",
+            SymmetricKeyAlgorithmTag.Null,
+            HashAlgorithmTag.Sha512,
+            (char[])null!,
+            false,
+            primaryFlags.Generate(),
+            null,
+            new SecureRandom());
+        var signingFlags = new PgpSignatureSubpacketGenerator();
+        signingFlags.SetKeyFlags(true, PgpKeyFlags.CanSign);
+        keyRingGenerator.AddSubKey(signingPair, signingFlags.Generate(), null);
+        var publicRing = keyRingGenerator.GeneratePublicKeyRing();
+        var master = publicRing.GetPublicKeys().First(key => key.IsMasterKey);
+        var subkey = publicRing.GetPublicKeys().First(key => !key.IsMasterKey);
+
+        var backSignatureGenerator = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        backSignatureGenerator.InitSign(PgpSignature.PrimaryKeyBinding, signingPair.PrivateKey);
+        var backSignaturePackets = new PgpSignatureSubpacketGenerator();
+        backSignaturePackets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        AddUnknownCriticalSubpacket(backSignaturePackets);
+        backSignatureGenerator.SetHashedSubpackets(backSignaturePackets.Generate());
+        var backSignature = backSignatureGenerator.GenerateCertification(master, subkey);
+
+        var bindingGenerator = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha512);
+        bindingGenerator.InitSign(PgpSignature.SubkeyBinding, primaryPair.PrivateKey);
+        var bindingPackets = new PgpSignatureSubpacketGenerator();
+        bindingPackets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        bindingPackets.SetKeyFlags(true, PgpKeyFlags.CanSign);
+        bindingPackets.AddEmbeddedSignature(false, backSignature);
+        bindingGenerator.SetHashedSubpackets(bindingPackets.Generate());
+        var binding = bindingGenerator.GenerateCertification(master, subkey);
+
+        foreach (var previousBinding in subkey.GetKeySignatures()
+                     .Where(signature => signature.SignatureType == PgpSignature.SubkeyBinding)
+                     .ToArray())
+        {
+            subkey = PgpPublicKey.RemoveCertification(subkey, previousBinding);
+        }
+        subkey = PgpPublicKey.AddCertification(subkey, binding);
+        publicRing = PgpPublicKeyRing.InsertPublicKey(publicRing, subkey);
+
+        var embeddedSignatures = binding.GetHashedSubPackets()!.GetEmbeddedSignatures();
+        Assert.Equal(1, embeddedSignatures.Count);
+        var embedded = embeddedSignatures[0];
+        Assert.Contains((SignatureSubpacketTag)100, embedded.GetHashedSubPackets()!.GetCriticalTags()!);
+        using var keyBytes = new MemoryStream();
+        publicRing.Encode(keyBytes);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(keyBytes.ToArray()));
+
+        Assert.Contains("No usable", exception.Message, StringComparison.Ordinal);
     }
 
     [Theory]
