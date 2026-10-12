@@ -231,10 +231,7 @@ public sealed class HelmProvenanceTrustedKey
             if (!signature.VerifyCertification(master, subkey))
                 return false;
 
-            var validitySeconds = signature.GetHashedSubPackets()?.GetSignatureExpirationTime() ?? 0;
-            return validitySeconds <= 0 || !IsExpiredAt(
-                signature.CreationTime.AddSeconds(validitySeconds),
-                DateTime.UtcNow);
+            return !IsSignatureExpired(signature, DateTime.UtcNow);
         }
         catch (Exception exception) when (exception is PgpException or ArgumentOutOfRangeException)
         {
@@ -250,7 +247,7 @@ public sealed class HelmProvenanceTrustedKey
             {
                 signature.InitVerify(key);
                 if (signature.VerifyCertification(userId, key))
-                    return true;
+                    return !IsSignatureExpired(signature, DateTime.UtcNow);
             }
             catch (PgpException)
             {
@@ -337,7 +334,7 @@ public sealed class HelmProvenanceTrustedKey
             // key revocations only; a direct-key signature hashes the primary packet.
             signature.Update(keyPrefix);
             signature.Update(keyContents);
-            return signature.Verify();
+            return signature.Verify() && !IsSignatureExpired(signature, DateTime.UtcNow);
         }
         catch (Exception exception) when (exception is PgpException or IOException
             or InvalidOperationException or ArgumentException)
@@ -357,6 +354,23 @@ public sealed class HelmProvenanceTrustedKey
         return keyExpiry is null ? primaryExpiry
             : primaryExpiry is null ? keyExpiry
             : keyExpiry < primaryExpiry ? keyExpiry : primaryExpiry;
+    }
+
+    private static bool IsSignatureExpired(PgpSignature signature, DateTime at)
+    {
+        var validitySeconds = signature.GetHashedSubPackets()?.GetSignatureExpirationTime() ?? 0;
+        if (validitySeconds <= 0)
+            return false;
+
+        try
+        {
+            return IsExpiredAt(signature.CreationTime.AddSeconds(validitySeconds), at);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            // An unrepresentable expiration timestamp cannot extend authorization.
+            return true;
+        }
     }
 
     private static bool IsExpiredAt(DateTime? expiresAt, DateTime at)
@@ -475,7 +489,7 @@ public sealed class HelmProvenanceTrustedKey
         try
         {
             signature.InitVerify(key);
-            return signature.VerifyCertification(userId, key);
+            return signature.VerifyCertification(userId, key) && !IsSignatureExpired(signature, DateTime.UtcNow);
         }
         catch (PgpException)
         {

@@ -151,10 +151,14 @@ public static class HelmProvenance
         // --- 4. Verify the OpenPGP signature over the canonicalized signed body ---
         PgpSignature? parsedSignature = null;
         bool signatureValid = false;
+        bool trustedKeyMatchedExpiredSignature = false;
         bool trustedKeyMatchedButUnusable = false;
         string? signerFingerprint = null;
         string? signerKeyId = null;
         string? signerUserId = null;
+        string? expiredFingerprint = null;
+        string? expiredKeyId = null;
+        string? expiredUserId = null;
         string? unusableFingerprint = null;
         string? unusableKeyId = null;
         string? unusableUserId = null;
@@ -168,6 +172,15 @@ public static class HelmProvenance
                 parsedSignature.Update(CanonicalizeForHash(signedBody));
                 if (parsedSignature.Verify())
                 {
+                    if (IsSignatureExpired(parsedSignature, DateTime.UtcNow))
+                    {
+                        trustedKeyMatchedExpiredSignature = true;
+                        expiredFingerprint ??= trusted.Fingerprint;
+                        expiredKeyId ??= trusted.KeyId;
+                        expiredUserId ??= trusted.UserId;
+                        continue;
+                    }
+
                     // A mathematical signature is not enough: OpenPGP policy must also
                     // authorize this key to sign. Fail closed on revoked, expired, and
                     // non-signing keys (e.g. encryption-only subkeys).
@@ -199,6 +212,13 @@ public static class HelmProvenance
 
         if (!signatureValid)
         {
+            if (trustedKeyMatchedExpiredSignature)
+            {
+                return Fail(expiredFingerprint, expiredKeyId, expiredUserId,
+                    ExtractSha256(provContent, archiveName), actualSha256,
+                    "Provenance signature has expired.");
+            }
+
             if (trustedKeyMatchedButUnusable)
             {
                 return Fail(unusableFingerprint, unusableKeyId, unusableUserId,
@@ -221,7 +241,15 @@ public static class HelmProvenance
         var expectedSha256 = ExtractSha256(signedBody, archiveName);
         if (expectedSha256 is null)
         {
-            return Fail(signerFingerprint, signerKeyId, signerUserId, null, actualSha256,
+            return new HelmProvenanceVerificationResult(
+                signatureValid: true,
+                signerTrusted: true,
+                digestMatches: false,
+                signerFingerprint,
+                signerKeyId,
+                signerUserId,
+                expectedSha256: null,
+                actualSha256,
                 "Signed provenance body does not contain a chart digest in the files section.");
         }
 
@@ -913,6 +941,22 @@ public static class HelmProvenance
             actualSha256,
             failureReason);
 
+    private static bool IsSignatureExpired(PgpSignature signature, DateTime at)
+    {
+        var validitySeconds = signature.GetHashedSubPackets()?.GetSignatureExpirationTime() ?? 0;
+        if (validitySeconds <= 0)
+            return false;
+
+        try
+        {
+            return at >= signature.CreationTime.AddSeconds(validitySeconds);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return true;
+        }
+    }
+
     // --- Metadata extraction from the chart archive ---
 
     private static async Task<Dictionary<string, object?>> ReadArchiveMetadataAsync(
@@ -922,6 +966,8 @@ public static class HelmProvenance
         using var input = new MemoryStream(archiveBytes, writable: false);
         await using var gzip = new System.IO.Compression.GZipStream(input, System.IO.Compression.CompressionMode.Decompress);
         using var reader = new System.Formats.Tar.TarReader(gzip);
+        Dictionary<string, object?>? chartMetadata = null;
+        var rootChartMetadataCount = 0;
         while (reader.GetNextEntry() is { } entry)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -935,11 +981,18 @@ public static class HelmProvenance
             if (!chartFileName && !rootChartFileName)
                 continue;
 
+            rootChartMetadataCount++;
+            if (rootChartMetadataCount > 1)
+                throw new InvalidDataException("Chart archive contains multiple root Chart.yaml entries.");
+
             using var memory = new MemoryStream();
             await entry.DataStream.CopyToAsync(memory, cancellationToken).ConfigureAwait(false);
             var yaml = Encoding.UTF8.GetString(memory.ToArray());
-            return HelmYaml.DeserializeDictionary(yaml);
+            chartMetadata = HelmYaml.DeserializeDictionary(yaml);
         }
+
+        if (chartMetadata is not null)
+            return chartMetadata;
 
         throw new InvalidDataException("Chart archive does not contain Chart.yaml.");
     }

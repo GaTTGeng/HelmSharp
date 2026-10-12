@@ -329,6 +329,53 @@ public class HelmProvenanceTests
         }
     }
 
+    private static string ExtractCleartextBodyForTest(string provContent)
+    {
+        var text = provContent.Replace("\r\n", "\n", StringComparison.Ordinal);
+        var bodyStart = text.IndexOf("\n\n", StringComparison.Ordinal) + 2;
+        var signatureStart = text.IndexOf("-----BEGIN PGP SIGNATURE-----", bodyStart, StringComparison.Ordinal);
+        Assert.True(bodyStart >= 2 && signatureStart > bodyStart);
+        return string.Join('\n', text.AsSpan(bodyStart, signatureStart - bodyStart)
+            .ToString()
+            .Split('\n')
+            .Select(line => line.StartsWith("- ", StringComparison.Ordinal) ? line[2..] : line));
+    }
+
+    private static string CreateClearSignedProvForTest(
+        string body,
+        HelmProvenanceSigningKey signingKey,
+        DateTime creationTime,
+        long? expirationSeconds = null)
+    {
+        var secretKey = signingKey.GetSecretKey();
+        var signatureGenerator = new PgpSignatureGenerator(secretKey.PublicKey.Algorithm, HashAlgorithmTag.Sha512);
+        signatureGenerator.InitSign(PgpSignature.BinaryDocument, secretKey.ExtractPrivateKeyUtf8(signingKey.Passphrase)!);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, creationTime);
+        if (expirationSeconds is not null)
+            packets.SetSignatureExpirationTime(false, expirationSeconds.Value);
+        signatureGenerator.SetHashedSubpackets(packets.Generate());
+
+        var canonical = body.Replace("\r\n", "\n", StringComparison.Ordinal);
+        if (canonical.EndsWith("\n", StringComparison.Ordinal))
+            canonical = canonical[..^1];
+        var lines = canonical.Split('\n');
+        var signedBytes = Encoding.UTF8.GetBytes(string.Join("\r\n", lines.Select(line => line.TrimEnd(' ', '\t'))));
+        signatureGenerator.Update(signedBytes, 0, signedBytes.Length);
+        using var signatureBytes = new MemoryStream();
+        signatureGenerator.Generate().Encode(signatureBytes);
+
+        var armor = Convert.ToBase64String(signatureBytes.ToArray());
+        var wrappedArmor = string.Join('\n', Enumerable.Range(0, (armor.Length + 63) / 64)
+            .Select(index => armor.Substring(index * 64, Math.Min(64, armor.Length - index * 64))));
+        var escapedBody = string.Join('\n', body.Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Split('\n')
+            .Select(line => line.StartsWith("-", StringComparison.Ordinal) ? "- " + line : line));
+        return "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\n" + escapedBody +
+            (escapedBody.EndsWith("\n", StringComparison.Ordinal) ? string.Empty : "\n") +
+            "-----BEGIN PGP SIGNATURE-----\n\n" + wrappedArmor + "\n-----END PGP SIGNATURE-----\n";
+    }
+
     private static string TempDir()
     {
         var dir = Path.Combine(Path.GetTempPath(), "helmsharp-prov-" + Guid.NewGuid().ToString("N"));
@@ -477,6 +524,68 @@ public class HelmProvenanceTests
         var (_, publicRing) = CreateRingWithSigningSubkey(expiredBinding: true);
         using var ms = new MemoryStream();
         publicRing.Encode(ms);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
+
+        Assert.Contains("No usable", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FromKeyringData_ExpiredPrimaryUserCertificationCannotAuthorizeSigning()
+    {
+        const string userId = "Expired assertion <expired-assertion@example.com>";
+        var generator = new RsaKeyPairGenerator();
+        generator.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
+        var pair = new PgpKeyPair(
+            PublicKeyAlgorithmTag.RsaGeneral,
+            generator.GenerateKeyPair(),
+            DateTime.UtcNow.AddMinutes(-2));
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, DateTime.UtcNow.AddMinutes(-1));
+        packets.SetSignatureExpirationTime(false, 30);
+        packets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
+        var ringGenerator = new PgpKeyRingGenerator(
+            (int)PgpSignature.PositiveCertification,
+            pair,
+            userId,
+            SymmetricKeyAlgorithmTag.Null,
+            true,
+            (char[])null!,
+            false,
+            packets.Generate(),
+            null,
+            new SecureRandom());
+        using var ms = new MemoryStream();
+        ringGenerator.GeneratePublicKeyRing().Encode(ms);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
+
+        Assert.Contains("No usable", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FromKeyringData_ExpiredDirectKeyAssertionCannotAuthorizeSigning()
+    {
+        var keyGenerator = new RsaKeyPairGenerator();
+        keyGenerator.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
+        var pair = new PgpKeyPair(
+            PublicKeyAlgorithmTag.RsaGeneral,
+            keyGenerator.GenerateKeyPair(),
+            DateTime.UtcNow.AddMinutes(-2));
+        var signatureGenerator = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        signatureGenerator.InitSign(PgpSignature.DirectKey, pair.PrivateKey);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, DateTime.UtcNow.AddMinutes(-1));
+        packets.SetSignatureExpirationTime(false, 30);
+        packets.SetKeyFlags(true, PgpKeyFlags.CanSign);
+        signatureGenerator.SetHashedSubpackets(packets.Generate());
+        var expiredAssertionKey = PgpPublicKey.AddCertification(
+            pair.PublicKey,
+            signatureGenerator.GenerateCertification(pair.PublicKey));
+        using var ms = new MemoryStream();
+        expiredAssertionKey.Encode(ms);
 
         var exception = Assert.Throws<ArgumentException>(
             () => HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
@@ -657,6 +766,62 @@ public class HelmProvenanceTests
             var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
             Assert.False(result.IsValid);
             Assert.False(result.SignatureValid);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Verify_ExpiredDocumentSignature_Fails()
+    {
+        var work = TempDir();
+        try
+        {
+            var tgz = await CreateTestChartArchiveAsync(work);
+            var (_, _, signingKey, trustedKey) = CreateTestKeys();
+            var validProvPath = await HelmProvenance.SignAsync(tgz, signingKey);
+            var body = ExtractCleartextBodyForTest(await File.ReadAllTextAsync(validProvPath));
+            var expiredProv = CreateClearSignedProvForTest(
+                body,
+                signingKey,
+                DateTime.UtcNow.AddMinutes(-2),
+                expirationSeconds: 30);
+            await File.WriteAllTextAsync(validProvPath, expiredProv);
+
+            var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
+
+            Assert.False(result.IsValid);
+            Assert.Contains("signature has expired", result.FailureReason, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Verify_MissingArchiveDigest_PreservesSuccessfulSignatureChecks()
+    {
+        var work = TempDir();
+        try
+        {
+            var tgz = await CreateTestChartArchiveAsync(work);
+            var (_, _, signingKey, trustedKey) = CreateTestKeys();
+            var provPath = tgz + ".prov";
+            var signedWithoutFiles = CreateClearSignedProvForTest(
+                "name: provchart\nversion: 0.1.0",
+                signingKey,
+                DateTime.UtcNow);
+            await File.WriteAllTextAsync(provPath, signedWithoutFiles);
+
+            var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
+
+            Assert.False(result.IsValid);
+            Assert.True(result.SignatureValid);
+            Assert.True(result.SignerTrusted);
+            Assert.False(result.DigestMatches);
         }
         finally
         {
@@ -1220,6 +1385,43 @@ public class HelmProvenanceTests
             var metadata = HelmProvenance.ExtractMetadata(await File.ReadAllTextAsync(provPath));
 
             Assert.Equal("rootchart", metadata["name"]);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SignAsync_RejectsMultipleRootChartMetadataFiles()
+    {
+        var work = TempDir();
+        try
+        {
+            var archivePath = Path.Combine(work, "rootchart-0.1.0.tgz");
+            await using (var file = File.Create(archivePath))
+            await using (var gzip = new System.IO.Compression.GZipStream(file, System.IO.Compression.CompressionLevel.Optimal))
+            using (var tar = new System.Formats.Tar.TarWriter(gzip))
+            {
+                var decoyYaml = Encoding.UTF8.GetBytes(DefaultChartYaml.Replace("provchart", "decoy", StringComparison.Ordinal));
+                var rootYaml = Encoding.UTF8.GetBytes(DefaultChartYaml.Replace("provchart", "rootchart", StringComparison.Ordinal));
+                await tar.WriteEntryAsync(new System.Formats.Tar.PaxTarEntry(
+                    System.Formats.Tar.TarEntryType.RegularFile, "decoy/Chart.yaml")
+                {
+                    DataStream = new MemoryStream(decoyYaml)
+                });
+                await tar.WriteEntryAsync(new System.Formats.Tar.PaxTarEntry(
+                    System.Formats.Tar.TarEntryType.RegularFile, "rootchart/Chart.yaml")
+                {
+                    DataStream = new MemoryStream(rootYaml)
+                });
+            }
+
+            var (_, _, signingKey, _) = CreateTestKeys();
+
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(() => HelmProvenance.SignAsync(archivePath, signingKey));
+
+            Assert.Contains("multiple root Chart.yaml", exception.Message, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
