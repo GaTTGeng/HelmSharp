@@ -371,7 +371,8 @@ public class HelmProvenanceTests
         HelmProvenanceSigningKey signingKey,
         DateTime creationTime,
         long? expirationSeconds = null,
-        int signatureType = PgpSignature.CanonicalTextDocument)
+        int signatureType = PgpSignature.CanonicalTextDocument,
+        SignatureSubpacketTag? criticalSubpacketTag = null)
     {
         var secretKey = signingKey.GetSecretKey();
         var signatureGenerator = new PgpSignatureGenerator(secretKey.PublicKey.Algorithm, HashAlgorithmTag.Sha512);
@@ -380,6 +381,18 @@ public class HelmProvenanceTests
         packets.SetSignatureCreationTime(false, creationTime);
         if (expirationSeconds is not null)
             packets.SetSignatureExpirationTime(false, expirationSeconds.Value);
+        if (criticalSubpacketTag is not null)
+        {
+            var subpacketConstructor = typeof(SignatureSubpacket).GetConstructor(
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
+                binder: null,
+                [typeof(SignatureSubpacketTag), typeof(bool), typeof(bool), typeof(byte[])],
+                modifiers: null)
+                ?? throw new InvalidOperationException("Could not find the OpenPGP subpacket test constructor.");
+            var subpacket = (SignatureSubpacket)subpacketConstructor.Invoke(
+                [criticalSubpacketTag.Value, true, false, Array.Empty<byte>()]);
+            packets.AddCustomSubpacket(subpacket);
+        }
         signatureGenerator.SetHashedSubpackets(packets.Generate());
 
         var canonical = body.Replace("\r\n", "\n", StringComparison.Ordinal);
@@ -1036,6 +1049,59 @@ public class HelmProvenanceTests
             Assert.False(result.IsValid);
             Assert.False(result.SignatureValid);
             Assert.Contains("canonical-text document signature", result.FailureReason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Verify_UnknownCriticalHashedSubpacket_FailsClosed()
+    {
+        var work = TempDir();
+        try
+        {
+            var tgz = await CreateTestChartArchiveAsync(work);
+            var (_, _, signingKey, trustedKey) = CreateTestKeys();
+            var provenancePath = await HelmProvenance.SignAsync(tgz, signingKey);
+            var body = ExtractCleartextBodyForTest(await File.ReadAllTextAsync(provenancePath));
+            var provenanceWithUnknownSubpacket = CreateClearSignedProvForTest(
+                body,
+                signingKey,
+                DateTime.UtcNow,
+                criticalSubpacketTag: (SignatureSubpacketTag)100);
+            await File.WriteAllTextAsync(provenancePath, provenanceWithUnknownSubpacket);
+
+            var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
+
+            Assert.False(result.IsValid);
+            Assert.False(result.SignatureValid);
+            Assert.Contains("unsupported critical hashed subpacket", result.FailureReason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Verify_UnsignedTextAfterSignatureFooter_FailsClosed()
+    {
+        var work = TempDir();
+        try
+        {
+            var tgz = await CreateTestChartArchiveAsync(work);
+            var (_, _, signingKey, trustedKey) = CreateTestKeys();
+            var provenancePath = await HelmProvenance.SignAsync(tgz, signingKey);
+            var validProvenance = await File.ReadAllTextAsync(provenancePath);
+            await File.WriteAllTextAsync(provenancePath, validProvenance + "Unsigned appended claim\n");
+
+            var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
+
+            Assert.False(result.IsValid);
+            Assert.False(result.SignatureValid);
+            Assert.Contains("Malformed OpenPGP clearsigned provenance armor", result.FailureReason, StringComparison.Ordinal);
         }
         finally
         {
@@ -2075,6 +2141,40 @@ public class HelmProvenanceTests
                 () => HelmProvenance.SignAsync(archivePath, signingKey));
 
             Assert.Contains("unsafe", exception.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SignAsync_AllowsExplicitDirectoryEntriesWithTrailingSlash()
+    {
+        var work = TempDir();
+        try
+        {
+            var archivePath = Path.Combine(work, "rootchart-0.1.0.tgz");
+            await using (var file = File.Create(archivePath))
+            await using (var gzip = new System.IO.Compression.GZipStream(file, System.IO.Compression.CompressionLevel.Optimal))
+            using (var tar = new System.Formats.Tar.TarWriter(gzip))
+            {
+                await tar.WriteEntryAsync(new System.Formats.Tar.PaxTarEntry(
+                    System.Formats.Tar.TarEntryType.Directory, "rootchart/"));
+                var rootYaml = Encoding.UTF8.GetBytes(DefaultChartYaml.Replace("provchart", "rootchart", StringComparison.Ordinal));
+                await tar.WriteEntryAsync(new System.Formats.Tar.PaxTarEntry(
+                    System.Formats.Tar.TarEntryType.RegularFile, "rootchart/Chart.yaml")
+                {
+                    DataStream = new MemoryStream(rootYaml)
+                });
+            }
+
+            var (_, _, signingKey, trustedKey) = CreateTestKeys();
+
+            var provenancePath = await HelmProvenance.SignAsync(archivePath, signingKey);
+            var result = await HelmProvenance.VerifyAsync(archivePath, [trustedKey], provenancePath);
+
+            Assert.True(result.IsValid, result.FailureReason);
         }
         finally
         {

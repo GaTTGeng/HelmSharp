@@ -185,6 +185,12 @@ public static class HelmProvenance
                 "OpenPGP clear-signed provenance must use a canonical-text document signature.");
         }
 
+        if (HasUnsupportedCriticalSubpackets(parsedSignature))
+        {
+            return Fail(null, null, null, ExtractSha256(provContent, archiveName), actualSha256,
+                "OpenPGP provenance signature contains an unsupported critical hashed subpacket.");
+        }
+
         bool signatureValid = false;
         bool weakHashSignature = false;
         bool understrengthHashSignature = false;
@@ -668,8 +674,12 @@ public static class HelmProvenance
         var base64Start = text.IndexOf('\n', sigStart);
         if (base64Start < 0)
             return false;
-        var footerStart = text.IndexOf(SignatureFooter, base64Start, StringComparison.Ordinal);
+        var footerStart = FindLine(text, SignatureFooter, base64Start);
         if (footerStart < 0)
+            return false;
+
+        var footerEnd = footerStart + SignatureFooter.Length;
+        if (text[footerEnd..].Any(character => !char.IsWhiteSpace(character)))
             return false;
 
         var base64Region = text[base64Start..footerStart];
@@ -768,6 +778,18 @@ public static class HelmProvenance
         if (obj is PgpSignatureList list && list.Count > 0)
             return list[0];
         throw new PgpException("Signature block does not contain an OpenPGP signature packet.");
+    }
+
+    private static bool HasUnsupportedCriticalSubpackets(PgpSignature signature)
+    {
+        var criticalTags = signature.GetHashedSubPackets()?.GetCriticalTags();
+        if (criticalTags is null)
+            return false;
+
+        // Only creation and expiration times have defined meaning in this provenance
+        // verifier; a critical extension we do not process must invalidate the signature.
+        return criticalTags.Any(tag => tag is not SignatureSubpacketTag.CreationTime and
+            not SignatureSubpacketTag.ExpireTime);
     }
 
     private static bool IsWeakHashAlgorithm(HashAlgorithmTag algorithm)
@@ -1118,8 +1140,12 @@ public static class HelmProvenance
         while ((entry = reader.GetNextEntry()) is not null)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            // Directory records are structural; common tar writers add a trailing slash.
+            if (entry.EntryType is System.Formats.Tar.TarEntryType.Directory)
+                continue;
+
             var name = NormalizeArchiveEntryName(entry.Name);
-            if (entry.EntryType is System.Formats.Tar.TarEntryType.Directory || entry.DataStream is null)
+            if (entry.DataStream is null)
                 continue;
 
             var chartFileName = name.Equals("Chart.yaml", StringComparison.OrdinalIgnoreCase);
