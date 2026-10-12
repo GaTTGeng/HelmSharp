@@ -274,6 +274,7 @@ internal sealed class ChartArchiveBudget
             private int _headerBytes;
             private long _remainingDataBytes;
             private int _remainingPaddingBytes;
+            private PaxMetadataScanner? _paxMetadataScanner;
 
             internal TarEntryGuardStream(Stream inner, ArchiveScope scope)
             {
@@ -334,10 +335,14 @@ internal sealed class ChartArchiveBudget
                     if (_remainingDataBytes > 0)
                     {
                         var consumed = (int)Math.Min(_remainingDataBytes, bytes.Length - offset);
+                        _paxMetadataScanner?.Process(bytes.Slice(offset, consumed));
                         _remainingDataBytes -= consumed;
                         offset += consumed;
                         if (_remainingDataBytes == 0)
+                        {
                             _remainingPaddingBytes = (int)((TarBlockSize - (_headerSize % TarBlockSize)) % TarBlockSize);
+                            _paxMetadataScanner = null;
+                        }
                         continue;
                     }
 
@@ -362,8 +367,10 @@ internal sealed class ChartArchiveBudget
 
                     _scope.CountEntry();
                     var size = ReadTarSize(_header.AsSpan(124, 12));
-                    if (_header[156] is (byte)'x' or (byte)'g' or (byte)'L' or (byte)'K')
+                    var type = _header[156];
+                    if (type is (byte)'x' or (byte)'g' or (byte)'L' or (byte)'K')
                         _scope.CheckMetadataSize(size);
+                    _paxMetadataScanner = type is (byte)'x' or (byte)'g' ? new PaxMetadataScanner() : null;
                     _headerSize = size;
                     _remainingDataBytes = size;
                     if (_remainingDataBytes == 0)
@@ -372,6 +379,79 @@ internal sealed class ChartArchiveBudget
             }
 
             private long _headerSize;
+
+            /// <summary>
+            /// Detects PAX size overrides without buffering the metadata payload. The
+            /// guard cannot safely follow TarReader's boundary after such an override,
+            /// so reject it before exposing the metadata bytes to TarReader.
+            /// </summary>
+            private sealed class PaxMetadataScanner
+            {
+                private PaxRecordState _state;
+                private bool _sawLengthDigit;
+                private bool _keyMatchesSize = true;
+                private int _keyLength;
+
+                internal void Process(ReadOnlySpan<byte> bytes)
+                {
+                    foreach (var value in bytes)
+                    {
+                        switch (_state)
+                        {
+                            case PaxRecordState.Length:
+                                if (value is >= (byte)'0' and <= (byte)'9')
+                                {
+                                    _sawLengthDigit = true;
+                                }
+                                else if (value == (byte)' ' && _sawLengthDigit)
+                                {
+                                    _state = PaxRecordState.Key;
+                                }
+                                else
+                                {
+                                    ResetRecord();
+                                }
+                                break;
+
+                            case PaxRecordState.Key:
+                                if (value == (byte)'=')
+                                {
+                                    if (_keyMatchesSize && _keyLength == 4)
+                                        throw new InvalidDataException("PAX size overrides are not supported in chart archives.");
+                                    _state = PaxRecordState.Value;
+                                }
+                                else
+                                {
+                                    ReadOnlySpan<byte> sizeKey = "size"u8;
+                                    if (_keyLength >= sizeKey.Length || value != sizeKey[_keyLength])
+                                        _keyMatchesSize = false;
+                                    _keyLength++;
+                                }
+                                break;
+
+                            case PaxRecordState.Value:
+                                if (value == (byte)'\n')
+                                    ResetRecord();
+                                break;
+                        }
+                    }
+                }
+
+                private void ResetRecord()
+                {
+                    _state = PaxRecordState.Length;
+                    _sawLengthDigit = false;
+                    _keyMatchesSize = true;
+                    _keyLength = 0;
+                }
+
+                private enum PaxRecordState
+                {
+                    Length,
+                    Key,
+                    Value,
+                }
+            }
 
             private static bool IsEndOfArchiveBlock(ReadOnlySpan<byte> header)
             {

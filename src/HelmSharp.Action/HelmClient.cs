@@ -2572,8 +2572,16 @@ public class HelmClient : IHelmClient
     {
         ArgumentNullException.ThrowIfNull(request);
         var options = await _optionsProvider.GetHelmAsync(cancellationToken);
-        request.ArchiveLimits ??= options.ArchiveLimits;
-        var indexPath = await HelmRepoIndexer.GenerateIndexAsync(request, cancellationToken);
+        var effectiveRequest = new HelmRepoIndexRequest
+        {
+            DirectoryPath = request.DirectoryPath,
+            Url = request.Url,
+            MergeIndexPath = request.MergeIndexPath,
+            OutputPath = request.OutputPath,
+            FailOnInvalidPackage = request.FailOnInvalidPackage,
+            ArchiveLimits = request.ArchiveLimits ?? options.ArchiveLimits,
+        };
+        var indexPath = await HelmRepoIndexer.GenerateIndexAsync(effectiveRequest, cancellationToken);
         return Ok($"Index generated at: {indexPath}");
     }
 

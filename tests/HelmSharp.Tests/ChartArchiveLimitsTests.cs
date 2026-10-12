@@ -107,6 +107,20 @@ public sealed class ChartArchiveLimitsTests : IDisposable
     }
 
     [Fact]
+    public async Task LoadArchive_PaxSizeOverride_IsRejectedBeforeTarBoundariesCanDiverge()
+    {
+        // The scanner uses raw header sizes to meter entry payloads. A PAX override
+        // changes TarReader's view of the following entry, so accepting it could make
+        // the scanner and reader disagree about where the next header begins.
+        var archive = CreateTgzWithPaxMetadata("10 size=1\n"u8.ToArray(), appendChart: true);
+
+        var ex = await Assert.ThrowsAsync<InvalidDataException>(
+            () => LoadArchiveBytesAsync(archive, HelmChartArchiveLimits.Default));
+
+        Assert.Contains("PAX size overrides", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task LoadArchive_CompressedInputExceedsBudget_ThrowsCompressedBytesLimit()
     {
         var archive = CreateChartTgz(("file.bin", new byte[64]));
@@ -858,7 +872,45 @@ public sealed class ChartArchiveLimitsTests : IDisposable
         Assert.True(content.BytesDelivered < payload.Length);
     }
 
+    [Fact]
+    public async Task RepoIndexAsync_ReusedRequestUsesEachClientsConfiguredArchiveLimits()
+    {
+        var repositoryPath = Path.Combine(_tempDir, "reused-index-request");
+        Directory.CreateDirectory(repositoryPath);
+        var payload = new byte[256 * 1024];
+        new Random(17).NextBytes(payload);
+        await File.WriteAllBytesAsync(Path.Combine(repositoryPath, "large-blob.tgz"), CreateChartTgz(("blob.bin", payload)));
+        var request = new HelmRepoIndexRequest
+        {
+            DirectoryPath = repositoryPath,
+            FailOnInvalidPackage = true,
+        };
+        var relaxedClient = CreateClientWithArchiveLimits(new HelmChartArchiveLimits
+        {
+            MaxEntryBytes = 1024 * 1024,
+            MaxTotalExtractedBytes = 2 * 1024 * 1024,
+        });
+        var strictClient = CreateClientWithArchiveLimits(new HelmChartArchiveLimits
+        {
+            MaxEntryBytes = 64 * 1024,
+            MaxTotalExtractedBytes = 2 * 1024 * 1024,
+        });
+
+        var relaxedResult = await relaxedClient.RepoIndexAsync(request);
+        var strictException = await Assert.ThrowsAsync<InvalidDataException>(() => strictClient.RepoIndexAsync(request));
+
+        Assert.True(relaxedResult.Succeeded, relaxedResult.StandardError);
+        Assert.Contains("invalid chart package", strictException.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(request.ArchiveLimits);
+    }
+
     // --- Helpers ---
+
+    private HelmClient CreateClientWithArchiveLimits(HelmChartArchiveLimits limits)
+        => new(
+            new StaticLimitsOptionsProvider(limits),
+            (_, _, _, _) => throw new NotSupportedException(),
+            options => new HelmChartRepository(options ?? new HelmRepositoryOptions()));
 
     private static string FixturesRoot => Path.Combine(AppContext.BaseDirectory, "Fixtures", "Charts");
 
