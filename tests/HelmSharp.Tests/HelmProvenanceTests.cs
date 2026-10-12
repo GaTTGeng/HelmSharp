@@ -464,6 +464,67 @@ public class HelmProvenanceTests
     }
 
     [Fact]
+    public void FromKeyringData_SkipsUncertifiedUserId()
+    {
+        const string uncertifiedUserId = "Uncertified <untrusted@example.com>";
+        const string certifiedUserId = "Certified <trusted@example.com>";
+        var (_, publicRing, _, _) = CreateTestKeys(certifiedUserId);
+        var primary = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+        var attackerGenerator = new RsaKeyPairGenerator();
+        attackerGenerator.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
+        var attackerPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, attackerGenerator.GenerateKeyPair(), DateTime.UtcNow);
+        var thirdPartyCertification = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        thirdPartyCertification.InitSign(PgpSignature.PositiveCertification, attackerPair.PrivateKey);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        thirdPartyCertification.SetHashedSubpackets(packets.Generate());
+        var withUncertifiedId = PgpPublicKey.AddCertification(primary, uncertifiedUserId,
+            thirdPartyCertification.GenerateCertification(uncertifiedUserId, primary));
+        var updatedRing = PgpPublicKeyRing.InsertPublicKey(publicRing, withUncertifiedId);
+        using var ms = new MemoryStream();
+        updatedRing.Encode(ms);
+
+        var trustedKey = Assert.Single(HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
+
+        Assert.Equal(certifiedUserId, trustedKey.UserId);
+    }
+
+    [Fact]
+    public void FromKeyringData_SkipsRevokedUserId()
+    {
+        const string revokedUserId = "Revoked <revoked@example.com>";
+        const string activeUserId = "Active <active@example.com>";
+        var (secretRing, publicRing, _, _) = CreateTestKeys(revokedUserId);
+        var primarySecret = secretRing.GetSecretKeys().First();
+        var primary = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+        var privateKey = primarySecret.ExtractPrivateKey(null)!;
+
+        var revocation = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        revocation.InitSign(PgpSignature.CertificationRevocation, privateKey);
+        var revocationPackets = new PgpSignatureSubpacketGenerator();
+        revocationPackets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        revocation.SetHashedSubpackets(revocationPackets.Generate());
+        var updated = PgpPublicKey.AddCertification(primary, revokedUserId,
+            revocation.GenerateCertification(revokedUserId, primary));
+
+        var certification = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        certification.InitSign(PgpSignature.PositiveCertification, privateKey);
+        var certificationPackets = new PgpSignatureSubpacketGenerator();
+        certificationPackets.SetSignatureCreationTime(false, DateTime.UtcNow.AddMinutes(1));
+        certificationPackets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
+        certification.SetHashedSubpackets(certificationPackets.Generate());
+        updated = PgpPublicKey.AddCertification(updated, activeUserId,
+            certification.GenerateCertification(activeUserId, updated));
+        var updatedRing = PgpPublicKeyRing.InsertPublicKey(publicRing, updated);
+        using var ms = new MemoryStream();
+        updatedRing.Encode(ms);
+
+        var trustedKey = Assert.Single(HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
+
+        Assert.Equal(activeUserId, trustedKey.UserId);
+    }
+
+    [Fact]
     public void FromKeyringData_MarkerBeforeKeyringIsSkipped()
     {
         var (_, publicRing) = CreateRingWithSigningSubkey();
@@ -1106,6 +1167,43 @@ public class HelmProvenanceTests
         Assert.Equal(
             "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
             meta["sha256"]);
+    }
+
+    [Fact]
+    public async Task SignAsync_UsesRootChartMetadataWhenSubchartAppearsFirst()
+    {
+        var work = TempDir();
+        try
+        {
+            var archivePath = Path.Combine(work, "rootchart-0.1.0.tgz");
+            await using (var file = File.Create(archivePath))
+            await using (var gzip = new System.IO.Compression.GZipStream(file, System.IO.Compression.CompressionLevel.Optimal))
+            using (var tar = new System.Formats.Tar.TarWriter(gzip))
+            {
+                var childYaml = Encoding.UTF8.GetBytes(DefaultChartYaml.Replace("provchart", "dependency", StringComparison.Ordinal));
+                var rootYaml = Encoding.UTF8.GetBytes(DefaultChartYaml.Replace("provchart", "rootchart", StringComparison.Ordinal));
+                await tar.WriteEntryAsync(new System.Formats.Tar.PaxTarEntry(
+                    System.Formats.Tar.TarEntryType.RegularFile, "rootchart/charts/dependency/Chart.yaml")
+                {
+                    DataStream = new MemoryStream(childYaml)
+                });
+                await tar.WriteEntryAsync(new System.Formats.Tar.PaxTarEntry(
+                    System.Formats.Tar.TarEntryType.RegularFile, "rootchart/Chart.yaml")
+                {
+                    DataStream = new MemoryStream(rootYaml)
+                });
+            }
+
+            var (_, _, signingKey, _) = CreateTestKeys();
+            var provPath = await HelmProvenance.SignAsync(archivePath, signingKey);
+            var metadata = HelmProvenance.ExtractMetadata(await File.ReadAllTextAsync(provPath));
+
+            Assert.Equal("rootchart", metadata["name"]);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
     }
 
     // --- Digest extraction scoped to the files section ---

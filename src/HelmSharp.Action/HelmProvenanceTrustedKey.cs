@@ -432,7 +432,48 @@ public sealed class HelmProvenanceTrustedKey
     private static string? GetUserId(PgpPublicKey key)
     {
         foreach (var userId in key.GetUserIds())
-            return userId;
+        {
+            PgpSignature? latestCertification = null;
+            PgpSignature? latestRevocation = null;
+            foreach (var signature in key.GetSignaturesForId(userId))
+            {
+                if (!HasValidUserIdSignature(signature, userId, key))
+                    continue;
+
+                if (signature.SignatureType == PgpSignature.CertificationRevocation)
+                {
+                    if (latestRevocation is null || signature.CreationTime > latestRevocation.CreationTime)
+                        latestRevocation = signature;
+                }
+                else if (signature.SignatureType is PgpSignature.PositiveCertification
+                    or PgpSignature.CasualCertification or PgpSignature.NoCertification
+                    or PgpSignature.DefaultCertification)
+                {
+                    if (latestCertification is null || signature.CreationTime > latestCertification.CreationTime)
+                        latestCertification = signature;
+                }
+            }
+
+            // A UID is useful only when its self-certification is authentic and has not
+            // subsequently been revoked. On ties, prefer revocation and fail closed.
+            if (latestCertification is not null &&
+                (latestRevocation is null || latestCertification.CreationTime > latestRevocation.CreationTime))
+                return userId;
+        }
+
         return null;
+    }
+
+    private static bool HasValidUserIdSignature(PgpSignature signature, string userId, PgpPublicKey key)
+    {
+        try
+        {
+            signature.InitVerify(key);
+            return signature.VerifyCertification(userId, key);
+        }
+        catch (PgpException)
+        {
+            return false;
+        }
     }
 }

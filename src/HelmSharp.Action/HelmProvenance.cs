@@ -916,8 +916,10 @@ public static class HelmProvenance
                 continue;
 
             var name = entry.Name.Replace('\\', '/');
-            if (!name.EndsWith("/Chart.yaml", StringComparison.OrdinalIgnoreCase) &&
-                !name.Equals("Chart.yaml", StringComparison.OrdinalIgnoreCase))
+            var chartFileName = name.Equals("Chart.yaml", StringComparison.OrdinalIgnoreCase);
+            var rootChartFileName = name.EndsWith("/Chart.yaml", StringComparison.OrdinalIgnoreCase) &&
+                name.IndexOf('/') == name.LastIndexOf('/');
+            if (!chartFileName && !rootChartFileName)
                 continue;
 
             using var memory = new MemoryStream();
