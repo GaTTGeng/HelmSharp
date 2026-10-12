@@ -370,11 +370,12 @@ public class HelmProvenanceTests
         string body,
         HelmProvenanceSigningKey signingKey,
         DateTime creationTime,
-        long? expirationSeconds = null)
+        long? expirationSeconds = null,
+        int signatureType = PgpSignature.CanonicalTextDocument)
     {
         var secretKey = signingKey.GetSecretKey();
         var signatureGenerator = new PgpSignatureGenerator(secretKey.PublicKey.Algorithm, HashAlgorithmTag.Sha512);
-        signatureGenerator.InitSign(PgpSignature.BinaryDocument, secretKey.ExtractPrivateKeyUtf8(signingKey.Passphrase)!);
+        signatureGenerator.InitSign(signatureType, secretKey.ExtractPrivateKeyUtf8(signingKey.Passphrase)!);
         var packets = new PgpSignatureSubpacketGenerator();
         packets.SetSignatureCreationTime(false, creationTime);
         if (expirationSeconds is not null)
@@ -973,6 +974,68 @@ public class HelmProvenanceTests
 
             Assert.False(result.IsValid);
             Assert.Contains("signature has expired", result.FailureReason, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Verify_UnsignedTextAndUnknownArmorHeaders_FailClosed()
+    {
+        var work = TempDir();
+        try
+        {
+            var tgz = await CreateTestChartArchiveAsync(work);
+            var (_, _, signingKey, trustedKey) = CreateTestKeys();
+            var provenancePath = await HelmProvenance.SignAsync(tgz, signingKey);
+            var validProvenance = await File.ReadAllTextAsync(provenancePath);
+            var variants = new[]
+            {
+                "untrusted prefix\n" + validProvenance,
+                validProvenance.Replace("Hash: SHA512\n\n", "Version: attacker\nHash: SHA512\n\n", StringComparison.Ordinal),
+            };
+
+            foreach (var malformed in variants)
+            {
+                await File.WriteAllTextAsync(provenancePath, malformed);
+
+                var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
+
+                Assert.False(result.IsValid);
+                Assert.False(result.SignatureValid);
+                Assert.Contains("Malformed OpenPGP clearsigned provenance armor", result.FailureReason, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Verify_BinaryDocumentSignatureInCleartextArmor_FailsClosed()
+    {
+        var work = TempDir();
+        try
+        {
+            var tgz = await CreateTestChartArchiveAsync(work);
+            var (_, _, signingKey, trustedKey) = CreateTestKeys();
+            var provenancePath = await HelmProvenance.SignAsync(tgz, signingKey);
+            var body = ExtractCleartextBodyForTest(await File.ReadAllTextAsync(provenancePath));
+            var binaryDocumentProvenance = CreateClearSignedProvForTest(
+                body,
+                signingKey,
+                DateTime.UtcNow,
+                signatureType: PgpSignature.BinaryDocument);
+            await File.WriteAllTextAsync(provenancePath, binaryDocumentProvenance);
+
+            var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
+
+            Assert.False(result.IsValid);
+            Assert.False(result.SignatureValid);
+            Assert.Contains("canonical-text document signature", result.FailureReason, StringComparison.Ordinal);
         }
         finally
         {
@@ -1971,6 +2034,47 @@ public class HelmProvenanceTests
             var exception = await Assert.ThrowsAsync<InvalidDataException>(() => HelmProvenance.SignAsync(archivePath, signingKey));
 
             Assert.Contains("multiple root Chart.yaml", exception.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("../Chart.yaml")]
+    [InlineData("root/../payload.txt")]
+    public async Task SignAsync_RejectsUnsafeArchiveEntryPaths(string unsafeEntryName)
+    {
+        var work = TempDir();
+        try
+        {
+            var archivePath = Path.Combine(work, "rootchart-0.1.0.tgz");
+            await using (var file = File.Create(archivePath))
+            await using (var gzip = new System.IO.Compression.GZipStream(file, System.IO.Compression.CompressionLevel.Optimal))
+            using (var tar = new System.Formats.Tar.TarWriter(gzip))
+            {
+                var unsafeContent = Encoding.UTF8.GetBytes("untrusted archive content");
+                await tar.WriteEntryAsync(new System.Formats.Tar.PaxTarEntry(
+                    System.Formats.Tar.TarEntryType.RegularFile, unsafeEntryName)
+                {
+                    DataStream = new MemoryStream(unsafeContent)
+                });
+
+                var rootYaml = Encoding.UTF8.GetBytes(DefaultChartYaml.Replace("provchart", "rootchart", StringComparison.Ordinal));
+                await tar.WriteEntryAsync(new System.Formats.Tar.PaxTarEntry(
+                    System.Formats.Tar.TarEntryType.RegularFile, "rootchart/Chart.yaml")
+                {
+                    DataStream = new MemoryStream(rootYaml)
+                });
+            }
+
+            var (_, _, signingKey, _) = CreateTestKeys();
+
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(
+                () => HelmProvenance.SignAsync(archivePath, signingKey));
+
+            Assert.Contains("unsafe", exception.Message, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {

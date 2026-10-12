@@ -163,7 +163,28 @@ public static class HelmProvenance
         }
 
         // --- 4. Verify the OpenPGP signature over the canonicalized signed body ---
-        PgpSignature? parsedSignature = null;
+        PgpSignature parsedSignature;
+        try
+        {
+            parsedSignature = ParseSignature(signaturePacket);
+        }
+        catch (PgpException)
+        {
+            return Fail(null, null, null, ExtractSha256(provContent, archiveName), actualSha256,
+                "OpenPGP provenance signature block is malformed.");
+        }
+        catch (IOException)
+        {
+            return Fail(null, null, null, ExtractSha256(provContent, archiveName), actualSha256,
+                "OpenPGP provenance signature block is malformed.");
+        }
+
+        if (parsedSignature.SignatureType != PgpSignature.CanonicalTextDocument)
+        {
+            return Fail(null, null, null, ExtractSha256(provContent, archiveName), actualSha256,
+                "OpenPGP clear-signed provenance must use a canonical-text document signature.");
+        }
+
         bool signatureValid = false;
         bool weakHashSignature = false;
         bool understrengthHashSignature = false;
@@ -183,7 +204,6 @@ public static class HelmProvenance
         {
             try
             {
-                parsedSignature = ParseSignature(signaturePacket);
                 if (IsWeakHashAlgorithm(parsedSignature.HashAlgorithm))
                 {
                     weakHashSignature = true;
@@ -636,19 +656,14 @@ public static class HelmProvenance
         signaturePacket = Array.Empty<byte>();
 
         var text = provContent.Replace("\r\n", "\n", StringComparison.Ordinal);
-        var msgStart = text.IndexOf(SignedMessageHeader, StringComparison.Ordinal);
-        if (msgStart < 0)
+        if (!TryGetClearTextBodyStart(text, out var bodyStart))
             return false;
 
-        var headerEnd = text.IndexOf("\n\n", msgStart, StringComparison.Ordinal);
-        if (headerEnd < 0)
-            return false;
-
-        var sigStart = FindLine(text, SignatureHeader, headerEnd + 2);
+        var sigStart = FindLine(text, SignatureHeader, bodyStart);
         if (sigStart < 0)
             return false;
 
-        signedBody = text[(headerEnd + 2)..sigStart];
+        signedBody = text[bodyStart..sigStart];
 
         var base64Start = text.IndexOf('\n', sigStart);
         if (base64Start < 0)
@@ -694,6 +709,55 @@ public static class HelmProvenance
         // Helm/GPG emit dash-escaped cleartext; the signature covers the unescaped text.
         signedBody = UnescapeDashLines(signedBody);
         return true;
+    }
+
+    private static bool TryGetClearTextBodyStart(string text, out int bodyStart)
+    {
+        // Only the armor header is outside the signature; accepting any leading text or
+        // unknown fields would let an attacker attach unsigned claims to valid metadata.
+        bodyStart = 0;
+        var firstLineEnd = text.IndexOf('\n');
+        if (firstLineEnd < 0 ||
+            !text.AsSpan(0, firstLineEnd).SequenceEqual(SignedMessageHeader.AsSpan()))
+        {
+            return false;
+        }
+
+        var position = firstLineEnd + 1;
+        var sawHashHeader = false;
+        while (position <= text.Length)
+        {
+            var lineEnd = text.IndexOf('\n', position);
+            if (lineEnd < 0)
+                return false;
+
+            var line = text.AsSpan(position, lineEnd - position);
+            if (line.IsEmpty)
+            {
+                if (!sawHashHeader)
+                    return false;
+
+                bodyStart = lineEnd + 1;
+                return true;
+            }
+
+            const string hashHeader = "Hash:";
+            if (!line.StartsWith(hashHeader, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            var algorithms = line[hashHeader.Length..].Trim().ToString().Split(',');
+            if (algorithms.Length == 0 || algorithms.Any(algorithm =>
+                    algorithm.Length == 0 || algorithm.Any(character =>
+                        !char.IsAsciiLetterOrDigit(character) && character != '-')))
+            {
+                return false;
+            }
+
+            sawHashHeader = true;
+            position = lineEnd + 1;
+        }
+
+        return false;
     }
 
     private static PgpSignature ParseSignature(byte[] signaturePacket)
@@ -1054,10 +1118,10 @@ public static class HelmProvenance
         while ((entry = reader.GetNextEntry()) is not null)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var name = NormalizeArchiveEntryName(entry.Name);
             if (entry.EntryType is System.Formats.Tar.TarEntryType.Directory || entry.DataStream is null)
                 continue;
 
-            var name = entry.Name.Replace('\\', '/');
             var chartFileName = name.Equals("Chart.yaml", StringComparison.OrdinalIgnoreCase);
             var rootChartFileName = name.EndsWith("/Chart.yaml", StringComparison.OrdinalIgnoreCase) &&
                 name.IndexOf('/') == name.LastIndexOf('/');
@@ -1077,5 +1141,24 @@ public static class HelmProvenance
             return chartMetadata;
 
         throw new InvalidDataException("Chart archive does not contain Chart.yaml.");
+    }
+
+    private static string NormalizeArchiveEntryName(string entryName)
+    {
+        if (string.IsNullOrWhiteSpace(entryName))
+            throw new InvalidDataException("Chart archive contains an entry with an empty name.");
+
+        var normalized = entryName.Replace('\\', '/');
+        if (normalized.StartsWith("/", StringComparison.Ordinal) ||
+            (normalized.Length >= 2 && char.IsAsciiLetter(normalized[0]) && normalized[1] == ':' &&
+             (normalized.Length == 2 || normalized[2] == '/')))
+        {
+            throw new InvalidDataException($"Chart archive entry '{entryName}' uses an unsafe absolute path.");
+        }
+
+        if (normalized.Split('/').Any(segment => segment.Length == 0 || segment is "." or ".."))
+            throw new InvalidDataException($"Chart archive entry '{entryName}' uses an unsafe relative path.");
+
+        return normalized;
     }
 }
