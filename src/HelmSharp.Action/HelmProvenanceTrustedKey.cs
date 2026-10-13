@@ -729,18 +729,7 @@ public sealed class HelmProvenanceTrustedKey
         IReadOnlyList<PgpPublicKey> certificateKeys)
         // A Certification Revocation is hashed over the same primary-key data as the
         // Direct Key assertion it cancels, and revocation wins equal creation times.
-    {
-        var revokers = GetAuthorizedRevokers(key, certificateKeys);
-        return key.GetSignatures().Any(revocation =>
-            revocation.SignatureType == PgpSignature.CertificationRevocation &&
-            revocation.CreationTime >= directKeySignature.CreationTime &&
-            RevocationTargetsSignature(revocation, directKeySignature) &&
-            revokers.Any(revoker => HasValidPrimaryKeySignature(
-                revocation,
-                key,
-                PgpSignature.CertificationRevocation,
-                revoker)));
-    }
+        => IsDirectKeySignatureRevokedByItsDeclaration(directKeySignature, key, certificateKeys);
 
     private static bool HasValidPrimaryKeySignature(PgpSignature signature, PgpPublicKey key, int signatureType)
         => HasValidPrimaryKeySignature(signature, key, signatureType, key);
@@ -921,7 +910,7 @@ public sealed class HelmProvenanceTrustedKey
         PgpPublicKey primary,
         IReadOnlyList<PgpPublicKey> certificateKeys)
     {
-        var authorizedFingerprints = GetAuthorizedRevokerFingerprints(primary);
+        var authorizedFingerprints = GetAuthorizedRevokerFingerprints(primary, certificateKeys);
         authorizedFingerprints.Add(Convert.ToHexString(primary.GetFingerprint()));
         return certificateKeys
             .Append(primary)
@@ -930,29 +919,62 @@ public sealed class HelmProvenanceTrustedKey
             .ToArray();
     }
 
-    private static HashSet<string> GetAuthorizedRevokerFingerprints(PgpPublicKey primary)
+    private static HashSet<string> GetAuthorizedRevokerFingerprints(
+        PgpPublicKey primary,
+        IReadOnlyList<PgpPublicKey> certificateKeys)
     {
-        var fingerprints = new HashSet<string>(StringComparer.Ordinal);
+        // RFC 9580 places Revocation Key declarations on Direct Key signatures and
+        // requires the most recent valid self-signature on an object to govern it.
+        // Ignore older declarations so a replacement can remove a former revoker.
+        var latestDirectKey = GetLatestUnrevokedDirectKeySignature(primary, certificateKeys);
+        return latestDirectKey?.GetHashedSubPackets()?.GetRevocationKeys()
+            .Select(revocationKey => Convert.ToHexString(revocationKey.GetFingerprint()))
+            .ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>(StringComparer.Ordinal);
+    }
+
+    private static PgpSignature? GetLatestUnrevokedDirectKeySignature(
+        PgpPublicKey primary,
+        IReadOnlyList<PgpPublicKey> certificateKeys)
+    {
+        PgpSignature? latest = null;
         foreach (var signature in primary.GetSignatures())
         {
-            // Discover declarations from cryptographically valid self-assertions without
-            // checking their revocations here. Revocation verification consumes this set,
-            // so following revocation status recursively would make authorization circular.
-            var isValidAssertion = signature.SignatureType == PgpSignature.DirectKey
-                ? HasValidPrimaryKeySignature(signature, primary, PgpSignature.DirectKey)
-                : (signature.SignatureType is PgpSignature.PositiveCertification
-                    or PgpSignature.CasualCertification
-                    or PgpSignature.NoCertification
-                    or PgpSignature.DefaultCertification)
-                    && primary.GetUserIds().Any(userId => HasValidUserIdSignature(signature, userId, primary));
-            if (!isValidAssertion)
+            if (signature.SignatureType != PgpSignature.DirectKey ||
+                !HasValidPrimaryKeySignature(signature, primary, PgpSignature.DirectKey) ||
+                IsDirectKeySignatureRevokedByItsDeclaration(signature, primary, certificateKeys))
                 continue;
 
-            foreach (var revocationKey in signature.GetHashedSubPackets()?.GetRevocationKeys() ?? [])
-                fingerprints.Add(Convert.ToHexString(revocationKey.GetFingerprint()));
+            if (latest is null || signature.CreationTime > latest.CreationTime)
+                latest = signature;
         }
 
-        return fingerprints;
+        return latest;
+    }
+
+    private static bool IsDirectKeySignatureRevokedByItsDeclaration(
+        PgpSignature directKeySignature,
+        PgpPublicKey primary,
+        IReadOnlyList<PgpPublicKey> certificateKeys)
+    {
+        var authorizedFingerprints = directKeySignature.GetHashedSubPackets()?.GetRevocationKeys()
+            .Select(revocationKey => Convert.ToHexString(revocationKey.GetFingerprint()))
+            .ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>(StringComparer.Ordinal);
+        authorizedFingerprints.Add(Convert.ToHexString(primary.GetFingerprint()));
+
+        var revokers = certificateKeys
+            .Append(primary)
+            .DistinctBy(candidate => Convert.ToHexString(candidate.GetFingerprint()), StringComparer.Ordinal)
+            .Where(candidate => authorizedFingerprints.Contains(Convert.ToHexString(candidate.GetFingerprint())))
+            .ToArray();
+        return primary.GetSignatures().Any(revocation =>
+            revocation.SignatureType == PgpSignature.CertificationRevocation &&
+            revocation.CreationTime >= directKeySignature.CreationTime &&
+            RevocationTargetsSignature(revocation, directKeySignature) &&
+            revokers.Any(revoker => HasValidPrimaryKeySignature(
+                revocation,
+                primary,
+                PgpSignature.CertificationRevocation,
+                revoker)));
     }
 
     private sealed record KeyCandidate(PgpPublicKey Key, PgpPublicKey? Master);
@@ -1004,7 +1026,7 @@ public sealed class HelmProvenanceTrustedKey
             .ToList();
     }
 
-    private static PgpPublicKey MergePublicKeys(IEnumerable<PgpPublicKey> keys)
+    internal static PgpPublicKey MergePublicKeys(IEnumerable<PgpPublicKey> keys)
     {
         using var enumerator = keys.GetEnumerator();
         if (!enumerator.MoveNext())

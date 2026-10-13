@@ -92,13 +92,12 @@ public sealed class HelmProvenanceSigningKey : IDisposable
         // Prefer explicit public certificates over the public halves embedded in secret
         // packets. GPG may export an older secret-key packet alongside a refreshed public
         // certificate, and the latter can carry a revocation absent from the stale copy.
-        var certificateKeys = publicKeys
-            .Concat(secretPublicKeys)
-            .DistinctBy(key => Convert.ToHexString(key.GetFingerprint()), StringComparer.Ordinal)
-            .ToArray();
-        var certificatesByFingerprint = certificateKeys.ToDictionary(
-            key => Convert.ToHexString(key.GetFingerprint()),
-            StringComparer.Ordinal);
+        var certificatesByFingerprint = secretPublicKeys
+            .GroupBy(key => Convert.ToHexString(key.GetFingerprint()), StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, HelmProvenanceTrustedKey.MergePublicKeys, StringComparer.Ordinal);
+        foreach (var group in publicKeys.GroupBy(key => Convert.ToHexString(key.GetFingerprint()), StringComparer.Ordinal))
+            certificatesByFingerprint[group.Key] = HelmProvenanceTrustedKey.MergePublicKeys(group);
+        var certificateKeys = certificatesByFingerprint.Values.ToArray();
         var hasSigningCandidate = false;
         var hasUnsupportedSigningVersion = false;
         foreach (var candidate in keys)
