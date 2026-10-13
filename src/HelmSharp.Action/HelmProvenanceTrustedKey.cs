@@ -472,7 +472,11 @@ public sealed class HelmProvenanceTrustedKey
             // Bouncy Castle's parameterless GetValidSeconds reads packet metadata without
             // proving the self-signature. Only a certification verified by the primary
             // key may define its lifetime.
-            var primarySelfSignature = GetLatestValidPrimarySelfSignature(key);
+            // V6 stores primary-key-wide expiration in a Direct Key signature; a later
+            // certification for one UID must not replace that certificate-wide policy.
+            var primarySelfSignature = key.Version == 6
+                ? GetLatestValidPrimaryDirectKeySignature(key)
+                : GetLatestValidPrimarySelfSignature(key);
             var primaryLifetime = primarySelfSignature?.GetHashedSubPackets()?.GetKeyExpirationTime() ?? 0;
             return primaryLifetime <= 0 ? null : key.CreationTime.AddSeconds(primaryLifetime);
         }

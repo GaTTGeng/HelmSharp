@@ -47,6 +47,11 @@ namespace HelmSharp.Action;
 /// </remarks>
 public static class HelmProvenance
 {
+    private static readonly HashSet<string> RegisteredArmorHashNames = new(StringComparer.Ordinal)
+    {
+        "MD5", "SHA1", "RIPEMD160", "SHA256", "SHA384", "SHA512", "SHA224", "SHA3-256", "SHA3-512",
+    };
+
     private const string SignedMessageHeader = "-----BEGIN PGP SIGNED MESSAGE-----";
     private const string SignatureHeader = "-----BEGIN PGP SIGNATURE-----";
     private const string SignatureFooter = "-----END PGP SIGNATURE-----";
@@ -867,10 +872,9 @@ public static class HelmProvenance
             if (!line.StartsWith(hashHeader, StringComparison.OrdinalIgnoreCase))
                 return false;
 
-            var algorithms = line[hashHeader.Length..].Trim().ToString().Split(',');
+            var algorithms = line[hashHeader.Length..].ToString().Split(',');
             if (algorithms.Length == 0 || algorithms.Any(algorithm =>
-                    algorithm.Length == 0 || algorithm.Any(character =>
-                        !char.IsAsciiLetterOrDigit(character) && character != '-')))
+                    !RegisteredArmorHashNames.Contains(algorithm.Trim())))
             {
                 return false;
             }
