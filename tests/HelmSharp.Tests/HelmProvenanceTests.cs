@@ -593,6 +593,38 @@ public class HelmProvenanceTests
     }
 
     [Fact]
+    public async Task Verify_UsesLaterTrustedSignaturePacket()
+    {
+        var work = TempDir();
+        try
+        {
+            var tgz = await CreateTestChartArchiveAsync(work);
+            var (_, _, trustedSigningKey, trustedKey) = CreateTestKeys();
+            var (_, _, untrustedSigningKey, _) = CreateTestKeys("Untrusted HelmSharp Test <untrusted@example.com>");
+            var provenancePath = await HelmProvenance.SignAsync(tgz, trustedSigningKey);
+            var trustedProvenance = await File.ReadAllTextAsync(provenancePath);
+            var signedBody = ExtractCleartextBodyForTest(trustedProvenance);
+            var untrustedProvenance = CreateClearSignedProvForTest(
+                signedBody,
+                untrustedSigningKey,
+                DateTime.UtcNow);
+            var combinedPayload = ExtractSignaturePayload(untrustedProvenance)
+                .Concat(ExtractSignaturePayload(trustedProvenance))
+                .ToArray();
+            await File.WriteAllTextAsync(provenancePath, ReplaceSignaturePayload(trustedProvenance, combinedPayload));
+
+            var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
+
+            Assert.True(result.IsValid, result.FailureReason);
+            Assert.Equal(trustedKey.Fingerprint, result.SignerFingerprint);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Verify_ClearSignedMessageWithoutHashArmorHeader_Succeeds()
     {
         var work = TempDir();
@@ -663,6 +695,7 @@ public class HelmProvenanceTests
     [InlineData(3, 4, PublicKeyAlgorithmTag.Ed448, false)]
     [InlineData(4, 4, PublicKeyAlgorithmTag.ECDsa, true)]
     [InlineData(6, 6, PublicKeyAlgorithmTag.Ed25519, true)]
+    [InlineData(6, 6, PublicKeyAlgorithmTag.EdDsa_Legacy, false)]
     [InlineData(6, 4, PublicKeyAlgorithmTag.RsaGeneral, false)]
     [InlineData(4, 6, PublicKeyAlgorithmTag.RsaGeneral, false)]
     [InlineData(3, 6, PublicKeyAlgorithmTag.RsaGeneral, false)]
@@ -3687,6 +3720,21 @@ public class HelmProvenanceTests
         }
 
         return Convert.FromBase64String(base64.ToString());
+    }
+
+    private static string ReplaceSignaturePayload(string provContent, byte[] payload)
+    {
+        var text = provContent.Replace("\r\n", "\n", StringComparison.Ordinal);
+        const string header = "-----BEGIN PGP SIGNATURE-----";
+        const string footer = "-----END PGP SIGNATURE-----";
+        var signatureStart = text.IndexOf(header, StringComparison.Ordinal);
+        var footerStart = text.IndexOf(footer, signatureStart, StringComparison.Ordinal);
+        Assert.True(signatureStart >= 0 && footerStart > signatureStart);
+
+        var encoded = Convert.ToBase64String(payload);
+        var wrapped = string.Join('\n', Enumerable.Range(0, (encoded.Length + 63) / 64)
+            .Select(index => encoded.Substring(index * 64, Math.Min(64, encoded.Length - index * 64))));
+        return text[..signatureStart] + header + "\n\n" + wrapped + "\n" + footer + text[(footerStart + footer.Length)..];
     }
 
     /// <summary>The Base64(CRC-24) armor checksum line BouncyCastle writes for <paramref name="payload"/>.</summary>

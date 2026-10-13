@@ -192,10 +192,10 @@ public static class HelmProvenance
         }
 
         // --- 4. Verify the OpenPGP signature over the canonicalized signed body ---
-        PgpSignature parsedSignature;
+        IReadOnlyList<PgpSignature> parsedSignatures;
         try
         {
-            parsedSignature = ParseSignature(signaturePacket);
+            parsedSignatures = ParseSignatures(signaturePacket);
         }
         catch (PgpException)
         {
@@ -208,30 +208,12 @@ public static class HelmProvenance
                 "OpenPGP provenance signature block is malformed.");
         }
 
-        if (parsedSignature.SignatureType != PgpSignature.CanonicalTextDocument)
-        {
-            return Fail(null, null, null, ExtractSha256(provContent, archiveName), actualSha256,
-                "OpenPGP clear-signed provenance must use a canonical-text document signature.");
-        }
-
-        if (!HasRequiredSignatureCreationTime(parsedSignature))
-        {
-            return Fail(null, null, null, ExtractSha256(provContent, archiveName), actualSha256,
-                "OpenPGP provenance signature is missing its hashed creation time.");
-        }
-
-        if (HasUnsupportedCriticalSubpackets(
-                parsedSignature,
-                SignatureSubpacketTag.CreationTime,
-                SignatureSubpacketTag.ExpireTime))
-        {
-            return Fail(null, null, null, ExtractSha256(provContent, archiveName), actualSha256,
-                "OpenPGP provenance signature contains an unsupported critical hashed subpacket.");
-        }
-
         bool signatureValid = false;
         bool weakHashSignature = false;
         bool understrengthHashSignature = false;
+        bool invalidSignatureType = false;
+        bool missingCreationTime = false;
+        bool unsupportedCriticalSubpacket = false;
         bool trustedKeyMatchedExpiredSignature = false;
         bool trustedKeyMatchedButUnusable = false;
         string? signerFingerprint = null;
@@ -244,70 +226,97 @@ public static class HelmProvenance
         string? unusableKeyId = null;
         string? unusableUserId = null;
 
-        foreach (var trusted in trustedList)
+        foreach (var parsedSignature in parsedSignatures)
         {
-            try
+            // RFC 9580 permits multiple signatures in the armor. A malformed,
+            // unsupported, or untrusted packet must not hide a later trusted one.
+            if (parsedSignature.SignatureType != PgpSignature.CanonicalTextDocument)
             {
-                // A V6 signature cannot be verified by a V4 key; keep trying other
-                // trusted keys so a mixed trust set can still match a compatible key.
-                if (!SignatureVersionMatchesKey(
-                        parsedSignature.Version,
-                        trusted.PublicKey.Version,
-                        trusted.PublicKey.Algorithm))
-                    continue;
+                invalidSignatureType = true;
+                continue;
+            }
 
-                if (IsWeakHashAlgorithm(parsedSignature.HashAlgorithm))
-                {
-                    weakHashSignature = true;
-                    continue;
-                }
+            if (!HasRequiredSignatureCreationTime(parsedSignature))
+            {
+                missingCreationTime = true;
+                continue;
+            }
 
-                if (!HasSufficientSignatureHash(parsedSignature.HashAlgorithm, trusted.PublicKey))
-                {
-                    understrengthHashSignature = true;
-                    continue;
-                }
+            if (HasUnsupportedCriticalSubpackets(
+                    parsedSignature,
+                    SignatureSubpacketTag.CreationTime,
+                    SignatureSubpacketTag.ExpireTime))
+            {
+                unsupportedCriticalSubpacket = true;
+                continue;
+            }
 
-                parsedSignature.InitVerify(trusted.PublicKey);
-                parsedSignature.Update(CanonicalizeForHash(signedBody));
-                if (parsedSignature.Verify())
+            foreach (var trusted in trustedList)
+            {
+                try
                 {
-                    if (IsSignatureExpired(parsedSignature, DateTime.UtcNow))
+                    if (!SignatureVersionMatchesKey(
+                            parsedSignature.Version,
+                            trusted.PublicKey.Version,
+                            trusted.PublicKey.Algorithm))
+                        continue;
+
+                    if (IsWeakHashAlgorithm(parsedSignature.HashAlgorithm))
                     {
-                        trustedKeyMatchedExpiredSignature = true;
-                        expiredFingerprint ??= trusted.Fingerprint;
-                        expiredKeyId ??= trusted.KeyId;
-                        expiredUserId ??= trusted.UserId;
+                        weakHashSignature = true;
                         continue;
                     }
 
-                    // A mathematical signature is not enough: OpenPGP policy must also
-                    // authorize this key to sign. Fail closed on revoked, expired, and
-                    // non-signing keys (e.g. encryption-only subkeys).
-                    if (!trusted.IsUsableSigningKey)
+                    if (!HasSufficientSignatureHash(parsedSignature.HashAlgorithm, trusted.PublicKey))
                     {
-                        trustedKeyMatchedButUnusable = true;
-                        unusableFingerprint ??= trusted.Fingerprint;
-                        unusableKeyId ??= trusted.KeyId;
-                        unusableUserId ??= trusted.UserId;
+                        understrengthHashSignature = true;
                         continue;
                     }
 
-                    signatureValid = true;
-                    signerFingerprint = trusted.Fingerprint;
-                    signerKeyId = trusted.KeyId;
-                    signerUserId = trusted.UserId;
-                    break;
+                    parsedSignature.InitVerify(trusted.PublicKey);
+                    parsedSignature.Update(CanonicalizeForHash(signedBody));
+                    if (parsedSignature.Verify())
+                    {
+                        if (IsSignatureExpired(parsedSignature, DateTime.UtcNow))
+                        {
+                            trustedKeyMatchedExpiredSignature = true;
+                            expiredFingerprint ??= trusted.Fingerprint;
+                            expiredKeyId ??= trusted.KeyId;
+                            expiredUserId ??= trusted.UserId;
+                            continue;
+                        }
+
+                        // A mathematical signature is not enough: OpenPGP policy must also
+                        // authorize this key to sign. Fail closed on revoked, expired, and
+                        // non-signing keys (e.g. encryption-only subkeys).
+                        if (!trusted.IsUsableSigningKey)
+                        {
+                            trustedKeyMatchedButUnusable = true;
+                            unusableFingerprint ??= trusted.Fingerprint;
+                            unusableKeyId ??= trusted.KeyId;
+                            unusableUserId ??= trusted.UserId;
+                            continue;
+                        }
+
+                        signatureValid = true;
+                        signerFingerprint = trusted.Fingerprint;
+                        signerKeyId = trusted.KeyId;
+                        signerUserId = trusted.UserId;
+                        break;
+                    }
+                }
+                catch (PgpException)
+                {
+                    // Wrong key or malformed signature for this candidate; try the next trusted key.
+                }
+                catch (IOException)
+                {
+                    // Same: not this key's signature.
                 }
             }
-            catch (PgpException)
-            {
-                // Wrong key or malformed signature for this candidate; try the next trusted key.
-            }
-            catch (IOException)
-            {
-                // Same: not this key's signature.
-            }
+
+            if (signatureValid)
+                break;
         }
 
         if (!signatureValid)
@@ -340,11 +349,34 @@ public static class HelmProvenance
                     "Signature is cryptographically valid but the signing key is revoked, expired, or not authorized to sign.");
             }
 
-            // Distinguish "valid signature by an untrusted key" from "no valid signature at all".
-            if (TryVerifyAgainstEmbeddedIssuer(signedBody, signaturePacket, out var untrustedFp, out var untrustedId, out var untrustedUid))
+            if (missingCreationTime)
             {
-                return Fail(untrustedFp, untrustedId, untrustedUid, ExtractSha256(provContent, archiveName), actualSha256,
-                    "Signature is cryptographically valid but the signing key is not in the trusted key set.");
+                return Fail(null, null, null, ExtractSha256(provContent, archiveName), actualSha256,
+                    "OpenPGP provenance signature is missing its hashed creation time.");
+            }
+
+            if (unsupportedCriticalSubpacket)
+            {
+                return Fail(null, null, null, ExtractSha256(provContent, archiveName), actualSha256,
+                    "OpenPGP provenance signature contains an unsupported critical hashed subpacket.");
+            }
+
+            if (invalidSignatureType)
+            {
+                return Fail(null, null, null, ExtractSha256(provContent, archiveName), actualSha256,
+                    "OpenPGP clear-signed provenance must use a canonical-text document signature.");
+            }
+
+            // Distinguish "valid signature by an untrusted key" from "no valid signature at all".
+            foreach (var parsedSignature in parsedSignatures)
+            {
+                using var signatureStream = new MemoryStream();
+                parsedSignature.Encode(signatureStream);
+                if (TryVerifyAgainstEmbeddedIssuer(signedBody, signatureStream.ToArray(), out var untrustedFp, out var untrustedId, out var untrustedUid))
+                {
+                    return Fail(untrustedFp, untrustedId, untrustedUid, ExtractSha256(provContent, archiveName), actualSha256,
+                        "Signature is cryptographically valid but the signing key is not in the trusted key set.");
+                }
             }
 
             return Fail(null, null, null, ExtractSha256(provContent, archiveName), actualSha256,
@@ -420,7 +452,8 @@ public static class HelmProvenance
             // but explicitly prohibits V3 signatures with ECDSA and EdDSA algorithms.
             (4, 3) => !IsEllipticCurveSignatureAlgorithm(keyAlgorithm),
             (4, 4) => true,
-            (6, 6) => true,
+            // RFC 9580 §5.2.3.3.1 prohibits Ed25519Legacy in V6 signature packets.
+            (6, 6) => keyAlgorithm != PublicKeyAlgorithmTag.EdDsa_Legacy,
             _ => false,
         };
 
@@ -897,13 +930,13 @@ public static class HelmProvenance
         return false;
     }
 
-    private static PgpSignature ParseSignature(byte[] signaturePacket)
+    private static IReadOnlyList<PgpSignature> ParseSignatures(byte[] signaturePacket)
     {
         using var stream = new MemoryStream(signaturePacket, writable: false);
         var factory = new PgpObjectFactory(stream);
         var obj = factory.NextPgpObject();
-        if (obj is PgpSignatureList list && list.Count > 0)
-            return list[0];
+        if (obj is PgpSignatureList { Count: > 0 } list)
+            return Enumerable.Range(0, list.Count).Select(index => list[index]).ToArray();
         throw new PgpException("Signature block does not contain an OpenPGP signature packet.");
     }
 
@@ -968,7 +1001,9 @@ public static class HelmProvenance
         userId = null;
         try
         {
-            var sig = ParseSignature(signaturePacket);
+            var sig = ParseSignatures(signaturePacket).FirstOrDefault();
+            if (sig is null)
+                return false;
             // Without the issuer public key we cannot verify; report the key ID only.
             if (sig.KeyId != 0)
             {
