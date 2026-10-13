@@ -209,6 +209,12 @@ public static class HelmProvenance
                 "OpenPGP clear-signed provenance must use a canonical-text document signature.");
         }
 
+        if (!HasRequiredSignatureCreationTime(parsedSignature))
+        {
+            return Fail(null, null, null, ExtractSha256(provContent, archiveName), actualSha256,
+                "OpenPGP provenance signature is missing its hashed creation time.");
+        }
+
         if (HasUnsupportedCriticalSubpackets(
                 parsedSignature,
                 SignatureSubpacketTag.CreationTime,
@@ -237,9 +243,9 @@ public static class HelmProvenance
         {
             try
             {
-                // RFC 9580 requires V6 keys to produce V6 signatures. Keep trying
-                // other trusted keys so a mixed V4/V6 trust set can still match V4.
-                if (trusted.PublicKey.Version == 6 && parsedSignature.Version != 6)
+                // A V6 signature cannot be verified by a V4 key; keep trying other
+                // trusted keys so a mixed trust set can still match a compatible key.
+                if (!SignatureVersionMatchesKey(parsedSignature.Version, trusted.PublicKey.Version))
                     continue;
 
                 if (IsWeakHashAlgorithm(parsedSignature.HashAlgorithm))
@@ -380,6 +386,30 @@ public static class HelmProvenance
             actualSha256,
             failureReason: null);
     }
+
+    /// <summary>Whether a document signature has its required authenticated timestamp.</summary>
+    private static bool HasRequiredSignatureCreationTime(PgpSignature signature)
+    {
+        if (signature.Version == 3)
+            return true;
+
+        if (signature.Version is not (4 or 6))
+            return false;
+
+        var hashed = signature.GetHashedSubPackets();
+        return hashed is not null && hashed.HasSubpacket(SignatureSubpacketTag.CreationTime);
+    }
+
+    /// <summary>Whether the signature version is valid for the signing-key version.</summary>
+    private static bool SignatureVersionMatchesKey(int signatureVersion, int keyVersion) =>
+        (keyVersion, signatureVersion) switch
+        {
+            (3, 3) => true,
+            // RFC 9580 retains V3 signatures from V4 keys for historical verification.
+            (4, 3 or 4) => true,
+            (6, 6) => true,
+            _ => false,
+        };
 
     /// <summary>
     /// Compares the chart archive SHA-256 against the digest recorded in a <c>.prov</c> file.

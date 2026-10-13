@@ -259,11 +259,51 @@ public sealed class HelmProvenanceTrustedKey
                     SignatureSubpacketTag.ExpireTime,
                 },
             PgpSignature.KeyRevocation or PgpSignature.SubkeyRevocation or PgpSignature.CertificationRevocation =>
-                [SignatureSubpacketTag.CreationTime],
+                [SignatureSubpacketTag.CreationTime, SignatureSubpacketTag.RevocationReason],
             _ => Array.Empty<SignatureSubpacketTag>(),
         };
 
-        return !HelmProvenance.HasUnsupportedCriticalSubpackets(signature, supportedTags);
+        return IsValidRevocationReason(signature) &&
+            !HelmProvenance.HasUnsupportedCriticalSubpackets(signature, supportedTags);
+    }
+
+    private static bool IsValidRevocationReason(PgpSignature signature)
+    {
+        if (signature.SignatureType is not (PgpSignature.KeyRevocation or PgpSignature.SubkeyRevocation or PgpSignature.CertificationRevocation))
+            return true;
+
+        var hashed = signature.GetHashedSubPackets();
+        if (hashed is null)
+            return true;
+
+        foreach (var subpacket in hashed.GetSubpackets(SignatureSubpacketTag.RevocationReason))
+        {
+            var data = subpacket.GetData();
+            if (data.Length == 0)
+                return false;
+
+            var code = data[0];
+            var validCode = code is >= 100 and <= 110 || signature.SignatureType switch
+            {
+                PgpSignature.KeyRevocation or PgpSignature.SubkeyRevocation => code is 0 or 1 or 2 or 3,
+                PgpSignature.CertificationRevocation => code is 0 or 32,
+                _ => false,
+            };
+            if (!validCode)
+                return false;
+
+            try
+            {
+                _ = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true)
+                    .GetString(data, 1, data.Length - 1);
+            }
+            catch (System.Text.DecoderFallbackException)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>

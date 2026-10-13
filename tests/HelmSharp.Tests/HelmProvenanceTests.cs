@@ -246,6 +246,46 @@ public class HelmProvenanceTests
             ?? throw new InvalidOperationException("The policy validator returned no result."));
     }
 
+    private static bool SignatureVersionMatchesKey(int signatureVersion, int keyVersion)
+    {
+        var method = typeof(HelmProvenance).GetMethod(
+            "SignatureVersionMatchesKey",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Could not find the signature/key version validator.");
+        return (bool)(method.Invoke(null, [signatureVersion, keyVersion])
+            ?? throw new InvalidOperationException("The signature/key version validator returned no result."));
+    }
+
+    private static bool HasRequiredSignatureCreationTime(PgpSignature signature)
+    {
+        var method = typeof(HelmProvenance).GetMethod(
+            "HasRequiredSignatureCreationTime",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Could not find the document-signature timestamp validator.");
+        return (bool)(method.Invoke(null, [signature])
+            ?? throw new InvalidOperationException("The document-signature timestamp validator returned no result."));
+    }
+
+    private static string RemoveHashedCreationTimeFromClearSignedProv(string prov)
+    {
+        const string signatureHeader = "-----BEGIN PGP SIGNATURE-----";
+        const string signatureFooter = "-----END PGP SIGNATURE-----";
+        var start = prov.IndexOf(signatureHeader, StringComparison.Ordinal);
+        var end = prov.IndexOf(signatureFooter, start, StringComparison.Ordinal);
+        Assert.True(start >= 0 && end > start);
+        var base64 = string.Concat(prov[(start + signatureHeader.Length)..end]
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => !line.StartsWith('=') && !line.StartsWith(':')));
+        var parsed = new PgpObjectFactory(Convert.FromBase64String(base64)).NextPgpObject() as PgpSignatureList;
+        Assert.NotNull(parsed);
+        using var signatureBytes = new MemoryStream();
+        RemoveHashedCreationTime(parsed![0]).Encode(signatureBytes);
+        var encoded = Convert.ToBase64String(signatureBytes.ToArray());
+        var wrapped = string.Join('\n', Enumerable.Range(0, (encoded.Length + 63) / 64)
+            .Select(index => encoded.Substring(index * 64, Math.Min(64, encoded.Length - index * 64))));
+        return prov[..(start + signatureHeader.Length)] + "\n\n" + wrapped + "\n" + prov[end..];
+    }
+
     /// <summary>Binary public keyring containing a single signing key that is revoked.</summary>
     private static byte[] CreateRevokedSigningKeyring(string userId = "Revoked <revoked@example.com>")
     {
@@ -274,7 +314,7 @@ public class HelmProvenanceTests
         revGen.InitSign(PgpSignature.KeyRevocation, privateKey);
         var revSub = new PgpSignatureSubpacketGenerator();
         revSub.SetSignatureCreationTime(false, DateTime.UtcNow);
-        revSub.SetRevocationReason(false, RevocationReasonTag.KeySuperseded, "test revocation");
+        revSub.SetRevocationReason(true, RevocationReasonTag.KeySuperseded, "test revocation");
         revGen.SetHashedSubpackets(revSub.Generate());
         var revoked = PgpPublicKey.AddCertification(publicKeyToRevoke, revGen.GenerateCertification(publicKeyToRevoke));
 
@@ -530,6 +570,105 @@ public class HelmProvenanceTests
         {
             Directory.Delete(work, recursive: true);
         }
+    }
+
+    [Theory]
+    [InlineData(3, 3, true)]
+    [InlineData(3, 4, true)]
+    [InlineData(4, 4, true)]
+    [InlineData(6, 6, true)]
+    [InlineData(6, 4, false)]
+    [InlineData(4, 6, false)]
+    [InlineData(3, 6, false)]
+    public void SignatureVersionMatchesKey_UsesRegisteredVersionPairs(int signatureVersion, int keyVersion, bool expected)
+    {
+        Assert.Equal(expected, SignatureVersionMatchesKey(signatureVersion, keyVersion));
+    }
+
+    [Fact]
+    public async Task Verify_DocumentSignatureWithoutHashedCreationTime_FailsClosed()
+    {
+        var work = TempDir();
+        try
+        {
+            var tgz = await CreateTestChartArchiveAsync(work);
+            var (_, _, signingKey, trustedKey) = CreateTestKeys();
+            await HelmProvenance.SignAsync(tgz, signingKey);
+            var provPath = tgz + ".prov";
+            var prov = await File.ReadAllTextAsync(provPath);
+            await File.WriteAllTextAsync(provPath, RemoveHashedCreationTimeFromClearSignedProv(prov));
+
+            var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
+
+            Assert.False(result.IsValid);
+            Assert.Contains("hashed creation time", result.FailureReason, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void DocumentSignatureWithoutHashedCreationTime_IsMalformed()
+    {
+        var (secretRing, _, _, _) = CreateTestKeys();
+        var secret = secretRing.GetSecretKeys().First();
+        var generator = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha512);
+        generator.InitSign(PgpSignature.CanonicalTextDocument, secret.ExtractPrivateKey(null)!);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        generator.SetHashedSubpackets(packets.Generate());
+
+        var signature = generator.Generate();
+        Assert.True(HasRequiredSignatureCreationTime(signature));
+        Assert.False(HasRequiredSignatureCreationTime(RemoveHashedCreationTime(signature)));
+    }
+
+    [Fact]
+    public void PolicySignatureWithMalformedCriticalRevocationReason_IsRejected()
+    {
+        var (secretRing, _, _, _) = CreateTestKeys();
+        var secret = secretRing.GetSecretKeys().First();
+        var generator = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha512);
+        generator.InitSign(PgpSignature.KeyRevocation, secret.ExtractPrivateKey(null)!);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        AddCriticalSubpacket(packets, SignatureSubpacketTag.RevocationReason);
+        generator.SetHashedSubpackets(packets.Generate());
+
+        Assert.False(HasSupportedPolicySubpackets(generator.Generate()));
+    }
+
+    [Fact]
+    public void SigningKeyDispose_ZeroesOwnedSecretAndPassphraseCopies()
+    {
+        var passphrase = "passphrase".ToCharArray();
+        var (secretRing, _, setupSigningKey, _) = CreateTestKeys(passphrase: passphrase);
+        setupSigningKey.Dispose();
+        byte[] secretBytes;
+        using (var ms = new MemoryStream())
+        {
+            secretRing.Encode(ms);
+            secretBytes = ms.ToArray();
+        }
+        var originalInput = secretBytes.ToArray();
+        var signingKey = HelmProvenanceSigningKey.FromSecretKeyData(secretBytes, passphrase);
+        var secretCopy = (byte[])(typeof(HelmProvenanceSigningKey)
+            .GetField("_secretKeyData", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(signingKey)!);
+        var passphraseCopy = (char[])(typeof(HelmProvenanceSigningKey)
+            .GetField("_passphrase", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(signingKey)!);
+
+        signingKey.Dispose();
+        signingKey.Dispose();
+
+        Assert.All(secretCopy, value => Assert.Equal((byte)0, value));
+        Assert.All(passphraseCopy, value => Assert.Equal('\0', value));
+        Assert.Equal(originalInput, secretBytes);
+        Assert.Equal("passphrase", new string(passphrase));
+        Assert.Throws<ObjectDisposedException>(() => signingKey.GetSecretKey());
     }
 
     [Fact]

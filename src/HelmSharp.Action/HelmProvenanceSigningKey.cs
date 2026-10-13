@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Org.BouncyCastle.Bcpg;
 using Org.BouncyCastle.Bcpg.OpenPgp;
 using Org.BouncyCastle.Security;
@@ -54,7 +55,15 @@ public sealed class HelmProvenanceSigningKey : IDisposable
         if (!File.Exists(path))
             throw new FileNotFoundException($"Secret key file not found: {path}", path);
 
-        return FromSecretKeyData(File.ReadAllBytes(path), passphrase);
+        var secretKeyData = File.ReadAllBytes(path);
+        try
+        {
+            return FromSecretKeyData(secretKeyData, passphrase);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(secretKeyData);
+        }
     }
 
     /// <summary>Loads and unlocks the secret key for signing.</summary>
@@ -208,12 +217,13 @@ public sealed class HelmProvenanceSigningKey : IDisposable
         }
     }
 
-    /// <summary>Zeroes the in-memory passphrase copy.</summary>
+    /// <summary>Zeroes the owned secret-key and passphrase copies.</summary>
     public void Dispose()
     {
         if (_disposed)
             return;
         _disposed = true;
+        CryptographicOperations.ZeroMemory(_secretKeyData);
         if (_passphrase is not null)
         {
             Array.Clear(_passphrase);
