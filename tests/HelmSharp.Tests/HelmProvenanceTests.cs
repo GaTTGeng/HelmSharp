@@ -1185,6 +1185,60 @@ public class HelmProvenanceTests
     }
 
     [Fact]
+    public void FromKeyringData_SecondaryUserCertificationCannotClearPrimaryKeyExpiry()
+    {
+        const string secondaryUserId = "Secondary identity <secondary@example.com>";
+        var (secretRing, publicRing) = CreateRingWithSigningSubkey(expiredPrimary: true);
+        var primarySecret = secretRing.GetSecretKeys().First();
+        var primary = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+        var certification = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        certification.InitSign(PgpSignature.PositiveCertification, primarySecret.ExtractPrivateKey(null)!);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, DateTime.UtcNow.AddMinutes(1));
+        packets.SetPrimaryUserId(false, false);
+        certification.SetHashedSubpackets(packets.Generate());
+        var certifiedPrimary = PgpPublicKey.AddCertification(
+            primary,
+            secondaryUserId,
+            certification.GenerateCertification(secondaryUserId, primary));
+        var certifiedRing = PgpPublicKeyRing.InsertPublicKey(publicRing, certifiedPrimary);
+        using var ms = new MemoryStream();
+        certifiedRing.Encode(ms);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
+
+        Assert.Contains("No usable", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FromKeyringData_PrimaryUserCertificationCanUpdatePrimaryKeyExpiry()
+    {
+        const string userId = "Signing subkey <subkey@example.com>";
+        var (secretRing, publicRing) = CreateRingWithSigningSubkey(expiredPrimary: true);
+        var primarySecret = secretRing.GetSecretKeys().First();
+        var primary = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+        var certification = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        certification.InitSign(PgpSignature.PositiveCertification, primarySecret.ExtractPrivateKey(null)!);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, DateTime.UtcNow.AddMinutes(1));
+        certification.SetHashedSubpackets(packets.Generate());
+        var certifiedPrimary = PgpPublicKey.AddCertification(
+            primary,
+            userId,
+            certification.GenerateCertification(userId, primary));
+        var certifiedRing = PgpPublicKeyRing.InsertPublicKey(publicRing, certifiedPrimary);
+        using var ms = new MemoryStream();
+        certifiedRing.Encode(ms);
+
+        var trustedKeys = HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray());
+        var signingSubkey = publicRing.GetPublicKeys().Single(key => !key.IsMasterKey);
+
+        Assert.Contains(trustedKeys, trustedKey =>
+            trustedKey.Fingerprint == Convert.ToHexString(signingSubkey.GetFingerprint()).ToLowerInvariant());
+    }
+
+    [Fact]
     public void FromKeyringData_UnknownCriticalSelfCertificationIsRejected()
     {
         var keyGenerator = new RsaKeyPairGenerator();

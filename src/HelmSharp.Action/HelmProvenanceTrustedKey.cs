@@ -748,25 +748,81 @@ public sealed class HelmProvenanceTrustedKey
         IReadOnlyList<PgpPublicKey> certificateKeys)
     {
         PgpSignature? latest = null;
-        foreach (var signature in key.GetSignatures())
+        foreach (var signature in key.GetKeySignatures())
         {
-            var isCertification = signature.SignatureType is PgpSignature.PositiveCertification
-                or PgpSignature.CasualCertification or PgpSignature.NoCertification
-                or PgpSignature.DefaultCertification;
-            if (!isCertification && signature.SignatureType != PgpSignature.DirectKey)
+            if (signature.SignatureType != PgpSignature.DirectKey)
                 continue;
 
-            var isValid = isCertification
-                ? HasValidSelfCertification(signature, key, certificateKeys)
-                : HasValidDirectKeySignature(signature, key, certificateKeys);
-            if (!isValid)
+            if (!HasValidDirectKeySignature(signature, key, certificateKeys))
                 continue;
             if (latest is null || signature.CreationTime > latest.CreationTime)
                 latest = signature;
         }
 
+        // Key lifetime is controlled by direct-key assertions and certifications on
+        // the primary identity. A newer certification on another UID must not erase it.
+        var primaryUserId = GetUserId(key, certificateKeys);
+        if (primaryUserId is not null)
+        {
+            foreach (var signature in key.GetSignaturesForId(primaryUserId))
+            {
+                if (!IsUserCertification(signature) ||
+                    !HasValidUserIdSignature(signature, primaryUserId, key) ||
+                    IsCertificationRevoked(key, primaryUserId, signature, certificateKeys))
+                    continue;
+
+                if (latest is null || signature.CreationTime > latest.CreationTime)
+                    latest = signature;
+            }
+        }
+        else
+        {
+            // Preserve support for certificates that use User Attributes without a
+            // textual UID, applying the same primary-identity scope and fallback order.
+            var validAttributes = new List<(PgpUserAttributeSubpacketVector Attribute,
+                PgpSignature Certification, bool IsPrimary)>();
+            foreach (var attribute in key.GetUserAttributes())
+            {
+                var certification = key.GetSignaturesForUserAttribute(attribute)
+                    .Where(signature => IsUserCertification(signature) &&
+                        HasValidUserAttributeSignature(signature, attribute, key, key) &&
+                        !IsUserAttributeCertificationRevoked(key, attribute, signature, certificateKeys))
+                    .MaxBy(signature => signature.CreationTime);
+                if (certification is not null)
+                {
+                    validAttributes.Add((attribute, certification,
+                        certification.GetHashedSubPackets()?.IsPrimaryUserId() == true));
+                }
+            }
+
+            var primaryAttribute = validAttributes
+                .Where(candidate => candidate.IsPrimary)
+                .OrderByDescending(candidate => candidate.Certification.CreationTime)
+                .Select(candidate => candidate.Attribute)
+                .FirstOrDefault()
+                ?? validAttributes.FirstOrDefault().Attribute;
+            if (primaryAttribute is not null)
+            {
+                foreach (var signature in key.GetSignaturesForUserAttribute(primaryAttribute))
+                {
+                    if (!IsUserCertification(signature) ||
+                        !HasValidUserAttributeSignature(signature, primaryAttribute, key, key) ||
+                        IsUserAttributeCertificationRevoked(key, primaryAttribute, signature, certificateKeys))
+                        continue;
+
+                    if (latest is null || signature.CreationTime > latest.CreationTime)
+                        latest = signature;
+                }
+            }
+        }
+
         return latest;
     }
+
+    private static bool IsUserCertification(PgpSignature signature)
+        => signature.SignatureType is PgpSignature.PositiveCertification
+            or PgpSignature.CasualCertification or PgpSignature.NoCertification
+            or PgpSignature.DefaultCertification;
 
     private static bool HasValidDirectKeySignature(
         PgpSignature signature,
