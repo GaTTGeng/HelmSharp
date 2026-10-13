@@ -86,6 +86,32 @@ public sealed class HelmPluginManagerTests : IDisposable
         Assert.False(Directory.Exists(installedPath));
     }
 
+    [Theory]
+    [InlineData("{\"version\":1,\"description\":\"malformed\"}")]
+    [InlineData("[]")]
+    public async Task List_InvalidMetadataShape_UsesFallbackAndContinuesListing(string malformedMetadata)
+    {
+        var pluginRoot = Path.Combine(_tempDir, "plugins");
+        var malformedPlugin = Path.Combine(pluginRoot, "malformed");
+        var validPlugin = Path.Combine(pluginRoot, "valid");
+        Directory.CreateDirectory(malformedPlugin);
+        Directory.CreateDirectory(validPlugin);
+        await File.WriteAllTextAsync(Path.Combine(malformedPlugin, "plugin.json"), malformedMetadata);
+        await File.WriteAllTextAsync(
+            Path.Combine(validPlugin, "plugin.json"),
+            "{\"version\":\"2.0.0\",\"description\":\"valid metadata\"}");
+        var manager = new HelmPluginManager(pluginRoot);
+
+        var plugins = manager.List();
+
+        var fallbackPlugin = Assert.Single(plugins, plugin => plugin.Name == "malformed");
+        Assert.Equal("unknown", fallbackPlugin.Version);
+        Assert.Equal(string.Empty, fallbackPlugin.Description);
+        var listedPlugin = Assert.Single(plugins, plugin => plugin.Name == "valid");
+        Assert.Equal("2.0.0", listedPlugin.Version);
+        Assert.Equal("valid metadata", listedPlugin.Description);
+    }
+
     [Fact]
     public async Task InstallAsync_UsesPlatformCaseSemantics()
     {

@@ -127,6 +127,7 @@ public class HelmPluginManager
                     if (doc.TryGetProperty("description", out var d)) description = d.GetString() ?? "";
                 }
                 catch (JsonException) { }
+                catch (InvalidOperationException) { }
                 catch (IOException) { }
                 catch (UnauthorizedAccessException) { }
             }
