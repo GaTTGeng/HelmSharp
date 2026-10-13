@@ -426,7 +426,9 @@ public class HelmProvenanceTests
         return ms.ToArray();
     }
 
-    private static byte[] CreateSignatureTargetDigest(PgpSignature signature)
+    private static byte[] CreateSignatureTargetDigest(
+        PgpSignature signature,
+        HashAlgorithmTag hashAlgorithm = HashAlgorithmTag.Sha256)
     {
         var packet = signature.GetEncoded();
         int bodyOffset;
@@ -472,7 +474,13 @@ public class HelmProvenanceTests
             }
         }
 
-        return SHA256.HashData(packet.AsSpan(bodyOffset, bodyLength));
+        var digestName = hashAlgorithm switch
+        {
+            HashAlgorithmTag.Sha1 => "SHA1",
+            HashAlgorithmTag.Sha256 => "SHA256",
+            _ => throw new ArgumentOutOfRangeException(nameof(hashAlgorithm)),
+        };
+        return DigestUtilities.CalculateDigest(digestName, packet, bodyOffset, bodyLength);
     }
 
     private static PgpPublicKey AddTargetedCertificationRevocation(
@@ -480,7 +488,8 @@ public class HelmProvenanceTests
         PgpSecretKey primarySecret,
         string? userId,
         PgpSignature target,
-        DateTime creationTime)
+        DateTime creationTime,
+        HashAlgorithmTag targetHashAlgorithm = HashAlgorithmTag.Sha256)
     {
         var generator = new PgpSignatureGenerator(primarySecret.PublicKey.Algorithm, HashAlgorithmTag.Sha512);
         generator.InitSign(PgpSignature.CertificationRevocation, primarySecret.ExtractPrivateKey(null)!);
@@ -489,8 +498,8 @@ public class HelmProvenanceTests
         packets.AddCustomSubpacket(new SignatureTarget(
             true,
             (int)target.KeyAlgorithm,
-            (int)HashAlgorithmTag.Sha256,
-            CreateSignatureTargetDigest(target)));
+            (int)targetHashAlgorithm,
+            CreateSignatureTargetDigest(target, targetHashAlgorithm)));
         generator.SetHashedSubpackets(packets.Generate());
         var revocation = userId is null
             ? generator.GenerateCertification(primary)
@@ -2934,7 +2943,8 @@ public class HelmProvenanceTests
             primarySecret,
             userId,
             certification,
-            certification.CreationTime.AddMinutes(1));
+            certification.CreationTime.AddMinutes(1),
+            HashAlgorithmTag.Sha1);
         var revokedRing = PgpPublicKeyRing.InsertPublicKey(publicRing, revokedPrimary);
         using var bytes = new MemoryStream();
         revokedRing.Encode(bytes);

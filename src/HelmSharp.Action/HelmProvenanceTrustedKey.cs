@@ -3,6 +3,7 @@ using Org.BouncyCastle.Asn1.Nist;
 using Org.BouncyCastle.Bcpg;
 using Org.BouncyCastle.Bcpg.Sig;
 using Org.BouncyCastle.Bcpg.OpenPgp;
+using Org.BouncyCastle.Security;
 
 namespace HelmSharp.Action;
 
@@ -333,40 +334,61 @@ public sealed class HelmProvenanceTrustedKey
         var targetPackets = hashed.GetSubpackets(SignatureSubpacketTag.SignatureTarget);
         if (targetPackets.Length != 1 || targetPackets[0] is not SignatureTarget signatureTarget ||
             signatureTarget.PublicKeyAlgorithm != (int)targetSignature.KeyAlgorithm ||
-            !TryGetStrongTargetDigest(signatureTarget.HashAlgorithm, out var digestAlgorithm, out var expectedLength))
+            !TryGetTargetDigestParameters(signatureTarget.HashAlgorithm, out var digestAlgorithm, out var expectedLength))
             return false;
 
         var targetDigest = signatureTarget.GetHashData();
         if (targetDigest.Length != expectedLength || !TryGetTargetSignatureBody(targetSignature, out var signatureBody))
             return false;
 
-        var actualDigest = digestAlgorithm switch
-        {
-            HashAlgorithmTag.Sha256 => SHA256.HashData(signatureBody),
-            HashAlgorithmTag.Sha384 => SHA384.HashData(signatureBody),
-            HashAlgorithmTag.Sha512 => SHA512.HashData(signatureBody),
-            _ => Array.Empty<byte>(),
-        };
+        // The target digest identifies a signature packet; it is independent of the
+        // revocation signature's own hash, which is validated separately.
+        var actualDigest = DigestUtilities.CalculateDigest(digestAlgorithm, signatureBody);
 
         return actualDigest.Length == expectedLength &&
             CryptographicOperations.FixedTimeEquals(actualDigest, targetDigest);
     }
 
-    private static bool TryGetStrongTargetDigest(int hashAlgorithm, out HashAlgorithmTag algorithm, out int digestLength)
+    private static bool TryGetTargetDigestParameters(int hashAlgorithm, out string algorithm, out int digestLength)
     {
-        algorithm = HashAlgorithmTag.Sha256;
+        algorithm = string.Empty;
         digestLength = 0;
         switch ((HashAlgorithmTag)hashAlgorithm)
         {
+            case HashAlgorithmTag.MD5:
+                algorithm = "MD5";
+                digestLength = 16;
+                return true;
+            case HashAlgorithmTag.Sha1:
+                algorithm = "SHA1";
+                digestLength = 20;
+                return true;
+            case HashAlgorithmTag.RipeMD160:
+                algorithm = "RIPEMD160";
+                digestLength = 20;
+                return true;
+            case HashAlgorithmTag.Sha224:
+                algorithm = "SHA224";
+                digestLength = 28;
+                return true;
             case HashAlgorithmTag.Sha256:
+                algorithm = "SHA256";
                 digestLength = 32;
                 return true;
             case HashAlgorithmTag.Sha384:
-                algorithm = HashAlgorithmTag.Sha384;
+                algorithm = "SHA384";
                 digestLength = 48;
                 return true;
             case HashAlgorithmTag.Sha512:
-                algorithm = HashAlgorithmTag.Sha512;
+                algorithm = "SHA512";
+                digestLength = 64;
+                return true;
+            case HashAlgorithmTag.Sha3_256:
+                algorithm = "SHA3-256";
+                digestLength = 32;
+                return true;
+            case HashAlgorithmTag.Sha3_512:
+                algorithm = "SHA3-512";
                 digestLength = 64;
                 return true;
             default:
