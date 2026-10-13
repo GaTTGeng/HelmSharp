@@ -2229,6 +2229,39 @@ public class HelmProvenanceTests
         Assert.Contains("signing key", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData(PgpSignature.PositiveCertification)]
+    [InlineData(PgpSignature.DirectKey)]
+    public void FromKeyringData_CriticalIssuerFingerprintOnNewerPrimaryAssertionRevokesSigningFlags(int signatureType)
+    {
+        const string userId = "Issuer fingerprint signer <issuer@example.com>";
+        var (secretRing, publicRing, signingKey, _) = CreateTestKeys(userId);
+        using var signingKeyLifetime = signingKey;
+        var primarySecret = secretRing.GetSecretKeys().Single(key => key.PublicKey.IsMasterKey);
+        var primary = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+        var assertionGenerator = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha512);
+        assertionGenerator.InitSign(signatureType, primarySecret.ExtractPrivateKey(null)!);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, DateTime.UtcNow.AddMinutes(1));
+        packets.SetKeyFlags(true, PgpKeyFlags.CanCertify);
+        packets.AddCustomSubpacket(new IssuerFingerprint(true, primary.Version, primary.GetFingerprint()));
+        assertionGenerator.SetHashedSubpackets(packets.Generate());
+        var assertion = signatureType == PgpSignature.DirectKey
+            ? assertionGenerator.GenerateCertification(primary)
+            : assertionGenerator.GenerateCertification(userId, primary);
+        primary = signatureType == PgpSignature.DirectKey
+            ? PgpPublicKey.AddCertification(primary, assertion)
+            : PgpPublicKey.AddCertification(primary, userId, assertion);
+        var updatedRing = PgpPublicKeyRing.InsertPublicKey(publicRing, primary);
+        using var keyBytes = new MemoryStream();
+        updatedRing.Encode(keyBytes);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(keyBytes.ToArray()));
+
+        Assert.Contains("signing key", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public void FromKeyringData_Version6PrimaryWithoutDirectKeySignatureIsRejected()
     {
@@ -3560,8 +3593,11 @@ public class HelmProvenanceTests
         }
     }
 
-    [Fact]
-    public async Task Verify_ArmorChecksumMismatch_Fails()
+    [Theory]
+    [InlineData("=AAAA")]
+    [InlineData("=not-base64")]
+    [InlineData("=")]
+    public async Task Verify_ArmorChecksumDamage_IsIgnored(string damagedChecksum)
     {
         var work = TempDir();
         try
@@ -3575,12 +3611,13 @@ public class HelmProvenanceTests
             var checksumLine = prov.Split('\n')
                 .Select(l => l.Trim())
                 .Single(l => l.StartsWith('='));
-            prov = prov.Replace(checksumLine, "=AAAA", StringComparison.Ordinal);
+            prov = prov.Replace(checksumLine, damagedChecksum, StringComparison.Ordinal);
             await File.WriteAllTextAsync(provPath, prov);
 
             var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
-            Assert.False(result.IsValid);
-            Assert.Contains("armor", result.FailureReason, StringComparison.OrdinalIgnoreCase);
+            Assert.True(result.IsValid, result.FailureReason);
+            Assert.True(result.SignatureValid);
+            Assert.True(result.DigestMatches);
         }
         finally
         {

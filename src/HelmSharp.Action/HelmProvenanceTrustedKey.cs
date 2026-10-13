@@ -238,6 +238,7 @@ public sealed class HelmProvenanceTrustedKey
                     SignatureSubpacketTag.KeyFlags,
                     SignatureSubpacketTag.PrimaryUserId,
                     SignatureSubpacketTag.RevocationKey,
+                    SignatureSubpacketTag.IssuerFingerprint,
                 },
             PgpSignature.DirectKey =>
                 new[]
@@ -247,6 +248,7 @@ public sealed class HelmProvenanceTrustedKey
                     SignatureSubpacketTag.KeyExpireTime,
                     SignatureSubpacketTag.KeyFlags,
                     SignatureSubpacketTag.RevocationKey,
+                    SignatureSubpacketTag.IssuerFingerprint,
                 },
             PgpSignature.SubkeyBinding =>
                 new[]
@@ -263,6 +265,7 @@ public sealed class HelmProvenanceTrustedKey
                 {
                     SignatureSubpacketTag.CreationTime,
                     SignatureSubpacketTag.ExpireTime,
+                    SignatureSubpacketTag.IssuerFingerprint,
                 },
             PgpSignature.KeyRevocation or PgpSignature.SubkeyRevocation or PgpSignature.CertificationRevocation =>
                 [

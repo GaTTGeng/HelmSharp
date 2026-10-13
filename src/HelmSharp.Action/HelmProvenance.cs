@@ -35,8 +35,9 @@ namespace HelmSharp.Action;
 /// metadata YAML, a <c>files:</c> digest map, and a real OpenPGP signature) so they interoperate
 /// with <c>helm verify</c> and <c>helm package --sign</c>. The file is UTF-8 without a BOM;
 /// cleartext lines starting with <c>-</c> are dash-escaped in the armor while the signature
-/// covers the unescaped text, and the signature block carries the RFC 4880 CRC-24 armor
-/// checksum. Verification accepts Helm's checksum-less armor as well.
+/// covers the unescaped text, and the signature block may carry the RFC 4880 CRC-24 armor
+/// checksum. Verification treats the checksum as advisory and accepts it when missing,
+/// malformed, or mismatched.
 /// </para>
 /// <para>
 /// <b>Legacy files.</b> Earlier HelmSharp builds wrote a pseudo-signature whose PGP SIGNATURE
@@ -735,26 +736,6 @@ public static class HelmProvenance
         return [(byte)(crc >> 16), (byte)(crc >> 8), (byte)crc];
     }
 
-    /// <summary>
-    /// Validates the optional <c>=</c>-prefixed armor checksum line against the decoded
-    /// payload. Absence of a checksum is legal (Helm omits it); presence of a wrong one
-    /// means the armor was corrupted in transit.
-    /// </summary>
-    private static bool ArmorChecksumMatches(byte[] payload, string checksumLine)
-    {
-        byte[] expected;
-        try
-        {
-            expected = Convert.FromBase64String(checksumLine[1..]);
-        }
-        catch (FormatException)
-        {
-            return false;
-        }
-
-        return expected.AsSpan().SequenceEqual(ComputeCrc24(payload));
-    }
-
     // --- Verification internals ---
 
     private static byte[] CanonicalizeForHash(string body)
@@ -858,19 +839,15 @@ public static class HelmProvenance
 
         var base64Region = text[base64Start..footerStart];
         var base64 = new StringBuilder();
-        string? checksumLine = null;
         foreach (var line in base64Region.Split('\n'))
         {
             var trimmed = line.Trim();
             if (trimmed.Length == 0 || trimmed.Contains(':'))
                 continue;
-            // RFC 4880 §6.1: the armor checksum is a single '='-prefixed Base64(CRC-24)
-            // line. Keep it out of the signature payload — mixing it in breaks decoding.
+            // RFC 9580 §6.1 makes the CRC-24 advisory: ignore it whether it is missing,
+            // malformed, or mismatched. It is not part of the signed packet payload.
             if (trimmed[0] == '=')
-            {
-                checksumLine = trimmed;
                 continue;
-            }
 
             base64.Append(trimmed);
         }
@@ -885,9 +862,6 @@ public static class HelmProvenance
         }
 
         if (signaturePacket.Length == 0)
-            return false;
-
-        if (checksumLine is not null && !ArmorChecksumMatches(signaturePacket, checksumLine))
             return false;
 
         // Helm/GPG emit dash-escaped cleartext; the signature covers the unescaped text.
