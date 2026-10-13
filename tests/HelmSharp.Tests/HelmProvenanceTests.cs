@@ -3145,6 +3145,10 @@ public class HelmProvenanceTests
 
             var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
             Assert.False(result.IsValid);
+            Assert.True(result.SignatureValid);
+            Assert.True(result.SignerTrusted);
+            Assert.True(result.DigestMatches);
+            Assert.Equal(result.ExpectedSha256, result.ActualSha256);
             Assert.Contains("expired", result.FailureReason, StringComparison.OrdinalIgnoreCase);
         }
         finally

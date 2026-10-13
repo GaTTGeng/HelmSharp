@@ -359,8 +359,18 @@ public static class HelmProvenance
 
             if (trustedKeyMatchedButUnusable)
             {
-                return Fail(unusableFingerprint, unusableKeyId, unusableUserId,
-                    ExtractSha256(provContent, archiveName), actualSha256,
+                var unusableExpectedSha256 = ExtractSha256(signedBody, archiveName);
+                var unusableDigestMatches = unusableExpectedSha256 is not null &&
+                    string.Equals(unusableExpectedSha256, actualSha256, StringComparison.OrdinalIgnoreCase);
+                return new HelmProvenanceVerificationResult(
+                    signatureValid: true,
+                    signerTrusted: true,
+                    unusableDigestMatches,
+                    unusableFingerprint,
+                    unusableKeyId,
+                    unusableUserId,
+                    unusableExpectedSha256,
+                    actualSha256,
                     "Signature is cryptographically valid but the signing key is revoked, expired, or not authorized to sign.");
             }
 
