@@ -246,7 +246,8 @@ public static class HelmProvenance
             if (HasUnsupportedCriticalSubpackets(
                     parsedSignature,
                     SignatureSubpacketTag.CreationTime,
-                    SignatureSubpacketTag.ExpireTime))
+                    SignatureSubpacketTag.ExpireTime,
+                    SignatureSubpacketTag.IssuerFingerprint))
             {
                 unsupportedCriticalSubpacket = true;
                 continue;
@@ -260,6 +261,9 @@ public static class HelmProvenance
                             parsedSignature.Version,
                             trusted.PublicKey.Version,
                             trusted.PublicKey.Algorithm))
+                        continue;
+
+                    if (!HelmProvenanceTrustedKey.IssuerFingerprintMatches(parsedSignature, trusted.PublicKey))
                         continue;
 
                     if (IsWeakHashAlgorithm(parsedSignature.HashAlgorithm))

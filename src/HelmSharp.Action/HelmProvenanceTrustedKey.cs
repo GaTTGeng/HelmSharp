@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Org.BouncyCastle.Asn1.Nist;
 using Org.BouncyCastle.Bcpg;
 using Org.BouncyCastle.Bcpg.Sig;
@@ -272,6 +273,7 @@ public sealed class HelmProvenanceTrustedKey
                     SignatureSubpacketTag.CreationTime,
                     SignatureSubpacketTag.RevocationReason,
                     SignatureSubpacketTag.IssuerFingerprint,
+                    SignatureSubpacketTag.SignatureTarget,
                 ],
             _ => Array.Empty<SignatureSubpacketTag>(),
         };
@@ -319,6 +321,129 @@ public sealed class HelmProvenanceTrustedKey
             }
         }
 
+        return true;
+    }
+
+    private static bool RevocationTargetsSignature(PgpSignature revocation, PgpSignature targetSignature)
+    {
+        var hashed = revocation.GetHashedSubPackets();
+        if (hashed is null || !hashed.HasSubpacket(SignatureSubpacketTag.SignatureTarget))
+            return true;
+
+        var targetPackets = hashed.GetSubpackets(SignatureSubpacketTag.SignatureTarget);
+        if (targetPackets.Length != 1 || targetPackets[0] is not SignatureTarget signatureTarget ||
+            signatureTarget.PublicKeyAlgorithm != (int)targetSignature.KeyAlgorithm ||
+            !TryGetStrongTargetDigest(signatureTarget.HashAlgorithm, out var digestAlgorithm, out var expectedLength))
+            return false;
+
+        var targetDigest = signatureTarget.GetHashData();
+        if (targetDigest.Length != expectedLength || !TryGetTargetSignatureBody(targetSignature, out var signatureBody))
+            return false;
+
+        var actualDigest = digestAlgorithm switch
+        {
+            HashAlgorithmTag.Sha256 => SHA256.HashData(signatureBody),
+            HashAlgorithmTag.Sha384 => SHA384.HashData(signatureBody),
+            HashAlgorithmTag.Sha512 => SHA512.HashData(signatureBody),
+            _ => Array.Empty<byte>(),
+        };
+
+        return actualDigest.Length == expectedLength &&
+            CryptographicOperations.FixedTimeEquals(actualDigest, targetDigest);
+    }
+
+    private static bool TryGetStrongTargetDigest(int hashAlgorithm, out HashAlgorithmTag algorithm, out int digestLength)
+    {
+        algorithm = HashAlgorithmTag.Sha256;
+        digestLength = 0;
+        switch ((HashAlgorithmTag)hashAlgorithm)
+        {
+            case HashAlgorithmTag.Sha256:
+                digestLength = 32;
+                return true;
+            case HashAlgorithmTag.Sha384:
+                algorithm = HashAlgorithmTag.Sha384;
+                digestLength = 48;
+                return true;
+            case HashAlgorithmTag.Sha512:
+                algorithm = HashAlgorithmTag.Sha512;
+                digestLength = 64;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static bool TryGetTargetSignatureBody(PgpSignature signature, out byte[] signatureBody)
+    {
+        var packetEncoding = signature.GetEncoded();
+        signatureBody = Array.Empty<byte>();
+        if (packetEncoding.Length < 2 || (packetEncoding[0] & 0x80) == 0)
+            return false;
+
+        int packetTag;
+        int bodyOffset;
+        long bodyLength;
+        if ((packetEncoding[0] & 0x40) != 0)
+        {
+            packetTag = packetEncoding[0] & 0x3f;
+            var firstLengthOctet = packetEncoding[1];
+            if (firstLengthOctet < 192)
+            {
+                bodyOffset = 2;
+                bodyLength = firstLengthOctet;
+            }
+            else if (firstLengthOctet < 224 && packetEncoding.Length >= 3)
+            {
+                bodyOffset = 3;
+                bodyLength = ((firstLengthOctet - 192) << 8) + packetEncoding[2] + 192;
+            }
+            else if (firstLengthOctet == 255 && packetEncoding.Length >= 6)
+            {
+                bodyOffset = 6;
+                bodyLength = ((long)packetEncoding[2] << 24) |
+                    ((long)packetEncoding[3] << 16) |
+                    ((long)packetEncoding[4] << 8) |
+                    packetEncoding[5];
+            }
+            else
+            {
+                // Bouncy Castle emits definite lengths here; reject partial or truncated framing.
+                return false;
+            }
+        }
+        else
+        {
+            packetTag = (packetEncoding[0] >> 2) & 0x0f;
+            switch (packetEncoding[0] & 0x03)
+            {
+                case 0:
+                    bodyOffset = 2;
+                    bodyLength = packetEncoding[1];
+                    break;
+                case 1 when packetEncoding.Length >= 3:
+                    bodyOffset = 3;
+                    bodyLength = (packetEncoding[1] << 8) | packetEncoding[2];
+                    break;
+                case 2 when packetEncoding.Length >= 5:
+                    bodyOffset = 5;
+                    bodyLength = ((long)packetEncoding[1] << 24) |
+                        ((long)packetEncoding[2] << 16) |
+                        ((long)packetEncoding[3] << 8) |
+                        packetEncoding[4];
+                    break;
+                default:
+                    return false;
+            }
+        }
+
+        if (packetTag != 2 || bodyLength <= 0 || bodyLength > int.MaxValue ||
+            bodyOffset + bodyLength > packetEncoding.Length)
+            return false;
+
+        // Signature Target identifies the signature packet body. Exclude packet framing
+        // and any following local trust packet so the digest is independent of transport.
+        signatureBody = packetEncoding.AsSpan(bodyOffset, (int)bodyLength).ToArray();
         return true;
     }
 
@@ -447,28 +572,28 @@ public sealed class HelmProvenanceTrustedKey
         foreach (var userId in key.GetUserIds())
         {
             if (HasValidUserIdSignature(signature, userId, key))
-                return !IsCertificationRevoked(key, userId, signature.CreationTime);
+                return !IsCertificationRevoked(key, userId, signature);
         }
 
         return false;
     }
 
-    private static bool IsCertificationRevoked(PgpPublicKey key, string userId, DateTime certificationTime)
+    private static bool IsCertificationRevoked(PgpPublicKey key, string userId, PgpSignature certification)
     {
-        PgpSignature? latestRevocation = null;
         foreach (var signature in key.GetSignaturesForId(userId))
         {
             if (signature.SignatureType != PgpSignature.CertificationRevocation ||
-                !HasValidUserIdSignature(signature, userId, key))
+                signature.CreationTime < certification.CreationTime ||
+                !HasValidUserIdSignature(signature, userId, key) ||
+                !RevocationTargetsSignature(signature, certification))
                 continue;
 
-            if (latestRevocation is null || signature.CreationTime > latestRevocation.CreationTime)
-                latestRevocation = signature;
+            return true;
         }
 
-        // Revocation wins equal timestamps; a later self-certification can reauthorize
-        // the UID while an older or revoked assertion cannot supply policy flags.
-        return latestRevocation is not null && latestRevocation.CreationTime >= certificationTime;
+        // A later self-certification can reauthorize the UID after a targetless legacy
+        // revocation; a targeted revocation only invalidates its exact assertion.
+        return false;
     }
 
     /// <summary>
@@ -559,6 +684,7 @@ public sealed class HelmProvenanceTrustedKey
         => key.GetSignatures().Any(revocation =>
             revocation.SignatureType == PgpSignature.CertificationRevocation &&
             revocation.CreationTime >= directKeySignature.CreationTime &&
+            RevocationTargetsSignature(revocation, directKeySignature) &&
             HasValidPrimaryKeySignature(revocation, key, PgpSignature.CertificationRevocation));
 
     private static bool HasValidPrimaryKeySignature(PgpSignature signature, PgpPublicKey key, int signatureType)
@@ -690,7 +816,7 @@ public sealed class HelmProvenanceTrustedKey
         return false;
     }
 
-    private static bool IssuerFingerprintMatches(PgpSignature signature, PgpPublicKey revoker)
+    internal static bool IssuerFingerprintMatches(PgpSignature signature, PgpPublicKey revoker)
     {
         // Unhashed issuer metadata is advisory; only accept a fingerprint bound by the signature.
         var hashed = signature.GetHashedSubPackets();
