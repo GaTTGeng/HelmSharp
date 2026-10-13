@@ -372,7 +372,7 @@ public class TemplateParserTests
         var tokens = new TemplateTokenizer("{{ if .A }}content").TokenizeFlat();
         var parser = new TemplateParser(tokens);
 
-        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        var ex = Assert.Throws<TemplateParseException>(parser.Parse);
         Assert.Contains("Missing 'end'", ex.Message);
         Assert.Contains("'if'", ex.Message);
         Assert.True(ex.Line > 0);
@@ -385,7 +385,7 @@ public class TemplateParserTests
         var tokens = new TemplateTokenizer("{{ define \"mytpl\" }}body").TokenizeFlat();
         var parser = new TemplateParser(tokens);
 
-        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        var ex = Assert.Throws<TemplateParseException>(parser.Parse);
         Assert.Contains("Missing 'end'", ex.Message);
         Assert.Contains("mytpl", ex.Message);
     }
@@ -396,7 +396,7 @@ public class TemplateParserTests
         var tokens = new TemplateTokenizer("{{ with .Values.data }}has data").TokenizeFlat();
         var parser = new TemplateParser(tokens);
 
-        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        var ex = Assert.Throws<TemplateParseException>(parser.Parse);
         Assert.Contains("Missing 'end'", ex.Message);
         Assert.Contains("'with'", ex.Message);
     }
@@ -407,7 +407,7 @@ public class TemplateParserTests
         var tokens = new TemplateTokenizer("{{ range .Items }}item").TokenizeFlat();
         var parser = new TemplateParser(tokens);
 
-        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        var ex = Assert.Throws<TemplateParseException>(parser.Parse);
         Assert.Contains("Missing 'end'", ex.Message);
         Assert.Contains("'range'", ex.Message);
     }
@@ -421,7 +421,7 @@ public class TemplateParserTests
         var tokens = new TemplateTokenizer("{{ if .A }}yes{{ else }}no").TokenizeFlat();
         var parser = new TemplateParser(tokens);
 
-        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        var ex = Assert.Throws<TemplateParseException>(parser.Parse);
         Assert.Contains("Missing 'end'", ex.Message);
         Assert.Contains("'else'", ex.Message);
         Assert.Equal(15, ex.Column);
@@ -435,7 +435,7 @@ public class TemplateParserTests
         var tokens = new TemplateTokenizer("{{ if .A }}a{{ else if .B }}b").TokenizeFlat();
         var parser = new TemplateParser(tokens);
 
-        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        var ex = Assert.Throws<TemplateParseException>(parser.Parse);
         Assert.Contains("Missing 'end'", ex.Message);
         Assert.Contains("'if'", ex.Message);
     }
@@ -447,7 +447,7 @@ public class TemplateParserTests
         var tokens = new TemplateTokenizer(template).TokenizeFlat();
         var parser = new TemplateParser(tokens);
 
-        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        var ex = Assert.Throws<TemplateParseException>(parser.Parse);
         Assert.Contains("Missing 'end'", ex.Message);
         Assert.Contains("'if'", ex.Message);
     }
@@ -460,7 +460,7 @@ public class TemplateParserTests
         var tokens = new TemplateTokenizer(template).TokenizeFlat();
         var parser = new TemplateParser(tokens);
 
-        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        var ex = Assert.Throws<TemplateParseException>(parser.Parse);
         Assert.Contains("Missing 'end'", ex.Message);
         Assert.Contains("'if'", ex.Message);
     }
@@ -487,8 +487,11 @@ public class TemplateParserTests
     [Fact]
     public void Render_RawStringContainingDelimitersSpacesAndPipes()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = "value: {{ `{{ .Release.Name }} | literal text` }}";
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = "value: {{ `{{ .Release.Name }} | literal text` }}" }
+        };
 
         var result = new HelmTemplateRenderer(chart, "release", "default", new Dictionary<string, object?>()).Render();
 
@@ -498,8 +501,11 @@ public class TemplateParserTests
     [Fact]
     public void Render_RawStringInsideParentheses()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = "value: {{ print (`a ) b`) }}";
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = "value: {{ print (`a ) b`) }}" }
+        };
 
         var result = new HelmTemplateRenderer(chart, "release", "default", new Dictionary<string, object?>()).Render();
 
@@ -509,8 +515,11 @@ public class TemplateParserTests
     [Fact]
     public void Render_RawStringWithPipeInsideParentheses()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = "value: {{ print (`a ) | b`) }}";
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = "value: {{ print (`a ) | b`) }}" }
+        };
 
         var result = new HelmTemplateRenderer(chart, "release", "default", new Dictionary<string, object?>()).Render();
 
@@ -520,8 +529,11 @@ public class TemplateParserTests
     [Fact]
     public void Render_RawStringDiscardsCarriageReturns()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = "value: {{ `first\r\nsecond` }}";
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = "value: {{ `first\r\nsecond` }}" }
+        };
 
         var result = new HelmTemplateRenderer(chart, "release", "default", new Dictionary<string, object?>()).Render();
 
@@ -532,8 +544,11 @@ public class TemplateParserTests
     [Fact]
     public void Render_RawStringDefineName()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = "{{ define `name` }}rendered{{ end }}{{ template `name` . }}";
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = "{{ define `name` }}rendered{{ end }}{{ template `name` . }}" }
+        };
 
         var result = new HelmTemplateRenderer(chart, "release", "default", new Dictionary<string, object?>()).Render();
 
@@ -578,7 +593,7 @@ public class TemplateParserTests
         var tokens = new TemplateTokenizer("    {{ if .A }}content").TokenizeFlat();
         var parser = new TemplateParser(tokens);
 
-        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        var ex = Assert.Throws<TemplateParseException>(parser.Parse);
         Assert.Equal(5, ex.Column);
     }
 
@@ -589,7 +604,7 @@ public class TemplateParserTests
         var tokens = new TemplateTokenizer("{{ define \"mytpl\" }}body").TokenizeFlat();
         var parser = new TemplateParser(tokens);
 
-        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        var ex = Assert.Throws<TemplateParseException>(parser.Parse);
         Assert.Equal(1, ex.Column);
     }
 
@@ -613,7 +628,7 @@ public class TemplateParserTests
         var tokens = new TemplateTokenizer("{{ define mytpl }}body{{ end }}").TokenizeFlat();
         var parser = new TemplateParser(tokens);
 
-        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        var ex = Assert.Throws<TemplateParseException>(parser.Parse);
         Assert.Contains("quoted", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("define", ex.Message);
     }
@@ -625,7 +640,7 @@ public class TemplateParserTests
         var tokens = new TemplateTokenizer("{{ define mytpl . }}body{{ end }}").TokenizeFlat();
         var parser = new TemplateParser(tokens);
 
-        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        var ex = Assert.Throws<TemplateParseException>(parser.Parse);
         Assert.Contains("quoted", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -636,7 +651,7 @@ public class TemplateParserTests
         var tokens = new TemplateTokenizer("{{ define }}body{{ end }}").TokenizeFlat();
         var parser = new TemplateParser(tokens);
 
-        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        var ex = Assert.Throws<TemplateParseException>(parser.Parse);
         Assert.Contains("quoted", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -647,7 +662,7 @@ public class TemplateParserTests
         var tokens = new TemplateTokenizer("{{ define \"\" }}body{{ end }}").TokenizeFlat();
         var parser = new TemplateParser(tokens);
 
-        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        var ex = Assert.Throws<TemplateParseException>(parser.Parse);
         Assert.Contains("empty", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -670,7 +685,7 @@ public class TemplateParserTests
         var tokens = new TemplateTokenizer("{{ define mytpl }}body{{ end }}").TokenizeFlat();
         var parser = new TemplateParser(tokens);
 
-        var ex = Assert.Throws<TemplateParseException>(() => parser.Parse());
+        var ex = Assert.Throws<TemplateParseException>(parser.Parse);
         Assert.True(ex.Line > 0);
         Assert.True(ex.Offset >= 0);
     }

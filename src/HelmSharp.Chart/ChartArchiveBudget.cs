@@ -20,8 +20,6 @@ internal sealed class ChartArchiveBudget
         _limits = limits;
     }
 
-    internal HelmChartArchiveLimits Limits => _limits;
-
     /// <summary>
     /// Rejects packaged dependency nesting deeper than the configured depth.
     /// The root chart is depth 0; each packaged dependency archive increments depth.
@@ -112,7 +110,7 @@ internal sealed class ChartArchiveBudget
         /// floods cannot evade the count limit.
         /// </summary>
         /// <exception cref="ChartArchiveLimitExceededException">Thrown when the entry-count limit is exceeded.</exception>
-        internal void CountEntry()
+        private void CountEntry()
         {
             _budget._totalEntryCount++;
             if (_budget._totalEntryCount > _budget._limits.MaxEntryCount)
@@ -185,7 +183,7 @@ internal sealed class ChartArchiveBudget
             // while sharing the total extracted budget. Compared in double space so a
             // near-unbounded ratio (trusted-chart profile) cannot overflow the bound.
             if (_compressedBytes > 0 &&
-                (double)_archiveExtractedBytes > _compressedBytes * _budget._limits.MaxCompressionRatio)
+                _archiveExtractedBytes > _compressedBytes * _budget._limits.MaxCompressionRatio)
             {
                 throw new ChartArchiveLimitExceededException(
                     ChartArchiveLimitKind.CompressionRatio,
@@ -498,7 +496,7 @@ internal sealed class ChartArchiveBudget
                     sawDigit = true;
                     if (octal > (long.MaxValue >> 3))
                         return long.MaxValue;
-                    octal = (octal << 3) | (long)(value - (byte)'0');
+                    octal = (octal << 3) + (uint)(value - (byte)'0');
                 }
 
                 return octal;

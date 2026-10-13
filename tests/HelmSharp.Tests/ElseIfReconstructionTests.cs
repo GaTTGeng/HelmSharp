@@ -11,24 +11,18 @@ namespace HelmSharp.Tests;
 /// Verifies that reconstructed <c>else if</c> chains pick the correct branch for
 /// default and matched values (a regression surface for the body-reconstruction path).
 /// </summary>
-public class ElseIfReconstructionTests
+public class ElseIfReconstructionTests(ITestOutputHelper output)
 {
-    private readonly ITestOutputHelper _output;
-
-    public ElseIfReconstructionTests(ITestOutputHelper output)
-    {
-        _output = output;
-    }
-
     [Fact]
     public void ElseIf_Chain_WithDefaultValues()
     {
         // Reproduce the controller-poddisruptionbudget template structure
         var chart = new HelmChart
         {
-            Name = "test", Version = "1.0.0", ValuesYaml = ""
-        };
-        chart.Templates["templates/test.yaml"] = """
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates =
+            {
+                ["templates/test.yaml"] = """
             {{- if eq .Values.controller.kind "Deployment" }}
             {{- $replicas := .Values.controller.replicaCount }}
             {{- if and .Values.controller.autoscaling.enabled (not .Values.controller.keda.enabled) }}
@@ -38,7 +32,9 @@ public class ElseIfReconstructionTests
             {{- end }}
             replicas: {{ $replicas }}
             {{- end }}
-            """;
+            """
+            }
+        };
 
         var renderer = new HelmTemplateRenderer(chart, "rel", "ns",
             new Dictionary<string, object?>
@@ -53,8 +49,8 @@ public class ElseIfReconstructionTests
             });
 
         var result = renderer.Render();
-        _output.WriteLine($"Result ({result.Length} chars):");
-        _output.WriteLine(result);
+        output.WriteLine($"Result ({result.Length} chars):");
+        output.WriteLine(result);
 
         // Should render "replicas: 3" (the else-if branch is false, so original value stays)
         Assert.Contains("replicas: 3", result);
@@ -65,9 +61,10 @@ public class ElseIfReconstructionTests
     {
         var chart = new HelmChart
         {
-            Name = "test", Version = "1.0.0", ValuesYaml = ""
-        };
-        chart.Templates["templates/test.yaml"] = """
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates =
+            {
+                ["templates/test.yaml"] = """
             {{- if and .Values.controller.autoscaling.enabled (not .Values.controller.keda.enabled) }}
             scaling: autoscaling
             {{- else if and .Values.controller.keda.enabled (not .Values.controller.autoscaling.enabled) }}
@@ -75,7 +72,9 @@ public class ElseIfReconstructionTests
             {{- else }}
             scaling: none
             {{- end }}
-            """;
+            """
+            }
+        };
 
         var renderer = new HelmTemplateRenderer(chart, "rel", "ns",
             new Dictionary<string, object?>
@@ -88,7 +87,7 @@ public class ElseIfReconstructionTests
             });
 
         var result = renderer.Render();
-        _output.WriteLine($"Result: {result}");
+        output.WriteLine($"Result: {result}");
 
         Assert.Contains("scaling: keda", result);
     }

@@ -1,5 +1,7 @@
 namespace HelmSharp.PostRenderer;
 
+// ReSharper disable UnusedMember.Global // Interface members are the public extension contract implemented by consumers.
+
 /// <summary>
 /// Transforms rendered manifests after template rendering (equivalent to Helm's --post-renderer).
 /// </summary>

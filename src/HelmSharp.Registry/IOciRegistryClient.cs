@@ -1,5 +1,7 @@
 namespace HelmSharp.Registry;
 
+// ReSharper disable UnusedMember.Global // Interface members are the public extension contract implemented by consumers.
+
 /// <summary>
 /// Client for OCI chart registries: credentials, chart push/pull, and tag listing.
 /// </summary>

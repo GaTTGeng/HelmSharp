@@ -9,6 +9,14 @@ namespace HelmSharp.Action;
 /// type, required, properties, items, enum, minimum/maximum, minLength/maxLength, pattern.
 /// Unknown keywords are ignored, matching Helm's lenient handling of unused schema features.
 /// </summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "UnusedType.Global",
+    Justification = "This internal schema validator is retained as the validation implementation for future Helm schema integration.")]
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "UnusedMember.Global",
+    Justification = "The validator is not yet wired into rendering, but its validation entry point is intentionally retained.")]
 internal static class HelmSchemaValidator
 {
     /// <summary>
@@ -167,7 +175,10 @@ internal static class HelmSchemaValidator
                     if (!System.Text.RegularExpressions.Regex.IsMatch(s, pattern.GetString() ?? ""))
                         errors.Add($"{path.TrimEnd('.')}: value does not match pattern '{pattern.GetString()}'");
                 }
-                catch { }
+                catch (ArgumentException ex)
+                {
+                    errors.Add($"{path.TrimEnd('.')}: schema pattern is invalid: {ex.Message}");
+                }
             }
         }
     }

@@ -12,14 +12,8 @@ namespace HelmSharp.Tests;
 /// Targeted diagnostics for specific real-chart render gaps (not pass/fail golden
 /// coverage) — used to drill into a single failing template such as ingress-nginx's PodDisruptionBudget.
 /// </summary>
-public class RealChartDiagnosticTests
+public class RealChartDiagnosticTests(ITestOutputHelper output)
 {
-    private readonly ITestOutputHelper _output;
-
-    public RealChartDiagnosticTests(ITestOutputHelper output)
-    {
-        _output = output;
-    }
 
     [HelmCliFact]
     [Trait("Category", "Diagnostic")]
@@ -32,15 +26,15 @@ public class RealChartDiagnosticTests
         var renderer = new HelmTemplateRenderer(chart, "rel", "ns", values);
 
         // List all defined templates
-        _output.WriteLine($"Defined templates: {renderer.DefinedTemplates.Count}");
+        output.WriteLine($"Defined templates: {renderer.DefinedTemplates.Count}");
         foreach (var (name, body) in renderer.DefinedTemplates.OrderBy(kv => kv.Key))
         {
-            _output.WriteLine($"  [{name}] ({body.Length} chars)");
+            output.WriteLine($"  [{name}] ({body.Length} chars)");
         }
 
         // Check each define body for balanced if/end pairs
-        _output.WriteLine("");
-        _output.WriteLine("Checking define body balance...");
+        output.WriteLine("");
+        output.WriteLine("Checking define body balance...");
         var regex = new System.Text.RegularExpressions.Regex(
             "{{-?\\s*(?<expr>.*?)\\s*-?}}",
             System.Text.RegularExpressions.RegexOptions.Singleline);
@@ -60,15 +54,14 @@ public class RealChartDiagnosticTests
                 else if (expr == "end")
                     depth--;
             }
-            if (depth != 0)
-                _output.WriteLine($"  UNBALANCED: [{name}] depth={depth} (should be 0)");
-            else
-                _output.WriteLine($"  OK: [{name}]");
+            output.WriteLine(depth != 0
+                ? $"  UNBALANCED: [{name}] depth={depth} (should be 0)"
+                : $"  OK: [{name}]");
         }
 
         // Try rendering each template individually and report errors
-        _output.WriteLine("");
-        _output.WriteLine("Rendering individual templates...");
+        output.WriteLine("");
+        output.WriteLine("Rendering individual templates...");
         var targetPath = "templates/controller-poddisruptionbudget.yaml";
 
         // Create single-template chart
@@ -91,14 +84,14 @@ public class RealChartDiagnosticTests
         {
             var singleValues = await HelmValues.BuildAsync(single, (IEnumerable<string>?)null, null, null, null, null, null, CancellationToken.None);
             var singleRenderer = new HelmTemplateRenderer(single, "rel", "ns", singleValues);
-            var output = singleRenderer.Render();
-            _output.WriteLine($"  RENDER OK: {output.Length} chars");
+            var renderedOutput = singleRenderer.Render();
+            output.WriteLine($"  RENDER OK: {renderedOutput.Length} chars");
         }
         catch (Exception ex)
         {
-            _output.WriteLine($"  RENDER FAILED: {ex.GetType().Name}: {ex.Message}");
+            output.WriteLine($"  RENDER FAILED: {ex.GetType().Name}: {ex.Message}");
             if (ex.InnerException != null)
-                _output.WriteLine($"  INNER: {ex.InnerException.GetType().Name}: {ex.InnerException.Message}");
+                output.WriteLine($"  INNER: {ex.InnerException.GetType().Name}: {ex.InnerException.Message}");
         }
 
         // Diagnostic test: verifies template structure is sound. Does not assert on output content.

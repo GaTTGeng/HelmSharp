@@ -1,5 +1,6 @@
 using HelmSharp.Action;
 using HelmSharp.Kube;
+using HelmSharp.Release;
 using System.Diagnostics;
 using System.Net;
 using System.Text;
@@ -32,7 +33,7 @@ public class HelmHookTests
               key: value
             """;
 
-        var (remaining, hooks) = HelmHookExecutor.ExtractHooks(manifest, "default");
+        var (_, hooks) = HelmHookExecutor.ExtractHooks(manifest, "default");
 
         Assert.Single(hooks);
         Assert.Contains(HelmHookEvent.PreInstall, hooks[0].Events);
@@ -244,12 +245,12 @@ public class HelmHookTests
             metadata:
               name: delete-hook
             """;
-        var record = new HelmSharp.Release.HelmReleaseRecord
+        var record = new HelmReleaseRecord
         {
             Manifest = mainManifest,
             Hooks =
             [
-                new HelmSharp.Release.HelmReleaseHookRecord
+                new HelmReleaseHookRecord
                 {
                     Name = "delete-hook",
                     Kind = "Job",
@@ -276,7 +277,7 @@ public class HelmHookTests
     [Fact]
     public void ResolveStoredManifest_FallsBackToLegacyCombinedManifest()
     {
-        var record = new HelmSharp.Release.HelmReleaseRecord
+        var record = new HelmReleaseRecord
         {
             Manifest = """
                 apiVersion: v1
@@ -312,12 +313,12 @@ public class HelmHookTests
     [Fact]
     public void ResolveStoredManifest_UsesExplicitHookNamespace()
     {
-        var record = new HelmSharp.Release.HelmReleaseRecord
+        var record = new HelmReleaseRecord
         {
             Manifest = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: main\n",
             Hooks =
             [
-                new HelmSharp.Release.HelmReleaseHookRecord
+                new HelmReleaseHookRecord
                 {
                     Name = "namespace-hook",
                     Kind = "Pod",
@@ -840,13 +841,13 @@ public class HelmHookTests
                 HelmHookEvent.PreUpgrade,
                 "test-ns",
                 cancellationSource.Token)
-            .GetAsyncEnumerator();
+            .GetAsyncEnumerator(cancellationSource.Token);
 
         Assert.True(await enumerator.MoveNextAsync());
         Assert.StartsWith("Applying hook", enumerator.Current, StringComparison.Ordinal);
         Assert.True(await enumerator.MoveNextAsync());
         Assert.Contains("Hook resource applied", enumerator.Current, StringComparison.Ordinal);
-        cancellationSource.Cancel();
+        await cancellationSource.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => enumerator.MoveNextAsync().AsTask());
 
@@ -1065,7 +1066,7 @@ public class HelmHookTests
                 path.EndsWith("/configmaps", StringComparison.Ordinal) &&
                 cancelOnConfigMapApply is not null)
             {
-                cancelOnConfigMapApply.Cancel();
+                await cancelOnConfigMapApply.CancelAsync();
                 return await Task.FromCanceled<HttpResponseMessage>(cancellationToken);
             }
 

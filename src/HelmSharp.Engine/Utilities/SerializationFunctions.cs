@@ -1,5 +1,7 @@
 using System.Text.Json;
 
+// Feature folders share the stable HelmSharp.Engine namespace.
+// ReSharper disable once CheckNamespace
 namespace HelmSharp.Engine;
 
 /// <summary>
@@ -44,7 +46,8 @@ internal static class SerializationFunctions
     public static decimal ToDecimal(object? value)
     {
         var str = TypeConverters.ToTemplateString(value);
-        if (str.Length > 0 && str.All(c => c >= '0' && c <= '7'))
+        // ReSharper disable once MergeIntoPattern // Non-empty input and an all-characters octal check are separate invariants.
+        if (str is { Length: > 0 } && str.All(c => c is >= '0' and <= '7'))
             return Convert.ToInt64(str, 8);
         return 0m;
     }
@@ -68,7 +71,7 @@ internal static class SerializationFunctions
     /// conventions used elsewhere in the engine; JSON itself remains case-sensitive
     /// at parse time.
     /// </summary>
-    public static object? JsonElementToObject(JsonElement element)
+    private static object? JsonElementToObject(JsonElement element)
     {
         return element.ValueKind switch
         {

@@ -13,10 +13,10 @@ namespace HelmSharp.Release;
 /// </summary>
 public sealed class HelmReleaseStore
 {
-    private readonly k8s.Kubernetes _client;
+    private readonly Kubernetes _client;
 
     /// <param name="client">Kubernetes client used for Secret reads and writes.</param>
-    public HelmReleaseStore(k8s.Kubernetes client)
+    public HelmReleaseStore(Kubernetes client)
     {
         _client = client;
     }

@@ -1,3 +1,5 @@
+// Feature folders share the stable HelmSharp.Engine namespace.
+// ReSharper disable once CheckNamespace
 namespace HelmSharp.Engine;
 
 /// <summary>
@@ -25,6 +27,8 @@ internal static class MathFunctions
             "%" => b != 0 ? a % b : 0,
             _ => a
         };
+        // Exact equality with the floor detects integral results without rounding.
+        // ReSharper disable once CompareOfFloatsByEqualityOperator
         return result == Math.Floor(result) ? (long)result : result;
     }
 
@@ -32,6 +36,8 @@ internal static class MathFunctions
     public static object MathMax(IEnumerable<double> args)
     {
         var max = args.Max();
+        // Exact equality with the floor detects integral results without rounding.
+        // ReSharper disable once CompareOfFloatsByEqualityOperator
         return max == Math.Floor(max) ? (long)max : max;
     }
 
@@ -39,6 +45,8 @@ internal static class MathFunctions
     public static object MathMin(IEnumerable<double> args)
     {
         var min = args.Min();
+        // Exact equality with the floor detects integral results without rounding.
+        // ReSharper disable once CompareOfFloatsByEqualityOperator
         return min == Math.Floor(min) ? (long)min : min;
     }
 

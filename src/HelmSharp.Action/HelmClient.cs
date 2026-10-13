@@ -8,7 +8,6 @@ using HelmSharp.Release;
 using HelmSharp.Repo;
 using k8s;
 using k8s.Autorest;
-using k8s.Models;
 
 namespace HelmSharp.Action;
 
@@ -18,11 +17,12 @@ namespace HelmSharp.Action;
 /// </summary>
 public class HelmClient : IHelmClient
 {
+    private static readonly HttpClient SharedHttpClient = new();
     private static readonly string ProductVersion =
         typeof(HelmClient).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
 
     private readonly IHelmOptionsProvider _optionsProvider;
-    private readonly Func<HelmExecutionOptions, string?, string?, CancellationToken, Task<k8s.Kubernetes>> _createKubernetesClientAsync;
+    private readonly Func<HelmExecutionOptions, string?, string?, CancellationToken, Task<Kubernetes>> _createKubernetesClientAsync;
     private readonly Func<HelmRepositoryOptions?, HelmChartRepository> _createChartRepository;
 
     /// <summary>
@@ -38,7 +38,7 @@ public class HelmClient : IHelmClient
 
     internal HelmClient(
         IHelmOptionsProvider optionsProvider,
-        Func<HelmExecutionOptions, string?, string?, CancellationToken, Task<k8s.Kubernetes>> createKubernetesClientAsync)
+        Func<HelmExecutionOptions, string?, string?, CancellationToken, Task<Kubernetes>> createKubernetesClientAsync)
         : this(optionsProvider, createKubernetesClientAsync, static options => options is null
             ? new HelmChartRepository()
             : new HelmChartRepository(options))
@@ -47,7 +47,7 @@ public class HelmClient : IHelmClient
 
     internal HelmClient(
         IHelmOptionsProvider optionsProvider,
-        Func<HelmExecutionOptions, string?, string?, CancellationToken, Task<k8s.Kubernetes>> createKubernetesClientAsync,
+        Func<HelmExecutionOptions, string?, string?, CancellationToken, Task<Kubernetes>> createKubernetesClientAsync,
         Func<HelmRepositoryOptions?, HelmChartRepository> createChartRepository)
     {
         ArgumentNullException.ThrowIfNull(optionsProvider);
@@ -70,6 +70,7 @@ public class HelmClient : IHelmClient
     /// <param name="allNamespaces">List releases across all namespaces.</param>
     /// <param name="selector">Label selector, e.g. <c>app=web,tier=frontend</c>. Set and set-not operators are rejected.</param>
     /// <param name="limit">Maximum number of releases to return; null or zero returns all.</param>
+    /// <param name="cancellationToken">Token used to cancel the operation.</param>
     /// <returns>JSON array of release records ordered as stored.</returns>
     public async Task<CommandResult> ListReleasesAsync(
         string? @namespace = null,
@@ -100,7 +101,7 @@ public class HelmClient : IHelmClient
         }
 
         // Apply limit
-        if (limit.HasValue && limit.Value > 0)
+        if (limit is > 0)
             releases = releases.Take(limit.Value).ToList();
 
         return Ok(JsonSerializer.Serialize(releases, JsonDefaults));
@@ -343,7 +344,9 @@ public class HelmClient : IHelmClient
             var preEvent = isUpgrade ? HelmHookEvent.PreUpgrade : HelmHookEvent.PreInstall;
             await foreach (var hookLine in StreamWithFailureHandlingAsync(
                                hookExecutor.ExecuteHooksWithFailureHandlingAsync(hooks, preEvent, ns, operationToken),
-                               error => PersistFailedLifecycleAsync(store, WithHookExecution(releaseRecord, hooks), error, null, mainManifest, existingHistory, isUpgrade, request, ns)))
+                               // ReSharper disable once AccessToModifiedClosure // Recovery runs before the outer iterator advances or changes this operation state.
+                               error => PersistFailedLifecycleAsync(store, WithHookExecution(releaseRecord, hooks), error, null, mainManifest, existingHistory, isUpgrade, request, ns))
+                               .WithCancellation(operationToken))
             {
                 yield return hookLine;
             }
@@ -388,7 +391,9 @@ public class HelmClient : IHelmClient
             var postEvent = isUpgrade ? HelmHookEvent.PostUpgrade : HelmHookEvent.PostInstall;
             await foreach (var hookLine in StreamWithFailureHandlingAsync(
                                hookExecutor.ExecuteHooksWithFailureHandlingAsync(hooks, postEvent, ns, operationToken),
-                               error => PersistFailedLifecycleAsync(store, WithHookExecution(releaseRecord, hooks), error, applier, mainManifest, existingHistory, isUpgrade, request, ns)))
+                               // ReSharper disable once AccessToModifiedClosure // Recovery runs before the outer iterator advances or changes this operation state.
+                               error => PersistFailedLifecycleAsync(store, WithHookExecution(releaseRecord, hooks), error, applier, mainManifest, existingHistory, isUpgrade, request, ns))
+                               .WithCancellation(operationToken))
             {
                 yield return hookLine;
             }
@@ -539,7 +544,7 @@ public class HelmClient : IHelmClient
     /// merged on top; otherwise the provided overrides are used as-is.
     /// </summary>
     /// <exception cref="InvalidOperationException">Reuse-values was requested without an existing release.</exception>
-    internal static Dictionary<string, object?> ResolveUpgradeOverrides(
+    private static Dictionary<string, object?> ResolveUpgradeOverrides(
         IReadOnlyCollection<HelmReleaseRecord> history,
         bool isUpgrade,
         bool reuseValues,
@@ -1683,7 +1688,7 @@ public class HelmClient : IHelmClient
         var output = new StringBuilder();
         foreach (var hook in hooks)
         {
-            output.AppendLine($"---");
+            output.AppendLine("---");
             output.AppendLine($"# Hook: {hook.Name}");
             output.AppendLine($"# Events: {string.Join(", ", hook.Events)}");
             output.AppendLine($"# Weight: {hook.Weight}");
@@ -1798,7 +1803,7 @@ public class HelmClient : IHelmClient
                 try
                 {
                     await foreach (var line in hookExecutor.ExecuteHooksAsync(
-                        new List<HelmHook> { hook }, HelmHookEvent.Test, ns, operationToken))
+                        [hook], HelmHookEvent.Test, ns, operationToken))
                     {
                         output.AppendLine(line);
                     }
@@ -2012,7 +2017,7 @@ public class HelmClient : IHelmClient
             dependencies = chart.Dependencies.Select(d => new { d.Name, d.Version, d.Repository, d.Condition, d.Enabled }),
             templates = chart.Templates.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList()
         };
-        return Ok(System.Text.Json.JsonSerializer.Serialize(info, JsonDefaults));
+        return Ok(JsonSerializer.Serialize(info, JsonDefaults));
     }
 
     /// <summary>Prints the chart's default values.yaml (like <c>helm show values</c>).</summary>
@@ -2352,7 +2357,6 @@ public class HelmClient : IHelmClient
         string remote,
         CancellationToken cancellationToken = default)
     {
-        var chartPath = chartRef;
         if (File.Exists(chartRef) && chartRef.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase))
         {
             return Ok($"Chart pushed to: {remote}");
@@ -2360,7 +2364,7 @@ public class HelmClient : IHelmClient
 
         if (Directory.Exists(chartRef))
         {
-            var tgzPath = await HelmChartPackager.PackageAsync(chartRef, cancellationToken: cancellationToken);
+            await HelmChartPackager.PackageAsync(chartRef, cancellationToken: cancellationToken);
             return Ok($"Chart packaged and pushed to: {remote}");
         }
 
@@ -2399,7 +2403,7 @@ public class HelmClient : IHelmClient
     {
         using var repo = _createChartRepository(null);
         var repos = await repo.ListRepositoriesAsync(cancellationToken);
-        return Ok(System.Text.Json.JsonSerializer.Serialize(repos, JsonDefaults));
+        return Ok(JsonSerializer.Serialize(repos, JsonDefaults));
     }
 
     /// <summary>
@@ -2415,7 +2419,7 @@ public class HelmClient : IHelmClient
         var results = repoUrl is null
             ? await repo.SearchRepoAsync(keyword, cancellationToken)
             : await repo.SearchRepoAsync(repoUrl, keyword, cancellationToken: cancellationToken);
-        return Ok(System.Text.Json.JsonSerializer.Serialize(results, JsonDefaults));
+        return Ok(JsonSerializer.Serialize(results, JsonDefaults));
     }
 
     /// <summary>
@@ -2436,7 +2440,7 @@ public class HelmClient : IHelmClient
 
         var configFile = Path.Combine(configDir, "config.json");
         var config = File.Exists(configFile)
-            ? System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(File.ReadAllText(configFile))
+            ? JsonSerializer.Deserialize<Dictionary<string, object>>(File.ReadAllText(configFile))
               ?? new Dictionary<string, object>()
             : new Dictionary<string, object>();
 
@@ -2444,18 +2448,18 @@ public class HelmClient : IHelmClient
         {
             ["username"] = username,
             ["password"] = password,
-            ["auth"] = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{username}:{password}"))
+            ["auth"] = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}"))
         };
 
-        var auths = config.ContainsKey("auths")
-            ? config["auths"] as Dictionary<string, object> ?? new Dictionary<string, object>()
+        var auths = config.TryGetValue("auths", out var authsValue)
+            ? authsValue as Dictionary<string, object> ?? new Dictionary<string, object>()
             : new Dictionary<string, object>();
 
         auths[$"https://{host}"] = credentials;
         config["auths"] = auths;
 
-        File.WriteAllText(configFile, System.Text.Json.JsonSerializer.Serialize(config,
-            new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+                File.WriteAllText(configFile, JsonSerializer.Serialize(config,
+                    new JsonSerializerOptions { WriteIndented = true }));
         return Task.FromResult(Ok($"Login Succeeded for: https://{host}"));
     }
 
@@ -2475,19 +2479,19 @@ public class HelmClient : IHelmClient
         if (!File.Exists(configFile))
             return Task.FromResult(Ok($"Not logged in to: https://{host}"));
 
-        var config = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(File.ReadAllText(configFile))
+        var config = JsonSerializer.Deserialize<Dictionary<string, object>>(File.ReadAllText(configFile))
                      ?? new Dictionary<string, object>();
 
-        if (config.TryGetValue("auths", out var authsObj) && authsObj is System.Text.Json.JsonElement authsElement)
+        if (config.TryGetValue("auths", out var authsObj) && authsObj is JsonElement authsElement)
         {
-            var auths = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(authsElement.GetRawText())
+            var auths = JsonSerializer.Deserialize<Dictionary<string, object>>(authsElement.GetRawText())
                         ?? new Dictionary<string, object>();
             var key = $"https://{host}";
             if (auths.Remove(key))
             {
                 config["auths"] = auths;
-                File.WriteAllText(configFile, System.Text.Json.JsonSerializer.Serialize(config,
-                    new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+            File.WriteAllText(configFile, JsonSerializer.Serialize(config,
+                new JsonSerializerOptions { WriteIndented = true }));
                 return Task.FromResult(Ok($"Removed login credentials for: https://{host}"));
             }
         }
@@ -2515,7 +2519,7 @@ public class HelmClient : IHelmClient
         // Check for README.md in chart root
         var readmePath = Path.Combine(chartPath, "README.md");
         if (File.Exists(readmePath))
-            return Ok(await File.ReadAllTextAsync(readmePath, System.Text.Encoding.UTF8, cancellationToken));
+            return Ok(await File.ReadAllTextAsync(readmePath, Encoding.UTF8, cancellationToken));
 
         return Ok("No README found for this chart.");
     }
@@ -2616,7 +2620,7 @@ public class HelmClient : IHelmClient
         string keyword,
         CancellationToken cancellationToken = default)
     {
-        using var http = new System.Net.Http.HttpClient();
+        var http = SharedHttpClient;
         var url = $"https://artifacthub.io/api/v1/packages/search?kind=0&offset=0&limit=20&ts_query={Uri.EscapeDataString(keyword)}";
         try
         {
@@ -2646,7 +2650,7 @@ public class HelmClient : IHelmClient
         // Chart metadata
         output.AppendLine("---");
         output.AppendLine("# Chart.yaml");
-        output.AppendLine($"apiVersion: v2");
+        output.AppendLine("apiVersion: v2");
         output.AppendLine($"name: {chart.Name}");
         output.AppendLine($"version: {chart.Version}");
         if (chart.AppVersion is not null) output.AppendLine($"appVersion: {chart.AppVersion}");
@@ -2701,7 +2705,7 @@ public class HelmClient : IHelmClient
     public Task<CommandResult> EnvAsync(CancellationToken cancellationToken = default)
     {
         var output = new StringBuilder();
-        output.AppendLine($"HELM_DRIVER=secret");
+        output.AppendLine("HELM_DRIVER=secret");
         output.AppendLine($"HELM_NAMESPACE={Environment.GetEnvironmentVariable("HELM_NAMESPACE") ?? "default"}");
         output.AppendLine($"HELM_KUBECONFIG={Environment.GetEnvironmentVariable("HELM_KUBECONFIG") ?? "~/.kube/config"}");
         output.AppendLine($"HELM_CONFIG_HOME={Environment.GetEnvironmentVariable("HELM_CONFIG_HOME") ?? "~/.config/helm"}");
@@ -3039,10 +3043,6 @@ public class HelmClient : IHelmClient
             return await repo.PullChartAsync(chartRef, version, cancellationToken);
         }
 
-        // repo/chart shorthand without path separators is left for repository resolution
-        if (chartRef.Contains('/') && !chartRef.Contains(Path.DirectorySeparatorChar) && !chartRef.Contains('/'))
-            return chartRef;
-
         return chartRef;
     }
 
@@ -3062,11 +3062,11 @@ public class HelmClient : IHelmClient
             throw new ArgumentOutOfRangeException(nameof(request), "TimeoutSeconds must be greater than zero.");
         if (request.MaxHistory is < 0)
             throw new ArgumentOutOfRangeException(nameof(request), "MaxHistory cannot be negative.");
-        if (request.ReuseValues && request.ResetValues)
+        if (request is { ReuseValues: true, ResetValues: true })
             throw new ArgumentException("ReuseValues and ResetValues cannot both be enabled.", nameof(request));
-        if (request.WaitForJobs && !request.Wait && !request.Atomic)
+        if (request is { WaitForJobs: true, Wait: false, Atomic: false })
             throw new ArgumentException("WaitForJobs requires Wait or Atomic.", nameof(request));
-        if (request.ReuseValues && request.DryRun)
+        if (request is { ReuseValues: true, DryRun: true })
             throw new NotSupportedException("ReuseValues is not supported for DryRun because it requires stored release values.");
 
         var unsupported = new List<string>();
@@ -3128,7 +3128,7 @@ public class HelmClient : IHelmClient
             throw new ArgumentOutOfRangeException(nameof(request), "TimeoutSeconds must be greater than zero.");
         if (request.MaxHistory is < 0)
             throw new ArgumentOutOfRangeException(nameof(request), "MaxHistory cannot be negative.");
-        if (request.WaitForJobs && !request.Wait)
+        if (request is { WaitForJobs: true, Wait: false })
             throw new ArgumentException("WaitForJobs requires Wait.", nameof(request));
     }
 
@@ -3271,27 +3271,36 @@ public class HelmClient : IHelmClient
 
     // Builds a Kubernetes client: request-supplied kubeconfig content/path wins over options,
     // falling back to the default kubeconfig chain (~/.kube/config, in-cluster, etc.).
-    private static async Task<k8s.Kubernetes> CreateKubernetesClientAsync(
+    private static async Task<Kubernetes> CreateKubernetesClientAsync(
         HelmExecutionOptions options,
         string? requestKubeConfigPath,
         string? requestKubeConfigContent,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var kubeConfigContent = requestKubeConfigContent ?? options.KubeConfigContent;
         if (!string.IsNullOrWhiteSpace(kubeConfigContent))
         {
             await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(kubeConfigContent));
-            return new k8s.Kubernetes(KubernetesClientConfiguration.BuildConfigFromConfigFile(stream));
+            var configuration = await KubernetesClientConfiguration
+                .BuildConfigFromConfigFileAsync(stream)
+                .ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            return new Kubernetes(configuration);
         }
 
         var kubeConfigPath = requestKubeConfigPath ?? options.KubeConfigPath;
         if (!string.IsNullOrWhiteSpace(kubeConfigPath))
         {
-            await using var stream = File.OpenRead(kubeConfigPath);
-            return new k8s.Kubernetes(KubernetesClientConfiguration.BuildConfigFromConfigFile(stream));
+            var configuration = await KubernetesClientConfiguration
+                .BuildConfigFromConfigFileAsync(new FileInfo(kubeConfigPath))
+                .ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            return new Kubernetes(configuration);
         }
 
-        return new k8s.Kubernetes(KubernetesClientConfiguration.BuildDefaultConfig());
+        cancellationToken.ThrowIfCancellationRequested();
+        return new Kubernetes(KubernetesClientConfiguration.BuildDefaultConfig());
     }
 
     /// <summary>

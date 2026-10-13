@@ -7,6 +7,14 @@ namespace HelmSharp.Action;
 /// Compares: last deployed manifest vs new manifest vs live resource.
 /// Preserves manual modifications that don't conflict with the new manifest.
 /// </summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "UnusedType.Global",
+    Justification = "The isolated merge helper is retained for a future upgrade lifecycle integration.")]
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "UnusedMember.Global",
+    Justification = "The isolated merge entry point is retained for a future upgrade lifecycle integration.")]
 internal static class ThreeWayMerge
 {
     /// <summary>
@@ -82,11 +90,6 @@ internal static class ThreeWayMerge
                     mergedChildDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
                     merged[key] = mergedChildDict;
                 }
-                else
-                {
-                    mergedChildDict = (IDictionary<string, object?>)mergedChild;
-                }
-
                 DeepThreeWayMerge(lastDict, newDict, liveDict, mergedChildDict);
                 continue;
             }
@@ -129,7 +132,7 @@ internal static class ThreeWayMerge
     /// long/int/double with a small epsilon for doubles so YAML type inference differences
     /// (e.g. an int in one document, a double in another) do not count as drift.
     /// </summary>
-    internal static bool DeepEquals(object? a, object? b)
+    private static bool DeepEquals(object? a, object? b)
     {
         if (a is null && b is null) return true;
         if (a is null || b is null) return false;
@@ -145,8 +148,8 @@ internal static class ThreeWayMerge
         if (a is double da && b is double db) return Math.Abs(da - db) < 1e-10;
         if (a is long l1 && b is int i1) return l1 == i1;
         if (a is int i2 && b is long l2) return i2 == l2;
-        if (a is long l3 && b is double d1) return l3 == d1;
-        if (a is double d2 && b is long l4) return d2 == l4;
+        if (a is long l3 && b is double d1) return Math.Abs(l3 - d1) < 1e-10;
+        if (a is double d2 && b is long l4) return Math.Abs(d2 - l4) < 1e-10;
 
         // Dictionary comparison
         if (a is IDictionary<string, object?> dictA && b is IDictionary<string, object?> dictB)

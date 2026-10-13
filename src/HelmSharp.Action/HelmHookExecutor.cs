@@ -1,10 +1,8 @@
 using System.Runtime.CompilerServices;
 using System.Text;
-using System.Text.RegularExpressions;
 using HelmSharp.Chart;
 using HelmSharp.Kube;
 using k8s;
-using k8s.Autorest;
 using k8s.Models;
 
 namespace HelmSharp.Action;
@@ -73,7 +71,7 @@ internal sealed class HelmHook
 internal sealed class HelmHookExecutor
 {
     internal const string CleanupErrorDataKey = "HelmSharp.HookCleanupError";
-    private readonly k8s.Kubernetes _client;
+    private readonly Kubernetes _client;
     private readonly string _fieldManager;
     private readonly int _timeoutSeconds;
 
@@ -81,7 +79,7 @@ internal sealed class HelmHookExecutor
     /// Creates an executor that applies hooks with <paramref name="fieldManager"/> and bounds
     /// Job/Pod waiting to <paramref name="timeoutSeconds"/>.
     /// </summary>
-    public HelmHookExecutor(k8s.Kubernetes client, string fieldManager, int timeoutSeconds)
+    public HelmHookExecutor(Kubernetes client, string fieldManager, int timeoutSeconds)
     {
         _client = client;
         _fieldManager = fieldManager;

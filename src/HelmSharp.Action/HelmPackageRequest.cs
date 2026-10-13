@@ -1,5 +1,6 @@
 namespace HelmSharp.Action;
 
+// ReSharper disable PropertyCanBeMadeInitOnly.Global // Request objects support mutation after construction in the public API.
 /// <summary>
 /// Describes a chart package operation.
 /// </summary>
@@ -35,3 +36,4 @@ public sealed class HelmPackageRequest
     /// </summary>
     public bool SkipSchemaValidation { get; set; }
 }
+// ReSharper restore PropertyCanBeMadeInitOnly.Global

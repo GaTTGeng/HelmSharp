@@ -73,8 +73,7 @@ public static class HelmYaml
         var merges = new List<Dictionary<string, object?>>();
         foreach (var (keyNode, valueNode) in mapping.Children)
         {
-            if (keyNode is YamlScalarNode scalarKey
-                && scalarKey.Value == "<<")
+            if (keyNode is YamlScalarNode { Value: "<<" })
             {
                 // YAML merge key: << : *anchor  or  << : [ *a, *b ]
                 if (valueNode is YamlMappingNode mergeMapping)
@@ -102,8 +101,7 @@ public static class HelmYaml
         // Apply explicit keys (highest precedence)
         foreach (var (keyNode, valueNode) in mapping.Children)
         {
-            if (keyNode is YamlScalarNode scalarKey
-                && scalarKey.Value == "<<")
+            if (keyNode is YamlScalarNode { Value: "<<" })
                 continue; // already handled above
 
             var key = keyNode is YamlScalarNode sk
@@ -204,7 +202,7 @@ public static class HelmYaml
         return value switch
         {
             IDictionary<string, object?> dict => new SortedDictionary<string, object?>(
-                dict.ToDictionary(kvp => kvp.Key, kvp => SortKeys(kvp.Value))!,
+                dict.ToDictionary(kvp => kvp.Key, kvp => SortKeys(kvp.Value)),
                 StringComparer.Ordinal),
             // Dictionary<object, object> is already normalized by Normalize()
             // before Serialize is called — skip it to avoid key-collision crash.
@@ -272,6 +270,7 @@ public static class HelmYaml
     /// Converts parser-shaped graphs (object-keyed dictionaries, nested lists) into
     /// the string-keyed dictionary / list shapes the rest of the library consumes.
     /// </summary>
+    // ReSharper disable once MemberCanBePrivate.Global // Normalize is part of the public YAML helper API.
     public static object? Normalize(object? value)
     {
         return value switch
@@ -296,7 +295,7 @@ public static class HelmYaml
     {
         public bool Accepts(Type type) => type == typeof(QuotedYamlString);
 
-        public object? ReadYaml(IParser parser, Type type, ObjectDeserializer rootDeserializer)
+        public object ReadYaml(IParser parser, Type type, ObjectDeserializer rootDeserializer)
             => throw new NotSupportedException();
 
         public void WriteYaml(IEmitter emitter, object? value, Type type, ObjectSerializer serializer)

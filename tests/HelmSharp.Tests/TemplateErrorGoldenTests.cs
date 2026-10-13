@@ -43,43 +43,55 @@ public class TemplateErrorGoldenTests
             CancellationToken.None);
         var renderer = new HelmTemplateRenderer(chart, "golden-release", "golden-namespace", values);
 
-        var exception = Assert.Throws<InvalidOperationException>(() => renderer.Render());
+        var exception = Assert.Throws<InvalidOperationException>(renderer.Render);
         Assert.Contains(managedErrorNeedle, exception.ToString());
     }
 
     [Fact]
     public void Render_MissingNoArgumentFunction_Throws()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/configmap.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates =
+            {
+                ["templates/configmap.yaml"] = """
             apiVersion: v1
             kind: ConfigMap
             metadata:
               name: missing-function
             data:
               value: {{ missingFunction }}
-            """;
+            """
+            }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>());
 
-        var exception = Assert.Throws<InvalidOperationException>(() => renderer.Render());
+        var exception = Assert.Throws<InvalidOperationException>(renderer.Render);
         Assert.Contains("missingFunction", exception.ToString());
     }
 
     [Fact]
     public void Render_SubstrEndBeforeStart_Throws()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/configmap.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates =
+            {
+                ["templates/configmap.yaml"] = """
             apiVersion: v1
             kind: ConfigMap
             metadata:
               name: substr-error
             data:
               value: {{ substr 4 2 "hello" | quote }}
-            """;
+            """
+            }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>());
 
-        var exception = Assert.Throws<InvalidOperationException>(() => renderer.Render());
+        var exception = Assert.Throws<InvalidOperationException>(renderer.Render);
         Assert.Contains("slice bounds out of range [4:2]", exception.ToString());
     }
 }

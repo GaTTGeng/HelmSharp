@@ -2,6 +2,8 @@ using System.Collections;
 using System.Globalization;
 using System.Text;
 
+// Feature folders share the stable HelmSharp.Engine namespace.
+// ReSharper disable once CheckNamespace
 namespace HelmSharp.Engine;
 
 /// <summary>
@@ -78,7 +80,7 @@ internal static class TypeConverters
             decimal d => d != 0m,
             float f => f != 0.0f,
             double d => d != 0.0,
-            System.Collections.IDictionary d => d.Count > 0,
+            IDictionary d => d.Count > 0,
             IEnumerable<object?> e => e.Any(),
             _ => true
         };

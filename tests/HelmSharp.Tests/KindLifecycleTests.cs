@@ -3,7 +3,6 @@ using HelmSharp.Action;
 using HelmSharp.Release;
 using k8s;
 using k8s.Autorest;
-using k8s.Models;
 
 namespace HelmSharp.Tests;
 
@@ -40,7 +39,7 @@ public class KindLifecycleTests
 
     private static string ChartPath => TestFixtures.ChartPath("kind-lifecycle");
 
-    private static async Task<string> ReadStdoutAsync(HelmClient client, Func<CancellationToken, Task<CommandResult>> action, CancellationToken cancellationToken)
+    private static async Task<string> ReadStdoutAsync(Func<CancellationToken, Task<CommandResult>> action, CancellationToken cancellationToken)
     {
         var result = await action(cancellationToken);
         if (result.ExitCode != 0)
@@ -80,7 +79,7 @@ public class KindLifecycleTests
             try
             {
                 var value = await probe(cancellationToken);
-                if (value is not null && predicate(value))
+                if (predicate(value))
                     return value;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -103,7 +102,7 @@ public class KindLifecycleTests
         var release = NewName("kl-life");
         var ns = release;
         var client = CreateClient(ns);
-        using var k8s = await CreateClusterClientAsync(cts.Token);
+        using var k8S = await CreateClusterClientAsync(cts.Token);
 
         try
         {
@@ -123,23 +122,23 @@ public class KindLifecycleTests
                 }
             }, cts.Token), cts.Token);
 
-            var status = await ReadStdoutAsync(client, ct => client.StatusAsync(release, ns, ct), cts.Token);
+            var status = await ReadStdoutAsync(ct => client.StatusAsync(release, ns, ct), cts.Token);
             Assert.Contains("deployed", status, StringComparison.OrdinalIgnoreCase);
 
-            var history = await ReadStdoutAsync(client, ct => client.HistoryAsync(release, ns, ct), cts.Token);
+            var history = await ReadStdoutAsync(ct => client.HistoryAsync(release, ns, ct), cts.Token);
             Assert.Contains("1", history);
 
             // Namespace-scoped identity: resources live in the release namespace.
-            var config = await k8s.CoreV1.ReadNamespacedConfigMapAsync($"{release}-config", ns, cancellationToken: cts.Token);
+            var config = await k8S.CoreV1.ReadNamespacedConfigMapAsync($"{release}-config", ns, cancellationToken: cts.Token);
             Assert.Equal("hello", config.Data["message"]);
-            var deployment = await k8s.AppsV1.ReadNamespacedDeploymentAsync($"{release}-web", ns, cancellationToken: cts.Token);
+            var deployment = await k8S.AppsV1.ReadNamespacedDeploymentAsync($"{release}-web", ns, cancellationToken: cts.Token);
             Assert.Equal(1, deployment.Spec.Replicas);
-            var service = await k8s.CoreV1.ReadNamespacedServiceAsync($"{release}-web", ns, cancellationToken: cts.Token);
+            var service = await k8S.CoreV1.ReadNamespacedServiceAsync($"{release}-web", ns, cancellationToken: cts.Token);
             Assert.Equal(ns, service.Metadata.NamespaceProperty);
 
             // Hook Job completed and was cleaned up by before-hook-creation / hook-succeeded path.
             await Assert.ThrowsAsync<HttpOperationException>(async () =>
-                await k8s.BatchV1.ReadNamespacedJobAsync($"{release}-setup", ns, cancellationToken: cts.Token));
+                await k8S.BatchV1.ReadNamespacedJobAsync($"{release}-setup", ns, cancellationToken: cts.Token));
 
             // --- Upgrade: chart-owned change takes effect ---
             await DrainStreamAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
@@ -158,21 +157,19 @@ public class KindLifecycleTests
                 }
             }, cts.Token), cts.Token);
 
-            var upgraded = await k8s.CoreV1.ReadNamespacedConfigMapAsync($"{release}-config", ns, cancellationToken: cts.Token);
+            var upgraded = await k8S.CoreV1.ReadNamespacedConfigMapAsync($"{release}-config", ns, cancellationToken: cts.Token);
             Assert.Equal("upgraded", upgraded.Data["message"]);
 
-            history = await ReadStdoutAsync(client, ct => client.HistoryAsync(release, ns, ct), cts.Token);
+            history = await ReadStdoutAsync(ct => client.HistoryAsync(release, ns, ct), cts.Token);
             Assert.Contains("2", history);
 
             // --- Rollback to revision 1 ---
-            await ReadStdoutAsync(client, ct => client.RollbackAsync(release, 1, ns, ct), cts.Token);
-            var rolledBack = await k8s.CoreV1.ReadNamespacedConfigMapAsync($"{release}-config", ns, cancellationToken: cts.Token);
+            await ReadStdoutAsync(ct => client.RollbackAsync(release, 1, ns, ct), cts.Token);
+            var rolledBack = await k8S.CoreV1.ReadNamespacedConfigMapAsync($"{release}-config", ns, cancellationToken: cts.Token);
             Assert.Equal("hello", rolledBack.Data["message"]);
 
             // --- Uninstall (purge) ---
-            await ReadStdoutAsync(
-                client,
-                ct => client.UninstallAsync(new HelmUninstallRequest
+            await ReadStdoutAsync(ct => client.UninstallAsync(new HelmUninstallRequest
                 {
                     ReleaseName = release,
                     Namespace = ns,
@@ -183,12 +180,12 @@ public class KindLifecycleTests
                 cts.Token);
 
             await Assert.ThrowsAsync<HttpOperationException>(async () =>
-                await k8s.CoreV1.ReadNamespacedConfigMapAsync($"{release}-config", ns, cancellationToken: cts.Token));
+                await k8S.CoreV1.ReadNamespacedConfigMapAsync($"{release}-config", ns, cancellationToken: cts.Token));
             await Assert.ThrowsAsync<HttpOperationException>(async () =>
-                await k8s.AppsV1.ReadNamespacedDeploymentAsync($"{release}-web", ns, cancellationToken: cts.Token));
+                await k8S.AppsV1.ReadNamespacedDeploymentAsync($"{release}-web", ns, cancellationToken: cts.Token));
 
             // Purge removes release Secrets.
-            var secrets = await k8s.CoreV1.ListNamespacedSecretAsync(ns, labelSelector: "owner=helm", cancellationToken: cts.Token);
+            var secrets = await k8S.CoreV1.ListNamespacedSecretAsync(ns, labelSelector: "owner=helm", cancellationToken: cts.Token);
             Assert.Empty(secrets.Items);
         }
         finally
@@ -204,11 +201,11 @@ public class KindLifecycleTests
         var release = NewName("kl-ns");
         var ns = release;
         var client = CreateClient(ns);
-        using var k8s = await CreateClusterClientAsync(cts.Token);
+        using var k8S = await CreateClusterClientAsync(cts.Token);
 
         try
         {
-            Assert.False(await NamespaceExistsAsync(k8s, ns, cts.Token));
+            Assert.False(await NamespaceExistsAsync(k8S, ns, cts.Token));
 
             await DrainStreamAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
             {
@@ -220,18 +217,18 @@ public class KindLifecycleTests
                 TimeoutSeconds = 180
             }, cts.Token), cts.Token);
 
-            Assert.True(await NamespaceExistsAsync(k8s, ns, cts.Token));
-            var config = await k8s.CoreV1.ReadNamespacedConfigMapAsync($"{release}-config", ns, cancellationToken: cts.Token);
+            Assert.True(await NamespaceExistsAsync(k8S, ns, cts.Token));
+            var config = await k8S.CoreV1.ReadNamespacedConfigMapAsync($"{release}-config", ns, cancellationToken: cts.Token);
             Assert.Equal(ns, config.Metadata.NamespaceProperty);
 
             // Cluster-scoped CRD carries no namespace.
             var crdName = $"widgets.{release}.example.test";
-            var crd = await k8s.ApiextensionsV1.ReadCustomResourceDefinitionAsync(crdName, cancellationToken: cts.Token);
+            var crd = await k8S.ApiextensionsV1.ReadCustomResourceDefinitionAsync(crdName, cancellationToken: cts.Token);
             Assert.True(string.IsNullOrEmpty(crd.Metadata.NamespaceProperty));
             Assert.Equal($"{release}.example.test", crd.Spec.Group);
 
             // Custom resource is applied through cluster discovery of the CRD kind.
-            var widget = await k8s.CustomObjects.GetNamespacedCustomObjectAsync(
+            var widget = await k8S.CustomObjects.GetNamespacedCustomObjectAsync(
                 $"{release}.example.test",
                 "v1",
                 ns,
@@ -255,7 +252,7 @@ public class KindLifecycleTests
         var release = NewName("kl-upd");
         var ns = release;
         var client = CreateClient(ns);
-        using var k8s = await CreateClusterClientAsync(cts.Token);
+        using var k8S = await CreateClusterClientAsync(cts.Token);
 
         try
         {
@@ -290,14 +287,14 @@ public class KindLifecycleTests
                 }
             }, cts.Token), cts.Token);
 
-            var config = await k8s.CoreV1.ReadNamespacedConfigMapAsync($"{release}-config", ns, cancellationToken: cts.Token);
+            var config = await k8S.CoreV1.ReadNamespacedConfigMapAsync($"{release}-config", ns, cancellationToken: cts.Token);
             Assert.Equal("v2", config.Data["message"]);
 
             await WaitForAsync(
                 "custom resource spec update",
                 async ct =>
                 {
-                    var obj = await k8s.CustomObjects.GetNamespacedCustomObjectAsync(
+                    var obj = await k8S.CustomObjects.GetNamespacedCustomObjectAsync(
                         $"{release}.example.test",
                         "v1",
                         ns,
@@ -324,7 +321,7 @@ public class KindLifecycleTests
         var release = NewName("kl-ready");
         var ns = release;
         var client = CreateClient(ns);
-        using var k8s = await CreateClusterClientAsync(cts.Token);
+        using var k8S = await CreateClusterClientAsync(cts.Token);
 
         try
         {
@@ -343,7 +340,7 @@ public class KindLifecycleTests
 
             var deployment = await WaitForAsync(
                 "Deployment ready replicas",
-                async ct => await k8s.AppsV1.ReadNamespacedDeploymentAsync($"{release}-web", ns, cancellationToken: ct),
+                async ct => await k8S.AppsV1.ReadNamespacedDeploymentAsync($"{release}-web", ns, cancellationToken: ct),
                 d => d.Status is { ReadyReplicas: >= 1, ObservedGeneration: >= 1 },
                 TimeSpan.FromSeconds(60),
                 cts.Token);
@@ -362,7 +359,7 @@ public class KindLifecycleTests
         var release = NewName("kl-hookfail");
         var ns = release;
         var client = CreateClient(ns);
-        using var k8s = await CreateClusterClientAsync(cts.Token);
+        using var k8S = await CreateClusterClientAsync(cts.Token);
 
         try
         {
@@ -398,15 +395,15 @@ public class KindLifecycleTests
                 }, cts.Token), cts.Token));
             Assert.NotNull(failed);
 
-            var status = await ReadStdoutAsync(client, ct => client.StatusAsync(release, ns, ct), cts.Token);
+            var status = await ReadStdoutAsync(ct => client.StatusAsync(release, ns, ct), cts.Token);
             Assert.Contains("failed", status, StringComparison.OrdinalIgnoreCase);
 
             // Rollback to the last good revision.
-            await ReadStdoutAsync(client, ct => client.RollbackAsync(release, 1, ns, ct), cts.Token);
-            var config = await k8s.CoreV1.ReadNamespacedConfigMapAsync($"{release}-config", ns, cancellationToken: cts.Token);
+            await ReadStdoutAsync(ct => client.RollbackAsync(release, 1, ns, ct), cts.Token);
+            var config = await k8S.CoreV1.ReadNamespacedConfigMapAsync($"{release}-config", ns, cancellationToken: cts.Token);
             Assert.Equal("stable", config.Data["message"]);
 
-            status = await ReadStdoutAsync(client, ct => client.StatusAsync(release, ns, ct), cts.Token);
+            status = await ReadStdoutAsync(ct => client.StatusAsync(release, ns, ct), cts.Token);
             Assert.Contains("deployed", status, StringComparison.OrdinalIgnoreCase);
         }
         finally
@@ -422,7 +419,7 @@ public class KindLifecycleTests
         var release = NewName("kl-retain");
         var ns = release;
         var client = CreateClient(ns);
-        using var k8s = await CreateClusterClientAsync(cts.Token);
+        using var k8S = await CreateClusterClientAsync(cts.Token);
 
         try
         {
@@ -436,9 +433,7 @@ public class KindLifecycleTests
                 TimeoutSeconds = 180
             }, cts.Token), cts.Token);
 
-            await ReadStdoutAsync(
-                client,
-                ct => client.UninstallAsync(new HelmUninstallRequest
+            await ReadStdoutAsync(ct => client.UninstallAsync(new HelmUninstallRequest
                 {
                     ReleaseName = release,
                     Namespace = ns,
@@ -450,14 +445,12 @@ public class KindLifecycleTests
 
             // Resources are gone but release Secrets remain (retained uninstall).
             await Assert.ThrowsAsync<HttpOperationException>(async () =>
-                await k8s.CoreV1.ReadNamespacedConfigMapAsync($"{release}-config", ns, cancellationToken: cts.Token));
-            var retained = await k8s.CoreV1.ListNamespacedSecretAsync(ns, labelSelector: "owner=helm,name=" + release, cancellationToken: cts.Token);
+                await k8S.CoreV1.ReadNamespacedConfigMapAsync($"{release}-config", ns, cancellationToken: cts.Token));
+            var retained = await k8S.CoreV1.ListNamespacedSecretAsync(ns, labelSelector: "owner=helm,name=" + release, cancellationToken: cts.Token);
             Assert.NotEmpty(retained.Items);
 
             // Purge removes retained history.
-            await ReadStdoutAsync(
-                client,
-                ct => client.UninstallAsync(new HelmUninstallRequest
+            await ReadStdoutAsync(ct => client.UninstallAsync(new HelmUninstallRequest
                 {
                     ReleaseName = release,
                     Namespace = ns,
@@ -466,7 +459,7 @@ public class KindLifecycleTests
                     TimeoutSeconds = 120
                 }, ct),
                 cts.Token);
-            var purged = await k8s.CoreV1.ListNamespacedSecretAsync(ns, labelSelector: "owner=helm,name=" + release, cancellationToken: cts.Token);
+            var purged = await k8S.CoreV1.ListNamespacedSecretAsync(ns, labelSelector: "owner=helm,name=" + release, cancellationToken: cts.Token);
             Assert.Empty(purged.Items);
         }
         finally
@@ -482,7 +475,7 @@ public class KindLifecycleTests
         var release = NewName("kl-timeout");
         var ns = release;
         var client = CreateClient(ns);
-        using var k8s = await CreateClusterClientAsync(cts.Token);
+        using var k8S = await CreateClusterClientAsync(cts.Token);
 
         try
         {
@@ -504,7 +497,7 @@ public class KindLifecycleTests
             Assert.NotNull(ex);
 
             // Documented post-operation state: the attempted revision is recorded as failed.
-            var store = new HelmReleaseStore(k8s);
+            var store = new HelmReleaseStore(k8S);
             var history = await store.HistoryAsync(release, ns, cts.Token);
             var latest = Assert.Single(history);
             Assert.Equal("failed", latest.Status);
@@ -522,7 +515,7 @@ public class KindLifecycleTests
         var release = NewName("kl-secret");
         var ns = release;
         var client = CreateClient(ns);
-        using var k8s = await CreateClusterClientAsync(cts.Token);
+        using var k8S = await CreateClusterClientAsync(cts.Token);
 
         try
         {
@@ -537,7 +530,7 @@ public class KindLifecycleTests
             }, cts.Token), cts.Token);
 
             var secretName = $"sh.helm.release.v1.{release}.v1";
-            var secret = await k8s.CoreV1.ReadNamespacedSecretAsync(secretName, ns, cancellationToken: cts.Token);
+            var secret = await k8S.CoreV1.ReadNamespacedSecretAsync(secretName, ns, cancellationToken: cts.Token);
 
             // Helm v3 storage contract: name, type, labels, and payload key.
             Assert.Equal("helm.sh/release.v1", secret.Type);
@@ -547,7 +540,7 @@ public class KindLifecycleTests
             Assert.True(secret.Data.ContainsKey("release"));
 
             // HelmSharp can decode its own Secret payload back into a release record.
-            var store = new HelmReleaseStore(k8s);
+            var store = new HelmReleaseStore(k8S);
             var history = await store.HistoryAsync(release, ns, cts.Token);
             var record = Assert.Single(history);
             Assert.Equal(release, record.Name);
@@ -562,11 +555,11 @@ public class KindLifecycleTests
         }
     }
 
-    private static async Task<bool> NamespaceExistsAsync(Kubernetes k8s, string ns, CancellationToken cancellationToken)
+    private static async Task<bool> NamespaceExistsAsync(Kubernetes k8S, string ns, CancellationToken cancellationToken)
     {
         try
         {
-            await k8s.CoreV1.ReadNamespaceAsync(ns, cancellationToken: cancellationToken);
+            await k8S.CoreV1.ReadNamespaceAsync(ns, cancellationToken: cancellationToken);
             return true;
         }
         catch (HttpOperationException ex) when ((int)ex.Response.StatusCode == 404)

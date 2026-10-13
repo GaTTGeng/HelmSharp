@@ -33,19 +33,13 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
         using var reloadedRepository = new HelmChartRepository(options);
         var repositories = await reloadedRepository.ListRepositoriesAsync();
 
-        Assert.Collection(repositories,
-            repository =>
-            {
-                Assert.Equal("private", repository.Name);
-                Assert.Equal("https://private.example.test", repository.Url);
-                Assert.Equal("alice", repository.Username);
-                Assert.Equal("secret", repository.Password);
-            },
-            repository =>
-            {
-                Assert.Equal("stable", repository.Name);
-                Assert.Equal("https://charts.example.test", repository.Url);
-            });
+        Assert.Equal(
+            [
+                ("private", "https://private.example.test", "alice", "secret"),
+                ("stable", "https://charts.example.test", null, null)
+            ],
+            repositories.Select(repository =>
+                (repository.Name, repository.Url, repository.Username, repository.Password)));
         var config = await File.ReadAllTextAsync(reloadedRepository.RepositoryConfigPath);
         Assert.Contains("apiVersion: v1", config, StringComparison.Ordinal);
         Assert.Contains("repositories:", config, StringComparison.Ordinal);
@@ -161,7 +155,7 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
         Directory.CreateDirectory(options.ConfigDirectory!);
         var lockPath = HelmChartRepository.GetRepositoryConfigLockPath(
             Path.Combine(options.ConfigDirectory!, "repositories.yaml"));
-        await using var heldLock = new FileStream(
+        var heldLock = new FileStream(
             lockPath,
             FileMode.OpenOrCreate,
             FileAccess.ReadWrite,
@@ -183,15 +177,24 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
     public async Task AddRepositoryAsync_SerializesConcurrentConfigurationUpdates()
     {
         var options = CreateOptions();
-        using var repository = new HelmChartRepository(options);
-        var additions = Enumerable.Range(0, 12)
-            .Select(index => repository.AddRepositoryAsync(
+        var repository = new HelmChartRepository(options);
+        var additions = new List<Task>();
+        for (var index = 0; index < 12; index++)
+        {
+            additions.Add(repository.AddRepositoryAsync(
                 $"repository-{index}",
                 $"https://repository-{index}.example.test"));
+        }
 
-        await Task.WhenAll(additions);
-
-        Assert.Equal(12, (await repository.ListRepositoriesAsync()).Count);
+        try
+        {
+            await Task.WhenAll(additions);
+            Assert.Equal(12, (await repository.ListRepositoriesAsync()).Count);
+        }
+        finally
+        {
+            repository.Dispose();
+        }
     }
 
     [Fact]
@@ -342,7 +345,7 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
         HelmChartRepository.AddServerChainCertificates(validationChain, serverChain);
 
         Assert.Contains(
-            validationChain.ChainPolicy.ExtraStore.Cast<X509Certificate2>(),
+            validationChain.ChainPolicy.ExtraStore,
             certificate => string.Equals(
                 certificate.Thumbprint,
                 intermediate.Thumbprint,
@@ -475,7 +478,7 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
         var configDirectory = HelmChartRepository.ResolveHelmConfigDirectory(
             helmConfigHome: null,
             xdgConfigHome: null,
-            isMacOS: true,
+            isMacOs: true,
             userProfile: home,
             applicationData: applicationData);
 
@@ -490,7 +493,7 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
         var configDirectory = HelmChartRepository.ResolveHelmConfigDirectory(
             helmConfigHome,
             xdgConfigHome: Path.Combine(_tempDir, "xdg-config"),
-            isMacOS: true,
+            isMacOs: true,
             userProfile: Path.Combine(_tempDir, "home"),
             applicationData: Path.Combine(_tempDir, "application-data"));
 
@@ -505,7 +508,7 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
         var configDirectory = HelmChartRepository.ResolveHelmConfigDirectory(
             helmConfigHome: null,
             xdgConfigHome: xdgConfigHome,
-            isMacOS: true,
+            isMacOs: true,
             userProfile: Path.Combine(_tempDir, "home"),
             applicationData: Path.Combine(_tempDir, "application-data"));
 
@@ -559,7 +562,7 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => HelmChartRepository.WriteAllTextAtomicallyAsync(path, "new-index", cts.Token));
 
-        Assert.Equal("old-index", await File.ReadAllTextAsync(path));
+        Assert.Equal("old-index", await File.ReadAllTextAsync(path, CancellationToken.None));
     }
 
     [Fact]
@@ -766,7 +769,7 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
             environmentRepositoryCache: Path.Combine(_tempDir, "repository-cache"),
             helmCacheHome: Path.Combine(_tempDir, "helm-cache"),
             xdgCacheHome: Path.Combine(_tempDir, "xdg-cache"),
-            isMacOS: false,
+            isMacOs: false,
             isWindows: true,
             userProfile: Path.Combine(_tempDir, "home"),
             temporaryDirectory: Path.Combine(_tempDir, "temp"));
@@ -784,7 +787,7 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
             environmentRepositoryCache: repositoryCache,
             helmCacheHome: Path.Combine(_tempDir, "helm-cache"),
             xdgCacheHome: Path.Combine(_tempDir, "xdg-cache"),
-            isMacOS: false,
+            isMacOs: false,
             isWindows: true,
             userProfile: Path.Combine(_tempDir, "home"),
             temporaryDirectory: Path.Combine(_tempDir, "temp"));
@@ -797,7 +800,7 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
     [InlineData(false, true, "temp/helm/repository")]
     [InlineData(false, false, "home/.cache/helm/repository")]
     public void ResolveHelmCacheDirectory_UsesPlatformFallbacks(
-        bool isMacOS,
+        bool isMacOs,
         bool isWindows,
         string expectedRelativePath)
     {
@@ -807,7 +810,7 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
         var cacheDirectory = HelmChartRepository.ResolveHelmCacheDirectory(
             helmCacheHome: null,
             xdgCacheHome: null,
-            isMacOS,
+            isMacOs,
             isWindows,
             userProfile,
             temporaryDirectory);
@@ -825,7 +828,7 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
         var cacheDirectory = HelmChartRepository.ResolveHelmCacheDirectory(
             helmCacheHome,
             xdgCacheHome: Path.Combine(_tempDir, "xdg-cache"),
-            isMacOS: true,
+            isMacOs: true,
             isWindows: false,
             userProfile: Path.Combine(_tempDir, "home"),
             temporaryDirectory: Path.Combine(_tempDir, "temp"));
@@ -841,7 +844,7 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
         var cacheDirectory = HelmChartRepository.ResolveHelmCacheDirectory(
             helmCacheHome: null,
             xdgCacheHome,
-            isMacOS: false,
+            isMacOs: false,
             isWindows: false,
             userProfile: Path.Combine(_tempDir, "home"),
             temporaryDirectory: Path.Combine(_tempDir, "temp"));
@@ -911,8 +914,8 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
 
     public void Dispose()
     {
-        try { Directory.Delete(_tempDir, recursive: true); }
-        catch { }
+        if (Directory.Exists(_tempDir))
+            Directory.Delete(_tempDir, recursive: true);
     }
 
     private sealed class RecordingHandler(params HttpResponseMessage[] responses) : HttpMessageHandler

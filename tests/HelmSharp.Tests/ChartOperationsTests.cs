@@ -1065,15 +1065,11 @@ public class ChartOperationsTests : IDisposable
             TimeoutSeconds = 1
         }));
 
-        Assert.Collection(
-            releaseState.Records("rollback-wait-failure"),
-            record => Assert.Equal((1, "superseded"), (record.Revision, record.Status)),
-            record => Assert.Equal((2, "deployed"), (record.Revision, record.Status)),
-            record =>
-            {
-                Assert.Equal((3, "failed"), (record.Revision, record.Status));
-                Assert.StartsWith("Rollback failed:", record.Description);
-            });
+        var records = releaseState.Records("rollback-wait-failure");
+        Assert.Equal((1, "superseded"), (records[0].Revision, records[0].Status));
+        Assert.Equal((2, "deployed"), (records[1].Revision, records[1].Status));
+        Assert.Equal((3, "failed"), (records[2].Revision, records[2].Status));
+        Assert.StartsWith("Rollback failed:", records[2].Description);
     }
 
     [Fact]
@@ -1134,7 +1130,7 @@ public class ChartOperationsTests : IDisposable
         {
             ReleaseName = "rollback-reservation-cancellation",
             Chart = chartDir
-        }));
+        }, CancellationToken.None));
         releaseState.AppliedPaths.Clear();
 
         using var cancellationSource = new CancellationTokenSource();
@@ -1158,10 +1154,10 @@ public class ChartOperationsTests : IDisposable
         {
             ReleaseName = "rollback-reservation-cancellation",
             Chart = chartDir
-        }));
+        }, CancellationToken.None));
 
         Assert.Contains(releaseState.Records("rollback-reservation-cancellation"),
-            record => record.Revision == 3 && record.Status == "deployed");
+            record => record is { Revision: 3, Status: "deployed" });
     }
 
     [Fact]
@@ -1890,14 +1886,10 @@ public class ChartOperationsTests : IDisposable
                 Chart = chartDir
             })));
 
-        Assert.Collection(
-            releaseState.Records("save-failure"),
-            record => Assert.Equal((1, "deployed"), (record.Revision, record.Status)),
-            record =>
-            {
-                Assert.Equal((2, "failed"), (record.Revision, record.Status));
-                Assert.StartsWith("Upgrade failed:", record.Description);
-            });
+        var records = releaseState.Records("save-failure");
+        Assert.Equal((1, "deployed"), (records[0].Revision, records[0].Status));
+        Assert.Equal((2, "failed"), (records[1].Revision, records[1].Status));
+        Assert.StartsWith("Upgrade failed:", records[1].Description);
     }
 
     [Fact]
@@ -1999,7 +1991,7 @@ public class ChartOperationsTests : IDisposable
         var firstHooks = await client.GetHooksAsync("revision-inspection", "test-ns", revision: 1);
         var firstAll = await client.GetAllAsync("revision-inspection", "test-ns", revision: 1);
         var firstStatus = await client.StatusRevisionAsync("revision-inspection", revision: 1, @namespace: "test-ns");
-        var legacyDefaultStatus = await client.StatusAsync("revision-inspection", default);
+        var legacyDefaultStatus = await client.StatusAsync("revision-inspection");
         var history = await client.HistoryAsync("revision-inspection", "test-ns");
 
         Assert.All([firstManifest, firstValues, firstNotes, firstHooks, firstAll, firstStatus, legacyDefaultStatus, history], result => Assert.Equal(0, result.ExitCode));
@@ -2075,11 +2067,11 @@ public class ChartOperationsTests : IDisposable
         var invalidRevision = await client.GetManifestAsync("missing-revision", "test-ns", revision: -1);
         var missingHistory = await client.HistoryAsync("does-not-exist", "test-ns");
 
-        Assert.All([missingManifest, missingNotes, missingHooks, missingAll, missingStatus, missingValues], result =>
+        foreach (var result in new[] { missingManifest, missingNotes, missingHooks, missingAll, missingStatus, missingValues })
         {
             Assert.Equal(1, result.ExitCode);
             Assert.Equal("release: revision 99 not found: missing-revision", result.StandardError);
-        });
+        }
         Assert.Equal("release: revision must be zero or a positive integer: -1", invalidRevision.StandardError);
         Assert.Equal("release: not found: does-not-exist", missingHistory.StandardError);
     }
@@ -2383,27 +2375,21 @@ public class ChartOperationsTests : IDisposable
               name: {{introducedName}}
             """);
 
-    private sealed class ReleaseLifecycleHandler : DelegatingHandler
+    private sealed class ReleaseLifecycleHandler(ReleaseLifecycleState releaseState) : DelegatingHandler
     {
-        private readonly ReleaseLifecycleState _releaseState;
-
-        public ReleaseLifecycleHandler(ReleaseLifecycleState releaseState)
-        {
-            _releaseState = releaseState;
-        }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var path = request.RequestUri?.AbsolutePath ?? string.Empty;
-            _releaseState.RequestedPaths.Add(path);
+            releaseState.RequestedPaths.Add(path);
             if (request.Method == HttpMethod.Delete && request.Content is not null)
-                _releaseState.DeleteRequestBodies.Add(await request.Content.ReadAsStringAsync(cancellationToken));
+                releaseState.DeleteRequestBodies.Add(await request.Content.ReadAsStringAsync(cancellationToken));
             if (request.Method == HttpMethod.Delete)
-                _releaseState.DeletedPaths.Add(path);
+                releaseState.DeletedPaths.Add(path);
             if (request.Method == HttpMethod.Get && path.EndsWith("/secrets", StringComparison.Ordinal))
             {
                 var selector = Uri.UnescapeDataString(request.RequestUri?.Query ?? string.Empty);
-                IEnumerable<string> secrets = _releaseState.Secrets.Values;
+                IEnumerable<string> secrets = releaseState.Secrets.Values;
                 if (selector.Contains("name=", StringComparison.Ordinal))
                 {
                     var releaseName = selector[(selector.IndexOf("name=", StringComparison.Ordinal) + "name=".Length)..]
@@ -2424,31 +2410,31 @@ public class ChartOperationsTests : IDisposable
             {
                 var secret = await request.Content!.ReadAsStringAsync(cancellationToken);
                 var envelope = JsonSerializer.Deserialize<ReleaseLifecycleState.SecretEnvelope>(secret, ReleaseLifecycleState.JsonDefaults)!;
-                if (request.Method == HttpMethod.Post && _releaseState.FailNextSecretCreate)
+                if (request.Method == HttpMethod.Post && releaseState.FailNextSecretCreate)
                 {
-                    _releaseState.FailNextSecretCreate = false;
+                    releaseState.FailNextSecretCreate = false;
                     return JsonResponse(request, HttpStatusCode.InternalServerError, "{ \"code\": 500 }");
                 }
-                if (request.Method == HttpMethod.Post && _releaseState.CreateNextSecretThenReturnConflict)
+                if (request.Method == HttpMethod.Post && releaseState.CreateNextSecretThenReturnConflict)
                 {
-                    _releaseState.CreateNextSecretThenReturnConflict = false;
-                    _releaseState.Secrets[envelope.Metadata.Name] = secret;
+                    releaseState.CreateNextSecretThenReturnConflict = false;
+                    releaseState.Secrets[envelope.Metadata.Name] = secret;
                     return JsonResponse(request, HttpStatusCode.Conflict, "{ \"code\": 409 }");
                 }
-                if (request.Method == HttpMethod.Post && _releaseState.Secrets.ContainsKey(envelope.Metadata.Name))
+                if (request.Method == HttpMethod.Post && releaseState.Secrets.ContainsKey(envelope.Metadata.Name))
                     return JsonResponse(request, HttpStatusCode.Conflict, "{ \"code\": 409 }");
-                if (request.Method == HttpMethod.Post && _releaseState.CancelNextSecretCreateBeforePersisting is { } delayedCancellationSource)
+                if (request.Method == HttpMethod.Post && releaseState.CancelNextSecretCreateBeforePersisting is { } delayedCancellationSource)
                 {
-                    _releaseState.CancelNextSecretCreateBeforePersisting = null;
-                    delayedCancellationSource.Cancel();
+                    releaseState.CancelNextSecretCreateBeforePersisting = null;
+                    await delayedCancellationSource.CancelAsync();
                     if (cancellationToken.IsCancellationRequested)
                         return await Task.FromCanceled<HttpResponseMessage>(cancellationToken);
                 }
-                _releaseState.Secrets[envelope.Metadata.Name] = secret;
-                if (request.Method == HttpMethod.Post && _releaseState.CancelAfterNextSecretCreate is { } cancellationSource)
+                releaseState.Secrets[envelope.Metadata.Name] = secret;
+                if (request.Method == HttpMethod.Post && releaseState.CancelAfterNextSecretCreate is { } cancellationSource)
                 {
-                    _releaseState.CancelAfterNextSecretCreate = null;
-                    cancellationSource.Cancel();
+                    releaseState.CancelAfterNextSecretCreate = null;
+                    await cancellationSource.CancelAsync();
                     if (cancellationToken.IsCancellationRequested)
                         return await Task.FromCanceled<HttpResponseMessage>(cancellationToken);
                 }
@@ -2457,16 +2443,16 @@ public class ChartOperationsTests : IDisposable
 
             if (request.Method == HttpMethod.Get && path.Contains("/secrets/", StringComparison.Ordinal))
             {
-                if (_releaseState.CancelOnNextReleaseSecretRead is { } cancellationSource)
+                if (releaseState.CancelOnNextReleaseSecretRead is { } cancellationSource)
                 {
-                    _releaseState.CancelOnNextReleaseSecretRead = null;
-                    cancellationSource.Cancel();
+                    releaseState.CancelOnNextReleaseSecretRead = null;
+                    await cancellationSource.CancelAsync();
                     if (cancellationToken.IsCancellationRequested)
                         return await Task.FromCanceled<HttpResponseMessage>(cancellationToken);
                 }
 
                 var name = path[(path.LastIndexOf('/') + 1)..];
-                return _releaseState.Secrets.TryGetValue(name, out var secret)
+                return releaseState.Secrets.TryGetValue(name, out var secret)
                     ? JsonResponse(request, HttpStatusCode.OK, secret)
                     : JsonResponse(request, HttpStatusCode.NotFound, "{ \"code\": 404 }");
             }
@@ -2474,20 +2460,20 @@ public class ChartOperationsTests : IDisposable
             if (request.Method == HttpMethod.Delete && path.Contains("/secrets/", StringComparison.Ordinal))
             {
                 var name = path[(path.LastIndexOf('/') + 1)..];
-                _releaseState.Secrets.Remove(name);
+                releaseState.Secrets.Remove(name);
                 return JsonResponse(request, HttpStatusCode.OK, "{}");
             }
 
             if (request.Method == HttpMethod.Delete && path.Contains("/configmaps/", StringComparison.Ordinal))
             {
-                _releaseState.ConfigMaps.Remove(path);
+                releaseState.ConfigMaps.Remove(path);
                 return JsonResponse(request, HttpStatusCode.OK, "{}");
             }
 
             if (request.Method == HttpMethod.Get && path == "/apis/example.com/v1")
             {
-                _releaseState.WidgetDiscoveryRequestCount++;
-                if (_releaseState.WidgetDiscoveryRequestCount == _releaseState.FailWidgetDiscoveryRequestNumber)
+                releaseState.WidgetDiscoveryRequestCount++;
+                if (releaseState.WidgetDiscoveryRequestCount == releaseState.FailWidgetDiscoveryRequestNumber)
                 {
                     return JsonResponse(request, HttpStatusCode.InternalServerError, "{ \"code\": 500 }");
                 }
@@ -2511,41 +2497,43 @@ public class ChartOperationsTests : IDisposable
             {
                 var widget = await request.Content!.ReadAsStringAsync(cancellationToken);
                 var name = JsonDocument.Parse(widget).RootElement.GetProperty("metadata").GetProperty("name").GetString()!;
-                _releaseState.AppliedWidgetNames.Add(name);
+                releaseState.AppliedWidgetNames.Add(name);
                 return JsonResponse(request, HttpStatusCode.Created, widget);
             }
 
+            // ReSharper disable once MergeIntoPattern // HttpMethod instances cannot be used as constant-pattern values.
             if ((request.Method == HttpMethod.Post || request.Method == HttpMethod.Put) &&
                 path.Contains("/configmaps", StringComparison.Ordinal))
             {
-                if (_releaseState.FailNextConfigMapWrite)
+                if (releaseState.FailNextConfigMapWrite)
                 {
-                    _releaseState.FailNextConfigMapWrite = false;
+                    releaseState.FailNextConfigMapWrite = false;
                     return JsonResponse(request, HttpStatusCode.InternalServerError, "{ \"code\": 500 }");
                 }
-                if (_releaseState.StallNextConfigMapWrite)
+                if (releaseState.StallNextConfigMapWrite)
                 {
-                    _releaseState.StallNextConfigMapWrite = false;
+                    releaseState.StallNextConfigMapWrite = false;
                     try
                     {
                         await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
-                        _releaseState.ConfigMapWriteWasCanceled = true;
+                        releaseState.ConfigMapWriteWasCanceled = true;
                         throw;
                     }
                 }
-                _releaseState.AppliedPaths.Add(path);
+                releaseState.AppliedPaths.Add(path);
                 var configMap = await request.Content!.ReadAsStringAsync(cancellationToken);
                 var name = JsonDocument.Parse(configMap).RootElement.GetProperty("metadata").GetProperty("name").GetString()!;
                 var resourcePath = request.Method == HttpMethod.Post ? $"{path}/{name}" : path;
-                _releaseState.AppliedConfigMapNames.Add(name);
-                _releaseState.ConfigMapWrites.Add((request.Method, resourcePath, configMap));
-                _releaseState.ConfigMaps[resourcePath] = configMap;
+                releaseState.AppliedConfigMapNames.Add(name);
+                releaseState.ConfigMapWrites.Add((request.Method, resourcePath, configMap));
+                releaseState.ConfigMaps[resourcePath] = configMap;
                 return JsonResponse(request, request.Method == HttpMethod.Post ? HttpStatusCode.Created : HttpStatusCode.OK, configMap);
             }
 
+            // ReSharper disable once MergeIntoPattern // HttpMethod instances cannot be used as constant-pattern values.
             if ((request.Method == HttpMethod.Post || request.Method == HttpMethod.Put) &&
                 path.Contains("/deployments", StringComparison.Ordinal))
             {
@@ -2559,6 +2547,7 @@ public class ChartOperationsTests : IDisposable
             if (request.Method == HttpMethod.Get && path.Contains("/horizontalpodautoscalers/", StringComparison.Ordinal))
                 return JsonResponse(request, HttpStatusCode.NotFound, "{ \"code\": 404 }");
 
+            // ReSharper disable once MergeIntoPattern // HttpMethod instances cannot be used as constant-pattern values.
             if ((request.Method == HttpMethod.Post || request.Method == HttpMethod.Put) &&
                 path.Contains("/horizontalpodautoscalers", StringComparison.Ordinal))
             {
@@ -2568,8 +2557,8 @@ public class ChartOperationsTests : IDisposable
 
             if (request.Method == HttpMethod.Get && path.Contains("/configmaps/", StringComparison.Ordinal))
             {
-                _releaseState.WaitedPaths.Add(path);
-                return _releaseState.ConfigMaps.TryGetValue(path, out var configMap)
+                releaseState.WaitedPaths.Add(path);
+                return releaseState.ConfigMaps.TryGetValue(path, out var configMap)
                     ? JsonResponse(request, HttpStatusCode.OK, configMap)
                     : JsonResponse(request, HttpStatusCode.NotFound, "{ \"code\": 404 }");
             }
@@ -2817,33 +2806,21 @@ public class ChartOperationsTests : IDisposable
             path.EndsWith("/configmaps/introduced-by-second-failure", StringComparison.Ordinal));
     }
 
-    private sealed class StaticHelmOptionsProvider : IHelmOptionsProvider
+    private sealed class StaticHelmOptionsProvider(HelmExecutionOptions options) : IHelmOptionsProvider
     {
-        private readonly HelmExecutionOptions _options;
 
         public StaticHelmOptionsProvider()
             : this(new HelmExecutionOptions { DefaultNamespace = "default" })
         {
         }
 
-        public StaticHelmOptionsProvider(HelmExecutionOptions options)
-        {
-            _options = options;
-        }
-
         public ValueTask<HelmExecutionOptions> GetHelmAsync(CancellationToken cancellationToken = default)
-            => ValueTask.FromResult(_options);
+            => ValueTask.FromResult(options);
     }
 
-    private sealed class RecordingKubernetesHandler : DelegatingHandler
+    private sealed class RecordingKubernetesHandler(HttpStatusCode secretListStatus = HttpStatusCode.OK) : DelegatingHandler
     {
-        private readonly HttpStatusCode _secretListStatus;
         private readonly List<(HttpMethod Method, string PathAndQuery)> _requests = [];
-
-        public RecordingKubernetesHandler(HttpStatusCode secretListStatus = HttpStatusCode.OK)
-        {
-            _secretListStatus = secretListStatus;
-        }
 
         public IReadOnlyList<(HttpMethod Method, string PathAndQuery)> Requests => _requests;
 
@@ -2854,7 +2831,7 @@ public class ChartOperationsTests : IDisposable
             if (request.Method == HttpMethod.Get &&
                 request.RequestUri?.AbsolutePath.EndsWith("/secrets", StringComparison.Ordinal) == true)
             {
-                var content = _secretListStatus == HttpStatusCode.OK
+                var content = secretListStatus == HttpStatusCode.OK
                     ? """
                       {
                         "kind": "SecretList",
@@ -2872,7 +2849,7 @@ public class ChartOperationsTests : IDisposable
                       }
                       """;
 
-                return Task.FromResult(JsonResponse(request, _secretListStatus, content));
+                return Task.FromResult(JsonResponse(request, secretListStatus, content));
             }
 
             if (request.Method == HttpMethod.Post &&
@@ -2919,13 +2896,13 @@ public class ChartOperationsTests : IDisposable
             => new(statusCode)
             {
                 RequestMessage = request,
-                Content = new StringContent(content, System.Text.Encoding.UTF8, "application/json")
+                Content = new StringContent(content, Encoding.UTF8, "application/json")
             };
     }
 
     public void Dispose()
     {
-        try { Directory.Delete(_tempDir, recursive: true); }
-        catch { }
+        if (Directory.Exists(_tempDir))
+            Directory.Delete(_tempDir, recursive: true);
     }
 }

@@ -78,14 +78,15 @@ public sealed class KubernetesManifestApplierTests
         await KubernetesManifestApplier.EnsureNamespaceAsync(
             KubernetesTestClientBuilder.Create(handler), "release-ns", CancellationToken.None);
 
-        Assert.Collection(
-            handler.Requests,
-            request => Assert.Equal((HttpMethod.Get, "/api/v1/namespaces/release-ns"), (request.Method, request.PathAndQuery)),
-            request =>
-            {
-                Assert.Equal((HttpMethod.Post, "/api/v1/namespaces"), (request.Method, request.PathAndQuery));
-                Assert.Contains("release-ns", request.Content);
-            });
+        var namespaceRequests = handler.Requests
+            .Select(request => (request.Method, request.PathAndQuery, request.Content))
+            .ToArray();
+        Assert.Equal(2, namespaceRequests.Length);
+        Assert.Equal((HttpMethod.Get, "/api/v1/namespaces/release-ns"),
+            (namespaceRequests[0].Method, namespaceRequests[0].PathAndQuery));
+        Assert.Equal((HttpMethod.Post, "/api/v1/namespaces"),
+            (namespaceRequests[1].Method, namespaceRequests[1].PathAndQuery));
+        Assert.Contains("release-ns", namespaceRequests[1].Content);
     }
 
     [Fact]
@@ -134,15 +135,16 @@ public sealed class KubernetesManifestApplierTests
               namespace: chart-ns
             """, "release-ns"));
 
-        Assert.Collection(
-            handler.Requests,
-            request => Assert.Equal((HttpMethod.Get, "/api/v1/namespaces/chart-ns/configmaps/settings"), (request.Method, request.PathAndQuery)),
-            request =>
-            {
-                Assert.Equal((HttpMethod.Put, "/api/v1/namespaces/chart-ns/configmaps/settings"), (request.Method, request.PathAndQuery));
-                Assert.Contains("\"resourceVersion\":\"42\"", request.Content);
-                Assert.Contains("\"namespace\":\"chart-ns\"", request.Content);
-            });
+        var requests = handler.Requests
+            .Select(request => (request.Method, request.PathAndQuery, request.Content))
+            .ToArray();
+        Assert.Equal(2, requests.Length);
+        Assert.Equal((HttpMethod.Get, "/api/v1/namespaces/chart-ns/configmaps/settings"),
+            (requests[0].Method, requests[0].PathAndQuery));
+        Assert.Equal((HttpMethod.Put, "/api/v1/namespaces/chart-ns/configmaps/settings"),
+            (requests[1].Method, requests[1].PathAndQuery));
+        Assert.Contains("\"resourceVersion\":\"42\"", requests[1].Content);
+        Assert.Contains("\"namespace\":\"chart-ns\"", requests[1].Content);
     }
 
     [Fact]
@@ -157,8 +159,8 @@ public sealed class KubernetesManifestApplierTests
                   "resources": [{ "name": "widgets", "kind": "Widget", "namespaced": true }]
                 }
                 """)
-            .Respond(HttpMethod.Post, "/apis/example.com/v1/namespaces/release-ns/widgets?fieldManager=helmsharp-test", HttpStatusCode.Created, "{}")
-            .Respond(HttpMethod.Post, "/apis/example.com/v1/namespaces/release-ns/widgets?fieldManager=helmsharp-test", HttpStatusCode.Created, "{}");
+            .Respond(HttpMethod.Post, "/apis/example.com/v1/namespaces/release-ns/widgets?fieldManager=helmsharp-test", HttpStatusCode.Created)
+            .Respond(HttpMethod.Post, "/apis/example.com/v1/namespaces/release-ns/widgets?fieldManager=helmsharp-test", HttpStatusCode.Created);
         var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
 
         await AsyncEnumerableTestExtensions.DrainAsync(applier.ApplyAsync("""
@@ -196,8 +198,7 @@ public sealed class KubernetesManifestApplierTests
             .Respond(
                 HttpMethod.Post,
                 "/apis/example.com/v1/namespaces/tenant-a/customroles?fieldManager=helmsharp-test",
-                HttpStatusCode.Created,
-                "{}");
+                HttpStatusCode.Created);
         var applier = new KubernetesManifestApplier(
             KubernetesTestClientBuilder.Create(handler),
             "helmsharp-test");
@@ -229,7 +230,7 @@ public sealed class KubernetesManifestApplierTests
                   "resources": [{ "name": "clustersettings", "kind": "ClusterSetting", "namespaced": false }]
                 }
                 """)
-            .Respond(HttpMethod.Post, "/apis/example.com/v1/clustersettings?fieldManager=helmsharp-test", HttpStatusCode.Created, "{}");
+            .Respond(HttpMethod.Post, "/apis/example.com/v1/clustersettings?fieldManager=helmsharp-test", HttpStatusCode.Created);
         var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
 
         var applied = await AsyncEnumerableTestExtensions.CollectAsync(applier.ApplyAsync("""
@@ -266,7 +267,7 @@ public sealed class KubernetesManifestApplierTests
                   "resources": [{ "name": "widgets", "kind": "Widget", "namespaced": true }]
                 }
                 """)
-            .Respond(HttpMethod.Post, "/apis/example.com/v1/namespaces/release-ns/widgets?fieldManager=helmsharp-test", HttpStatusCode.Created, "{}");
+            .Respond(HttpMethod.Post, "/apis/example.com/v1/namespaces/release-ns/widgets?fieldManager=helmsharp-test", HttpStatusCode.Created);
         var delayCalls = new List<TimeSpan>();
         var applier = new KubernetesManifestApplier(
             KubernetesTestClientBuilder.Create(handler),
@@ -369,7 +370,7 @@ public sealed class KubernetesManifestApplierTests
                   }
                 }
                 """)
-            .Respond(HttpMethod.Put, "/api/v1/namespaces/release-ns/services/api", HttpStatusCode.OK, "{}");
+            .Respond(HttpMethod.Put, "/api/v1/namespaces/release-ns/services/api", HttpStatusCode.OK);
         var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
 
         await AsyncEnumerableTestExtensions.DrainAsync(applier.ApplyAsync("""
@@ -411,7 +412,7 @@ public sealed class KubernetesManifestApplierTests
                   }
                 }
                 """)
-            .Respond(HttpMethod.Put, "/api/v1/namespaces/release-ns/services/api", HttpStatusCode.OK, "{}");
+            .Respond(HttpMethod.Put, "/api/v1/namespaces/release-ns/services/api", HttpStatusCode.OK);
         var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
 
         await AsyncEnumerableTestExtensions.DrainAsync(applier.ApplyAsync("""
@@ -694,7 +695,7 @@ public sealed class KubernetesManifestApplierTests
         var handler = new KubernetesApiHandler();
         var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
         using var cancellationSource = new CancellationTokenSource();
-        cancellationSource.Cancel();
+        await cancellationSource.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             AsyncEnumerableTestExtensions.DrainAsync(applier.DeleteAsync("""
@@ -755,7 +756,7 @@ public sealed class KubernetesManifestApplierTests
         var handler = new KubernetesApiHandler();
         var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
         using var cancellationSource = new CancellationTokenSource();
-        cancellationSource.Cancel();
+        await cancellationSource.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => AsyncEnumerableTestExtensions.DrainAsync(applier.ApplyAsync("""
             apiVersion: v1

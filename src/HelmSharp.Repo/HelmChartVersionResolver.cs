@@ -25,20 +25,6 @@ internal static class HelmChartVersionResolver
     }
 
     /// <summary>
-    /// Picks the highest version string satisfying <paramref name="constraint"/>.
-    /// Same resolution rules as <see cref="Resolve"/>.
-    /// </summary>
-    public static string? ResolveVersion(
-        IEnumerable<string> versions,
-        string? constraint)
-    {
-        var selected = ResolveCandidates(
-            versions.Select((version, index) => new Candidate<string>(version, version, index)),
-            constraint);
-        return selected?.Value;
-    }
-
-    /// <summary>
     /// Orders two version strings SemVer-first. Unparseable versions sort before
     /// parseable ones and fall back to ordinal string comparison between themselves.
     /// </summary>
@@ -140,7 +126,7 @@ internal static class HelmChartVersionResolver
         {
             if (!TryAppendComparators(token, comparators))
             {
-                group = default!;
+                group = null!;
                 return false;
             }
         }
@@ -156,7 +142,7 @@ internal static class HelmChartVersionResolver
         var match = Regex.Match(text, @"^\s*(?<min>\S+)\s+-\s+(?<max>\S+)\s*$", RegexOptions.CultureInvariant);
         if (!match.Success)
         {
-            group = default!;
+            group = null!;
             return false;
         }
 
@@ -164,7 +150,7 @@ internal static class HelmChartVersionResolver
         if (!TryAppendComparators($">={match.Groups["min"].Value}", comparators) ||
             !TryAppendComparators($"<={match.Groups["max"].Value}", comparators))
         {
-            group = default!;
+            group = null!;
             return false;
         }
 
@@ -382,7 +368,7 @@ internal static class HelmChartVersionResolver
 
         if (parts.Length is < 1 or > 3)
         {
-            lower = default!;
+            lower = null!;
             return false;
         }
 
@@ -396,7 +382,7 @@ internal static class HelmChartVersionResolver
                 specifiedParts = i;
                 if (parts.Skip(i + 1).Any(remaining => remaining is not ("*" or "x" or "X")))
                 {
-                    lower = default!;
+                    lower = null!;
                     return false;
                 }
 
@@ -405,14 +391,14 @@ internal static class HelmChartVersionResolver
 
             if (wildcardIndex is not null || !int.TryParse(part, out numbers[i]))
             {
-                lower = default!;
+                lower = null!;
                 return false;
             }
         }
 
         if (wildcardIndex is not null && prereleaseSplit.Length == 2)
         {
-            lower = default!;
+            lower = null!;
             return false;
         }
 
@@ -476,9 +462,6 @@ internal static class HelmChartVersionResolver
         return true;
     }
 
-    private static bool TryParseConstraintVersion(string text, out SemanticVersion version)
-        => TryParseConstraintVersion(text, out version, out _);
-
     private static bool TryParseConstraintVersion(string text, out SemanticVersion version, out int specifiedParts)
     {
         if (TryParseVersionPattern(text, out version, out specifiedParts, out var wildcardIndex) &&
@@ -487,7 +470,7 @@ internal static class HelmChartVersionResolver
             return true;
         }
 
-        version = default!;
+        version = null!;
         return false;
     }
 
@@ -581,7 +564,7 @@ internal static class HelmChartVersionResolver
             var match = VersionRegex.Match(text.Trim());
             if (!match.Success)
             {
-                version = default!;
+                version = null!;
                 return false;
             }
 

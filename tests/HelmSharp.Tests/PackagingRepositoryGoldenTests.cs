@@ -46,7 +46,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
 
         AssertOperationSucceeded("helm package", helmResult);
         AssertOperationSucceeded("HelmSharp PackageAsync", sharpResult);
-        Assert.Equal(
+        AssertArchiveSnapshotsEqual(
             await ReadArchiveSnapshotAsync(GetSinglePackagePath(helmDestination)),
             await ReadArchiveSnapshotAsync(GetSinglePackagePath(sharpDestination)));
     }
@@ -73,7 +73,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
 
         AssertOperationSucceeded("helm repo index", helmResult);
         var helmIndexPath = Path.Combine(helmRepoDir, "index.yaml");
-        var sharpIndexYaml = File.ReadAllText(sharpIndexPath, Encoding.UTF8);
+        var sharpIndexYaml = await File.ReadAllTextAsync(sharpIndexPath, Encoding.UTF8);
         var sharpIndex = ReadIndexSnapshot(sharpIndexPath, "repo-golden");
         var helmIndex = ReadIndexSnapshot(helmIndexPath, "repo-golden");
 
@@ -341,8 +341,8 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
             mergeIndexPath: helmExistingIndex);
         AssertOperationSucceeded("helm repo index metadata-name merge", helmMerged);
 
-        var sharpIndex = HelmYaml.DeserializeDictionary(File.ReadAllText(sharpIndexPath, Encoding.UTF8));
-        var helmIndex = HelmYaml.DeserializeDictionary(File.ReadAllText(Path.Combine(helmRepoDir, "index.yaml"), Encoding.UTF8));
+        var sharpIndex = HelmYaml.DeserializeDictionary(await File.ReadAllTextAsync(sharpIndexPath, Encoding.UTF8));
+        var helmIndex = HelmYaml.DeserializeDictionary(await File.ReadAllTextAsync(Path.Combine(helmRepoDir, "index.yaml"), Encoding.UTF8));
         var sharpEntries = Assert.IsAssignableFrom<IDictionary<string, object?>>(sharpIndex["entries"]);
         var helmEntries = Assert.IsAssignableFrom<IDictionary<string, object?>>(helmIndex["entries"]);
         Assert.DoesNotContain("stale-entry-key", sharpEntries.Keys);
@@ -509,7 +509,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
             "https://repo.example.test/base",
             CancellationToken.None);
 
-        var index = HelmYaml.DeserializeDictionary(File.ReadAllText(result.IndexPath, Encoding.UTF8));
+        var index = HelmYaml.DeserializeDictionary(await File.ReadAllTextAsync(result.IndexPath, Encoding.UTF8));
         var entries = Assert.IsAssignableFrom<IDictionary<string, object?>>(index["entries"]);
         Assert.True(entries.ContainsKey("repo-minimal"));
         Assert.Equal(
@@ -590,6 +590,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         await PackageRepoChartVersionAsync("2.0.0-beta.1", repoDir);
         await using var server = await LocalFileServer.StartAsync(repoDir);
         await HelmRepoIndexer.GenerateIndexAsync(repoDir, server.BaseUrl, CancellationToken.None);
+        var serverBaseUrl = server.BaseUrl;
 
         await AssertPulledVersionAsync(version: null, expectedVersion: "1.10.0");
         await AssertPulledVersionAsync(version: "~1.2.0", expectedVersion: "1.2.5+build.7");
@@ -602,7 +603,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
                 new HelmPullRequest
                 {
                     ChartReference = "repo-golden",
-                    RepositoryUrl = server.BaseUrl,
+                    RepositoryUrl = serverBaseUrl,
                     Version = version,
                     Destination = Path.Combine(_tempDir, $"semver-archives-{Guid.NewGuid():N}"),
                     Untar = true,
@@ -628,14 +629,14 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         using var repository = CreateNoProxyRepository("configured-pull");
         await repository.AddRepositoryAsync("local", server.BaseUrl);
 
-        await AssertArchiveAsync(version: null, expectedVersion: "1.2.0");
-        await AssertArchiveAsync(version: "1.0.0", expectedVersion: "1.0.0");
-        await AssertArchiveAsync(version: "~1.0.0", expectedVersion: "1.0.0");
+        await AssertArchiveAsync(repository, version: null, expectedVersion: "1.2.0");
+        await AssertArchiveAsync(repository, version: "1.0.0", expectedVersion: "1.0.0");
+        await AssertArchiveAsync(repository, version: "~1.0.0", expectedVersion: "1.0.0");
 
-        async Task AssertArchiveAsync(string? version, string expectedVersion)
+        async Task AssertArchiveAsync(HelmChartRepository currentRepository, string? version, string expectedVersion)
         {
             var destination = Path.Combine(_tempDir, $"configured-destination-{Guid.NewGuid():N}");
-            var archivePath = await repository.PullChartAsync(
+            var archivePath = await currentRepository.PullChartAsync(
                 new HelmPullRequest
                 {
                     ChartReference = "local/repo-golden",
@@ -823,6 +824,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         await PackageRepoChartVersionAsync("1.2", repoDir);
         await using var server = await LocalFileServer.StartAsync(repoDir);
         await HelmRepoIndexer.GenerateIndexAsync(repoDir, server.BaseUrl, CancellationToken.None);
+        var serverBaseUrl = server.BaseUrl;
 
         await AssertPulledVersionAsync(version: null, expectedVersion: "1.2");
         await AssertPulledVersionAsync(version: "1.2", expectedVersion: "1.2");
@@ -831,7 +833,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         {
             using var repository = CreateNoProxyRepository($"short-version-{Guid.NewGuid():N}");
             var sharpPath = await repository.PullChartAsync(
-                $"{server.BaseUrl}/repo-golden",
+                $"{serverBaseUrl}/repo-golden",
                 version,
                 CancellationToken.None);
             var chart = await HelmChartLoader.LoadAsync(sharpPath, CancellationToken.None);
@@ -1001,7 +1003,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         var helmLock = ReadDependencyLockSnapshot(helmUpdateChart);
         var sharpLock = ReadDependencyLockSnapshot(sharpUpdateChart);
         Assert.Equal(helmLock.Digest, sharpLock.Digest);
-        Assert.Equal(helmLock.Dependencies, sharpLock.Dependencies);
+        AssertDependencySnapshotsEqual(helmLock.Dependencies, sharpLock.Dependencies);
         await AssertDependencyPackageMatchesAsync(helmUpdateChart, sharpUpdateChart, "0.2.5");
 
         var sharpOk = await client.DependencyListAsync(sharpUpdateChart);
@@ -1191,10 +1193,10 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         var sharpLock = ReadDependencyLockSnapshot(sharpChart);
         var helmLock = ReadDependencyLockSnapshot(helmChart);
         Assert.Equal(helmLock.Digest, sharpLock.Digest);
-        Assert.Equal(helmLock.Dependencies, sharpLock.Dependencies);
+        AssertDependencySnapshotsEqual(helmLock.Dependencies, sharpLock.Dependencies);
         var sharpArchive = Path.Combine(sharpChart, "charts", "local-child-1.2.3.tgz");
         var helmArchive = Path.Combine(helmChart, "charts", "local-child-1.2.3.tgz");
-        Assert.Equal(
+        AssertArchiveSnapshotsEqual(
             await ReadArchiveSnapshotAsync(helmArchive),
             await ReadArchiveSnapshotAsync(sharpArchive));
 
@@ -1226,7 +1228,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         AssertOperationSucceeded("file dependency HelmSharp build", sharpBuild);
         AssertOperationSucceeded("file dependency Helm build", helmBuild);
         Assert.Equal(lockBeforeBuild, await File.ReadAllBytesAsync(Path.Combine(sharpChart, "Chart.lock")));
-        Assert.Equal(
+        AssertArchiveSnapshotsEqual(
             await ReadArchiveSnapshotAsync(helmArchive),
             await ReadArchiveSnapshotAsync(sharpArchive));
     }
@@ -1246,7 +1248,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         var helmLock = ReadDependencyLockSnapshot(helmChart);
         var sharpLock = ReadDependencyLockSnapshot(sharpChart);
         Assert.Equal(helmLock.Digest, sharpLock.Digest);
-        Assert.Equal(helmLock.Dependencies, sharpLock.Dependencies);
+        AssertDependencySnapshotsEqual(helmLock.Dependencies, sharpLock.Dependencies);
         Assert.True(Directory.Exists(Path.Combine(sharpChart, "charts", "local-child")));
         Assert.Empty(Directory.EnumerateFiles(Path.Combine(sharpChart, "charts"), "*.tgz"));
 
@@ -1360,7 +1362,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         var helmLock = ReadDependencyLockSnapshot(helmChart);
         var sharpLock = ReadDependencyLockSnapshot(sharpChart);
         Assert.Equal(helmLock.Digest, sharpLock.Digest);
-        Assert.Equal(helmLock.Dependencies, sharpLock.Dependencies);
+        AssertDependencySnapshotsEqual(helmLock.Dependencies, sharpLock.Dependencies);
         Assert.Single(Directory.EnumerateFiles(Path.Combine(sharpChart, "charts"), "*.tgz"));
 
         File.Delete(Assert.Single(Directory.EnumerateFiles(Path.Combine(sharpChart, "charts"), "*.tgz")));
@@ -1395,7 +1397,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         var sharpLock = ReadDependencyLockSnapshot(sharpChart);
         var helmLock = ReadDependencyLockSnapshot(helmChart);
         Assert.Equal("1.0", Assert.Single(sharpLock.Dependencies).Version);
-        Assert.Equal(helmLock.Dependencies, sharpLock.Dependencies);
+        AssertDependencySnapshotsEqual(helmLock.Dependencies, sharpLock.Dependencies);
         Assert.Equal(helmLock.Digest, sharpLock.Digest);
 
         File.Delete(Path.Combine(sharpChart, "charts", "child-dep-1.0.tgz"));
@@ -1766,7 +1768,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         var sharpPackage = Path.Combine(sharpChartDir, "charts", $"child-dep-{expectedVersion}.tgz");
         Assert.True(File.Exists(helmPackage), $"Helm dependency package was not written: {helmPackage}");
         Assert.True(File.Exists(sharpPackage), $"HelmSharp dependency package was not written: {sharpPackage}");
-        Assert.Equal(
+        AssertArchiveSnapshotsEqual(
             await ReadArchiveSnapshotAsync(helmPackage),
             await ReadArchiveSnapshotAsync(sharpPackage));
     }
@@ -1775,7 +1777,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
     {
         var lockFile = HelmYaml.DeserializeDictionary(File.ReadAllText(Path.Combine(chartPath, "Chart.lock")));
         var dependencies = Assert.IsAssignableFrom<IList<object?>>(lockFile["dependencies"])
-            .Select(dependency => Assert.IsAssignableFrom<IDictionary<string, object?>>(dependency))
+            .Select(Assert.IsAssignableFrom<IDictionary<string, object?>>)
             .Select(dependency => new LockedDependencySnapshot(
                 HelmYaml.GetString(dependency, "name") ?? string.Empty,
                 HelmYaml.GetString(dependency, "repository") ?? string.Empty,
@@ -1842,7 +1844,45 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         Assert.Equal(expected.Version, actual.Version);
         Assert.Equal(expected.ValuesYaml, actual.ValuesYaml);
         Assert.Equal(expected.Templates, actual.Templates);
-        Assert.Equal(expected.Files, actual.Files);
+        AssertFileSnapshotsEqual(expected.Files, actual.Files);
+    }
+
+    private static void AssertArchiveSnapshotsEqual(
+        IReadOnlyList<ArchiveEntrySnapshot> expected,
+        IReadOnlyList<ArchiveEntrySnapshot> actual)
+    {
+        Assert.Equal(expected.Count, actual.Count);
+        for (var index = 0; index < expected.Count; index++)
+        {
+            Assert.Equal(expected[index].Name, actual[index].Name);
+            Assert.Equal(expected[index].EntryType, actual[index].EntryType);
+            Assert.Equal(expected[index].Mode, actual[index].Mode);
+            Assert.Equal(expected[index].Size, actual[index].Size);
+            Assert.Equal(expected[index].Sha256, actual[index].Sha256);
+        }
+    }
+
+    private static void AssertFileSnapshotsEqual(IReadOnlyList<FileSnapshot> expected, IReadOnlyList<FileSnapshot> actual)
+    {
+        Assert.Equal(expected.Count, actual.Count);
+        for (var index = 0; index < expected.Count; index++)
+        {
+            Assert.Equal(expected[index].Path, actual[index].Path);
+            Assert.Equal(expected[index].Sha256, actual[index].Sha256);
+        }
+    }
+
+    private static void AssertDependencySnapshotsEqual(
+        IReadOnlyList<LockedDependencySnapshot> expected,
+        IReadOnlyList<LockedDependencySnapshot> actual)
+    {
+        Assert.Equal(expected.Count, actual.Count);
+        for (var index = 0; index < expected.Count; index++)
+        {
+            Assert.Equal(expected[index].Name, actual[index].Name);
+            Assert.Equal(expected[index].Repository, actual[index].Repository);
+            Assert.Equal(expected[index].Version, actual[index].Version);
+        }
     }
 
     private static string ParseDependencyStatus(string output, string dependencyName)
@@ -1869,10 +1909,8 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         var entries = new List<ArchiveEntrySnapshot>();
         await using var file = File.OpenRead(packagePath);
         await using var gzip = new GZipStream(file, CompressionMode.Decompress);
-        using var reader = new TarReader(gzip);
-
-        TarEntry? entry;
-        while ((entry = reader.GetNextEntry()) is not null)
+        await using var reader = new TarReader(gzip);
+        while (await reader.GetNextEntryAsync().ConfigureAwait(false) is { } entry)
         {
             var hash = string.Empty;
             var size = 0L;
@@ -1888,7 +1926,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
             entries.Add(new ArchiveEntrySnapshot(entry.Name, entry.EntryType, entry.Mode, size, hash));
         }
 
-        return entries.OrderBy(entry => entry.Name, StringComparer.Ordinal).ToList();
+        return entries.OrderBy(item => item.Name, StringComparer.Ordinal).ToList();
     }
 
     private static async Task<string> ComputeSha256Async(string path)
@@ -1991,8 +2029,8 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
 
     public void Dispose()
     {
-        try { Directory.Delete(_tempDir, recursive: true); }
-        catch { }
+        if (Directory.Exists(_tempDir))
+            Directory.Delete(_tempDir, recursive: true);
     }
 
     private sealed class StaticHelmOptionsProvider : IHelmOptionsProvider
@@ -2127,10 +2165,9 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
 
         public async ValueTask DisposeAsync()
         {
-            _cancellation.Cancel();
+            await _cancellation.CancelAsync();
             _listener.Stop();
-            try { await _serverTask; }
-            catch { }
+            await _serverTask;
             _cancellation.Dispose();
         }
     }

@@ -1,3 +1,5 @@
+// Feature folders share the stable HelmSharp.Engine namespace.
+// ReSharper disable once CheckNamespace
 namespace HelmSharp.Engine;
 
 /// <summary>
@@ -19,7 +21,7 @@ internal static class CoreFunctions
     }
 
     /// <summary>Sprig <c>fail</c>: aborts rendering with the given message ("fail called" when empty).</summary>
-    public static object? FnFail(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    public static object FnFail(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
         var msg = pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(1), context);
         var message = TypeConverters.ToTemplateString(msg);
@@ -155,13 +157,13 @@ internal static class CoreFunctions
             format = StringHelpers.ReplaceFirst(format, "%f", "{" + i + "}");
             format = StringHelpers.ReplaceFirst(format, "%q", "{" + i + "}");
         }
-        return string.Format(format, args);
+        return string.Format(format, args.Cast<object?>().ToArray());
     }
 
     // ── List operations ──
 
     /// <summary>Sprig <c>prepend</c>: new list with ITEM inserted before the list's elements.</summary>
-    public static object? Prepend(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    public static object Prepend(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
         var list = CollectionsHelpers.ToList(pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(2), context));
         var item = eval.EvaluateToken(tokens.ElementAtOrDefault(1), context);
@@ -171,7 +173,7 @@ internal static class CoreFunctions
     }
 
     /// <summary>Sprig <c>append</c>: new list with ITEM appended after the list's elements.</summary>
-    public static object? Append(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    public static object Append(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
         var list = CollectionsHelpers.ToList(pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));
         var item = eval.EvaluateToken(tokens.ElementAtOrDefault(2), context);
@@ -180,7 +182,7 @@ internal static class CoreFunctions
     }
 
     /// <summary>Sprig <c>without</c>: copy of the list with the given values removed (comparison by string form).</summary>
-    public static object? Without(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    public static object Without(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
         var list = CollectionsHelpers.ToList(pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));
         var exclude = tokens.Skip(2).Select(t => TypeConverters.ToTemplateString(eval.EvaluateToken(t, context))).ToHashSet(StringComparer.Ordinal);
@@ -191,7 +193,7 @@ internal static class CoreFunctions
     /// Sprig <c>has</c>: membership test — Helm signature is <c>has NEEDLE LIST</c>
     /// (needle first), or <c>LIST | has NEEDLE</c>. Elements compare by string form.
     /// </summary>
-    public static object? Has(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    public static object Has(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
         // Helm signature: has NEEDLE LIST  or  LIST | has NEEDLE
         var needle = TypeConverters.ToTemplateString(eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));
@@ -200,7 +202,7 @@ internal static class CoreFunctions
     }
 
     /// <summary>Sprig <c>concat</c>: flattens all argument lists (and the pipeline value) into one new list.</summary>
-    public static object? Concat(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
+    public static object Concat(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
         var result = new List<object?>();
         if (pipelineValue != null) result.AddRange(CollectionsHelpers.ToList(pipelineValue));
@@ -235,7 +237,7 @@ internal static class CoreFunctions
     /// Ordering is delegated to <see cref="TypeFunctions.CompareValues"/>; the
     /// <paramref name="cmp"/> predicate tests the comparison result against zero.
     /// </summary>
-    public static object? CompareOp(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, Func<int, int, bool> cmp, IEvaluationContext eval)
+    public static object CompareOp(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, Func<int, int, bool> cmp, IEvaluationContext eval)
     {
         var a = pipelineValue ?? eval.EvaluateToken(tokens.ElementAtOrDefault(1), context);
         var b = eval.EvaluateToken(tokens.ElementAtOrDefault(pipelineValue != null ? 1 : 2), context);

@@ -1,5 +1,6 @@
 namespace HelmSharp.Action;
 
+// ReSharper disable PropertyCanBeMadeInitOnly.Global // Request objects support mutation after construction in the public API.
 /// <summary>
 /// Describes options for a dependency update operation.
 /// </summary>
@@ -47,3 +48,4 @@ public sealed class HelmDependencyListRequest
     /// <summary>Gets or sets whether dependency status diagnostics are requested. The default is <see langword="true"/>.</summary>
     public bool IncludeDiagnostics { get; set; } = true;
 }
+// ReSharper restore PropertyCanBeMadeInitOnly.Global

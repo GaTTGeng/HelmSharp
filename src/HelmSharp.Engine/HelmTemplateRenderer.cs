@@ -1,9 +1,5 @@
-using System.Collections;
 using System.Globalization;
-using System.Numerics;
-using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using HelmSharp.Chart;
 
@@ -80,12 +76,13 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
     /// overrides). Values are copied and merged with chart defaults by
     /// <see cref="HelmValues.PrepareForRender"/>.
     /// </summary>
+    // ReSharper disable IntroduceOptionalParameters.Global // Keep the fresh-install overload distinct from the full environment-control constructor.
     public HelmTemplateRenderer(
         HelmChart chart,
         string releaseName,
         string releaseNamespace,
         Dictionary<string, object?> values)
-        : this(chart, releaseName, releaseNamespace, values, null, null, false, 1)
+        : this(chart, releaseName, releaseNamespace, values, null, null, false)
     {
     }
 
@@ -130,6 +127,8 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             DependencyNode = _dependencyGraph
         };
     }
+
+    // ReSharper restore IntroduceOptionalParameters.Global
 
     /// <summary>
     /// Renders all non-helper templates in the chart.
@@ -300,7 +299,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         if (string.IsNullOrEmpty(kind))
             return int.MaxValue;
 
-        return InstallOrder.TryGetValue(kind, out var order) ? order : int.MaxValue;
+        return InstallOrder.GetValueOrDefault(kind, int.MaxValue);
     }
 
     /// <summary>
@@ -388,8 +387,11 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         if (!source.TryGetValue(key, out var candidate))
             return false;
 
-        value = candidate as IDictionary<string, object?> ?? null!;
-        return value is not null;
+        if (candidate is not IDictionary<string, object?> dictionary)
+            return false;
+
+        value = dictionary;
+        return true;
     }
 
     private static string NormalizeManifestContent(string rendered)
@@ -666,7 +668,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                     // When a pure-whitespace text node sits between a previous action/block
                     // and a right-trim block, it is template-formatting whitespace that Go trims.
                     // Suppress the text node to avoid double-indentation.
-                    if (IsFormattingWhitespace(i, doc.Children, out _))
+                    if (IsFormattingWhitespace(i, doc.Children))
                     {
                         // skip entirely
                     }
@@ -715,9 +717,8 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
     /// previous action/block and a right-trim block — template-formatting whitespace
     /// that Go consumes.
     /// </summary>
-    private static bool IsFormattingWhitespace(int i, List<TemplateNode> children, out TemplateNode nextBlock)
+    private static bool IsFormattingWhitespace(int i, List<TemplateNode> children)
     {
-        nextBlock = null!;
         if (i + 1 >= children.Count)
             return false;
         if (children[i + 1] is not BlockNode block || !block.RightTrim)
@@ -736,37 +737,15 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         if (i > 0 && children[i - 1] is not (ActionNode or BlockNode))
             return false;
 
-        nextBlock = block;
         return true;
     }
 
     private static bool IsAllWhitespace(string value)
     {
-        for (var i = 0; i < value.Length; i++)
-            if (!char.IsWhiteSpace(value[i]))
+        foreach (var character in value)
+            if (!char.IsWhiteSpace(character))
                 return false;
         return true;
-    }
-
-    /// <summary>
-    /// Returns true when the block at <paramref name="blockIndex"/> should trim
-    /// the current output line before rendering — because the preceding text
-    /// carries content whose trailing indent would otherwise duplicate the body indentation.
-    /// </summary>
-    private static bool ShouldTrimLineIndent(int blockIndex, List<TemplateNode> children)
-    {
-        // Need a preceding text node
-        if (blockIndex == 0)
-            return false;
-        if (children[blockIndex - 1] is not TextNode text)
-            return false;
-        // Trim when the text node has meaningful content
-        // OR when it is pure whitespace sandwiched between template directives.
-        // Don't trim when the text node is pure whitespace standing alone
-        // before a block (that whitespace is the YAML indent Go preserves).
-        if (!IsAllWhitespace(text.Content))
-            return true;
-        return blockIndex > 1 && children[blockIndex - 2] is (ActionNode or BlockNode);
     }
 
     /// <summary>
@@ -801,16 +780,9 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         if (expr is "else" or "else if" or "end")
             return $"{{{{ {expr} }}}}";
 
-        string rendered;
-
-        if (TryAssignVariable(expr, context, out var assigned))
-        {
-            rendered = assigned;
-        }
-        else
-        {
-            rendered = TypeConverters.ToTemplateString(EvaluatePipeline(expr, context));
-        }
+        var rendered = TryAssignVariable(expr, context, out var assigned)
+            ? assigned
+            : TypeConverters.ToTemplateString(EvaluatePipeline(expr, context));
 
         return rendered;
     }
@@ -1262,9 +1234,9 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                 TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(2), context)),
                 pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(3), context)),
             "duration" => DateTimeFunctions.Duration(
-                (long)TypeConverters.ToLong(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+                TypeConverters.ToLong(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "durationRound" => DateTimeFunctions.DurationRound(
-                (long)TypeConverters.ToLong(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+                TypeConverters.ToLong(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "unixEpoch" => TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
 
             // Crypto / random functions
@@ -1391,10 +1363,10 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             // Comparison
             "eq" => CoreFunctions.Eq(tokens, context, pipelineValue, this),
             "ne" => !TypeConverters.IsTruthy(CoreFunctions.Eq(tokens, context, pipelineValue, this)),
-            "lt" => CoreFunctions.CompareOp(tokens, context, pipelineValue, (a, b) => a < 0, this),
-            "gt" => CoreFunctions.CompareOp(tokens, context, pipelineValue, (a, b) => a > 0, this),
-            "le" => CoreFunctions.CompareOp(tokens, context, pipelineValue, (a, b) => a <= 0, this),
-            "ge" => CoreFunctions.CompareOp(tokens, context, pipelineValue, (a, b) => a >= 0, this),
+            "lt" => CoreFunctions.CompareOp(tokens, context, pipelineValue, (a, _) => a < 0, this),
+            "gt" => CoreFunctions.CompareOp(tokens, context, pipelineValue, (a, _) => a > 0, this),
+            "le" => CoreFunctions.CompareOp(tokens, context, pipelineValue, (a, _) => a <= 0, this),
+            "ge" => CoreFunctions.CompareOp(tokens, context, pipelineValue, (a, _) => a >= 0, this),
 
             // JSON / YAML / TOML
             "toJson" => SerializationFunctions.ToJson(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
@@ -1411,7 +1383,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "len" => TypeFunctions.GetLength(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context)),
 
             _ => pipelineValue is not null && tokens.Count == 1
-                ? ApplySimpleFunction(head, pipelineValue, context)
+                ? ApplySimpleFunction(head, pipelineValue)
                 : tokens.Count > 1
                     ? throw new UnsupportedTemplateFeatureException($"Helm template function '{head}' is not supported by the managed renderer.")
                     : IsResolvableTokenExpression(expression)
@@ -1457,7 +1429,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
     /// trimmed — Go's <c>include</c> returns the template output with surrounding
     /// whitespace removed, which is what lets charts embed includes mid-line.
     /// </summary>
-    private object? IncludeTemplate(IReadOnlyList<string> tokens, TemplateContext context)
+    private object IncludeTemplate(IReadOnlyList<string> tokens, TemplateContext context)
     {
         var name = TypeConverters.ToTemplateString(EvaluateToken(tokens.ElementAtOrDefault(1), context));
         if (!_definedTemplates.TryGetValue(name, out var body))
@@ -1509,7 +1481,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
     /// and no explicit arguments are present (e.g. <c>.Name | quote</c>). This is the
     /// pipeline-only fast path; the main dispatch handles the positional form.
     /// </summary>
-    private object? ApplySimpleFunction(string function, object? value, TemplateContext context)
+    private object? ApplySimpleFunction(string function, object? value)
     {
         return function switch
         {
@@ -1583,7 +1555,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         if (values.Count == 0)
             return newline ? "\n" : string.Empty;
 
-        var sb = new System.Text.StringBuilder();
+        var sb = new StringBuilder();
         sb.Append(TypeConverters.ToTemplateString(values[0]));
         for (var i = 1; i < values.Count; i++)
         {
@@ -1795,7 +1767,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         return current;
     }
 
-    private object? EvaluateFilesMethod(
+    private object EvaluateFilesMethod(
         string head,
         IReadOnlyList<string> tokens,
         TemplateContext context)
@@ -1839,7 +1811,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
         private static readonly Regex DateLikeScalarRegex = new(
-            @"^[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[Tt ].*)?$",
+            "^[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[Tt ].*)?$",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
         private readonly Dictionary<string, byte[]> _files;
@@ -2031,7 +2003,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         var defaultVersions = GetDefaultApiVersions(kubeVersion);
         var customVersions = apiVersions ?? [];
         var versions = defaultVersions
-            .Concat<object?>(customVersions)
+            .Concat(customVersions)
             .DistinctBy(static v => v?.ToString(), StringComparer.Ordinal)
             .ToList();
         return new ApiVersionSet(versions);
@@ -2337,12 +2309,6 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
     private int GetInt(IReadOnlyList<string> tokens, int index, TemplateContext context)
         => (int)TypeConverters.ToLong(EvaluateToken(tokens.ElementAtOrDefault(index), context));
 
-    // ────────────────────────────────────────────────────────────
-    //  HELPER: get pipeline value or first arg
-    // ────────────────────────────────────────────────────────────
-    private static object? Pv(IReadOnlyList<string> tokens, int argIndex, TemplateContext context, object? pipelineValue)
-        => pipelineValue ?? EvaluateTokenStatic(tokens.ElementAtOrDefault(argIndex), context);
-
     /// <summary>
     /// Static token evaluator accessible to extracted function helpers in the same assembly.
     /// </summary>
@@ -2391,7 +2357,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
     // Sprig accepts the start as the pipeline value: STOP STEP | untilStep START
     // or all three as arguments; step defaults to 1 and a 0 step is coerced to 1
     // (the helper's empty-list case is unreachable from template calls).
-    private object? ResolveUntilStep(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
+    private object ResolveUntilStep(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
     {
         long start, stop, step;
         if (pipelineValue != null)
@@ -2431,6 +2397,8 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         for (var i = 1; i < args.Count; i++)
             result = (double)MathFunctions.MathOp(result, TypeConverters.ToDouble(args[i]), op);
 
+        // Exact equality with the floor detects integral results without rounding.
+        // ReSharper disable once CompareOfFloatsByEqualityOperator
         return result == Math.Floor(result) ? (long)result : result;
     }
 

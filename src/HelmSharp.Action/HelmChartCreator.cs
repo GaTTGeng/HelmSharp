@@ -7,11 +7,6 @@ namespace HelmSharp.Action;
 /// </summary>
 internal static class HelmChartCreator
 {
-    private static readonly Dictionary<string, string> StarterTemplates = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["default"] = "default-starter"
-    };
-
     /// <summary>
     /// Creates a new chart directory with default scaffold files (or a copy of
     /// <paramref name="starter"/>). The chart is created under
@@ -20,6 +15,7 @@ internal static class HelmChartCreator
     /// <param name="chartName">Chart name; becomes the directory name and Chart.yaml name.</param>
     /// <param name="destination">Parent directory to create the chart in; defaults to the current directory.</param>
     /// <param name="starter">Path to a starter chart directory to copy instead of the built-in scaffold.</param>
+    /// <param name="cancellationToken">Token used to cancel chart creation.</param>
     /// <returns>The full path of the created chart directory.</returns>
     /// <exception cref="InvalidOperationException">The target directory exists and is not empty.</exception>
     /// <exception cref="DirectoryNotFoundException">The starter directory does not exist.</exception>

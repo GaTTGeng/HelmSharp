@@ -520,7 +520,7 @@ public sealed class HelmChartRepository : IDisposable
         string? expectedDigest = null;
         var username = request.Username;
         var password = request.Password;
-        var passCredentials = false;
+        bool passCredentials;
         HelmRepository? configuredRepository = null;
 
         // Pull stages:
@@ -819,7 +819,7 @@ public sealed class HelmChartRepository : IDisposable
            && string.Equals(left.IdnHost, right.IdnHost, StringComparison.OrdinalIgnoreCase)
            && left.Port == right.Port;
 
-    internal async Task<HelmChartVersion> ResolveChartVersionAsync(
+    private async Task<HelmChartVersion> ResolveChartVersionAsync(
         string repoUrl,
         string chartName,
         string? versionConstraint = null,
@@ -898,7 +898,7 @@ public sealed class HelmChartRepository : IDisposable
         // Cache key is the content hash of the archive plus the active limit profile, so the
         // same chart bytes under different budgets never share an extraction directory. A
         // cache populated under looser limits must not be accepted by a stricter client.
-        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(chartBytes))[..12];
+        var hash = Convert.ToHexString(SHA256.HashData(chartBytes))[..12];
         var extractDir = Path.Combine(_cacheDir, $"{hash}-{GetArchiveLimitsFingerprint(_archiveLimits)}");
         if (Directory.Exists(extractDir))
             return extractDir;
@@ -1038,7 +1038,7 @@ public sealed class HelmChartRepository : IDisposable
     /// <exception cref="ChartArchiveLimitExceededException">Thrown when the compressed input limit is exceeded.</exception>
     private async Task<byte[]> ReadChartArchiveContentAsync(HttpContent content, CancellationToken cancellationToken)
     {
-        if (content.Headers.ContentLength is long declaredLength)
+        if (content.Headers.ContentLength is { } declaredLength)
             EnforceCompressedInputLimit(declaredLength);
 
         await using var source = await content.ReadAsStreamAsync(cancellationToken);
@@ -1130,18 +1130,17 @@ public sealed class HelmChartRepository : IDisposable
     {
         ArgumentNullException.ThrowIfNull(archiveLimits);
         var budget = new ChartArchiveBudget(archiveLimits);
-        using var memoryStream = new MemoryStream(chartBytes, writable: false);
-        using var gzip = new GZipStream(memoryStream, CompressionMode.Decompress);
+        await using var memoryStream = new MemoryStream(chartBytes, writable: false);
+        await using var gzip = new GZipStream(memoryStream, CompressionMode.Decompress);
         var scope = budget.BeginArchive(chartBytes.Length);
         // Meter every decompressed byte the tar reader consumes — headers and padding
         // included — so structural tar data cannot be decompressed outside the budgets.
-        using var metered = scope.MeterDecompressedStream(gzip);
-        using var guarded = scope.GuardTarStream(metered);
-        using var tar = new TarReader(guarded);
+        await using var metered = scope.MeterDecompressedStream(gzip);
+        await using var guarded = scope.GuardTarStream(metered);
+        await using var tar = new TarReader(guarded);
 
         var archiveFiles = new List<ArchiveFileEntry>();
-        TarEntry? entry;
-        while ((entry = tar.GetNextEntry()) is not null)
+        while (await tar.GetNextEntryAsync(cancellationToken: cancellationToken) is { } entry)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (entry.EntryType is TarEntryType.Directory || entry.DataStream is null)
@@ -1453,8 +1452,7 @@ public sealed class HelmChartRepository : IDisposable
 
     private static bool IsPortableFileNameCharacter(char character)
         => character >= ' '
-           && character is not '<' and not '>' and not ':' and not '"'
-           && character is not '/' and not '\\' and not '|' and not '?' and not '*';
+           && character is not ('<' or '>' or ':' or '"' or '/' or '\\' or '|' or '?' or '*');
 
     internal static string GetRepositoryConfigLockPath(string repositoryConfigPath)
     {
@@ -1550,7 +1548,7 @@ public sealed class HelmChartRepository : IDisposable
         string? environmentRepositoryCache,
         string? helmCacheHome,
         string? xdgCacheHome,
-        bool isMacOS,
+        bool isMacOs,
         bool isWindows,
         string userProfile,
         string temporaryDirectory)
@@ -1563,7 +1561,7 @@ public sealed class HelmChartRepository : IDisposable
         return ResolveHelmCacheDirectory(
             helmCacheHome,
             xdgCacheHome,
-            isMacOS,
+            isMacOs,
             isWindows,
             userProfile,
             temporaryDirectory);
@@ -1575,7 +1573,7 @@ public sealed class HelmChartRepository : IDisposable
     internal static string ResolveHelmCacheDirectory(
         string? helmCacheHome,
         string? xdgCacheHome,
-        bool isMacOS,
+        bool isMacOs,
         bool isWindows,
         string userProfile,
         string temporaryDirectory)
@@ -1584,7 +1582,7 @@ public sealed class HelmChartRepository : IDisposable
             return GetRepositoryCacheDirectory(helmCacheHome);
         if (!string.IsNullOrWhiteSpace(xdgCacheHome))
             return Path.Combine(xdgCacheHome, "helm", "repository");
-        if (isMacOS)
+        if (isMacOs)
             return Path.Combine(userProfile, "Library", "Caches", "helm", "repository");
         if (isWindows)
             return Path.Combine(temporaryDirectory, "helm", "repository");
@@ -1615,7 +1613,7 @@ public sealed class HelmChartRepository : IDisposable
     internal static string ResolveHelmConfigDirectory(
         string? helmConfigHome,
         string? xdgConfigHome,
-        bool isMacOS,
+        bool isMacOs,
         string userProfile,
         string applicationData)
     {
@@ -1623,7 +1621,7 @@ public sealed class HelmChartRepository : IDisposable
             return helmConfigHome;
         if (!string.IsNullOrWhiteSpace(xdgConfigHome))
             return Path.Combine(xdgConfigHome, "helm");
-        if (isMacOS && !string.IsNullOrWhiteSpace(userProfile))
+        if (isMacOs && !string.IsNullOrWhiteSpace(userProfile))
             return Path.Combine(userProfile, "Library", "Preferences", "helm");
         return Path.Combine(applicationData, "helm");
     }
@@ -1653,7 +1651,7 @@ public sealed class HelmChartRepository : IDisposable
             throw new FileNotFoundException($"Chart archive not found: {chartTgzPath}");
 
         var chartBytes = await File.ReadAllBytesAsync(chartTgzPath, ct);
-        var digest = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(chartBytes)).ToLowerInvariant();
+        var digest = Convert.ToHexString(SHA256.HashData(chartBytes)).ToLowerInvariant();
 
         // Step 1: Upload blob
         var blobUrl = $"https://{registry}/v2/{repository}/blobs/uploads/";
@@ -1684,8 +1682,8 @@ public sealed class HelmChartRepository : IDisposable
         putResponse.EnsureSuccessStatusCode();
 
         // Step 2: Upload config (empty OCI config)
-        var configBytes = Encoding.UTF8.GetBytes("{}");
-        var configDigest = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(configBytes)).ToLowerInvariant();
+        var configBytes = "{}"u8.ToArray();
+        var configDigest = Convert.ToHexString(SHA256.HashData(configBytes)).ToLowerInvariant();
 
         var configBlobUrl = $"https://{registry}/v2/{repository}/blobs/uploads/";
         var configInit = new HttpRequestMessage(HttpMethod.Post, configBlobUrl);
@@ -1762,6 +1760,10 @@ public sealed class HelmChartRepository : IDisposable
 /// <summary>
 /// A chart repository entry from the Helm-compatible <c>repositories.yaml</c> configuration.
 /// </summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "PropertyCanBeMadeInitOnly.Global",
+    Justification = "Repository configuration properties remain mutable for Helm-compatible configuration loading and callers.")]
 public class HelmRepository
 {
     /// <summary>Short name used in <c>repo/chart</c> references.</summary>
@@ -1798,6 +1800,18 @@ public class HelmRepository
 /// <summary>
 /// A parsed chart repository <c>index.yaml</c> (Helm repository index format v1).
 /// </summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "UnusedAutoPropertyAccessor.Global",
+    Justification = "These public model accessors are consumed by serializers and callers outside this assembly.")]
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "PropertyCanBeMadeInitOnly.Global",
+    Justification = "These public serialized index properties remain mutable for Helm-compatible deserialization and callers.")]
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "AutoPropertyCanBeMadeGetOnly.Global",
+    Justification = "The serializer populates this public index property during Helm-compatible deserialization.")]
 public class HelmRepoIndex
 {
     /// <summary>Index format version; Helm emits <c>v1</c>.</summary>
@@ -1813,6 +1827,14 @@ public class HelmRepoIndex
 /// <summary>
 /// One published chart version entry from a repository index.
 /// </summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "UnusedAutoPropertyAccessor.Global",
+    Justification = "These public model accessors are consumed by serializers and callers outside this assembly.")]
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "PropertyCanBeMadeInitOnly.Global",
+    Justification = "These public serialized version properties remain mutable for Helm-compatible deserialization and callers.")]
 public class HelmChartVersion
 {
     /// <summary>Chart name.</summary>
@@ -1840,6 +1862,14 @@ public class HelmChartVersion
 /// <summary>
 /// A chart matched by repository search.
 /// </summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "UnusedAutoPropertyAccessor.Global",
+    Justification = "These public result accessors are consumed by callers outside this assembly.")]
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "PropertyCanBeMadeInitOnly.Global",
+    Justification = "These public result properties remain mutable for callers that update search results after construction.")]
 public class HelmChartSearchResult
 {
     /// <summary>Chart name, prefixed with <c>repo/</c> when searching all configured repositories.</summary>

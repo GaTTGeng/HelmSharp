@@ -1,6 +1,5 @@
 using System.Formats.Tar;
 using System.IO.Compression;
-using System.Text;
 using HelmSharp.Repo;
 
 namespace HelmSharp.Tests;
@@ -24,12 +23,12 @@ public sealed class HelmChartRepositoryExtractionTests : IDisposable
     {
         var extractDir = Path.Combine(_tempDir, "extract");
         var archiveBytes = CreateArchive(
-            ("repo-chart/Chart.yaml", Encoding.UTF8.GetBytes("""
+            ("repo-chart/Chart.yaml", """
                 apiVersion: v2
                 name: repo-chart
                 version: 1.0.0
-                """)),
-            ("repo-chart/templates/deployment.yaml", Encoding.UTF8.GetBytes("kind: Deployment\n")));
+                """u8.ToArray()),
+            ("repo-chart/templates/deployment.yaml", "kind: Deployment\n"u8.ToArray()));
 
         await HelmChartRepository.ExtractChartArchiveAsync(archiveBytes, extractDir, CancellationToken.None);
 
@@ -48,12 +47,12 @@ public sealed class HelmChartRepositoryExtractionTests : IDisposable
         var extractDir = Path.Combine(_tempDir, "extract-unsafe");
         Directory.CreateDirectory(extractDir);
         var archiveBytes = CreateArchive(
-            ("repo-chart/Chart.yaml", Encoding.UTF8.GetBytes("""
+            ("repo-chart/Chart.yaml", """
                 apiVersion: v2
                 name: repo-chart
                 version: 1.0.0
-                """)),
-            (unsafeEntryName, Encoding.UTF8.GetBytes("evil")));
+                """u8.ToArray()),
+            (unsafeEntryName, "evil"u8.ToArray()));
 
         var ex = await Assert.ThrowsAsync<InvalidDataException>(
             () => HelmChartRepository.ExtractChartArchiveAsync(archiveBytes, extractDir, CancellationToken.None));
@@ -84,7 +83,7 @@ public sealed class HelmChartRepositoryExtractionTests : IDisposable
 
     public void Dispose()
     {
-        try { Directory.Delete(_tempDir, recursive: true); }
-        catch { }
+        if (Directory.Exists(_tempDir))
+            Directory.Delete(_tempDir, recursive: true);
     }
 }

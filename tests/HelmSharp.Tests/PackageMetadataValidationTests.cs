@@ -465,12 +465,11 @@ public sealed class PackageMetadataValidationTests : IDisposable
     [HelmCliFact]
     public async Task PackageAsync_VersionAndAppVersionOverrideMatchesHelmPackagedChartYaml()
     {
-        var sourceChartYaml = string.Join("\r\n", [
+        var sourceChartYaml = string.Join("\r\n",
             "apiVersion: v2",
             "name: appver-test",
             "version: 1.2.3",
-            "appVersion: 1.16"
-        ]);
+            "appVersion: 1.16");
         var sharpChartDir = await CreateChartAsync("sharp-appver-test", sourceChartYaml);
         var helmChartDir = await CreateChartAsync("helm-appver-test", sourceChartYaml);
         var sharpDestination = Path.Combine(_tempDir, "sharp-appver-output");
@@ -542,7 +541,7 @@ public sealed class PackageMetadataValidationTests : IDisposable
         Assert.Equal(0, helmResult.ExitCode);
         var sharpEntries = await ReadPackageEntriesAsync(GetSinglePackagePath(sharpDestination));
         var helmEntries = await ReadPackageEntriesAsync(GetSinglePackagePath(helmDestination));
-        Assert.Equal(helmEntries, sharpEntries);
+        AssertPackageEntriesEqual(helmEntries, sharpEntries);
     }
 
     private async Task<string> CreateChartAsync(string directoryName, string? chartYaml)
@@ -558,11 +557,10 @@ public sealed class PackageMetadataValidationTests : IDisposable
 
     private async Task<string> CreateArchiveLayoutChartAsync(string directoryName)
     {
-        var chartYaml = string.Join("\r\n", [
+        var chartYaml = string.Join("\r\n",
             "apiVersion: v2",
             "name: archive-layout",
-            "version: 1.2.3"
-        ]);
+            "version: 1.2.3");
         var chartDir = await CreateChartAsync(directoryName, chartYaml);
         await WriteTextAsync(Path.Combine(chartDir, "values.yaml"), "replicaCount: 1\n");
         await WriteTextAsync(Path.Combine(chartDir, "templates", "deployment.yaml"), "kind: Deployment\n");
@@ -572,11 +570,10 @@ public sealed class PackageMetadataValidationTests : IDisposable
             metadata:
               name: widgets.example.com
             """);
-        var childChartYaml = string.Join("\r\n", [
+        var childChartYaml = string.Join("\r\n",
             "apiVersion: v2",
             "name: child",
-            "version: 0.1.0"
-        ]);
+            "version: 0.1.0");
         await WriteTextAsync(Path.Combine(chartDir, "charts", "child", "Chart.yaml"), childChartYaml);
         await WriteTextAsync(Path.Combine(chartDir, "charts", "child", "values.yaml"), "enabled: true\n");
         await WriteTextAsync(Path.Combine(chartDir, "README.md"), "# Archive layout\n");
@@ -652,10 +649,8 @@ public sealed class PackageMetadataValidationTests : IDisposable
     {
         await using var file = File.OpenRead(packagePath);
         await using var gzip = new GZipStream(file, CompressionMode.Decompress);
-        using var reader = new TarReader(gzip);
-
-        TarEntry? entry;
-        while ((entry = reader.GetNextEntry()) is not null)
+        await using var reader = new TarReader(gzip);
+        while (await reader.GetNextEntryAsync() is { } entry)
         {
             if (entry.DataStream is null ||
                 !entry.Name.EndsWith("/Chart.yaml", StringComparison.OrdinalIgnoreCase))
@@ -676,10 +671,8 @@ public sealed class PackageMetadataValidationTests : IDisposable
         var entries = new List<string>();
         await using var file = File.OpenRead(packagePath);
         await using var gzip = new GZipStream(file, CompressionMode.Decompress);
-        using var reader = new TarReader(gzip);
-
-        TarEntry? entry;
-        while ((entry = reader.GetNextEntry()) is not null)
+        await using var reader = new TarReader(gzip);
+        while (await reader.GetNextEntryAsync() is { } entry)
             entries.Add(entry.Name);
 
         return entries;
@@ -690,10 +683,8 @@ public sealed class PackageMetadataValidationTests : IDisposable
         var entries = new List<PackageEntrySnapshot>();
         await using var file = File.OpenRead(packagePath);
         await using var gzip = new GZipStream(file, CompressionMode.Decompress);
-        using var reader = new TarReader(gzip);
-
-        TarEntry? entry;
-        while ((entry = reader.GetNextEntry()) is not null)
+        await using var reader = new TarReader(gzip);
+        while (await reader.GetNextEntryAsync() is { } entry)
         {
             byte[] payload = [];
             if (entry.DataStream is not null)
@@ -711,17 +702,30 @@ public sealed class PackageMetadataValidationTests : IDisposable
                 Convert.ToHexString(payload)));
         }
 
-        return entries.OrderBy(entry => entry.Name, StringComparer.Ordinal).ToList();
+        return entries.OrderBy(item => item.Name, StringComparer.Ordinal).ToList();
+    }
+
+    private static void AssertPackageEntriesEqual(
+        IReadOnlyList<PackageEntrySnapshot> expected,
+        IReadOnlyList<PackageEntrySnapshot> actual)
+    {
+        Assert.Equal(expected.Count, actual.Count);
+        for (var index = 0; index < expected.Count; index++)
+        {
+            Assert.Equal(expected[index].Name, actual[index].Name);
+            Assert.Equal(expected[index].EntryType, actual[index].EntryType);
+            Assert.Equal(expected[index].Mode, actual[index].Mode);
+            Assert.Equal(expected[index].Size, actual[index].Size);
+            Assert.Equal(expected[index].PayloadHex, actual[index].PayloadHex);
+        }
     }
 
     private static async Task<byte[]> ReadPackageEntryBytesAsync(string packagePath, string entryName)
     {
         await using var file = File.OpenRead(packagePath);
         await using var gzip = new GZipStream(file, CompressionMode.Decompress);
-        using var reader = new TarReader(gzip);
-
-        TarEntry? entry;
-        while ((entry = reader.GetNextEntry()) is not null)
+        await using var reader = new TarReader(gzip);
+        while (await reader.GetNextEntryAsync() is { } entry)
         {
             if (entry.DataStream is null || !string.Equals(entry.Name, entryName, StringComparison.Ordinal))
                 continue;
@@ -736,8 +740,8 @@ public sealed class PackageMetadataValidationTests : IDisposable
 
     public void Dispose()
     {
-        try { Directory.Delete(_tempDir, recursive: true); }
-        catch { }
+        if (Directory.Exists(_tempDir))
+            Directory.Delete(_tempDir, recursive: true);
     }
 
     private sealed class StaticHelmOptionsProvider : IHelmOptionsProvider

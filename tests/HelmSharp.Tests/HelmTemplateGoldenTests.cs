@@ -83,7 +83,7 @@ public class HelmTemplateGoldenTests
             var chart = await HelmChartLoader.LoadAsync(chartPath, CancellationToken.None);
             var values = await HelmValues.BuildAsync(
                 chart,
-                new[] { valuesFile },
+                [valuesFile],
                 null,
                 null,
                 null,

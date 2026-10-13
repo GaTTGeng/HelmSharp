@@ -247,11 +247,12 @@ internal static class HelmV3ReleaseCodec
             ["schema"] = schema.Value is null ? null : Convert.ToBase64String(schema.Value),
             ["files"] = files,
             ["crds"] = new JsonArray(chart.Crds
-                .Select((crd, index) => ToJsonCrd(crd, index))
+                .Select(ToJsonCrd)
                 .ToArray()),
             ["dependencies"] = new JsonArray(chart.Subcharts
                 .OrderBy(pair => pair.Key, StringComparer.Ordinal)
-                .Select(pair => CreateChartSnapshotNode(pair.Value))
+                .Select(pair => pair.Value)
+                .Select(subchart => (JsonNode?)CreateChartSnapshotNode(subchart))
                 .ToArray())
         };
     }

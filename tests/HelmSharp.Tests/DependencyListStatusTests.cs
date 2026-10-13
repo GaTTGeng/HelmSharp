@@ -56,7 +56,7 @@ public sealed class DependencyListStatusTests : IDisposable
 
         AssertSuccess("HelmSharp dependency list", sharpResult.ExitCode, sharpResult.StandardError);
         AssertSuccess("helm dependency list", helmResult.ExitCode, helmResult.Stderr);
-        Assert.Equal(ParseRows(helmResult.Stdout), ParseRows(sharpResult.StandardOutput));
+        AssertRowsEqual(ParseRows(helmResult.Stdout), ParseRows(sharpResult.StandardOutput));
         Assert.Equal("ok", FindStatus(ParseRows(sharpResult.StandardOutput), "range-dep"));
     }
 
@@ -84,7 +84,7 @@ public sealed class DependencyListStatusTests : IDisposable
 
         AssertSuccess("HelmSharp dependency list", sharpResult.ExitCode, sharpResult.StandardError);
         AssertSuccess("helm dependency list", helmResult.ExitCode, helmResult.Stderr);
-        Assert.Equal(ParseRows(helmResult.Stdout), ParseRows(sharpResult.StandardOutput));
+        AssertRowsEqual(ParseRows(helmResult.Stdout), ParseRows(sharpResult.StandardOutput));
         Assert.Equal("ok", FindStatus(ParseRows(sharpResult.StandardOutput), "archive-ok"));
     }
 
@@ -118,7 +118,7 @@ public sealed class DependencyListStatusTests : IDisposable
 
         AssertSuccess("HelmSharp dependency list", sharpResult.ExitCode, sharpResult.StandardError);
         AssertSuccess("helm dependency list", helmResult.ExitCode, helmResult.Stderr);
-        Assert.Equal(ParseRows(helmResult.Stdout), rows);
+        AssertRowsEqual(ParseRows(helmResult.Stdout), rows);
         Assert.Equal("unpacked", FindStatus(rows, "alias-target"));
         Assert.Equal("missing", FindStatus(rows, "optional-dep"));
     }
@@ -148,7 +148,7 @@ public sealed class DependencyListStatusTests : IDisposable
 
         AssertSuccess("HelmSharp dependency list", sharpResult.ExitCode, sharpResult.StandardError);
         AssertSuccess("helm dependency list", helmResult.ExitCode, helmResult.Stderr);
-        Assert.Equal(ParseRows(helmResult.Stdout), ParseRows(sharpResult.StandardOutput));
+        AssertRowsEqual(ParseRows(helmResult.Stdout), ParseRows(sharpResult.StandardOutput));
         Assert.Equal("missing", FindStatus(ParseRows(sharpResult.StandardOutput), "optional-dep"));
     }
 
@@ -270,6 +270,18 @@ public sealed class DependencyListStatusTests : IDisposable
         }
 
         return rows;
+    }
+
+    private static void AssertRowsEqual(IReadOnlyList<DependencyRow> expected, IReadOnlyList<DependencyRow> actual)
+    {
+        Assert.Equal(expected.Count, actual.Count);
+        for (var index = 0; index < expected.Count; index++)
+        {
+            Assert.Equal(expected[index].Name, actual[index].Name);
+            Assert.Equal(expected[index].Version, actual[index].Version);
+            Assert.Equal(expected[index].Repository, actual[index].Repository);
+            Assert.Equal(expected[index].Status, actual[index].Status);
+        }
     }
 
     private static string FindStatus(IReadOnlyList<DependencyRow> rows, string name)

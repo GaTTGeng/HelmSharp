@@ -146,7 +146,7 @@ public sealed class TemplateParser
         var name = ExtractQuotedFirstArg(expr, "define");
         if (name is null)
             throw new TemplateParseException(
-                $"The 'define' keyword requires a quoted template name (e.g. define \"name\")",
+                "The 'define' keyword requires a quoted template name (e.g. define \"name\")",
                 startLine, startCol, startOffset);
         if (name.Length == 0)
             throw new TemplateParseException(

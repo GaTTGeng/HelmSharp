@@ -225,9 +225,15 @@ public class StorageTests
     [Fact]
     public void HelmChart_TemplatesCollection()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0" };
-        chart.Templates["templates/deployment.yaml"] = "apiVersion: apps/v1\nkind: Deployment\n";
-        chart.Templates["templates/_helpers.tpl"] = "{{- define \"test.name\" -}}test{{- end -}}";
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0",
+            Templates =
+            {
+                ["templates/deployment.yaml"] = "apiVersion: apps/v1\nkind: Deployment\n",
+                ["templates/_helpers.tpl"] = "{{- define \"test.name\" -}}test{{- end -}}"
+            }
+        };
 
         Assert.Equal(2, chart.Templates.Count);
         Assert.True(chart.Templates.ContainsKey("templates/deployment.yaml"));
