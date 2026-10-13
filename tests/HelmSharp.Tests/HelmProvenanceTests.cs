@@ -246,13 +246,16 @@ public class HelmProvenanceTests
             ?? throw new InvalidOperationException("The policy validator returned no result."));
     }
 
-    private static bool SignatureVersionMatchesKey(int signatureVersion, int keyVersion)
+    private static bool SignatureVersionMatchesKey(
+        int signatureVersion,
+        int keyVersion,
+        PublicKeyAlgorithmTag keyAlgorithm)
     {
         var method = typeof(HelmProvenance).GetMethod(
             "SignatureVersionMatchesKey",
             System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
             ?? throw new InvalidOperationException("Could not find the signature/key version validator.");
-        return (bool)(method.Invoke(null, [signatureVersion, keyVersion])
+        return (bool)(method.Invoke(null, [signatureVersion, keyVersion, keyAlgorithm])
             ?? throw new InvalidOperationException("The signature/key version validator returned no result."));
     }
 
@@ -573,16 +576,25 @@ public class HelmProvenanceTests
     }
 
     [Theory]
-    [InlineData(3, 3, true)]
-    [InlineData(3, 4, true)]
-    [InlineData(4, 4, true)]
-    [InlineData(6, 6, true)]
-    [InlineData(6, 4, false)]
-    [InlineData(4, 6, false)]
-    [InlineData(3, 6, false)]
-    public void SignatureVersionMatchesKey_UsesRegisteredVersionPairs(int signatureVersion, int keyVersion, bool expected)
+    [InlineData(3, 3, PublicKeyAlgorithmTag.RsaGeneral, true)]
+    [InlineData(3, 4, PublicKeyAlgorithmTag.RsaGeneral, true)]
+    [InlineData(3, 4, PublicKeyAlgorithmTag.Dsa, true)]
+    [InlineData(3, 4, PublicKeyAlgorithmTag.ECDsa, false)]
+    [InlineData(3, 4, PublicKeyAlgorithmTag.EdDsa_Legacy, false)]
+    [InlineData(3, 4, PublicKeyAlgorithmTag.Ed25519, false)]
+    [InlineData(3, 4, PublicKeyAlgorithmTag.Ed448, false)]
+    [InlineData(4, 4, PublicKeyAlgorithmTag.ECDsa, true)]
+    [InlineData(6, 6, PublicKeyAlgorithmTag.Ed25519, true)]
+    [InlineData(6, 4, PublicKeyAlgorithmTag.RsaGeneral, false)]
+    [InlineData(4, 6, PublicKeyAlgorithmTag.RsaGeneral, false)]
+    [InlineData(3, 6, PublicKeyAlgorithmTag.RsaGeneral, false)]
+    public void SignatureVersionMatchesKey_UsesRegisteredVersionPairs(
+        int signatureVersion,
+        int keyVersion,
+        PublicKeyAlgorithmTag keyAlgorithm,
+        bool expected)
     {
-        Assert.Equal(expected, SignatureVersionMatchesKey(signatureVersion, keyVersion));
+        Assert.Equal(expected, SignatureVersionMatchesKey(signatureVersion, keyVersion, keyAlgorithm));
     }
 
     [Fact]

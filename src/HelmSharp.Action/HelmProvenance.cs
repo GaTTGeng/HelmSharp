@@ -250,7 +250,10 @@ public static class HelmProvenance
             {
                 // A V6 signature cannot be verified by a V4 key; keep trying other
                 // trusted keys so a mixed trust set can still match a compatible key.
-                if (!SignatureVersionMatchesKey(parsedSignature.Version, trusted.PublicKey.Version))
+                if (!SignatureVersionMatchesKey(
+                        parsedSignature.Version,
+                        trusted.PublicKey.Version,
+                        trusted.PublicKey.Algorithm))
                     continue;
 
                 if (IsWeakHashAlgorithm(parsedSignature.HashAlgorithm))
@@ -405,16 +408,27 @@ public static class HelmProvenance
         return hashed is not null && hashed.HasSubpacket(SignatureSubpacketTag.CreationTime);
     }
 
-    /// <summary>Whether the signature version is valid for the signing-key version.</summary>
-    internal static bool SignatureVersionMatchesKey(int signatureVersion, int keyVersion) =>
+    /// <summary>Whether the signature version is valid for the signing key's version and algorithm.</summary>
+    internal static bool SignatureVersionMatchesKey(
+        int signatureVersion,
+        int keyVersion,
+        PublicKeyAlgorithmTag keyAlgorithm) =>
         (keyVersion, signatureVersion) switch
         {
-            (3, 3) => true,
-            // RFC 9580 retains V3 signatures from V4 keys for historical verification.
-            (4, 3 or 4) => true,
+            (3, 3) => !IsEllipticCurveSignatureAlgorithm(keyAlgorithm),
+            // RFC 9580 retains V3 signatures from V4 keys for historical verification,
+            // but explicitly prohibits V3 signatures with ECDSA and EdDSA algorithms.
+            (4, 3) => !IsEllipticCurveSignatureAlgorithm(keyAlgorithm),
+            (4, 4) => true,
             (6, 6) => true,
             _ => false,
         };
+
+    private static bool IsEllipticCurveSignatureAlgorithm(PublicKeyAlgorithmTag algorithm) =>
+        algorithm is PublicKeyAlgorithmTag.ECDsa
+            or PublicKeyAlgorithmTag.EdDsa_Legacy
+            or PublicKeyAlgorithmTag.Ed25519
+            or PublicKeyAlgorithmTag.Ed448;
 
     /// <summary>
     /// Compares the chart archive SHA-256 against the digest recorded in a <c>.prov</c> file.
