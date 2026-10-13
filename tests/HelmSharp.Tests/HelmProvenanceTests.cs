@@ -1064,6 +1064,41 @@ public class HelmProvenanceTests
     }
 
     [Fact]
+    public async Task Verify_RejectsUtf16AndInvalidUtf8Provenance()
+    {
+        var work = TempDir();
+        try
+        {
+            var tgz = await CreateTestChartArchiveAsync(work);
+            var (_, _, signingKey, trustedKey) = CreateTestKeys();
+            var provenancePath = await HelmProvenance.SignAsync(tgz, signingKey);
+            var validText = await File.ReadAllTextAsync(provenancePath);
+            var utf16 = Encoding.Unicode.GetPreamble()
+                .Concat(Encoding.Unicode.GetBytes(validText))
+                .ToArray();
+            var invalidUtf8 = Encoding.UTF8.GetBytes(validText);
+            var metadataOffset = validText.IndexOf("provenance test chart", StringComparison.Ordinal);
+            Assert.True(metadataOffset >= 0);
+            invalidUtf8[metadataOffset] = 0xFF;
+
+            foreach (var malformed in new[] { utf16, invalidUtf8 })
+            {
+                await File.WriteAllBytesAsync(provenancePath, malformed);
+
+                var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
+
+                Assert.False(result.IsValid);
+                Assert.False(result.SignatureValid);
+                Assert.Contains("valid UTF-8 without a byte-order mark", result.FailureReason, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Verify_BinaryDocumentSignatureInCleartextArmor_FailsClosed()
     {
         var work = TempDir();
@@ -1348,6 +1383,46 @@ public class HelmProvenanceTests
             () => HelmProvenanceTrustedKey.FromKeyringData(keyBytes.ToArray()));
 
         Assert.Contains("No usable", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("P-224", false)]
+    [InlineData("P-256", true)]
+    public void FromKeyringData_EnforcesSupportedEcdsaCurves(string curveName, bool isSupported)
+    {
+        var keyGenerator = new ECKeyPairGenerator();
+        var curveOid = Org.BouncyCastle.Asn1.Nist.NistNamedCurves.GetOid(curveName);
+        keyGenerator.Init(new ECKeyGenerationParameters(curveOid, new SecureRandom()));
+        var pair = new PgpKeyPair(
+            PublicKeyAlgorithmTag.ECDsa,
+            keyGenerator.GenerateKeyPair(),
+            DateTime.UtcNow);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
+        var ringGenerator = new PgpKeyRingGenerator(
+            (int)PgpSignature.PositiveCertification,
+            pair,
+            $"ECDSA {curveName} <{curveName.ToLowerInvariant()}@example.com>",
+            SymmetricKeyAlgorithmTag.Null,
+            HashAlgorithmTag.Sha512,
+            (char[])null!,
+            false,
+            packets.Generate(),
+            null,
+            new SecureRandom());
+        using var keyBytes = new MemoryStream();
+        ringGenerator.GeneratePublicKeyRing().Encode(keyBytes);
+
+        if (isSupported)
+        {
+            Assert.Single(HelmProvenanceTrustedKey.FromKeyringData(keyBytes.ToArray()));
+        }
+        else
+        {
+            var exception = Assert.Throws<ArgumentException>(
+                () => HelmProvenanceTrustedKey.FromKeyringData(keyBytes.ToArray()));
+            Assert.Contains("No usable", exception.Message, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

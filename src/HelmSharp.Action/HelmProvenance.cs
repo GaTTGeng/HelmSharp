@@ -54,7 +54,9 @@ public static class HelmProvenance
     // Provenance files are UTF-8 without a BOM, matching Helm's Go writer. Reading or
     // hashing as ASCII would replace non-ASCII metadata bytes with '?' and invalidate
     // the signature over otherwise untouched chart text.
-    private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+    private static readonly Encoding Utf8NoBom = new UTF8Encoding(
+        encoderShouldEmitUTF8Identifier: false,
+        throwOnInvalidBytes: true);
 
     /// <summary>
     /// Signs a chart archive with a real OpenPGP signature and writes the provenance file
@@ -146,7 +148,12 @@ public static class HelmProvenance
         var archiveName = Path.GetFileName(chartTgzPath);
         var chartBytes = await File.ReadAllBytesAsync(chartTgzPath, cancellationToken).ConfigureAwait(false);
         var actualSha256 = Convert.ToHexString(SHA256.HashData(chartBytes)).ToLowerInvariant();
-        var provContent = await File.ReadAllTextAsync(provPath, Utf8NoBom, cancellationToken).ConfigureAwait(false);
+        var provenanceBytes = await File.ReadAllBytesAsync(provPath, cancellationToken).ConfigureAwait(false);
+        if (!TryDecodeUtf8WithoutBom(provenanceBytes, out var provContent))
+        {
+            return Fail(null, null, null, expectedSha256: null, actualSha256,
+                "Provenance file must use valid UTF-8 without a byte-order mark.");
+        }
 
         // --- 2. Reject legacy pseudo-signature files before any crypto ---
         if (IsLegacyPseudoSignature(provContent))
@@ -657,6 +664,27 @@ public static class HelmProvenance
         }
 
         return Utf8NoBom.GetBytes(sb.ToString());
+    }
+
+    private static bool TryDecodeUtf8WithoutBom(byte[] bytes, out string text)
+    {
+        text = string.Empty;
+        var content = bytes.AsSpan();
+        if (content.StartsWith(new byte[] { 0xEF, 0xBB, 0xBF }) ||
+            content.StartsWith(new byte[] { 0xFF, 0xFE }) ||
+            content.StartsWith(new byte[] { 0xFE, 0xFF }) ||
+            content.StartsWith(new byte[] { 0x00, 0x00, 0xFE, 0xFF }))
+            return false;
+
+        try
+        {
+            text = Utf8NoBom.GetString(bytes);
+            return true;
+        }
+        catch (DecoderFallbackException)
+        {
+            return false;
+        }
     }
 
     private static bool TryParseClearSign(string provContent, out string signedBody, out byte[] signaturePacket)

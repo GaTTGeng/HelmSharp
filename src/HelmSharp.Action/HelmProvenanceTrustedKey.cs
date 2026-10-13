@@ -1,3 +1,4 @@
+using Org.BouncyCastle.Asn1.Nist;
 using Org.BouncyCastle.Bcpg;
 using Org.BouncyCastle.Bcpg.OpenPgp;
 
@@ -15,6 +16,13 @@ namespace HelmSharp.Action;
 /// </remarks>
 public sealed class HelmProvenanceTrustedKey
 {
+    private static readonly HashSet<string> SupportedEcdsaCurveOids =
+    [
+        NistNamedCurves.GetOid("P-256")!.Id,
+        NistNamedCurves.GetOid("P-384")!.Id,
+        NistNamedCurves.GetOid("P-521")!.Id,
+    ];
+
     private readonly PgpPublicKey _publicKey;
     private readonly PgpPublicKey? _master;
     private readonly DateTime? _expiresAt;
@@ -187,12 +195,14 @@ public sealed class HelmProvenanceTrustedKey
 
     /// <summary>
     /// Algorithms and key sizes permitted for OpenPGP signing. RSA keys below 2048 bits,
-    /// DSA, and encryption-only algorithms are excluded even when key flags claim otherwise.
+    /// ECDSA curves outside NIST P-256/P-384/P-521, DSA, and encryption-only algorithms
+    /// are excluded even when key flags claim otherwise.
     /// </summary>
     private static bool AlgorithmCanSign(PgpPublicKey key) => key.Algorithm switch
     {
         PublicKeyAlgorithmTag.RsaGeneral or PublicKeyAlgorithmTag.RsaSign => key.BitStrength >= 2048,
-        PublicKeyAlgorithmTag.ECDsa or
+        PublicKeyAlgorithmTag.ECDsa => key.PublicKeyPacket.Key is ECPublicBcpgKey ecKey &&
+            SupportedEcdsaCurveOids.Contains(ecKey.CurveOid.Id),
         PublicKeyAlgorithmTag.EdDsa_Legacy or
         PublicKeyAlgorithmTag.Ed25519 or
         PublicKeyAlgorithmTag.Ed448 => true,

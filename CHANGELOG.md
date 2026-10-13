@@ -33,6 +33,7 @@ This project follows semantic versioning once stable releases begin.
 - Provenance digest lookup now selects the archive entry in the signed `files:` map by filename instead of returning the first `sha256:`-shaped scalar, so chart metadata such as an annotation value that looks like a digest can no longer be mistaken for the archive digest.
 - Provenance verification enforces algorithm-specific signature hash strength, validates key revocation signatures instead of trusting packet presence, merges renewed certificate copies before filtering, and applies the chart archive decompression budget while signing.
 - Clear-signed provenance and trusted-key policy signatures reject unsupported critical subpackets, preventing unknown certificate, direct-key, subkey-binding, and embedded back-signature extensions from granting signing authority. Clear-signed provenance also rejects unsigned text around the signed message, malformed armor headers, and non-canonical signature types; signing rejects unsafe archive paths while accepting conventional directory records.
+- Provenance verification rejects files that are not strict UTF-8 without a byte-order mark, and trusted ECDSA signers are limited to NIST P-256, P-384, or P-521 curves.
 
 ### Removed
 
