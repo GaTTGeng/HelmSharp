@@ -272,13 +272,7 @@ public sealed class HelmProvenanceTrustedKey
     }
 
     private static bool IsPolicySignatureVersionCompatible(PgpPublicKey signingKey, PgpSignature signature)
-        => (signingKey.Version, signature.Version) switch
-        {
-            // Version 3 signatures from V4 keys are accepted only for historical interoperability.
-            (4, 3 or 4) => true,
-            (6, 6) => true,
-            _ => false,
-        };
+        => HelmProvenance.SignatureVersionMatchesKey(signature.Version, signingKey.Version);
 
     private static bool IsValidRevocationReason(PgpSignature signature)
     {

@@ -1904,13 +1904,53 @@ public class HelmProvenanceTests
             var oversizedMetadata = RandomNumberGenerator.GetBytes((int)HelmChartArchiveLimits.Default.MaxEntryBytes + 1);
             await using (var file = File.Create(archivePath))
             await using (var gzip = new System.IO.Compression.GZipStream(file, System.IO.Compression.CompressionLevel.Optimal))
-            using (var tar = new System.Formats.Tar.TarWriter(gzip))
+            await using (var tar = new System.Formats.Tar.TarWriter(gzip))
             {
                 await tar.WriteEntryAsync(new System.Formats.Tar.PaxTarEntry(
                     System.Formats.Tar.TarEntryType.RegularFile,
                     "oversized-chart/Chart.yaml")
                 {
                     DataStream = new MemoryStream(oversizedMetadata, writable: false)
+                });
+            }
+
+            var (_, _, signingKey, _) = CreateTestKeys();
+            var exception = await Assert.ThrowsAsync<ChartArchiveLimitExceededException>(
+                () => HelmProvenance.SignAsync(archivePath, signingKey));
+
+            Assert.Equal(ChartArchiveLimitKind.EntryBytes, exception.Limit);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SignAsync_RejectsOversizedNonMetadataEntry()
+    {
+        var work = TempDir();
+        try
+        {
+            var archivePath = Path.Combine(work, "oversized-template.tgz");
+            var oversizedTemplate = RandomNumberGenerator.GetBytes((int)HelmChartArchiveLimits.Default.MaxEntryBytes + 1);
+            await using (var file = File.Create(archivePath))
+            await using (var gzip = new System.IO.Compression.GZipStream(file, System.IO.Compression.CompressionLevel.Optimal))
+            await using (var tar = new System.Formats.Tar.TarWriter(gzip))
+            {
+                await tar.WriteEntryAsync(new System.Formats.Tar.PaxTarEntry(
+                    System.Formats.Tar.TarEntryType.RegularFile,
+                    "oversized-template/templates/configmap.yaml")
+                {
+                    DataStream = new MemoryStream(oversizedTemplate, writable: false)
+                });
+                await tar.WriteEntryAsync(new System.Formats.Tar.PaxTarEntry(
+                    System.Formats.Tar.TarEntryType.RegularFile,
+                    "oversized-template/Chart.yaml")
+                {
+                    DataStream = new MemoryStream(
+                        "apiVersion: v2\nname: oversized-template\nversion: 1.0.0\n"u8.ToArray(),
+                        writable: false)
                 });
             }
 

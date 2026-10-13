@@ -406,7 +406,7 @@ public static class HelmProvenance
     }
 
     /// <summary>Whether the signature version is valid for the signing-key version.</summary>
-    private static bool SignatureVersionMatchesKey(int signatureVersion, int keyVersion) =>
+    internal static bool SignatureVersionMatchesKey(int signatureVersion, int keyVersion) =>
         (keyVersion, signatureVersion) switch
         {
             (3, 3) => true,
@@ -1246,17 +1246,16 @@ public static class HelmProvenance
         var budget = new ChartArchiveBudget(HelmChartArchiveLimits.Default);
         var scope = budget.BeginArchive(compressedBytes);
         await using var gzip = new GZipStream(archive, CompressionMode.Decompress, leaveOpen: true);
-        using var metered = scope.MeterDecompressedStream(gzip);
-        using var guarded = scope.GuardTarStream(metered);
-        using var reader = new TarReader(guarded, leaveOpen: true);
+        await using var metered = scope.MeterDecompressedStream(gzip);
+        await using var guarded = scope.GuardTarStream(metered);
+        await using var reader = new TarReader(guarded, leaveOpen: true);
         Dictionary<string, object?>? chartMetadata = null;
         var rootChartMetadataCount = 0;
-        TarEntry? entry;
-        while ((entry = reader.GetNextEntry()) is not null)
+        while ((await reader.GetNextEntryAsync(copyData: false, cancellationToken: cancellationToken).ConfigureAwait(false)) is { } entry)
         {
             cancellationToken.ThrowIfCancellationRequested();
             // Directory records are structural; common tar writers add a trailing slash.
-            if (entry.EntryType is System.Formats.Tar.TarEntryType.Directory)
+            if (entry.EntryType is TarEntryType.Directory)
                 continue;
 
             var name = NormalizeArchiveEntryName(entry.Name);
@@ -1267,7 +1266,12 @@ public static class HelmProvenance
             var rootChartFileName = name.EndsWith("/Chart.yaml", StringComparison.OrdinalIgnoreCase) &&
                 name.IndexOf('/') == name.LastIndexOf('/');
             if (!chartFileName && !rootChartFileName)
+            {
+                // Signing still validates every entry against the same per-entry and
+                // total extraction budgets used when a chart is loaded.
+                _ = await scope.ReadEntryAsync(entry.DataStream, cancellationToken).ConfigureAwait(false);
                 continue;
+            }
 
             rootChartMetadataCount++;
             if (rootChartMetadataCount > 1)
