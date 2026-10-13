@@ -76,7 +76,7 @@ public static class HelmProvenance
     /// <exception cref="FileNotFoundException">The chart archive does not exist.</exception>
     /// <exception cref="InvalidDataException">The archive has no readable <c>Chart.yaml</c>.</exception>
     /// <exception cref="PgpException">The signing key cannot be unlocked or signing fails.</exception>
-    /// <exception cref="NotSupportedException">The signing key is version 6, which the current signature generator cannot encode.</exception>
+    /// <exception cref="NotSupportedException">The signing key is not version 4, which the current signature generator cannot encode.</exception>
     public static async Task<string> SignAsync(
         string chartTgzPath,
         HelmProvenanceSigningKey signingKey,
@@ -617,8 +617,8 @@ public static class HelmProvenance
     private static string ClearSign(string body, HelmProvenanceSigningKey signingKey)
     {
         var secretKey = signingKey.GetSecretKey();
-        if (secretKey.PublicKey.Version == 6)
-            throw new NotSupportedException("OpenPGP version 6 signing keys are not supported by the current provenance signature generator.");
+        if (secretKey.PublicKey.Version != 4)
+            throw new NotSupportedException("Only OpenPGP version 4 signing keys are supported by the current provenance signature generator.");
 
         var privateKey = secretKey.ExtractPrivateKeyUtf8(signingKey.Passphrase)
                          ?? throw new PgpException("Signing key could not be unlocked; check the passphrase.");
@@ -901,11 +901,15 @@ public static class HelmProvenance
                 return true;
             }
 
-            const string hashHeader = "Hash:";
+            const string hashHeader = "Hash: ";
             if (!line.StartsWith(hashHeader, StringComparison.OrdinalIgnoreCase))
                 return false;
 
-            var algorithms = line[hashHeader.Length..].ToString().Split(',');
+            var hashValue = line[hashHeader.Length..];
+            if (hashValue.IsEmpty || char.IsWhiteSpace(hashValue[0]) || char.IsWhiteSpace(hashValue[^1]))
+                return false;
+
+            var algorithms = hashValue.ToString().Split(',');
             if (algorithms.Length == 0 || algorithms.Any(algorithm =>
                     !RegisteredArmorHashNames.Contains(algorithm.Trim())))
             {
@@ -1285,6 +1289,8 @@ public static class HelmProvenance
         await using var reader = new TarReader(guarded, leaveOpen: true);
         Dictionary<string, object?>? chartMetadata = null;
         var rootChartMetadataCount = 0;
+        string? nestedChartRoot = null;
+        var archiveEntryNames = new List<string>();
         while ((await reader.GetNextEntryAsync(copyData: false, cancellationToken: cancellationToken).ConfigureAwait(false)) is { } entry)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1295,6 +1301,7 @@ public static class HelmProvenance
             var name = NormalizeArchiveEntryName(entry.Name);
             if (entry.DataStream is null)
                 continue;
+            archiveEntryNames.Add(name);
 
             var chartFileName = name.Equals("Chart.yaml", StringComparison.OrdinalIgnoreCase);
             var rootChartFileName = name.EndsWith("/Chart.yaml", StringComparison.OrdinalIgnoreCase) &&
@@ -1311,9 +1318,19 @@ public static class HelmProvenance
             if (rootChartMetadataCount > 1)
                 throw new InvalidDataException("Chart archive contains multiple root Chart.yaml entries.");
 
+            if (rootChartFileName)
+                nestedChartRoot = name[..name.IndexOf('/', StringComparison.Ordinal)];
+
             var chartYaml = await scope.ReadEntryAsync(entry.DataStream, cancellationToken).ConfigureAwait(false);
             var yaml = Encoding.UTF8.GetString(chartYaml);
             chartMetadata = HelmYaml.DeserializeDictionary(yaml);
+        }
+
+        if (nestedChartRoot is not null && archiveEntryNames.Any(name =>
+                !name.StartsWith(nestedChartRoot + "/", StringComparison.Ordinal)))
+        {
+            throw new InvalidDataException(
+                "Chart archive entries do not share the root directory containing Chart.yaml.");
         }
 
         if (chartMetadata is not null)

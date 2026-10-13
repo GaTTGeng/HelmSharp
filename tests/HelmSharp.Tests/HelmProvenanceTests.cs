@@ -1666,6 +1666,8 @@ public class HelmProvenanceTests
                 validProvenance.Replace("Hash: SHA512\n\n", "Version: attacker\nHash: SHA512\n\n", StringComparison.Ordinal),
                 validProvenance.Replace("Hash: SHA512\n\n", "Hash: VERIFIED-BY-ACME\n\n", StringComparison.Ordinal),
                 validProvenance.Replace("Hash: SHA512\n\n", "Hash: SHA512, VERIFIED-BY-ACME\n\n", StringComparison.Ordinal),
+                validProvenance.Replace("Hash: SHA512\n\n", "Hash:SHA512\n\n", StringComparison.Ordinal),
+                validProvenance.Replace("Hash: SHA512\n\n", "Hash:  SHA512\n\n", StringComparison.Ordinal),
             };
 
             foreach (var malformed in variants)
@@ -2576,6 +2578,41 @@ public class HelmProvenanceTests
     }
 
     [Fact]
+    public void FromSecretKeyData_Version3SigningKeyIsNotSupported()
+    {
+        var keyGenerator = new RsaKeyPairGenerator();
+        keyGenerator.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
+        var originalPair = new PgpKeyPair(
+            PublicKeyAlgorithmTag.RsaGeneral,
+            keyGenerator.GenerateKeyPair(),
+            DateTime.UtcNow);
+        var version3Public = new PgpPublicKey(new PublicKeyPacket(
+            (byte)3,
+            originalPair.PublicKey.Algorithm,
+            originalPair.PublicKey.CreationTime,
+            originalPair.PublicKey.PublicKeyPacket.Key));
+        var version3Pair = new PgpKeyPair(version3Public, originalPair.PrivateKey);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
+        var secretKey = new PgpSecretKey(
+            (int)PgpSignature.PositiveCertification,
+            version3Pair,
+            "V3 signer <v3@example.com>",
+            SymmetricKeyAlgorithmTag.Null,
+            HashAlgorithmTag.Sha512,
+            (char[])null!,
+            false,
+            packets.Generate(),
+            null,
+            new SecureRandom());
+        using var keyBytes = new MemoryStream();
+        secretKey.Encode(keyBytes);
+
+        Assert.Throws<NotSupportedException>(
+            () => HelmProvenanceSigningKey.FromSecretKeyData(keyBytes.ToArray()));
+    }
+
+    [Fact]
     public void FromSecretKeyData_UsesIncludedDesignatedRevokerWhenSelectingSigner()
     {
         const string revokerUserId = "Designated revoker <revoker@example.com>";
@@ -3392,6 +3429,43 @@ public class HelmProvenanceTests
             var exception = await Assert.ThrowsAsync<InvalidDataException>(() => HelmProvenance.SignAsync(archivePath, signingKey));
 
             Assert.Contains("multiple root Chart.yaml", exception.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SignAsync_RejectsMixedRootsWhenChartMetadataIsNested()
+    {
+        var work = TempDir();
+        try
+        {
+            var archivePath = Path.Combine(work, "rootchart-0.1.0.tgz");
+            await using (var file = File.Create(archivePath))
+            await using (var gzip = new System.IO.Compression.GZipStream(file, System.IO.Compression.CompressionLevel.Optimal))
+            using (var tar = new System.Formats.Tar.TarWriter(gzip))
+            {
+                var rootYaml = Encoding.UTF8.GetBytes(DefaultChartYaml.Replace("provchart", "rootchart", StringComparison.Ordinal));
+                await tar.WriteEntryAsync(new System.Formats.Tar.PaxTarEntry(
+                    System.Formats.Tar.TarEntryType.RegularFile, "chart/Chart.yaml")
+                {
+                    DataStream = new MemoryStream(rootYaml)
+                });
+                await tar.WriteEntryAsync(new System.Formats.Tar.PaxTarEntry(
+                    System.Formats.Tar.TarEntryType.RegularFile, "other-root/payload.txt")
+                {
+                    DataStream = new MemoryStream(Encoding.UTF8.GetBytes("payload"))
+                });
+            }
+
+            var (_, _, signingKey, _) = CreateTestKeys();
+
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(
+                () => HelmProvenance.SignAsync(archivePath, signingKey));
+
+            Assert.Contains("share the root directory", exception.Message, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {

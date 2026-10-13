@@ -31,7 +31,7 @@ public sealed class HelmProvenanceSigningKey : IDisposable
     /// <exception cref="ArgumentNullException"><paramref name="secretKeyData"/> is null.</exception>
     /// <exception cref="ArgumentException"><paramref name="secretKeyData"/> is empty.</exception>
     /// <exception cref="PgpException">The data does not contain a usable secret key.</exception>
-    /// <exception cref="NotSupportedException">The selected signing key is version 6, which the current signature generator cannot encode.</exception>
+    /// <exception cref="NotSupportedException">The selected signing key is not version 4, which the current signature generator cannot encode.</exception>
     public static HelmProvenanceSigningKey FromSecretKeyData(byte[] secretKeyData, char[]? passphrase = null)
     {
         ArgumentNullException.ThrowIfNull(secretKeyData);
@@ -101,7 +101,7 @@ public sealed class HelmProvenanceSigningKey : IDisposable
         foreach (var candidate in keys)
         {
             var key = candidate.Key;
-            if (key.PublicKey.Version == 6)
+            if (key.PublicKey.Version != 4)
             {
                 hasUnsupportedSigningVersion = true;
                 continue;
@@ -129,7 +129,7 @@ public sealed class HelmProvenanceSigningKey : IDisposable
         if (!hasSigningCandidate)
         {
             if (hasUnsupportedSigningVersion)
-                throw new NotSupportedException("OpenPGP version 6 signing keys are not supported by the current provenance signature generator.");
+                throw new NotSupportedException("Only OpenPGP version 4 signing keys are supported by the current provenance signature generator.");
 
             throw new PgpException("No OpenPGP secret key is authorized to sign provenance data.");
         }
