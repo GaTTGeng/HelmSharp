@@ -50,7 +50,7 @@ public sealed class HelmProvenanceTrustedKey
     public string KeyId => _publicKey.KeyId.ToString("x16");
 
     /// <summary>Primary user ID on the key, when present.</summary>
-    public string? UserId => GetUserId(_master ?? _publicKey);
+    public string? UserId => GetUserId(_master ?? _publicKey, _certificateKeys);
 
     internal PgpPublicKey PublicKey => _publicKey;
 
@@ -1073,26 +1073,18 @@ public sealed class HelmProvenanceTrustedKey
         }
     }
 
-    private static string? GetUserId(PgpPublicKey key)
+    private static string? GetUserId(PgpPublicKey key, IReadOnlyList<PgpPublicKey> certificateKeys)
     {
         var validUserIds = new List<(string UserId, PgpSignature Certification, bool IsPrimary)>();
         foreach (var userId in key.GetUserIds())
         {
             PgpSignature? latestCertification = null;
-            PgpSignature? latestRevocation = null;
             foreach (var signature in key.GetSignaturesForId(userId))
             {
-                if (!HasValidUserIdSignature(signature, userId, key))
-                    continue;
-
-                if (signature.SignatureType == PgpSignature.CertificationRevocation)
-                {
-                    if (latestRevocation is null || signature.CreationTime > latestRevocation.CreationTime)
-                        latestRevocation = signature;
-                }
-                else if (signature.SignatureType is PgpSignature.PositiveCertification
+                if ((signature.SignatureType is PgpSignature.PositiveCertification
                     or PgpSignature.CasualCertification or PgpSignature.NoCertification
-                    or PgpSignature.DefaultCertification)
+                    or PgpSignature.DefaultCertification) &&
+                    HasValidUserIdSignature(signature, userId, key))
                 {
                     if (latestCertification is null || signature.CreationTime > latestCertification.CreationTime)
                         latestCertification = signature;
@@ -1100,13 +1092,9 @@ public sealed class HelmProvenanceTrustedKey
             }
 
             // A UID is useful only when its self-certification is authentic and has not
-            // subsequently been revoked. Targeted revocations affect only their named
-            // certification, and a non-revocable certification cannot be revoked.
+            // subsequently been revoked by the primary or an authorized designated revoker.
             var isRevoked = latestCertification is not null &&
-                !IsNonRevocable(latestCertification) &&
-                latestRevocation is not null &&
-                latestRevocation.CreationTime >= latestCertification.CreationTime &&
-                RevocationTargetsSignature(latestRevocation, latestCertification);
+                IsCertificationRevoked(key, userId, latestCertification, certificateKeys);
             if (latestCertification is not null && !isRevoked)
             {
                 var isPrimary = latestCertification.GetHashedSubPackets()?.IsPrimaryUserId() == true;

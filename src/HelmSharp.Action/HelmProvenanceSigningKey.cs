@@ -88,14 +88,12 @@ public sealed class HelmProvenanceSigningKey : IDisposable
         if (keys.Count == 0)
             throw new PgpException("No OpenPGP secret key found in the supplied key material.");
 
-        // Prefer explicit public certificates over the public halves embedded in secret
-        // packets. GPG may export an older secret-key packet alongside a refreshed public
-        // certificate, and the latter can carry a revocation absent from the stale copy.
+        // Merge explicit certificates with the public halves embedded in secret packets.
+        // Either source can be stale while the other carries newer policy or revocations.
         var certificatesByFingerprint = secretPublicKeys
+            .Concat(publicKeys)
             .GroupBy(key => Convert.ToHexString(key.GetFingerprint()), StringComparer.Ordinal)
             .ToDictionary(group => group.Key, HelmProvenanceTrustedKey.MergePublicKeys, StringComparer.Ordinal);
-        foreach (var group in publicKeys.GroupBy(key => Convert.ToHexString(key.GetFingerprint()), StringComparer.Ordinal))
-            certificatesByFingerprint[group.Key] = HelmProvenanceTrustedKey.MergePublicKeys(group);
         var certificateKeys = certificatesByFingerprint.Values.ToArray();
         var hasSigningCandidate = false;
         var hasUnsupportedSigningVersion = false;

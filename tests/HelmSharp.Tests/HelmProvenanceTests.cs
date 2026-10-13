@@ -2868,6 +2868,42 @@ public class HelmProvenanceTests
         Assert.Contains("No OpenPGP secret key is authorized", exception.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FromSecretKeyData_MergesRefreshedSecretCertificateWithStaleExplicitCopy(bool staleRingFirst)
+    {
+        const string userId = "Refreshed secret certificate <secret-refresh@example.com>";
+        var (secretRing, publicRing, signingKey, _) = CreateTestKeys(userId);
+        using var signingKeyLifetime = signingKey;
+        var primarySecret = secretRing.GetSecretKeys().Single(key => key.PublicKey.IsMasterKey);
+        var primary = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+        var revocationGenerator = new PgpSignatureGenerator(primarySecret.PublicKey.Algorithm, HashAlgorithmTag.Sha512);
+        revocationGenerator.InitSign(PgpSignature.KeyRevocation, primarySecret.ExtractPrivateKey(null)!);
+        var revocationPackets = new PgpSignatureSubpacketGenerator();
+        revocationPackets.SetSignatureCreationTime(false, DateTime.UtcNow.AddSeconds(1));
+        revocationGenerator.SetHashedSubpackets(revocationPackets.Generate());
+        var revokedPrimary = PgpPublicKey.AddCertification(primary, revocationGenerator.GenerateCertification(primary));
+        var refreshedPublicRing = PgpPublicKeyRing.InsertPublicKey(publicRing, revokedPrimary);
+        var refreshedSecretRing = PgpSecretKeyRing.ReplacePublicKeys(secretRing, refreshedPublicRing);
+        using var keyMaterial = new MemoryStream();
+        if (staleRingFirst)
+        {
+            publicRing.Encode(keyMaterial);
+            refreshedSecretRing.Encode(keyMaterial);
+        }
+        else
+        {
+            refreshedSecretRing.Encode(keyMaterial);
+            publicRing.Encode(keyMaterial);
+        }
+
+        var exception = Assert.Throws<PgpException>(
+            () => HelmProvenanceSigningKey.FromSecretKeyData(keyMaterial.ToArray()));
+
+        Assert.Contains("No OpenPGP secret key is authorized", exception.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void IsUsableSigningKeyFor_Version6PrimaryWithoutDirectKeySignatureRejectsSigningSubkey()
     {
@@ -3444,6 +3480,18 @@ public class HelmProvenanceTests
         var trustedKeys = HelmProvenanceTrustedKey.FromKeyringData(revokedBytes);
 
         Assert.Single(trustedKeys);
+    }
+
+    [Fact]
+    public void FromKeyringData_DesignatedRevokerRevokesDisplayedUserId()
+    {
+        var revokedBytes = CreateSigningKeyringWithDesignatedCertificationRevocation(revokeDirectKey: false);
+
+        var trustedKeys = HelmProvenanceTrustedKey.FromKeyringData(revokedBytes);
+
+        Assert.Equal(2, trustedKeys.Count);
+        Assert.Contains(trustedKeys, key => key.UserId is null);
+        Assert.Contains(trustedKeys, key => key.UserId == "Designated revoker <revoker@example.com>");
     }
 
     [Theory]
