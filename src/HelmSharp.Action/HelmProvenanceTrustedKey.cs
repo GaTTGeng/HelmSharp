@@ -62,7 +62,7 @@ public sealed class HelmProvenanceTrustedKey
     internal static bool IsUsableSigningKeyFor(PgpPublicKey key, PgpPublicKey? master)
         => IsUsableSigningKeyFor(key, master, master is null ? [key] : [key, master]);
 
-    private static bool IsUsableSigningKeyFor(
+    internal static bool IsUsableSigningKeyFor(
         PgpPublicKey key,
         PgpPublicKey? master,
         IReadOnlyList<PgpPublicKey> certificateKeys)

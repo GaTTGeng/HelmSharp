@@ -1499,6 +1499,10 @@ public class HelmProvenanceTests
             var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
 
             Assert.False(result.IsValid);
+            Assert.True(result.SignatureValid);
+            Assert.True(result.SignerTrusted);
+            Assert.True(result.DigestMatches);
+            Assert.Equal(result.ExpectedSha256, result.ActualSha256);
             Assert.Contains("signature has expired", result.FailureReason, StringComparison.OrdinalIgnoreCase);
         }
         finally
@@ -2336,6 +2340,59 @@ public class HelmProvenanceTests
 
         Assert.Throws<NotSupportedException>(
             () => HelmProvenanceSigningKey.FromSecretKeyData(keyBytes.ToArray()));
+    }
+
+    [Fact]
+    public void FromSecretKeyData_UsesIncludedDesignatedRevokerWhenSelectingSigner()
+    {
+        const string victimUserId = "Victim signer <victim-signer@example.com>";
+        const string revokerUserId = "Designated revoker <revoker@example.com>";
+        var (revokerSecretRing, revokerPublicRing, revokerSigningKey, _) = CreateTestKeys(revokerUserId);
+        using var revokerSigningKeyLifetime = revokerSigningKey;
+        var revokerSecret = revokerSecretRing.GetSecretKeys().First();
+
+        var keyGenerator = new RsaKeyPairGenerator();
+        keyGenerator.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
+        var victimPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, keyGenerator.GenerateKeyPair(), DateTime.UtcNow);
+        var victimPackets = new PgpSignatureSubpacketGenerator();
+        victimPackets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
+        victimPackets.AddRevocationKey(false, revokerSecret.PublicKey.Algorithm, revokerSecret.PublicKey.GetFingerprint());
+        var victimRingGenerator = new PgpKeyRingGenerator(
+            PgpSignature.PositiveCertification,
+            victimPair,
+            victimUserId,
+            SymmetricKeyAlgorithmTag.Null,
+            HashAlgorithmTag.Sha512,
+            (char[])null!,
+            false,
+            victimPackets.Generate(),
+            null,
+            new SecureRandom());
+        var victimSecretRing = victimRingGenerator.GenerateSecretKeyRing();
+        var victimPublicRing = victimRingGenerator.GeneratePublicKeyRing();
+        var victimPrimary = victimPublicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+
+        var revocationGenerator = new PgpSignatureGenerator(
+            revokerSecret.PublicKey.Algorithm,
+            HashAlgorithmTag.Sha512);
+        revocationGenerator.InitSign(PgpSignature.KeyRevocation, revokerSecret.ExtractPrivateKey(null)!);
+        var revocationPackets = new PgpSignatureSubpacketGenerator();
+        revocationPackets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        revocationGenerator.SetHashedSubpackets(revocationPackets.Generate());
+        var revokedVictimPrimary = PgpPublicKey.AddCertification(
+            victimPrimary,
+            revocationGenerator.GenerateCertification(victimPrimary));
+        var revokedVictimPublicRing = PgpPublicKeyRing.InsertPublicKey(victimPublicRing, revokedVictimPrimary);
+        var revokedVictimSecretRing = PgpSecretKeyRing.ReplacePublicKeys(victimSecretRing, revokedVictimPublicRing);
+
+        using var keyMaterial = new MemoryStream();
+        revokedVictimSecretRing.Encode(keyMaterial);
+        revokerSecretRing.Encode(keyMaterial);
+        using var signingKey = HelmProvenanceSigningKey.FromSecretKeyData(keyMaterial.ToArray());
+
+        Assert.Equal(
+            revokerPublicRing.GetPublicKeys().First().GetFingerprint(),
+            signingKey.GetSecretKey().PublicKey.GetFingerprint());
     }
 
     [Fact]

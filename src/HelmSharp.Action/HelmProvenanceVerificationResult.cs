@@ -3,8 +3,8 @@ namespace HelmSharp.Action;
 /// <summary>
 /// Outcome of an authenticating <c>.prov</c> verification: OpenPGP signature validity,
 /// signer identity, trusted-signer match, and chart-digest agreement.
-/// Authenticity requires all of <see cref="SignatureValid"/>, <see cref="SignerTrusted"/>,
-/// and <see cref="DigestMatches"/>; <see cref="IsValid"/> reports the conjunction.
+/// Authenticity requires the signature and digest checks to pass, the signer to be trusted,
+/// and no additional signature-policy failure (such as expiration).
 /// </summary>
 public sealed class HelmProvenanceVerificationResult
 {
@@ -42,8 +42,8 @@ public sealed class HelmProvenanceVerificationResult
     /// <summary>True when the chart archive SHA-256 matches the signed <c>files:</c> digest.</summary>
     public bool DigestMatches { get; }
 
-    /// <summary>True when the signature is valid, the signer is trusted, and the digest matches.</summary>
-    public bool IsValid => SignatureValid && SignerTrusted && DigestMatches;
+    /// <summary>True when all authenticity checks pass and no additional policy failure was reported.</summary>
+    public bool IsValid => SignatureValid && SignerTrusted && DigestMatches && FailureReason is null;
 
     /// <summary>Hex fingerprint of the key that produced the signature, when it could be determined.</summary>
     public string? SignerFingerprint { get; }
@@ -60,6 +60,6 @@ public sealed class HelmProvenanceVerificationResult
     /// <summary>SHA-256 computed over the chart archive bytes.</summary>
     public string? ActualSha256 { get; }
 
-    /// <summary>Human-readable reason for the first failed check, or null when <see cref="IsValid"/>.</summary>
+    /// <summary>Human-readable reason for a failed check or signature policy, or null when <see cref="IsValid"/>.</summary>
     public string? FailureReason { get; }
 }

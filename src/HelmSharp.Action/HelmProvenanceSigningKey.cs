@@ -89,6 +89,12 @@ public sealed class HelmProvenanceSigningKey : IDisposable
         if (keys.Count == 0)
             throw new PgpException("No OpenPGP secret key found in the supplied key material.");
 
+        var certificateKeys = keys
+            .SelectMany(candidate => candidate.Master is null
+                ? new[] { candidate.Key.PublicKey }
+                : new[] { candidate.Key.PublicKey, candidate.Master })
+            .DistinctBy(key => Convert.ToHexString(key.GetFingerprint()), StringComparer.Ordinal)
+            .ToArray();
         var hasSigningCandidate = false;
         var hasUnsupportedSigningVersion = false;
         foreach (var candidate in keys)
@@ -100,7 +106,7 @@ public sealed class HelmProvenanceSigningKey : IDisposable
                 continue;
             }
 
-            if (!HelmProvenanceTrustedKey.IsUsableSigningKeyFor(key.PublicKey, candidate.Master))
+            if (!HelmProvenanceTrustedKey.IsUsableSigningKeyFor(key.PublicKey, candidate.Master, certificateKeys))
                 continue;
             hasSigningCandidate = true;
 

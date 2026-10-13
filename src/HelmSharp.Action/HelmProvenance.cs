@@ -337,8 +337,18 @@ public static class HelmProvenance
 
             if (trustedKeyMatchedExpiredSignature)
             {
-                return Fail(expiredFingerprint, expiredKeyId, expiredUserId,
-                    ExtractSha256(provContent, archiveName), actualSha256,
+                var expiredExpectedSha256 = ExtractSha256(signedBody, archiveName);
+                var expiredDigestMatches = expiredExpectedSha256 is not null &&
+                    string.Equals(expiredExpectedSha256, actualSha256, StringComparison.OrdinalIgnoreCase);
+                return new HelmProvenanceVerificationResult(
+                    signatureValid: true,
+                    signerTrusted: true,
+                    expiredDigestMatches,
+                    expiredFingerprint,
+                    expiredKeyId,
+                    expiredUserId,
+                    expiredExpectedSha256,
+                    actualSha256,
                     "Provenance signature has expired.");
             }
 
