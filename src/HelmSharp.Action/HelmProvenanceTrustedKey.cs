@@ -613,6 +613,9 @@ public sealed class HelmProvenanceTrustedKey
         PgpSignature certification,
         IReadOnlyList<PgpPublicKey> certificateKeys)
     {
+        if (IsNonRevocable(certification))
+            return false;
+
         var revokers = GetAuthorizedRevokers(key, certificateKeys);
         foreach (var signature in key.GetSignaturesForId(userId))
         {
@@ -911,15 +914,20 @@ public sealed class HelmProvenanceTrustedKey
         IReadOnlyList<PgpPublicKey> certificateKeys)
     {
         var authorizedFingerprints = GetAuthorizedRevokerFingerprints(primary, certificateKeys);
-        authorizedFingerprints.Add(Convert.ToHexString(primary.GetFingerprint()));
+        var primaryFingerprint = Convert.ToHexString(primary.GetFingerprint());
         return certificateKeys
             .Append(primary)
             .DistinctBy(candidate => Convert.ToHexString(candidate.GetFingerprint()), StringComparer.Ordinal)
-            .Where(candidate => authorizedFingerprints.Contains(Convert.ToHexString(candidate.GetFingerprint())))
+            .Where(candidate =>
+            {
+                var fingerprint = Convert.ToHexString(candidate.GetFingerprint());
+                return fingerprint == primaryFingerprint ||
+                    (authorizedFingerprints.TryGetValue(fingerprint, out var algorithms) && algorithms.Contains(candidate.Algorithm));
+            })
             .ToArray();
     }
 
-    private static HashSet<string> GetAuthorizedRevokerFingerprints(
+    private static Dictionary<string, HashSet<PublicKeyAlgorithmTag>> GetAuthorizedRevokerFingerprints(
         PgpPublicKey primary,
         IReadOnlyList<PgpPublicKey> certificateKeys)
     {
@@ -928,9 +936,20 @@ public sealed class HelmProvenanceTrustedKey
         // Ignore older declarations so a replacement can remove a former revoker.
         var latestDirectKey = GetLatestUnrevokedDirectKeySignature(primary, certificateKeys);
         return latestDirectKey?.GetHashedSubPackets()?.GetRevocationKeys()
-            .Select(revocationKey => Convert.ToHexString(revocationKey.GetFingerprint()))
-            .ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>(StringComparer.Ordinal);
+            .Where(IsValidRevocationKeyDeclaration)
+            .GroupBy(revocationKey => Convert.ToHexString(revocationKey.GetFingerprint()), StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(revocationKey => revocationKey.Algorithm).ToHashSet(),
+                StringComparer.Ordinal) ?? new Dictionary<string, HashSet<PublicKeyAlgorithmTag>>(StringComparer.Ordinal);
     }
+
+    private static bool IsValidRevocationKeyDeclaration(RevocationKey revocationKey)
+        => ((int)revocationKey.SignatureClass & 0x80) != 0 &&
+            ((int)revocationKey.SignatureClass & 0x3f) == 0 &&
+            revocationKey.Algorithm is PublicKeyAlgorithmTag.RsaGeneral or PublicKeyAlgorithmTag.RsaSign or
+                PublicKeyAlgorithmTag.Dsa or PublicKeyAlgorithmTag.ECDsa or PublicKeyAlgorithmTag.EdDsa_Legacy or
+                PublicKeyAlgorithmTag.Ed25519 or PublicKeyAlgorithmTag.Ed448;
 
     private static PgpSignature? GetLatestUnrevokedDirectKeySignature(
         PgpPublicKey primary,
@@ -956,15 +975,27 @@ public sealed class HelmProvenanceTrustedKey
         PgpPublicKey primary,
         IReadOnlyList<PgpPublicKey> certificateKeys)
     {
-        var authorizedFingerprints = directKeySignature.GetHashedSubPackets()?.GetRevocationKeys()
-            .Select(revocationKey => Convert.ToHexString(revocationKey.GetFingerprint()))
-            .ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>(StringComparer.Ordinal);
-        authorizedFingerprints.Add(Convert.ToHexString(primary.GetFingerprint()));
+        if (IsNonRevocable(directKeySignature))
+            return false;
 
+        var authorizedFingerprints = directKeySignature.GetHashedSubPackets()?.GetRevocationKeys()
+            .Where(IsValidRevocationKeyDeclaration)
+            .GroupBy(revocationKey => Convert.ToHexString(revocationKey.GetFingerprint()), StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(revocationKey => revocationKey.Algorithm).ToHashSet(),
+                StringComparer.Ordinal)
+            ?? new Dictionary<string, HashSet<PublicKeyAlgorithmTag>>(StringComparer.Ordinal);
+        var primaryFingerprint = Convert.ToHexString(primary.GetFingerprint());
         var revokers = certificateKeys
             .Append(primary)
             .DistinctBy(candidate => Convert.ToHexString(candidate.GetFingerprint()), StringComparer.Ordinal)
-            .Where(candidate => authorizedFingerprints.Contains(Convert.ToHexString(candidate.GetFingerprint())))
+            .Where(candidate =>
+            {
+                var fingerprint = Convert.ToHexString(candidate.GetFingerprint());
+                return fingerprint == primaryFingerprint ||
+                    (authorizedFingerprints.TryGetValue(fingerprint, out var algorithms) && algorithms.Contains(candidate.Algorithm));
+            })
             .ToArray();
         return primary.GetSignatures().Any(revocation =>
             revocation.SignatureType == PgpSignature.CertificationRevocation &&
@@ -976,6 +1007,11 @@ public sealed class HelmProvenanceTrustedKey
                 PgpSignature.CertificationRevocation,
                 revoker)));
     }
+
+    private static bool IsNonRevocable(PgpSignature signature)
+        => signature.GetHashedSubPackets()?.GetSubpackets(SignatureSubpacketTag.Revocable)
+            .OfType<Revocable>()
+            .Any(revocable => !revocable.IsRevocable()) == true;
 
     private sealed record KeyCandidate(PgpPublicKey Key, PgpPublicKey? Master);
 
@@ -1103,9 +1139,14 @@ public sealed class HelmProvenanceTrustedKey
             }
 
             // A UID is useful only when its self-certification is authentic and has not
-            // subsequently been revoked. On ties, prefer revocation and fail closed.
-            if (latestCertification is not null &&
-                (latestRevocation is null || latestCertification.CreationTime > latestRevocation.CreationTime))
+            // subsequently been revoked. Targeted revocations affect only their named
+            // certification, and a non-revocable certification cannot be revoked.
+            var isRevoked = latestCertification is not null &&
+                !IsNonRevocable(latestCertification) &&
+                latestRevocation is not null &&
+                latestRevocation.CreationTime >= latestCertification.CreationTime &&
+                RevocationTargetsSignature(latestRevocation, latestCertification);
+            if (latestCertification is not null && !isRevoked)
             {
                 var isPrimary = latestCertification.GetHashedSubPackets()?.IsPrimaryUserId() == true;
                 validUserIds.Add((userId, latestCertification, isPrimary));

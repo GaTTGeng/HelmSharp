@@ -936,10 +936,27 @@ public static class HelmProvenance
     {
         using var stream = new MemoryStream(signaturePacket, writable: false);
         var factory = new PgpObjectFactory(stream);
-        var obj = factory.NextPgpObject();
-        if (obj is PgpSignatureList { Count: > 0 } list)
-            return Enumerable.Range(0, list.Count).Select(index => list[index]).ToArray();
-        throw new PgpException("Signature block does not contain an OpenPGP signature packet.");
+        var signatures = new List<PgpSignature>();
+        foreach (var obj in factory.AllPgpObjects())
+        {
+            switch (obj)
+            {
+                case PgpSignatureList list:
+                    signatures.AddRange(Enumerable.Range(0, list.Count).Select(index => list[index]));
+                    break;
+                case PgpMarker:
+                case PgpPadding:
+                    // RFC 9580 permits these ignorable packets between detached signatures.
+                    break;
+                default:
+                    throw new PgpException("Signature block contains an unexpected OpenPGP packet.");
+            }
+        }
+
+        if (signatures.Count == 0)
+            throw new PgpException("Signature block does not contain an OpenPGP signature packet.");
+
+        return signatures;
     }
 
     internal static bool HasUnsupportedCriticalSubpackets(
