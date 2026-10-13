@@ -1,7 +1,8 @@
 namespace HelmSharp.Action;
 
-// ReSharper disable UnusedAutoPropertyAccessor.Global // Public request setters are consumed by library callers.
+// ReSharper disable UnusedAutoPropertyAccessor.Global, PropertyCanBeMadeInitOnly.Global, AutoPropertyCanBeMadeGetOnly.Global, UnusedMember.Global // Public request setters and options are consumed by library callers.
 /// <summary>Options for rendering a chart's templates without applying them.</summary>
+// ReSharper disable once ClassNeverInstantiated.Global // This public request type is instantiated by external library callers.
 public class HelmTemplateRequest
 {
     /// <summary>Release name used while rendering.</summary>

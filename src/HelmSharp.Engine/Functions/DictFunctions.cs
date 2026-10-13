@@ -202,11 +202,13 @@ internal static class DictFunctions
     /// dict — no live cluster access happens during template rendering. Templates that
     /// branch on lookup results will see "resource not found" behavior.
     /// </summary>
+    // ReSharper disable UnusedParameter.Global // The function dispatcher supplies a uniform argument set, including values this Helm-compatible stub does not need.
     public static object Lookup(IReadOnlyList<string> tokens, TemplateContext context, IEvaluationContext eval)
     {
         // In managed mode, return empty dict — no cluster access during template rendering
         return new Dictionary<string, object?>(StringComparer.Ordinal);
     }
+    // ReSharper restore UnusedParameter.Global
 
     // ── Helpers ──
 
@@ -216,7 +218,7 @@ internal static class DictFunctions
     /// index. Out-of-range or non-numeric list keys yield null, matching Go's
     /// missing-key behavior in templates rather than panicking.
     /// </summary>
-    internal static object? IndexOne(object? value, object? key)
+    private static object? IndexOne(object? value, object? key)
     {
         var keyString = TypeConverters.ToTemplateString(key);
         return value switch

@@ -17,6 +17,7 @@ internal static class TextFunctions
     /// Signature: <c>plural PLURAL SINGULAR COUNT</c>, or via pipeline with the
     /// word as the pipeline value: <c>"word" | plural PLURAL SINGULAR COUNT</c>.
     /// </summary>
+    // ReSharper disable once UnusedParameter.Global // The dispatcher passes a uniform argument set; plural reads its explicit count argument.
     public static string Plural(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
         var plural = TypeConverters.ToTemplateString(eval.EvaluateToken(tokens.ElementAtOrDefault(1), context));

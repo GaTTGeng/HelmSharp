@@ -785,11 +785,10 @@ public sealed class ChartArchiveLimitsTests : IDisposable
     {
         // A high-amplification dependency chart fits the trusted profile; validating the
         // downloaded archive with the default budgets would reject the same bytes.
-        var depArchive = CreateTgz(new (string Name, byte[] Content)[]
-        {
-            ("dep/Chart.yaml", Encoding.UTF8.GetBytes("apiVersion: v2\nname: dep\nversion: 1.0.0\n")),
+        var depArchive = CreateTgz([
+            ("dep/Chart.yaml", "apiVersion: v2\nname: dep\nversion: 1.0.0\n"u8.ToArray()),
             ("dep/zeros.bin", new byte[96 * 1024]),
-        });
+        ]);
         Assert.True(depArchive.Length < 8 * 1024, $"compressed size should be tiny, was {depArchive.Length}");
         var handler = new SingleResponseHandler(new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -940,11 +939,11 @@ public sealed class ChartArchiveLimitsTests : IDisposable
     {
         var entries = new List<(string Name, byte[] Content)>
         {
-            ("chart/Chart.yaml", Encoding.UTF8.GetBytes("""
+            ("chart/Chart.yaml", """
                 apiVersion: v2
                 name: limit-test
                 version: 1.0.0
-                """)),
+                """u8.ToArray()),
         };
         entries.AddRange(extraEntries);
         return CreateTgz(entries.ToArray());
@@ -1105,11 +1104,11 @@ public sealed class ChartArchiveLimitsTests : IDisposable
         {
             tar.WriteEntry(new GnuTarEntry(TarEntryType.RegularFile, "chart/Chart.yaml")
             {
-                DataStream = new MemoryStream(Encoding.UTF8.GetBytes("""
+                DataStream = new MemoryStream("""
                     apiVersion: v2
                     name: limit-test
                     version: 1.0.0
-                    """))
+                    """u8.ToArray())
             });
             for (var i = 0; i < directoryCount; i++)
                 tar.WriteEntry(new GnuTarEntry(TarEntryType.Directory, $"chart/dir-{i}"));
@@ -1132,11 +1131,11 @@ public sealed class ChartArchiveLimitsTests : IDisposable
         {
             tar.WriteEntry(new GnuTarEntry(TarEntryType.RegularFile, "chart/Chart.yaml")
             {
-                DataStream = new MemoryStream(Encoding.UTF8.GetBytes("""
+                DataStream = new MemoryStream("""
                     apiVersion: v2
                     name: hostile
                     version: 1.0.0
-                    """))
+                    """u8.ToArray())
             });
             tar.WriteEntry(new GnuTarEntry(TarEntryType.RegularFile, "chart/zeros.bin")
             {

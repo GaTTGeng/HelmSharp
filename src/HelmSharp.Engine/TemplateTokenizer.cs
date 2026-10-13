@@ -2,6 +2,8 @@ using System.Text;
 
 namespace HelmSharp.Engine;
 
+// ReSharper disable PropertyCanBeMadeInitOnly.Global // Token setters are public parser/consumer mutation points retained for API compatibility.
+
 /// <summary>
 /// Token types produced by the template tokenizer.
 /// Kept minimal — only structural tokens. Expression content is carried as raw text.

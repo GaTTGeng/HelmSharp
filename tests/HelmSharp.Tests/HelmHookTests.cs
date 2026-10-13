@@ -841,13 +841,13 @@ public class HelmHookTests
                 HelmHookEvent.PreUpgrade,
                 "test-ns",
                 cancellationSource.Token)
-            .GetAsyncEnumerator();
+            .GetAsyncEnumerator(cancellationSource.Token);
 
         Assert.True(await enumerator.MoveNextAsync());
         Assert.StartsWith("Applying hook", enumerator.Current, StringComparison.Ordinal);
         Assert.True(await enumerator.MoveNextAsync());
         Assert.Contains("Hook resource applied", enumerator.Current, StringComparison.Ordinal);
-        cancellationSource.Cancel();
+        await cancellationSource.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => enumerator.MoveNextAsync().AsTask());
 
@@ -1066,7 +1066,7 @@ public class HelmHookTests
                 path.EndsWith("/configmaps", StringComparison.Ordinal) &&
                 cancelOnConfigMapApply is not null)
             {
-                cancelOnConfigMapApply.Cancel();
+                await cancelOnConfigMapApply.CancelAsync();
                 return await Task.FromCanceled<HttpResponseMessage>(cancellationToken);
             }
 

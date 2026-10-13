@@ -1,6 +1,6 @@
 namespace HelmSharp.Action;
 
-// ReSharper disable UnusedAutoPropertyAccessor.Global // Public request setters are consumed by library callers.
+// ReSharper disable UnusedAutoPropertyAccessor.Global, PropertyCanBeMadeInitOnly.Global // Public request setters are consumed by library callers.
 /// <summary>
 /// Options for rolling a release back to a stored revision.
 /// </summary>

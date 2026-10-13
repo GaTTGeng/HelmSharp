@@ -2,6 +2,7 @@ using HelmSharp.Repo;
 
 namespace HelmSharp.Action;
 
+// ReSharper disable UnusedMember.Global, UnusedMemberInSuper.Global, UnusedParameter.Global // The public interface mirrors Helm's command surface, including methods consumers call directly.
 /// <summary>
 /// Facade over Helm chart and release operations. The current implementation is a managed
 /// subset and does not require a <c>helm</c> executable on the host.

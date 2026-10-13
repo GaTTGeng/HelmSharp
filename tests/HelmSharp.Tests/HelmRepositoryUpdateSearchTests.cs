@@ -21,7 +21,6 @@ public sealed class HelmRepositoryUpdateSearchTests : IDisposable
     [Fact]
     public async Task RepoUpdateAndSearchRepo_UsesNamedCachesOfflineAcrossConfiguredRepositories()
     {
-        string baseUrl;
         var options = CreateOptions();
         HelmClient client;
         CommandResult update;
@@ -31,7 +30,7 @@ public sealed class HelmRepositoryUpdateSearchTests : IDisposable
             ["/second/index.yaml"] = SecondIndex
         }))
         {
-            baseUrl = server.BaseUrl;
+            var baseUrl = server.BaseUrl;
             using (var repository = CreateNoProxyRepository(options))
             {
                 await repository.AddRepositoryAsync("first", baseUrl + "first");
@@ -55,7 +54,7 @@ public sealed class HelmRepositoryUpdateSearchTests : IDisposable
         Assert.True(search.Succeeded);
         Assert.NotNull(results);
         Assert.Equal(
-            new[] { ("first/shared", "1.10.0"), ("second/shared", "2.0.0") },
+            [("first/shared", "1.10.0"), ("second/shared", "2.0.0")],
             results.Select(result => (result.Name, result.Version)));
 
         var descriptionSearch = await client.SearchRepoAsync("database");
@@ -90,8 +89,8 @@ public sealed class HelmRepositoryUpdateSearchTests : IDisposable
         Assert.Contains("Failed to update bad:", update.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("Successfully updated: good", update.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("Update complete. 1 updated, 1 failed.", update.StandardOutput, StringComparison.Ordinal);
-        Assert.Contains(results!, result => result.Name == "bad/stale" && result.Version == "0.5.0");
-        Assert.Contains(results!, result => result.Name == "good/shared" && result.Version == "1.10.0");
+        Assert.Contains(results!, result => result is { Name: "bad/stale", Version: "0.5.0" });
+        Assert.Contains(results!, result => result is { Name: "good/shared", Version: "1.10.0" });
     }
 
     [Fact]
@@ -256,7 +255,7 @@ public sealed class HelmRepositoryUpdateSearchTests : IDisposable
             if (_disposed)
                 return;
             _disposed = true;
-            _cancellation.Cancel();
+            await _cancellation.CancelAsync();
             _listener.Stop();
             await _serveTask;
             _cancellation.Dispose();

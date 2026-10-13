@@ -8,14 +8,8 @@ namespace HelmSharp.Tests;
 /// Directly exercises the manually reconstructed block-body form used when the parser
 /// rewrites control flow, including parenthesized <c>else if</c> conditions.
 /// </summary>
-public class ReconstructedBodyTests
+public class ReconstructedBodyTests(ITestOutputHelper output)
 {
-    private readonly ITestOutputHelper _output;
-
-    public ReconstructedBodyTests(ITestOutputHelper output)
-    {
-        _output = output;
-    }
 
     [Fact]
     public void ManualReconstructedBody_RendersCorrectly()
@@ -23,15 +17,18 @@ public class ReconstructedBodyTests
         // This is exactly what the else-if reconstruction should produce
         var chart = new HelmChart
         {
-            Name = "test", Version = "1.0.0", ValuesYaml = ""
-        };
-        chart.Templates["templates/test.yaml"] = """
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates =
+            {
+                ["templates/test.yaml"] = """
             {{- if and .Values.x (not .Values.y) }}
             branch: first
             {{- else }}
             branch: second
             {{- end }}
-            """;
+            """
+            }
+        };
 
         var renderer = new HelmTemplateRenderer(chart, "rel", "ns",
             new Dictionary<string, object?>
@@ -41,7 +38,7 @@ public class ReconstructedBodyTests
             });
 
         var result = renderer.Render();
-        _output.WriteLine($"Result: {result}");
+        output.WriteLine($"Result: {result}");
         Assert.Contains("branch: first", result);
     }
 
@@ -51,15 +48,18 @@ public class ReconstructedBodyTests
         // Simplest possible else-if pattern
         var chart = new HelmChart
         {
-            Name = "test", Version = "1.0.0", ValuesYaml = ""
-        };
-        chart.Templates["templates/test.yaml"] = """
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates =
+            {
+                ["templates/test.yaml"] = """
             {{- if .Values.a }}
             A
             {{- else if .Values.b }}
             B
             {{- end }}
-            """;
+            """
+            }
+        };
 
         var renderer = new HelmTemplateRenderer(chart, "rel", "ns",
             new Dictionary<string, object?>
@@ -69,7 +69,7 @@ public class ReconstructedBodyTests
             });
 
         var result = renderer.Render();
-        _output.WriteLine($"Result: '{result}'");
+        output.WriteLine($"Result: '{result}'");
         Assert.Contains("B", result);
     }
 
@@ -79,15 +79,18 @@ public class ReconstructedBodyTests
         // Same as the cert-manager/external-dns pattern
         var chart = new HelmChart
         {
-            Name = "test", Version = "1.0.0", ValuesYaml = ""
-        };
-        chart.Templates["templates/test.yaml"] = """
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates =
+            {
+                ["templates/test.yaml"] = """
             {{- if and .Values.a (not .Values.b) }}
             BRANCH1
             {{- else if and .Values.c (not .Values.d) }}
             BRANCH2
             {{- end }}
-            """;
+            """
+            }
+        };
 
         var renderer = new HelmTemplateRenderer(chart, "rel", "ns",
             new Dictionary<string, object?>
@@ -99,7 +102,7 @@ public class ReconstructedBodyTests
             });
 
         var result = renderer.Render();
-        _output.WriteLine($"Result: '{result}'");
+        output.WriteLine($"Result: '{result}'");
         Assert.Contains("BRANCH2", result);
     }
 }

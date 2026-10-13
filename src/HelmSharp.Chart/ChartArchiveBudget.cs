@@ -20,8 +20,6 @@ internal sealed class ChartArchiveBudget
         _limits = limits;
     }
 
-    internal HelmChartArchiveLimits Limits => _limits;
-
     /// <summary>
     /// Rejects packaged dependency nesting deeper than the configured depth.
     /// The root chart is depth 0; each packaged dependency archive increments depth.
@@ -112,7 +110,7 @@ internal sealed class ChartArchiveBudget
         /// floods cannot evade the count limit.
         /// </summary>
         /// <exception cref="ChartArchiveLimitExceededException">Thrown when the entry-count limit is exceeded.</exception>
-        internal void CountEntry()
+        private void CountEntry()
         {
             _budget._totalEntryCount++;
             if (_budget._totalEntryCount > _budget._limits.MaxEntryCount)

@@ -308,8 +308,7 @@ public sealed class KubernetesManifestApplier
                         // LoadBalancer+Local services. All must survive the replace.
                         item.Spec.ClusterIP = existing.Spec.ClusterIP;
                         item.Spec.ClusterIPs = existing.Spec.ClusterIPs;
-                        if (item.Spec.IpFamilyPolicy is null)
-                            item.Spec.IpFamilyPolicy = existing.Spec.IpFamilyPolicy;
+                        item.Spec.IpFamilyPolicy ??= existing.Spec.IpFamilyPolicy;
                         if (item.Spec.HealthCheckNodePort is null && SupportsHealthCheckNodePort(item.Spec))
                             item.Spec.HealthCheckNodePort = existing.Spec.HealthCheckNodePort;
                         return _client.CoreV1.ReplaceNamespacedServiceAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -1263,27 +1262,22 @@ public sealed class KubernetesManifestApplier
 
 internal sealed record DiscoveredResource(string Group, string Version, string Plural, bool Namespaced);
 
-internal sealed class KubernetesApiResourceNotFoundException : Exception
+internal sealed class KubernetesApiResourceNotFoundException(string apiVersion, string kind)
+    : Exception($"Kubernetes API discovery did not find resource {apiVersion}/{kind}.")
+// ReSharper disable once RedundantTypeDeclarationBody // Multi-targeted .NET 8/9 builds require an explicit class body here.
 {
-    public KubernetesApiResourceNotFoundException(string apiVersion, string kind)
-        : base($"Kubernetes API discovery did not find resource {apiVersion}/{kind}.")
-    {
-    }
-}
-internal sealed class KubernetesApiResourceUnsupportedException : InvalidOperationException
-{
-    public KubernetesApiResourceUnsupportedException(string apiVersion, string kind)
-        : base($"Kubernetes core resource {apiVersion}/{kind} is not supported by the typed manifest applier.")
-    {
-    }
 }
 
-internal sealed class KubernetesResourceOperationException : InvalidOperationException
+internal sealed class KubernetesApiResourceUnsupportedException(string apiVersion, string kind)
+    : InvalidOperationException($"Kubernetes core resource {apiVersion}/{kind} is not supported by the typed manifest applier.")
+// ReSharper disable once RedundantTypeDeclarationBody // Multi-targeted .NET 8/9 builds require an explicit class body here.
 {
-    public KubernetesResourceOperationException(ManifestIdentity identity, Exception innerException)
-        : base($"Kubernetes operation failed for {identity.ApiVersion} {identity.DisplayName}.", innerException)
-    {
-    }
+}
+
+internal sealed class KubernetesResourceOperationException(ManifestIdentity identity, Exception innerException)
+    : InvalidOperationException($"Kubernetes operation failed for {identity.ApiVersion} {identity.DisplayName}.", innerException)
+// ReSharper disable once RedundantTypeDeclarationBody // Multi-targeted .NET 8/9 builds require an explicit class body here.
+{
 }
 
 /// <summary>

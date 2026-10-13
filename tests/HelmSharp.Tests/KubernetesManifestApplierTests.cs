@@ -695,7 +695,7 @@ public sealed class KubernetesManifestApplierTests
         var handler = new KubernetesApiHandler();
         var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
         using var cancellationSource = new CancellationTokenSource();
-        cancellationSource.Cancel();
+        await cancellationSource.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             AsyncEnumerableTestExtensions.DrainAsync(applier.DeleteAsync("""
@@ -756,7 +756,7 @@ public sealed class KubernetesManifestApplierTests
         var handler = new KubernetesApiHandler();
         var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
         using var cancellationSource = new CancellationTokenSource();
-        cancellationSource.Cancel();
+        await cancellationSource.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => AsyncEnumerableTestExtensions.DrainAsync(applier.ApplyAsync("""
             apiVersion: v1

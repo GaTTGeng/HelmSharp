@@ -17,7 +17,7 @@ internal static class SemverFunctions
     /// yields (0, 0, 0) rather than failing — callers use equality against
     /// that to reject the version where needed.
     /// </summary>
-    public static (int Major, int Minor, int Patch) Parse(string v)
+    private static (int Major, int Minor, int Patch) Parse(string v)
     {
         var m = Regex.Match(v, @"^v?(\d+)\.(\d+)\.(\d+)");
         if (!m.Success) return (0, 0, 0);
@@ -25,7 +25,7 @@ internal static class SemverFunctions
     }
 
     /// <summary>Standard three-way version comparison: negative, zero, or positive.</summary>
-    public static int Compare(int aMaj, int aMin, int aPat, int bMaj, int bMin, int bPat)
+    private static int Compare(int aMaj, int aMin, int aPat, int bMaj, int bMin, int bPat)
     {
         if (aMaj != bMaj) return aMaj.CompareTo(bMaj);
         if (aMin != bMin) return aMin.CompareTo(bMin);

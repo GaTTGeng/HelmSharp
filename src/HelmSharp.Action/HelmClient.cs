@@ -101,7 +101,7 @@ public class HelmClient : IHelmClient
         }
 
         // Apply limit
-        if (limit.HasValue && limit.Value > 0)
+        if (limit is > 0)
             releases = releases.Take(limit.Value).ToList();
 
         return Ok(JsonSerializer.Serialize(releases, JsonDefaults));
@@ -344,7 +344,9 @@ public class HelmClient : IHelmClient
             var preEvent = isUpgrade ? HelmHookEvent.PreUpgrade : HelmHookEvent.PreInstall;
             await foreach (var hookLine in StreamWithFailureHandlingAsync(
                                hookExecutor.ExecuteHooksWithFailureHandlingAsync(hooks, preEvent, ns, operationToken),
-                               error => PersistFailedLifecycleAsync(store, WithHookExecution(releaseRecord, hooks), error, null, mainManifest, existingHistory, isUpgrade, request, ns)))
+                               // ReSharper disable once AccessToModifiedClosure // Recovery runs before the outer iterator advances or changes this operation state.
+                               error => PersistFailedLifecycleAsync(store, WithHookExecution(releaseRecord, hooks), error, null, mainManifest, existingHistory, isUpgrade, request, ns))
+                               .WithCancellation(operationToken))
             {
                 yield return hookLine;
             }
@@ -389,7 +391,9 @@ public class HelmClient : IHelmClient
             var postEvent = isUpgrade ? HelmHookEvent.PostUpgrade : HelmHookEvent.PostInstall;
             await foreach (var hookLine in StreamWithFailureHandlingAsync(
                                hookExecutor.ExecuteHooksWithFailureHandlingAsync(hooks, postEvent, ns, operationToken),
-                               error => PersistFailedLifecycleAsync(store, WithHookExecution(releaseRecord, hooks), error, applier, mainManifest, existingHistory, isUpgrade, request, ns)))
+                               // ReSharper disable once AccessToModifiedClosure // Recovery runs before the outer iterator advances or changes this operation state.
+                               error => PersistFailedLifecycleAsync(store, WithHookExecution(releaseRecord, hooks), error, applier, mainManifest, existingHistory, isUpgrade, request, ns))
+                               .WithCancellation(operationToken))
             {
                 yield return hookLine;
             }
@@ -540,7 +544,7 @@ public class HelmClient : IHelmClient
     /// merged on top; otherwise the provided overrides are used as-is.
     /// </summary>
     /// <exception cref="InvalidOperationException">Reuse-values was requested without an existing release.</exception>
-    internal static Dictionary<string, object?> ResolveUpgradeOverrides(
+    private static Dictionary<string, object?> ResolveUpgradeOverrides(
         IReadOnlyCollection<HelmReleaseRecord> history,
         bool isUpgrade,
         bool reuseValues,
@@ -1684,7 +1688,7 @@ public class HelmClient : IHelmClient
         var output = new StringBuilder();
         foreach (var hook in hooks)
         {
-            output.AppendLine($"---");
+            output.AppendLine("---");
             output.AppendLine($"# Hook: {hook.Name}");
             output.AppendLine($"# Events: {string.Join(", ", hook.Events)}");
             output.AppendLine($"# Weight: {hook.Weight}");
@@ -1799,7 +1803,7 @@ public class HelmClient : IHelmClient
                 try
                 {
                     await foreach (var line in hookExecutor.ExecuteHooksAsync(
-                        new List<HelmHook> { hook }, HelmHookEvent.Test, ns, operationToken))
+                        [hook], HelmHookEvent.Test, ns, operationToken))
                     {
                         output.AppendLine(line);
                     }
@@ -2447,8 +2451,8 @@ public class HelmClient : IHelmClient
             ["auth"] = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}"))
         };
 
-        var auths = config.ContainsKey("auths")
-            ? config["auths"] as Dictionary<string, object> ?? new Dictionary<string, object>()
+        var auths = config.TryGetValue("auths", out var authsValue)
+            ? authsValue as Dictionary<string, object> ?? new Dictionary<string, object>()
             : new Dictionary<string, object>();
 
         auths[$"https://{host}"] = credentials;
@@ -2646,7 +2650,7 @@ public class HelmClient : IHelmClient
         // Chart metadata
         output.AppendLine("---");
         output.AppendLine("# Chart.yaml");
-        output.AppendLine($"apiVersion: v2");
+        output.AppendLine("apiVersion: v2");
         output.AppendLine($"name: {chart.Name}");
         output.AppendLine($"version: {chart.Version}");
         if (chart.AppVersion is not null) output.AppendLine($"appVersion: {chart.AppVersion}");
@@ -2701,7 +2705,7 @@ public class HelmClient : IHelmClient
     public Task<CommandResult> EnvAsync(CancellationToken cancellationToken = default)
     {
         var output = new StringBuilder();
-        output.AppendLine($"HELM_DRIVER=secret");
+        output.AppendLine("HELM_DRIVER=secret");
         output.AppendLine($"HELM_NAMESPACE={Environment.GetEnvironmentVariable("HELM_NAMESPACE") ?? "default"}");
         output.AppendLine($"HELM_KUBECONFIG={Environment.GetEnvironmentVariable("HELM_KUBECONFIG") ?? "~/.kube/config"}");
         output.AppendLine($"HELM_CONFIG_HOME={Environment.GetEnvironmentVariable("HELM_CONFIG_HOME") ?? "~/.config/helm"}");
@@ -3058,11 +3062,11 @@ public class HelmClient : IHelmClient
             throw new ArgumentOutOfRangeException(nameof(request), "TimeoutSeconds must be greater than zero.");
         if (request.MaxHistory is < 0)
             throw new ArgumentOutOfRangeException(nameof(request), "MaxHistory cannot be negative.");
-        if (request.ReuseValues && request.ResetValues)
+        if (request is { ReuseValues: true, ResetValues: true })
             throw new ArgumentException("ReuseValues and ResetValues cannot both be enabled.", nameof(request));
-        if (request.WaitForJobs && !request.Wait && !request.Atomic)
+        if (request is { WaitForJobs: true, Wait: false, Atomic: false })
             throw new ArgumentException("WaitForJobs requires Wait or Atomic.", nameof(request));
-        if (request.ReuseValues && request.DryRun)
+        if (request is { ReuseValues: true, DryRun: true })
             throw new NotSupportedException("ReuseValues is not supported for DryRun because it requires stored release values.");
 
         var unsupported = new List<string>();
@@ -3124,7 +3128,7 @@ public class HelmClient : IHelmClient
             throw new ArgumentOutOfRangeException(nameof(request), "TimeoutSeconds must be greater than zero.");
         if (request.MaxHistory is < 0)
             throw new ArgumentOutOfRangeException(nameof(request), "MaxHistory cannot be negative.");
-        if (request.WaitForJobs && !request.Wait)
+        if (request is { WaitForJobs: true, Wait: false })
             throw new ArgumentException("WaitForJobs requires Wait.", nameof(request));
     }
 
@@ -3273,20 +3277,29 @@ public class HelmClient : IHelmClient
         string? requestKubeConfigContent,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var kubeConfigContent = requestKubeConfigContent ?? options.KubeConfigContent;
         if (!string.IsNullOrWhiteSpace(kubeConfigContent))
         {
             await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(kubeConfigContent));
-            return new Kubernetes(KubernetesClientConfiguration.BuildConfigFromConfigFile(stream));
+            var configuration = await KubernetesClientConfiguration
+                .BuildConfigFromConfigFileAsync(stream)
+                .ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            return new Kubernetes(configuration);
         }
 
         var kubeConfigPath = requestKubeConfigPath ?? options.KubeConfigPath;
         if (!string.IsNullOrWhiteSpace(kubeConfigPath))
         {
-            await using var stream = File.OpenRead(kubeConfigPath);
-            return new Kubernetes(KubernetesClientConfiguration.BuildConfigFromConfigFile(stream));
+            var configuration = await KubernetesClientConfiguration
+                .BuildConfigFromConfigFileAsync(new FileInfo(kubeConfigPath))
+                .ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            return new Kubernetes(configuration);
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         return new Kubernetes(KubernetesClientConfiguration.BuildDefaultConfig());
     }
 

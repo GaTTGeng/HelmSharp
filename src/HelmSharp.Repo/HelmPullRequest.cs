@@ -3,6 +3,10 @@ namespace HelmSharp.Repo;
 /// <summary>
 /// Describes a chart pull operation from a traditional chart repository or direct archive URL.
 /// </summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "PropertyCanBeMadeInitOnly.Global",
+    Justification = "Request properties remain mutable for callers that construct or update requests after initialization.")]
 public sealed class HelmPullRequest
 {
     /// <summary>Gets or sets the chart reference, such as <c>repo/chart</c> or an archive URL.</summary>

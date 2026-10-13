@@ -36,12 +36,20 @@ public class ApiVersionSetTests
     [Fact]
     public void NullKubeVersion_IncludesAllApiVersions()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test",
+            Version = "1.0.0",
+            ValuesYaml = "",
+            Templates =
+            {
+                ["templates/test.yaml"] = """
             v1: {{ .Capabilities.APIVersions.Has "v1" }}
             extensions-v1beta1: {{ .Capabilities.APIVersions.Has "extensions/v1beta1" }}
             batch-v1beta1: {{ .Capabilities.APIVersions.Has "batch/v1beta1" }}
-            """;
+            """
+            }
+        };
 
         // null kubeVersion → backward-compatible: include all
         var renderer = new HelmTemplateRenderer(chart, "rel", "ns",
@@ -56,13 +64,21 @@ public class ApiVersionSetTests
     [Fact]
     public void KubeVersion122_ExcludesApisRemovedBy122()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test",
+            Version = "1.0.0",
+            ValuesYaml = "",
+            Templates =
+            {
+                ["templates/test.yaml"] = """
             v1: {{ .Capabilities.APIVersions.Has "v1" }}
             extensions-v1beta1: {{ .Capabilities.APIVersions.Has "extensions/v1beta1" }}
             batch-v1beta1: {{ .Capabilities.APIVersions.Has "batch/v1beta1" }}
             autoscaling-v2beta2: {{ .Capabilities.APIVersions.Has "autoscaling/v2beta2" }}
-            """;
+            """
+            }
+        };
 
         // v1.22 removes extensions/v1beta1 but NOT batch/v1beta1 (removed 1.25) or autoscaling/v2beta2 (removed 1.26)
         var renderer = new HelmTemplateRenderer(chart, "rel", "ns",
@@ -78,14 +94,22 @@ public class ApiVersionSetTests
     [Fact]
     public void KubeVersion125_ExcludesApisRemovedBy125()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test",
+            Version = "1.0.0",
+            ValuesYaml = "",
+            Templates =
+            {
+                ["templates/test.yaml"] = """
             batch-v1beta1: {{ .Capabilities.APIVersions.Has "batch/v1beta1" }}
             events-v1beta1: {{ .Capabilities.APIVersions.Has "events.k8s.io/v1beta1" }}
             policy-v1beta1: {{ .Capabilities.APIVersions.Has "policy/v1beta1" }}
             rbac-v1alpha1: {{ .Capabilities.APIVersions.Has "rbac.authorization.k8s.io/v1alpha1" }}
             extensions-v1beta1: {{ .Capabilities.APIVersions.Has "extensions/v1beta1" }}
-            """;
+            """
+            }
+        };
 
         // v1.25 removes batch/v1beta1, events/v1beta1, policy/v1beta1, rbac/v1alpha1
         // (extensions/v1beta1 was already removed in 1.22)
@@ -103,8 +127,14 @@ public class ApiVersionSetTests
     [Fact]
     public void KubeVersion130_ExcludesEvenMore()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test",
+            Version = "1.0.0",
+            ValuesYaml = "",
+            Templates =
+            {
+                ["templates/test.yaml"] = """
             autoscaling-v2beta2: {{ .Capabilities.APIVersions.Has "autoscaling/v2beta2" }}
             autoscaling-v2beta1: {{ .Capabilities.APIVersions.Has "autoscaling/v2beta1" }}
             flowcontrol-v1beta2: {{ .Capabilities.APIVersions.Has "flowcontrol.apiserver.k8s.io/v1beta2" }}
@@ -112,7 +142,9 @@ public class ApiVersionSetTests
             storage-v1: {{ .Capabilities.APIVersions.Has "storage.k8s.io/v1" }}
             networking-v1alpha1: {{ .Capabilities.APIVersions.Has "networking.k8s.io/v1alpha1" }}
             batch-v1beta1: {{ .Capabilities.APIVersions.Has "batch/v1beta1" }}
-            """;
+            """
+            }
+        };
 
         // v1.30 excludes everything removed ≤1.30:
         // 1.26: autoscaling/v2beta2, autoscaling/v2beta1
@@ -135,11 +167,19 @@ public class ApiVersionSetTests
     [Fact]
     public void KubeVersion116_ExcludesRemovedBetaApis()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test",
+            Version = "1.0.0",
+            ValuesYaml = "",
+            Templates =
+            {
+                ["templates/test.yaml"] = """
             apps-v1beta1: {{ .Capabilities.APIVersions.Has "apps/v1beta1" }}
             apps-v1beta2: {{ .Capabilities.APIVersions.Has "apps/v1beta2" }}
-            """;
+            """
+            }
+        };
 
         // v1.16 removed apps/v1beta1 and apps/v1beta2
         var renderer = new HelmTemplateRenderer(chart, "rel", "ns",

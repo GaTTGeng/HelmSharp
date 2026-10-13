@@ -34,14 +34,14 @@ public class RealChartGoldenTests
     //  Test data — move charts between categories as the engine improves
     // ────────────────────────────────────────────────────────────
 
-    public static readonly TheoryData<string> AllCharts = new()
-    {
+    public static readonly TheoryData<string> AllCharts =
+    [
         "podinfo",
         "metrics-server",
         "external-dns",
         "ingress-nginx",
         "cert-manager",
-    };
+    ];
 
     [Fact]
     public void NormalizeDynamicValues_ReplacesRandAlphaNumSuffixes()
@@ -300,7 +300,7 @@ public class RealChartGoldenTests
     /// Replaces non-deterministic template output with stable placeholders
     /// so that byte-for-byte comparison works despite randAlphaNum etc.
     /// </summary>
-    internal static string NormalizeDynamicValues(string yaml)
+    private static string NormalizeDynamicValues(string yaml)
     {
         foreach (var (pattern, replacement) in DynamicPatterns)
             yaml = pattern.Replace(yaml, replacement);

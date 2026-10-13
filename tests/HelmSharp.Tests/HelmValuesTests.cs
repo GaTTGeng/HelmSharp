@@ -115,7 +115,7 @@ public class HelmValuesTests
                     cpu: 1m
                 """);
 
-            var result = await HelmValues.BuildAsync(chart, new[] { file }, null, null, null, null, null, CancellationToken.None);
+            var result = await HelmValues.BuildAsync(chart, [file], null, null, null, null, null, CancellationToken.None);
 
             var resources = Assert.IsType<Dictionary<string, object?>>(result["resources"]);
             Assert.True(resources.ContainsKey("limits"));
@@ -546,7 +546,7 @@ public class HelmValuesTests
             await File.WriteAllTextAsync(file1, "key1: from-file1\nkey2: from-file1");
             await File.WriteAllTextAsync(file2, "key1: from-file2\nkey3: from-file2");
 
-            var result = await HelmValues.BuildAsync(chart, new[] { file1, file2 }, null, null, null, null, null, CancellationToken.None);
+            var result = await HelmValues.BuildAsync(chart, [file1, file2], null, null, null, null, null, CancellationToken.None);
 
             Assert.Equal("from-file2", result["key1"]); // file2 overrides file1
             Assert.Equal("from-file1", result["key2"]); // only in file1, preserved
@@ -578,7 +578,7 @@ public class HelmValuesTests
             await File.WriteAllTextAsync(file, "key: from-file");
             await File.WriteAllTextAsync(Path.Combine(dir, "values2.yaml"), "key: should-not-load");
 
-            var result = await HelmValues.BuildAsync(chart, new[] { file }, null, null, null, null, null, CancellationToken.None);
+            var result = await HelmValues.BuildAsync(chart, [file], null, null, null, null, null, CancellationToken.None);
 
             Assert.Equal("from-file", result["key"]);
         }

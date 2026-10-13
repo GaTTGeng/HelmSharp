@@ -234,7 +234,7 @@ public sealed class KubernetesResourceWaiterTests
         var handler = new KubernetesApiHandler();
         var waiter = new KubernetesResourceWaiter(KubernetesTestClientBuilder.Create(handler));
         using var cancellationSource = new CancellationTokenSource();
-        cancellationSource.Cancel();
+        await cancellationSource.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => AsyncEnumerableTestExtensions.DrainAsync(waiter.WaitForReadyAsync("""
             apiVersion: apps/v1
@@ -550,7 +550,7 @@ public sealed class KubernetesResourceWaiterTests
         var handler = new KubernetesApiHandler();
         var waiter = new KubernetesResourceWaiter(KubernetesTestClientBuilder.Create(handler));
         using var cancellationSource = new CancellationTokenSource();
-        cancellationSource.Cancel();
+        await cancellationSource.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => AsyncEnumerableTestExtensions.DrainAsync(waiter.WaitForDeletedAsync("""
             apiVersion: v1

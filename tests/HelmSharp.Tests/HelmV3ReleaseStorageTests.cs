@@ -183,7 +183,7 @@ public class HelmV3ReleaseStorageTests
             },
             Data = new Dictionary<string, byte[]>
             {
-                ["release"] = Encoding.UTF8.GetBytes("not-base64")
+                ["release"] = "not-base64"u8.ToArray()
             }
         };
 
@@ -325,19 +325,19 @@ public class HelmV3ReleaseStorageTests
             Digest = "sha256:child"
         });
         chart.Templates["templates/configmap.yaml"] = "apiVersion: v1\nkind: ConfigMap\n";
-        chart.Files["values.schema.json"] = Encoding.UTF8.GetBytes("{\"type\":\"object\"}");
-        chart.Files["README.md"] = Encoding.UTF8.GetBytes("# Fresh chart\n");
+        chart.Files["values.schema.json"] = "{\"type\":\"object\"}"u8.ToArray();
+        chart.Files["README.md"] = "# Fresh chart\n"u8.ToArray();
         chart.Files["assets/blob.bin"] = [0x00, 0x7f, 0xff];
-        chart.Files["Chart.lock"] = Encoding.UTF8.GetBytes("digest: sha256:lock\n");
+        chart.Files["Chart.lock"] = "digest: sha256:lock\n"u8.ToArray();
         var child = new HelmChart
         {
             ApiVersion = "v2",
             Name = "child",
             Version = "1.2.0",
-            ValuesYaml = "childDefault: true\n"
+            ValuesYaml = "childDefault: true\n",
+            Templates = { ["templates/child.yaml"] = "apiVersion: v1\nkind: ConfigMap\n" },
+            Files = { ["README.md"] = "# Child chart\n"u8.ToArray() }
         };
-        child.Templates["templates/child.yaml"] = "apiVersion: v1\nkind: ConfigMap\n";
-        child.Files["README.md"] = Encoding.UTF8.GetBytes("# Child chart\n");
         chart.Subcharts["child-alias"] = child;
         chart.Crds.Add(new Dictionary<string, object?>
         {

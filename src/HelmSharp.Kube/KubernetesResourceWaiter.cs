@@ -441,7 +441,7 @@ public sealed class KubernetesResourceWaiter
             cancellationToken: ct);
         var newReplicaSet = replicaSets.Items
             .Where(replicaSet => replicaSet.Metadata.OwnerReferences?.Any(owner =>
-                owner.Uid == deploy.Metadata.Uid && owner.Kind == "Deployment" && owner.Controller == true) == true)
+                owner is { Uid: var uid, Kind: "Deployment", Controller: true } && uid == deploy.Metadata.Uid) == true)
             .Where(replicaSet => PodTemplatesMatch(replicaSet.Spec.Template, deploy.Spec.Template))
             .OrderBy(replicaSet => replicaSet.Metadata.CreationTimestamp)
             .ThenBy(replicaSet => replicaSet.Metadata.Name, StringComparer.Ordinal)

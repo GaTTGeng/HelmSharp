@@ -252,11 +252,6 @@ internal static class HelmCliRunner
         home ??= ownedHome!;
 
         using var process = new Process();
-        using var timeoutSource = new CancellationTokenSource(timeout);
-        using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken,
-            timeoutSource.Token);
-
         process.StartInfo = new ProcessStartInfo
         {
             FileName = "helm",
@@ -267,6 +262,11 @@ internal static class HelmCliRunner
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8
         };
+        using var timeoutSource = new CancellationTokenSource(timeout);
+        using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            timeoutSource.Token);
+
         process.StartInfo.Environment["HELM_CONFIG_HOME"] = home.ConfigHome;
         process.StartInfo.Environment["HELM_CACHE_HOME"] = home.CacheHome;
         process.StartInfo.Environment["HELM_DATA_HOME"] = home.DataHome;
@@ -282,8 +282,8 @@ internal static class HelmCliRunner
             if (!process.Start())
                 throw new InvalidOperationException("Failed to start Helm CLI.");
 
-            var stdout = process.StandardOutput.ReadToEndAsync();
-            var stderr = process.StandardError.ReadToEndAsync();
+            var stdout = process.StandardOutput.ReadToEndAsync(linkedSource.Token);
+            var stderr = process.StandardError.ReadToEndAsync(linkedSource.Token);
 
             try
             {

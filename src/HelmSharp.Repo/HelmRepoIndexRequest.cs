@@ -5,6 +5,10 @@ namespace HelmSharp.Repo;
 /// <summary>
 /// Describes generation of a Helm repository index.
 /// </summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "PropertyCanBeMadeInitOnly.Global",
+    Justification = "Request properties remain mutable for callers that construct or update requests after initialization.")]
 public sealed class HelmRepoIndexRequest
 {
     /// <summary>Gets or sets the directory containing chart archives.</summary>

@@ -70,7 +70,9 @@ public class HelmPluginManager
             {
                 var tempFile = Path.GetTempFileName();
                 await File.WriteAllBytesAsync(tempFile, await response.Content.ReadAsByteArrayAsync(ct), ct);
-                System.IO.Compression.ZipFile.ExtractToDirectory(tempFile, pluginDir, true);
+                // The supported target frameworks do not provide an async ZIP extraction API.
+                // ReSharper disable once MethodHasAsyncOverloadWithCancellation
+                System.IO.Compression.ZipFile.ExtractToDirectory(tempFile, pluginDir, overwriteFiles: true);
                 File.Delete(tempFile);
             }
             else
@@ -293,8 +295,7 @@ public class HelmPluginManager
             return true;
         }
 
-        return stem.Length == 4 &&
-               stem[3] is >= '1' and <= '9' &&
+        return stem is [_, _, _, >= '1' and <= '9'] &&
                (stem.StartsWith("COM", StringComparison.OrdinalIgnoreCase) ||
                 stem.StartsWith("LPT", StringComparison.OrdinalIgnoreCase));
     }
@@ -316,7 +317,7 @@ public class HelmPluginManager
 }
 
 /// <summary>Metadata describing an installed plugin.</summary>
-// ReSharper disable UnusedAutoPropertyAccessor.Global // Public result getters are consumed by library callers.
+// ReSharper disable UnusedAutoPropertyAccessor.Global, PropertyCanBeMadeInitOnly.Global // Public result setters are consumed by library callers.
 public class HelmPluginInfo
 {
     /// <summary>Plugin directory name; the identifier used with run/uninstall.</summary>

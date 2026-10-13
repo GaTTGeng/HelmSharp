@@ -21,7 +21,7 @@ internal static class HelmChartPackager
         UnixFileMode.OtherRead;
 
     private static readonly Regex ChartNamePattern = new(
-        @"^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+        "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     private static readonly Regex VersionPattern = new(

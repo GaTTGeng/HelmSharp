@@ -317,20 +317,13 @@ public sealed class OperationRequestTests : IDisposable
         }
     }
 
-    private sealed class StaticHelmOptionsProvider : IHelmOptionsProvider
+    private sealed class StaticHelmOptionsProvider(HelmChartArchiveLimits? archiveLimits = null) : IHelmOptionsProvider
     {
-        private readonly HelmChartArchiveLimits? _archiveLimits;
-
-        public StaticHelmOptionsProvider(HelmChartArchiveLimits? archiveLimits = null)
-        {
-            _archiveLimits = archiveLimits;
-        }
-
         public ValueTask<HelmExecutionOptions> GetHelmAsync(CancellationToken cancellationToken = default)
             => ValueTask.FromResult(new HelmExecutionOptions
             {
                 DefaultNamespace = "default",
-                ArchiveLimits = _archiveLimits
+                ArchiveLimits = archiveLimits
             });
     }
 

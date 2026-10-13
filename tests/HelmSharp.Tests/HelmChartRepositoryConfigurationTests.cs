@@ -34,11 +34,10 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
         var repositories = await reloadedRepository.ListRepositoriesAsync();
 
         Assert.Equal(
-            new[]
-            {
+            [
                 ("private", "https://private.example.test", "alice", "secret"),
                 ("stable", "https://charts.example.test", null, null)
-            },
+            ],
             repositories.Select(repository =>
                 (repository.Name, repository.Url, repository.Username, repository.Password)));
         var config = await File.ReadAllTextAsync(reloadedRepository.RepositoryConfigPath);
@@ -563,7 +562,7 @@ public sealed class HelmChartRepositoryConfigurationTests : IDisposable
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => HelmChartRepository.WriteAllTextAtomicallyAsync(path, "new-index", cts.Token));
 
-        Assert.Equal("old-index", await File.ReadAllTextAsync(path));
+        Assert.Equal("old-index", await File.ReadAllTextAsync(path, CancellationToken.None));
     }
 
     [Fact]

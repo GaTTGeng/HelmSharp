@@ -15,10 +15,7 @@ internal static class EncodingHelpers
     /// <see cref="byte"/> arrays are encoded directly without re-encoding.
     /// </summary>
     public static string Base64Encode(object? value)
-        => Convert.ToBase64String(
-            value is byte[] bytes
-                ? bytes
-                : Encoding.UTF8.GetBytes(TypeConverters.ToTemplateString(value)));
+        => Convert.ToBase64String(value as byte[] ?? Encoding.UTF8.GetBytes(TypeConverters.ToTemplateString(value)));
 
     /// <summary>Sprig <c>sha1sum</c>: lowercase hex SHA-1 of the UTF-8 bytes.</summary>
     public static string Sha1Sum(string value)
@@ -149,12 +146,4 @@ internal static class EncodingHelpers
         return sb.ToString();
     }
 
-    /// <summary>
-    /// Sprig <c>expandenv</c>: replaces <c>%NAME%</c> (Windows) and <c>$NAME</c>/<c>${NAME}</c>
-    /// style placeholders with process environment variables. Placeholder syntax follows
-    /// .NET's <see cref="Environment.ExpandEnvironmentVariables"/>, which differs from
-    /// Go's <c>os.ExpandEnv</c> (<c>$NAME</c> only) on Windows-style names.
-    /// </summary>
-    public static string ExpandEnv(string input)
-        => Environment.ExpandEnvironmentVariables(input);
 }

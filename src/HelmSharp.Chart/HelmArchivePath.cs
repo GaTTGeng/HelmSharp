@@ -99,6 +99,6 @@ internal static partial class HelmArchivePath
         return destination;
     }
 
-    [GeneratedRegex(@"^[A-Za-z]:($|/)", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("^[A-Za-z]:($|/)", RegexOptions.CultureInvariant)]
     private static partial Regex DriveQualifiedPathPattern();
 }

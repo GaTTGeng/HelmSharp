@@ -6,6 +6,14 @@ namespace HelmSharp.Storage;
 /// Persists release records for the Helm release lifecycle (the storage half of
 /// Helm's Kubernetes Secret-backed release store).
 /// </summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "UnusedMember.Global",
+    Justification = "This public storage extension point is implemented and consumed by downstream integrations outside this solution.")]
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "UnusedParameter.Global",
+    Justification = "These contract parameters are consumed by downstream store implementations outside this solution.")]
 public interface IHelmReleaseStore
 {
     /// <summary>Stores a release record, creating or replacing its Secret entry.</summary>
@@ -34,6 +42,14 @@ public interface IHelmReleaseStore
 /// Extends <see cref="IHelmReleaseStore"/> with hard deletion of every record for a release
 /// (equivalent to <c>helm uninstall --purge</c>).
 /// </summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "UnusedMember.Global",
+    Justification = "This optional public capability is implemented by downstream stores outside this solution.")]
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "UnusedParameter.Global",
+    Justification = "These contract parameters are consumed by downstream store implementations outside this solution.")]
 public interface IHelmReleasePurgeStore : IHelmReleaseStore
 {
     /// <summary>Deletes all stored revisions for the release.</summary>

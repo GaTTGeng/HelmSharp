@@ -1,5 +1,7 @@
 namespace HelmSharp.Engine;
 
+// ReSharper disable PropertyCanBeMadeInitOnly.Global, AutoPropertyCanBeMadeGetOnly.Global, UnusedAutoPropertyAccessor.Global, CollectionNeverUpdated.Global // AST setters and collections are parser/consumer mutation points retained for API compatibility.
+
 /// <summary>
 /// Base class for all AST nodes in a parsed Helm/Go template.
 /// </summary>
@@ -98,7 +100,7 @@ public sealed class TemplateDocumentNode : TemplateNode
                 SerializeChildren(sb, eiDoc.Children);
         }
 
-        if (block.FalseBody is TemplateDocumentNode falseDoc && falseDoc.Children.Count > 0)
+        if (block.FalseBody is TemplateDocumentNode { Children.Count: > 0 } falseDoc)
         {
             sb.Append("{{ else }}");
             SerializeChildren(sb, falseDoc.Children);

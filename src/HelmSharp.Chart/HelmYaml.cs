@@ -73,8 +73,7 @@ public static class HelmYaml
         var merges = new List<Dictionary<string, object?>>();
         foreach (var (keyNode, valueNode) in mapping.Children)
         {
-            if (keyNode is YamlScalarNode scalarKey
-                && scalarKey.Value == "<<")
+            if (keyNode is YamlScalarNode { Value: "<<" })
             {
                 // YAML merge key: << : *anchor  or  << : [ *a, *b ]
                 if (valueNode is YamlMappingNode mergeMapping)
@@ -102,8 +101,7 @@ public static class HelmYaml
         // Apply explicit keys (highest precedence)
         foreach (var (keyNode, valueNode) in mapping.Children)
         {
-            if (keyNode is YamlScalarNode scalarKey
-                && scalarKey.Value == "<<")
+            if (keyNode is YamlScalarNode { Value: "<<" })
                 continue; // already handled above
 
             var key = keyNode is YamlScalarNode sk
@@ -272,6 +270,7 @@ public static class HelmYaml
     /// Converts parser-shaped graphs (object-keyed dictionaries, nested lists) into
     /// the string-keyed dictionary / list shapes the rest of the library consumes.
     /// </summary>
+    // ReSharper disable once MemberCanBePrivate.Global // Normalize is part of the public YAML helper API.
     public static object? Normalize(object? value)
     {
         return value switch

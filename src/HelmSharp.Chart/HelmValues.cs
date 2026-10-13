@@ -325,6 +325,10 @@ public static class HelmValues
     /// Equivalent to calling <see cref="BuildAsync(HelmChart,IEnumerable{string}?,string?,Dictionary{string,string}?,Dictionary{string,string}?,Dictionary{string,string}?,Dictionary{string,string}?,CancellationToken)"/>
     /// with a single-element enumerable when <paramref name="valuesFile"/> is non-null.
     /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "ReSharper",
+        "UnusedMember.Global",
+        Justification = "This public convenience overload is part of the supported values-building API for external callers.")]
     public static Task<Dictionary<string, object?>> BuildAsync(
         HelmChart chart,
         string? valuesFile,
@@ -346,6 +350,10 @@ public static class HelmValues
     /// <param name="subchart">Subchart whose values.yaml supplies the defaults.</param>
     /// <param name="parentValues">Parent chart's coalesced values.</param>
     /// <param name="subchartName">Key under which the subchart is scoped in parent values (dependency name or alias).</param>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "ReSharper",
+        "UnusedMember.Global",
+        Justification = "This public helper is part of the supported API for callers that prepare values for a subchart.")]
     public static Dictionary<string, object?> BuildSubchartValues(
         HelmChart subchart,
         Dictionary<string, object?> parentValues,
@@ -454,8 +462,8 @@ public static class HelmValues
         }
 
         // Last segment — if it has an index, set directly in the list element
-        var lastName = matches[matches.Count - 1].Groups[1].Value;
-        var lastIndexGroup = matches[matches.Count - 1].Groups[2];
+        var lastName = matches[^1].Groups[1].Value;
+        var lastIndexGroup = matches[^1].Groups[2];
 
         if (lastIndexGroup.Success)
         {
@@ -532,11 +540,13 @@ public static class HelmValues
             var yamlValue = HelmYaml.DeserializeAny(value);
             // DeserializeAny returns null for bare null/~, but for scalar coercion
             // we only want structured types; a bare string "hello" would also parse to "hello"
-            if (yamlValue is not string || value.StartsWith('"') || value.StartsWith('\''))
+            if (yamlValue is not string str)
+                return yamlValue;
+
+            if (value.StartsWith('"') || value.StartsWith('\''))
                 return yamlValue;
 
             // If YAML returned a string identical to input (no quotes), try scalar coercion
-            var str = (string)yamlValue;
             // bool
             if (bool.TryParse(str, out var b)) return b;
             // long

@@ -73,7 +73,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
 
         AssertOperationSucceeded("helm repo index", helmResult);
         var helmIndexPath = Path.Combine(helmRepoDir, "index.yaml");
-        var sharpIndexYaml = File.ReadAllText(sharpIndexPath, Encoding.UTF8);
+        var sharpIndexYaml = await File.ReadAllTextAsync(sharpIndexPath, Encoding.UTF8);
         var sharpIndex = ReadIndexSnapshot(sharpIndexPath, "repo-golden");
         var helmIndex = ReadIndexSnapshot(helmIndexPath, "repo-golden");
 
@@ -341,8 +341,8 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
             mergeIndexPath: helmExistingIndex);
         AssertOperationSucceeded("helm repo index metadata-name merge", helmMerged);
 
-        var sharpIndex = HelmYaml.DeserializeDictionary(File.ReadAllText(sharpIndexPath, Encoding.UTF8));
-        var helmIndex = HelmYaml.DeserializeDictionary(File.ReadAllText(Path.Combine(helmRepoDir, "index.yaml"), Encoding.UTF8));
+        var sharpIndex = HelmYaml.DeserializeDictionary(await File.ReadAllTextAsync(sharpIndexPath, Encoding.UTF8));
+        var helmIndex = HelmYaml.DeserializeDictionary(await File.ReadAllTextAsync(Path.Combine(helmRepoDir, "index.yaml"), Encoding.UTF8));
         var sharpEntries = Assert.IsAssignableFrom<IDictionary<string, object?>>(sharpIndex["entries"]);
         var helmEntries = Assert.IsAssignableFrom<IDictionary<string, object?>>(helmIndex["entries"]);
         Assert.DoesNotContain("stale-entry-key", sharpEntries.Keys);
@@ -509,7 +509,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
             "https://repo.example.test/base",
             CancellationToken.None);
 
-        var index = HelmYaml.DeserializeDictionary(File.ReadAllText(result.IndexPath, Encoding.UTF8));
+        var index = HelmYaml.DeserializeDictionary(await File.ReadAllTextAsync(result.IndexPath, Encoding.UTF8));
         var entries = Assert.IsAssignableFrom<IDictionary<string, object?>>(index["entries"]);
         Assert.True(entries.ContainsKey("repo-minimal"));
         Assert.Equal(
@@ -1777,7 +1777,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
     {
         var lockFile = HelmYaml.DeserializeDictionary(File.ReadAllText(Path.Combine(chartPath, "Chart.lock")));
         var dependencies = Assert.IsAssignableFrom<IList<object?>>(lockFile["dependencies"])
-            .Select(dependency => Assert.IsAssignableFrom<IDictionary<string, object?>>(dependency))
+            .Select(Assert.IsAssignableFrom<IDictionary<string, object?>>)
             .Select(dependency => new LockedDependencySnapshot(
                 HelmYaml.GetString(dependency, "name") ?? string.Empty,
                 HelmYaml.GetString(dependency, "repository") ?? string.Empty,
@@ -1909,10 +1909,8 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
         var entries = new List<ArchiveEntrySnapshot>();
         await using var file = File.OpenRead(packagePath);
         await using var gzip = new GZipStream(file, CompressionMode.Decompress);
-        using var reader = new TarReader(gzip);
-
-        TarEntry? entry;
-        while ((entry = reader.GetNextEntry()) is not null)
+        await using var reader = new TarReader(gzip);
+        while (await reader.GetNextEntryAsync().ConfigureAwait(false) is { } entry)
         {
             var hash = string.Empty;
             var size = 0L;
@@ -2167,7 +2165,7 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
 
         public async ValueTask DisposeAsync()
         {
-            _cancellation.Cancel();
+            await _cancellation.CancelAsync();
             _listener.Stop();
             await _serverTask;
             _cancellation.Dispose();

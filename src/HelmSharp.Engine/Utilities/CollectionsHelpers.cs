@@ -44,7 +44,7 @@ internal static class CollectionsHelpers
     public static object? SortAlpha(object? value)
     {
         if (value is IList<object?> list)
-            return list.OrderBy(x => TypeConverters.ToTemplateString(x), StringComparer.Ordinal).ToList();
+            return list.OrderBy(TypeConverters.ToTemplateString, StringComparer.Ordinal).ToList();
         return value;
     }
 
@@ -252,7 +252,7 @@ internal static class CollectionsHelpers
     public static object MustSortAlpha(object? value)
     {
         if (value is IList<object?> list)
-            return list.OrderBy(x => TypeConverters.ToTemplateString(x), StringComparer.Ordinal).ToList();
+            return list.OrderBy(TypeConverters.ToTemplateString, StringComparer.Ordinal).ToList();
         throw new InvalidOperationException("mustSortAlpha: argument is not a list");
     }
 

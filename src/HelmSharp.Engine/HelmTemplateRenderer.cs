@@ -76,6 +76,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
     /// overrides). Values are copied and merged with chart defaults by
     /// <see cref="HelmValues.PrepareForRender"/>.
     /// </summary>
+    // ReSharper disable IntroduceOptionalParameters.Global // Keep the fresh-install overload distinct from the full environment-control constructor.
     public HelmTemplateRenderer(
         HelmChart chart,
         string releaseName,
@@ -126,6 +127,8 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             DependencyNode = _dependencyGraph
         };
     }
+
+    // ReSharper restore IntroduceOptionalParameters.Global
 
     /// <summary>
     /// Renders all non-helper templates in the chart.
@@ -296,7 +299,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         if (string.IsNullOrEmpty(kind))
             return int.MaxValue;
 
-        return InstallOrder.TryGetValue(kind, out var order) ? order : int.MaxValue;
+        return InstallOrder.GetValueOrDefault(kind, int.MaxValue);
     }
 
     /// <summary>
@@ -739,8 +742,8 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
 
     private static bool IsAllWhitespace(string value)
     {
-        for (var i = 0; i < value.Length; i++)
-            if (!char.IsWhiteSpace(value[i]))
+        foreach (var character in value)
+            if (!char.IsWhiteSpace(character))
                 return false;
         return true;
     }
@@ -777,16 +780,9 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         if (expr is "else" or "else if" or "end")
             return $"{{{{ {expr} }}}}";
 
-        string rendered;
-
-        if (TryAssignVariable(expr, context, out var assigned))
-        {
-            rendered = assigned;
-        }
-        else
-        {
-            rendered = TypeConverters.ToTemplateString(EvaluatePipeline(expr, context));
-        }
+        var rendered = TryAssignVariable(expr, context, out var assigned)
+            ? assigned
+            : TypeConverters.ToTemplateString(EvaluatePipeline(expr, context));
 
         return rendered;
     }
@@ -1815,7 +1811,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
         private static readonly Regex DateLikeScalarRegex = new(
-            @"^[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[Tt ].*)?$",
+            "^[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[Tt ].*)?$",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
         private readonly Dictionary<string, byte[]> _files;

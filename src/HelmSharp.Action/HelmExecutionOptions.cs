@@ -2,7 +2,7 @@ using HelmSharp.Chart;
 
 namespace HelmSharp.Action;
 
-// ReSharper disable UnusedAutoPropertyAccessor.Global // Public option setters are consumed by library callers.
+// ReSharper disable UnusedAutoPropertyAccessor.Global, PropertyCanBeMadeInitOnly.Global, UnusedMember.Global // Public option setters and settings are consumed by library callers.
 public class HelmExecutionOptions
 {
     public string? KubeConfigPath { get; set; }

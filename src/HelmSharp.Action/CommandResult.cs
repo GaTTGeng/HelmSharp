@@ -1,5 +1,6 @@
 namespace HelmSharp.Action;
 
+// ReSharper disable PropertyCanBeMadeInitOnly.Global // Results remain mutable for consumers of the public API.
 /// <summary>
 /// Captures the outcome of a Helm operation as a CLI-style result: exit code plus
 /// captured standard output and error streams.
@@ -18,3 +19,4 @@ public class CommandResult
     /// <summary>True when <see cref="ExitCode"/> is zero.</summary>
     public bool Succeeded => ExitCode == 0;
 }
+// ReSharper restore PropertyCanBeMadeInitOnly.Global

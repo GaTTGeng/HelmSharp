@@ -1,5 +1,6 @@
 namespace HelmSharp.Action;
 
+// ReSharper disable PropertyCanBeMadeInitOnly.Global, UnusedMember.Global // Public request setters and Helm-compatible enum values are API surface.
 public class HelmUninstallRequest
 {
     /// <summary>Gets or sets the name of the release to uninstall.</summary>
@@ -39,6 +40,7 @@ public class HelmUninstallRequest
 
     public string? KubeConfigContent { get; set; }
 }
+// ReSharper restore PropertyCanBeMadeInitOnly.Global, UnusedMember.Global
 
 /// <summary>Kubernetes owner-reference propagation preference for release deletion.</summary>
 public enum HelmDeletionPropagation
@@ -50,5 +52,6 @@ public enum HelmDeletionPropagation
     Foreground,
 
     /// <summary>Delete the owner while leaving dependents orphaned.</summary>
+    // ReSharper disable once UnusedMember.Global // Helm exposes this propagation choice for compatibility.
     Orphan
 }

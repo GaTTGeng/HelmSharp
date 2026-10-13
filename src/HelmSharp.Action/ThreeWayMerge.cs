@@ -7,6 +7,14 @@ namespace HelmSharp.Action;
 /// Compares: last deployed manifest vs new manifest vs live resource.
 /// Preserves manual modifications that don't conflict with the new manifest.
 /// </summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "UnusedType.Global",
+    Justification = "The isolated merge helper is retained for a future upgrade lifecycle integration.")]
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "UnusedMember.Global",
+    Justification = "The isolated merge entry point is retained for a future upgrade lifecycle integration.")]
 internal static class ThreeWayMerge
 {
     /// <summary>
@@ -124,7 +132,7 @@ internal static class ThreeWayMerge
     /// long/int/double with a small epsilon for doubles so YAML type inference differences
     /// (e.g. an int in one document, a double in another) do not count as drift.
     /// </summary>
-    internal static bool DeepEquals(object? a, object? b)
+    private static bool DeepEquals(object? a, object? b)
     {
         if (a is null && b is null) return true;
         if (a is null || b is null) return false;

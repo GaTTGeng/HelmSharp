@@ -3,6 +3,7 @@ using System.Text;
 
 namespace HelmSharp.Action;
 
+// ReSharper disable UnusedType.Global, UnusedMember.Global // Public provenance helpers are available to callers independently of HelmClient.
 /// <summary>
 /// Chart provenance — generates and verifies .prov files for chart integrity.
 /// A .prov file contains: chart metadata hash, signature, and pgp info.
@@ -47,7 +48,7 @@ public static class HelmProvenance
             provContent.AppendLine($"pgpKeyID: {keyId}");
 
         provContent.AppendLine("-----BEGIN PGP SIGNATURE-----");
-        provContent.AppendLine($"comment: HelmSharp managed provenance");
+        provContent.AppendLine("comment: HelmSharp managed provenance");
         provContent.AppendLine();
         provContent.AppendLine(Convert.ToBase64String(SHA512.HashData(chartBytes)));
         provContent.AppendLine("-----END PGP SIGNATURE-----");
@@ -85,6 +86,7 @@ public static class HelmProvenance
     /// Extracts the SHA256 hash from a .prov file (the hex value following the
     /// <c>sha256:</c> key), or null when the key is absent.
     /// </summary>
+    // ReSharper disable once MemberCanBePrivate.Global // ExtractSha256 is part of the public provenance helper API.
     public static string? ExtractSha256(string provContent)
     {
         foreach (var line in provContent.Split('\n'))

@@ -819,7 +819,7 @@ public sealed class HelmChartRepository : IDisposable
            && string.Equals(left.IdnHost, right.IdnHost, StringComparison.OrdinalIgnoreCase)
            && left.Port == right.Port;
 
-    internal async Task<HelmChartVersion> ResolveChartVersionAsync(
+    private async Task<HelmChartVersion> ResolveChartVersionAsync(
         string repoUrl,
         string chartName,
         string? versionConstraint = null,
@@ -1130,18 +1130,17 @@ public sealed class HelmChartRepository : IDisposable
     {
         ArgumentNullException.ThrowIfNull(archiveLimits);
         var budget = new ChartArchiveBudget(archiveLimits);
-        using var memoryStream = new MemoryStream(chartBytes, writable: false);
-        using var gzip = new GZipStream(memoryStream, CompressionMode.Decompress);
+        await using var memoryStream = new MemoryStream(chartBytes, writable: false);
+        await using var gzip = new GZipStream(memoryStream, CompressionMode.Decompress);
         var scope = budget.BeginArchive(chartBytes.Length);
         // Meter every decompressed byte the tar reader consumes — headers and padding
         // included — so structural tar data cannot be decompressed outside the budgets.
-        using var metered = scope.MeterDecompressedStream(gzip);
-        using var guarded = scope.GuardTarStream(metered);
-        using var tar = new TarReader(guarded);
+        await using var metered = scope.MeterDecompressedStream(gzip);
+        await using var guarded = scope.GuardTarStream(metered);
+        await using var tar = new TarReader(guarded);
 
         var archiveFiles = new List<ArchiveFileEntry>();
-        TarEntry? entry;
-        while ((entry = tar.GetNextEntry()) is not null)
+        while (await tar.GetNextEntryAsync(cancellationToken: cancellationToken) is { } entry)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (entry.EntryType is TarEntryType.Directory || entry.DataStream is null)
@@ -1453,8 +1452,7 @@ public sealed class HelmChartRepository : IDisposable
 
     private static bool IsPortableFileNameCharacter(char character)
         => character >= ' '
-           && character is not '<' and not '>' and not ':' and not '"'
-           && character is not '/' and not '\\' and not '|' and not '?' and not '*';
+           && character is not ('<' or '>' or ':' or '"' or '/' or '\\' or '|' or '?' or '*');
 
     internal static string GetRepositoryConfigLockPath(string repositoryConfigPath)
     {
@@ -1684,7 +1682,7 @@ public sealed class HelmChartRepository : IDisposable
         putResponse.EnsureSuccessStatusCode();
 
         // Step 2: Upload config (empty OCI config)
-        var configBytes = Encoding.UTF8.GetBytes("{}");
+        var configBytes = "{}"u8.ToArray();
         var configDigest = Convert.ToHexString(SHA256.HashData(configBytes)).ToLowerInvariant();
 
         var configBlobUrl = $"https://{registry}/v2/{repository}/blobs/uploads/";
@@ -1762,6 +1760,10 @@ public sealed class HelmChartRepository : IDisposable
 /// <summary>
 /// A chart repository entry from the Helm-compatible <c>repositories.yaml</c> configuration.
 /// </summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "PropertyCanBeMadeInitOnly.Global",
+    Justification = "Repository configuration properties remain mutable for Helm-compatible configuration loading and callers.")]
 public class HelmRepository
 {
     /// <summary>Short name used in <c>repo/chart</c> references.</summary>
@@ -1802,6 +1804,14 @@ public class HelmRepository
     "ReSharper",
     "UnusedAutoPropertyAccessor.Global",
     Justification = "These public model accessors are consumed by serializers and callers outside this assembly.")]
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "PropertyCanBeMadeInitOnly.Global",
+    Justification = "These public serialized index properties remain mutable for Helm-compatible deserialization and callers.")]
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "AutoPropertyCanBeMadeGetOnly.Global",
+    Justification = "The serializer populates this public index property during Helm-compatible deserialization.")]
 public class HelmRepoIndex
 {
     /// <summary>Index format version; Helm emits <c>v1</c>.</summary>
@@ -1821,6 +1831,10 @@ public class HelmRepoIndex
     "ReSharper",
     "UnusedAutoPropertyAccessor.Global",
     Justification = "These public model accessors are consumed by serializers and callers outside this assembly.")]
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "PropertyCanBeMadeInitOnly.Global",
+    Justification = "These public serialized version properties remain mutable for Helm-compatible deserialization and callers.")]
 public class HelmChartVersion
 {
     /// <summary>Chart name.</summary>
@@ -1852,6 +1866,10 @@ public class HelmChartVersion
     "ReSharper",
     "UnusedAutoPropertyAccessor.Global",
     Justification = "These public result accessors are consumed by callers outside this assembly.")]
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "ReSharper",
+    "PropertyCanBeMadeInitOnly.Global",
+    Justification = "These public result properties remain mutable for callers that update search results after construction.")]
 public class HelmChartSearchResult
 {
     /// <summary>Chart name, prefixed with <c>repo/</c> when searching all configured repositories.</summary>

@@ -513,11 +513,10 @@ public static class HelmChartLoader
 
         // Meter every decompressed byte the tar reader consumes — headers and padding
         // included — so structural tar data cannot be decompressed outside the budgets.
-        using var metered = scope.MeterDecompressedStream(archive);
-        using var guarded = scope.GuardTarStream(metered);
-        using var reader = new TarReader(guarded);
-        TarEntry? entry;
-        while ((entry = reader.GetNextEntry()) is not null)
+        await using var metered = scope.MeterDecompressedStream(archive);
+        await using var guarded = scope.GuardTarStream(metered);
+        await using var reader = new TarReader(guarded);
+        while (await reader.GetNextEntryAsync(cancellationToken: cancellationToken).ConfigureAwait(false) is { } entry)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (entry.EntryType is TarEntryType.Directory || entry.DataStream is null)
@@ -603,7 +602,7 @@ public static class HelmChartLoader
     /// Normalizes a path to forward slashes without a leading slash so archive and
     /// directory entries share one key format.
     /// </summary>
-    internal static string NormalizePath(string path)
+    private static string NormalizePath(string path)
         => path.Replace('\\', '/').TrimStart('/');
 
     private static bool IsEmbeddedDependencyArchivePath(string path)

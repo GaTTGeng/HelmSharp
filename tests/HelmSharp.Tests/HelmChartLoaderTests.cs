@@ -1,6 +1,5 @@
 using System.Formats.Tar;
 using System.IO.Compression;
-using System.Text;
 using HelmSharp.Chart;
 using HelmSharp.Engine;
 
@@ -36,7 +35,7 @@ public class HelmChartLoaderTests : IDisposable
     public async Task LoadAsync_ParsesDependencies()
     {
         var chartDir = CreateChartDir("my-app", "1.0.0");
-        File.WriteAllText(Path.Combine(chartDir, "Chart.yaml"), """
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "Chart.yaml"), """
             apiVersion: v2
             name: my-app
             version: 1.0.0
@@ -81,7 +80,7 @@ public class HelmChartLoaderTests : IDisposable
     public async Task LoadAsync_ParsesMaintainers()
     {
         var chartDir = CreateChartDir("my-app", "1.0.0");
-        File.WriteAllText(Path.Combine(chartDir, "Chart.yaml"), """
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "Chart.yaml"), """
             apiVersion: v2
             name: my-app
             version: 1.0.0
@@ -101,7 +100,7 @@ public class HelmChartLoaderTests : IDisposable
     public async Task LoadAsync_ParsesHomeSourcesKeywords()
     {
         var chartDir = CreateChartDir("my-app", "1.0.0");
-        File.WriteAllText(Path.Combine(chartDir, "Chart.yaml"), """
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "Chart.yaml"), """
             apiVersion: v2
             name: my-app
             version: 1.0.0
@@ -128,13 +127,13 @@ public class HelmChartLoaderTests : IDisposable
     {
         var chartDir = CreateChartDir("my-app", "1.0.0");
         var templatesDir = Path.Combine(chartDir, "templates");
-        File.WriteAllText(Path.Combine(templatesDir, "deployment.yaml"), """
+        await File.WriteAllTextAsync(Path.Combine(templatesDir, "deployment.yaml"), """
             apiVersion: apps/v1
             kind: Deployment
             metadata:
               name: {{ .Release.Name }}
             """);
-        File.WriteAllText(Path.Combine(templatesDir, "_helpers.tpl"), """
+        await File.WriteAllTextAsync(Path.Combine(templatesDir, "_helpers.tpl"), """
             {{- define "my-app.fullname" -}}{{ .Release.Name }}-my-app{{- end -}}
             """);
 
@@ -149,7 +148,7 @@ public class HelmChartLoaderTests : IDisposable
     public async Task LoadAsync_LoadsValuesYaml()
     {
         var chartDir = CreateChartDir("my-app", "1.0.0");
-        File.WriteAllText(Path.Combine(chartDir, "values.yaml"), """
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "values.yaml"), """
             replicaCount: 3
             image:
               repository: nginx
@@ -168,7 +167,7 @@ public class HelmChartLoaderTests : IDisposable
         var chartDir = CreateChartDir("my-app", "1.0.0");
         var crdsDir = Path.Combine(chartDir, "crds");
         Directory.CreateDirectory(crdsDir);
-        File.WriteAllText(Path.Combine(crdsDir, "mycrd.yaml"), """
+        await File.WriteAllTextAsync(Path.Combine(crdsDir, "mycrd.yaml"), """
             apiVersion: apiextensions.k8s.io/v1
             kind: CustomResourceDefinition
             metadata:
@@ -227,7 +226,7 @@ public class HelmChartLoaderTests : IDisposable
     public async Task LoadAsync_DirectoryParentLoadsPackagedDependencyArchive()
     {
         var chartDir = CreateChartDir("parent", "1.0.0");
-        File.WriteAllText(Path.Combine(chartDir, "Chart.yaml"), """
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "Chart.yaml"), """
             apiVersion: v2
             name: parent
             version: 1.0.0
@@ -275,7 +274,7 @@ public class HelmChartLoaderTests : IDisposable
     public async Task LoadAsync_PackagedDependenciesPreserveDistinctAliasVersions()
     {
         var chartDir = CreateChartDir("parent", "1.0.0");
-        File.WriteAllText(Path.Combine(chartDir, "Chart.yaml"), """
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "Chart.yaml"), """
             apiVersion: v2
             name: parent
             version: 1.0.0
@@ -357,7 +356,7 @@ public class HelmChartLoaderTests : IDisposable
         var chartDir = CreateChartDir("parent", "1.0.0");
         var chartsDir = Path.Combine(chartDir, "charts");
         Directory.CreateDirectory(chartsDir);
-        File.WriteAllText(Path.Combine(chartsDir, "broken-1.0.0.tgz"), "not a gzip archive");
+        await File.WriteAllTextAsync(Path.Combine(chartsDir, "broken-1.0.0.tgz"), "not a gzip archive");
 
         var ex = await Assert.ThrowsAsync<InvalidDataException>(
             () => HelmChartLoader.LoadAsync(chartDir, CancellationToken.None));
@@ -377,12 +376,12 @@ public class HelmChartLoaderTests : IDisposable
         var archivePath = Path.Combine(_tempDir, "unsafe" + extension);
         CreateArchive(
             archivePath,
-            ("safe/Chart.yaml", Encoding.UTF8.GetBytes("""
+            ("safe/Chart.yaml", """
                 apiVersion: v2
                 name: safe
                 version: 1.0.0
-                """)),
-            (unsafeEntryName, Encoding.UTF8.GetBytes("evil")));
+                """u8.ToArray()),
+            (unsafeEntryName, "evil"u8.ToArray()));
 
         var ex = await Assert.ThrowsAsync<InvalidDataException>(
             () => HelmChartLoader.LoadAsync(archivePath, CancellationToken.None));
@@ -432,8 +431,8 @@ public class HelmChartLoaderTests : IDisposable
     public async Task LoadAsync_SkipsTemplatesDirectory()
     {
         var chartDir = CreateChartDir("my-app", "1.0.0");
-        File.WriteAllText(Path.Combine(chartDir, "README.md"), "# My App");
-        File.WriteAllText(Path.Combine(chartDir, "templates", "NOTES.txt"), "Thank you!");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "README.md"), "# My App");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "NOTES.txt"), "Thank you!");
 
         var chart = await HelmChartLoader.LoadAsync(chartDir, CancellationToken.None);
 
@@ -444,7 +443,7 @@ public class HelmChartLoaderTests : IDisposable
     public async Task LoadAsync_ParsesLockEntries()
     {
         var chartDir = CreateChartDir("lock-test", "1.0.0");
-        File.WriteAllText(Path.Combine(chartDir, "Chart.lock"), """
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "Chart.lock"), """
             dependencies:
             - name: redis
               version: 17.0.0

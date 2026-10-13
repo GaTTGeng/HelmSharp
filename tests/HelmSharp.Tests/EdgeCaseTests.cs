@@ -8,20 +8,17 @@ namespace HelmSharp.Tests;
 /// Rendering edge cases: empty charts, helpers-only charts, named-template <c>include</c>
 /// resolution (including aliased subcharts), and ensuring NOTES.txt never appears in manifest output.
 /// </summary>
-public class EdgeCaseTests
+public class EdgeCaseTests(ITestOutputHelper output)
 {
-    private readonly ITestOutputHelper _output;
-
-    public EdgeCaseTests(ITestOutputHelper output)
-    {
-        _output = output;
-    }
 
     [Fact]
     public void EmptyTemplate_ProducesEmptyOutput()
     {
-        var chart = new HelmChart { Name = "empty", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = "";
+        var chart = new HelmChart
+        {
+            Name = "empty", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = "" }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>());
         var result = renderer.Render();
         Assert.True(string.IsNullOrWhiteSpace(result));
@@ -39,8 +36,11 @@ public class EdgeCaseTests
     [Fact]
     public void OnlyHelpersTpl_ProducesEmptyOutput()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/_helpers.tpl"] = "{{- define \"test.name\" -}}test{{- end -}}";
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/_helpers.tpl"] = "{{- define \"test.name\" -}}test{{- end -}}" }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>());
         var result = renderer.Render();
         Assert.True(string.IsNullOrWhiteSpace(result));
@@ -49,9 +49,15 @@ public class EdgeCaseTests
     [Fact]
     public void Include_ResolvesNamedOrdinaryChartTemplate()
     {
-        var chart = new HelmChart { Name = "parent", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/configmap.yaml"] = "value: rendered";
-        chart.Templates["templates/deployment.yaml"] = "{{ include \"parent/templates/configmap.yaml\" . }}";
+        var chart = new HelmChart
+        {
+            Name = "parent", Version = "1.0.0", ValuesYaml = "",
+            Templates =
+            {
+                ["templates/configmap.yaml"] = "value: rendered",
+                ["templates/deployment.yaml"] = "{{ include \"parent/templates/configmap.yaml\" . }}"
+            }
+        };
 
         var result = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>()).Render();
 
@@ -61,12 +67,23 @@ public class EdgeCaseTests
     [Fact]
     public void Include_ResolvesNamedOrdinaryAliasedSubchartTemplate()
     {
-        var chart = new HelmChart { Name = "parent", Version = "1.0.0", ValuesYaml = "" };
-        chart.Dependencies.Add(new HelmChartDependency { Name = "postgres", Alias = "db" });
-        var subchart = new HelmChart { Name = "postgres", Version = "1.0.0", ValuesYaml = "" };
-        subchart.Templates["templates/configmap.yaml"] = "value: from-db";
-        chart.Subcharts["postgres"] = subchart;
-        chart.Templates["templates/deployment.yaml"] = "{{ include \"parent/charts/db/templates/configmap.yaml\" . }}";
+        var chart = new HelmChart
+        {
+            Name = "parent", Version = "1.0.0", ValuesYaml = "",
+            Dependencies = { new HelmChartDependency { Name = "postgres", Alias = "db" } },
+            Templates =
+            {
+                ["templates/deployment.yaml"] = "{{ include \"parent/charts/db/templates/configmap.yaml\" . }}"
+            },
+            Subcharts =
+            {
+                ["postgres"] = new HelmChart
+                {
+                    Name = "postgres", Version = "1.0.0", ValuesYaml = "",
+                    Templates = { ["templates/configmap.yaml"] = "value: from-db" }
+                }
+            }
+        };
 
         var result = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>()).Render();
 
@@ -76,9 +93,15 @@ public class EdgeCaseTests
     [Fact]
     public void NotesTxt_NotIncludedInRender()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/NOTES.txt"] = "Thank you!";
-        chart.Templates["templates/cm.yaml"] = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: test\n";
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates =
+            {
+                ["templates/NOTES.txt"] = "Thank you!",
+                ["templates/cm.yaml"] = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: test\n"
+            }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>());
         var result = renderer.Render();
         Assert.DoesNotContain("Thank you", result);
@@ -88,19 +111,22 @@ public class EdgeCaseTests
     [Fact]
     public void NestedIfBlocks()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             {{- if .Values.a }}
             a is true
             {{- if .Values.b }}
             b is also true
             {{- end }}
             {{- end }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?> { ["a"] = true, ["b"] = true });
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         Assert.Contains("a is true", result);
         Assert.Contains("b is also true", result);
     }
@@ -108,19 +134,22 @@ public class EdgeCaseTests
     [Fact]
     public void NestedIfBlocks_OuterFalse()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             {{- if .Values.a }}
             a is true
             {{- if .Values.b }}
             b is also true
             {{- end }}
             {{- end }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?> { ["a"] = false, ["b"] = true });
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         Assert.DoesNotContain("a is true", result);
         Assert.DoesNotContain("b is also true", result);
     }
@@ -128,17 +157,20 @@ public class EdgeCaseTests
     [Fact]
     public void RangeOverEmptyList()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             {{- range .Values.items }}
             - {{ . }}
             {{- end }}
             done
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?> { ["items"] = new List<object?>() });
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         Assert.Contains("done", result);
         Assert.DoesNotContain("- ", result);
     }
@@ -146,29 +178,35 @@ public class EdgeCaseTests
     [Fact]
     public void RangeOverNil()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             {{- range .Values.items }}
             - {{ . }}
             {{- end }}
             done
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?>());
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         Assert.Contains("done", result);
     }
 
     [Fact]
     public void RangeOverMap()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             {{- range $key, $val := .Values.data }}
             {{ $key }}={{ $val }}
             {{- end }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?>
             {
@@ -179,7 +217,7 @@ public class EdgeCaseTests
                 }
             });
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         Assert.Contains("host=localhost", result);
         Assert.Contains("port=5432", result);
     }
@@ -187,17 +225,20 @@ public class EdgeCaseTests
     [Fact]
     public void WithNil_SkipsBlock()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             {{- with .Values.data }}
             value: {{ . }}
             {{- end }}
             done
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?>());
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         Assert.Contains("done", result);
         Assert.DoesNotContain("value:", result);
     }
@@ -207,20 +248,23 @@ public class EdgeCaseTests
     {
         // Go text/template treats empty maps as falsy (val.Len() > 0).
         // Regression test for IsTruthy fix — empty IDictionary must return false.
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             {{- with .Values.data }}
             value: {{ . | toYaml }}
             {{- end }}
             done
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?>
             {
                 ["data"] = new Dictionary<string, object?>()
             });
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         Assert.Contains("done", result);
         Assert.DoesNotContain("value:", result);
     }
@@ -229,34 +273,40 @@ public class EdgeCaseTests
     public void WithNonEmptyDict_EntersBlock()
     {
         // Non-empty dicts are truthy in both Go templates and HelmSharp.
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             {{- with .Values.data }}
             value: present
             {{- end }}
             done
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?>
             {
                 ["data"] = new Dictionary<string, object?> { ["key"] = "val" }
             });
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         Assert.Contains("value: present", result);
     }
 
     [Fact]
     public void DefaultFunction_Fallback()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             val: {{ default "fallback" .Values.missing | quote }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?>());
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         Assert.Contains("fallback", result);
     }
 
@@ -269,18 +319,21 @@ public class EdgeCaseTests
             Version = "2.0.0",
             AppVersion = "1.5.0",
             Description = "Test chart",
-            Type = "application"
-        };
-        chart.Templates["templates/test.yaml"] = """
+            Type = "application",
+            Templates =
+            {
+                ["templates/test.yaml"] = """
             name: {{ .Chart.Name | quote }}
             version: {{ .Chart.Version | quote }}
             appVersion: {{ .Chart.AppVersion | quote }}
             type: {{ .Chart.Type | quote }}
-            """;
+            """
+            }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?>());
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         Assert.Contains("my-chart", result);
         Assert.Contains("2.0.0", result);
         Assert.Contains("1.5.0", result);
@@ -290,15 +343,18 @@ public class EdgeCaseTests
     [Fact]
     public void CapabilitiesObject()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             kubeVersion: {{ .Capabilities.KubeVersion.Version | quote }}
             helmVersion: {{ .Capabilities.HelmVersion.Version | quote }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?>());
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         Assert.Contains("v1.29.0", result);
         Assert.Contains("HelmSharp", result);
     }
@@ -306,8 +362,10 @@ public class EdgeCaseTests
     [Fact]
     public void BuiltInObjects_UseRequestedCapabilitiesAndReleaseState()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             kubeVersion: {{ .Capabilities.KubeVersion.Version | quote }}
             kubeMajor: {{ .Capabilities.KubeVersion.Major | quote }}
             kubeMinor: {{ .Capabilities.KubeVersion.Minor | quote }}
@@ -316,7 +374,8 @@ public class EdgeCaseTests
             isInstall: {{ .Release.IsInstall | quote }}
             isUpgrade: {{ .Release.IsUpgrade | quote }}
             revision: {{ .Release.Revision | quote }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(
             chart,
             "rel",
@@ -349,13 +408,16 @@ public class EdgeCaseTests
         string expectedMajor,
         string expectedMinor)
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             version: {{ .Capabilities.KubeVersion.Version | quote }}
             gitVersion: {{ .Capabilities.KubeVersion.GitVersion | quote }}
             major: {{ .Capabilities.KubeVersion.Major | quote }}
             minor: {{ .Capabilities.KubeVersion.Minor | quote }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(
             chart,
             "rel",
@@ -376,14 +438,17 @@ public class EdgeCaseTests
     [Fact]
     public void APIVersionsHas_WorksWhenAssignedToVariable()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             {{- $apis := .Capabilities.APIVersions -}}
             directHas: {{ .Capabilities.APIVersions.Has "batch/v1" }}
             varHas: {{ $apis.Has "batch/v1" }}
             varHasMissing: {{ $apis.Has "missing.example/v1" }}
             varHasCustom: {{ $apis.Has "custom.test/v1" }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(
             chart,
             "rel",
@@ -394,7 +459,7 @@ public class EdgeCaseTests
             false);
 
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
 
         Assert.Contains("directHas: true", result);
         Assert.Contains("varHas: true", result);
@@ -405,17 +470,20 @@ public class EdgeCaseTests
     [Fact]
     public void APIVersionsHas_WorksInIfConditionalViaVariable()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             {{- $apis := .Capabilities.APIVersions -}}
             {{- if $apis.Has "batch/v1" }}batchEnabled: true{{ end }}
             {{- if $apis.Has "missing/v1" }}missingEnabled: true{{ end }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(
             chart, "rel", "default", new Dictionary<string, object?>());
 
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
 
         Assert.Contains("batchEnabled: true", result);
         Assert.DoesNotContain("missingEnabled", result);
@@ -424,60 +492,72 @@ public class EdgeCaseTests
     [Fact]
     public void APIVersionsHas_WithNoArgument_ThrowsArityError()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             result: {{ .Capabilities.APIVersions.Has }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(
             chart, "rel", "default", new Dictionary<string, object?>());
 
-        var ex = Assert.Throws<InvalidOperationException>(() => renderer.Render());
+        var ex = Assert.Throws<InvalidOperationException>(renderer.Render);
         Assert.Equal("wrong number of args for Has: want 1 got 0", ex.Message);
     }
 
     [Fact]
     public void APIVersionsHas_WithNoArgumentViaVariable_ThrowsArityError()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             {{- $apis := .Capabilities.APIVersions -}}
             result: {{ $apis.Has }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(
             chart, "rel", "default", new Dictionary<string, object?>());
 
-        var ex = Assert.Throws<InvalidOperationException>(() => renderer.Render());
+        var ex = Assert.Throws<InvalidOperationException>(renderer.Render);
         Assert.Equal("wrong number of args for Has: want 1 got 0", ex.Message);
     }
 
     [Fact]
     public void APIVersionsHas_WithTooManyArguments_ThrowsArityError()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             result: {{ .Capabilities.APIVersions.Has "v1" "v2" }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(
             chart, "rel", "default", new Dictionary<string, object?>());
 
-        var ex = Assert.Throws<InvalidOperationException>(() => renderer.Render());
+        var ex = Assert.Throws<InvalidOperationException>(renderer.Render);
         Assert.Equal("wrong number of args for Has: want 1 got 2", ex.Message);
     }
 
     [Fact]
     public void APIVersionsHas_WithPipedArgument_ResolvesCorrectly()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             {{- $apis := .Capabilities.APIVersions -}}
             piped: {{ "batch/v1" | $apis.Has }}
             pipedMissing: {{ "missing/v1" | $apis.Has }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(
             chart, "rel", "default", new Dictionary<string, object?>());
 
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
 
         Assert.Contains("piped: true", result);
         Assert.Contains("pipedMissing: false", result);
@@ -486,37 +566,47 @@ public class EdgeCaseTests
     [Fact]
     public void APIVersionsHas_WithNilPipelineAndExplicitArgument_ThrowsArityError()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             out: {{ .Values.missing | .Capabilities.APIVersions.Has "v1" }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(
             chart, "rel", "default", new Dictionary<string, object?>());
 
-        var ex = Assert.Throws<InvalidOperationException>(() => renderer.Render());
+        var ex = Assert.Throws<InvalidOperationException>(renderer.Render);
         Assert.Equal("wrong number of args for Has: want 1 got 2", ex.Message);
     }
 
     [Fact]
     public void APIVersionsHas_WithNilPipelineAsOnlyArgument_ThrowsInvalidValueError()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             out: {{ .Values.missing | .Capabilities.APIVersions.Has }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(
             chart, "rel", "default", new Dictionary<string, object?>());
 
-        var ex = Assert.Throws<InvalidOperationException>(() => renderer.Render());
+        var ex = Assert.Throws<InvalidOperationException>(renderer.Render);
         Assert.Equal("invalid value; expected string", ex.Message);
     }
 
     [Fact]
     public void ChartDependencies_ExposeCompleteDependencyShape()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Dependencies.Add(new HelmChartDependency
+        var chart = new HelmChart
         {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Dependencies =
+            {
+                new HelmChartDependency
+                {
             Name = "redis",
             Version = "17.x.x",
             Repository = "https://charts.example.test",
@@ -532,9 +622,10 @@ public class EdgeCaseTests
                     ["parent"] = "imported"
                 }
             ],
-            Alias = "cache"
-        });
-        chart.Templates["templates/test.yaml"] = """
+                    Alias = "cache"
+                }
+            },
+            Templates = { ["templates/test.yaml"] = """
             {{- $dependency := index .Chart.Dependencies 0 }}
             {{- $mapping := index $dependency.ImportValues 1 }}
             name: {{ $dependency.Name | quote }}
@@ -547,7 +638,8 @@ public class EdgeCaseTests
             importChild: {{ $mapping.child | quote }}
             importParent: {{ $mapping.parent | quote }}
             alias: {{ $dependency.Alias | quote }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(
             chart,
             "rel",
@@ -571,9 +663,10 @@ public class EdgeCaseTests
     [Fact]
     public void SubchartTemplate_UsesParentQualifiedTemplatePaths()
     {
-        var chart = new HelmChart { Name = "parent", Version = "1.0.0", ValuesYaml = "" };
-        var subchart = new HelmChart { Name = "child", Version = "1.0.0", ValuesYaml = "" };
-        subchart.Templates["templates/configmap.yaml"] = """
+        var subchart = new HelmChart
+        {
+            Name = "child", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/configmap.yaml"] = """
             apiVersion: v1
             kind: ConfigMap
             metadata:
@@ -581,8 +674,13 @@ public class EdgeCaseTests
             data:
               templateName: {{ .Template.Name | quote }}
               templateBasePath: {{ .Template.BasePath | quote }}
-            """;
-        chart.Subcharts["child"] = subchart;
+            """ }
+        };
+        var chart = new HelmChart
+        {
+            Name = "parent", Version = "1.0.0", ValuesYaml = "",
+            Subcharts = { ["child"] = subchart }
+        };
 
         var renderer = new HelmTemplateRenderer(
             chart,
@@ -603,15 +701,17 @@ public class EdgeCaseTests
     [Fact]
     public void AliasedSubchart_UsesAliasIdentityAndValues()
     {
-        var chart = new HelmChart { Name = "parent", Version = "1.0.0", ValuesYaml = "" };
-        chart.Dependencies.Add(new HelmChartDependency
+        var chart = new HelmChart
         {
-            Name = "child",
-            Alias = "cache",
-            Version = "1.0.0",
-            Condition = "cache.enabled"
-        });
-        chart.Templates["templates/parent.yaml"] = """
+            Name = "parent", Version = "1.0.0", ValuesYaml = "",
+            Dependencies =
+            {
+                new HelmChartDependency
+                {
+                    Name = "child", Alias = "cache", Version = "1.0.0", Condition = "cache.enabled"
+                }
+            },
+            Templates = { ["templates/parent.yaml"] = """
             apiVersion: v1
             kind: ConfigMap
             metadata:
@@ -619,14 +719,14 @@ public class EdgeCaseTests
             data:
               dependencyName: {{ (index .Chart.Dependencies 0).Name | quote }}
               dependencyAlias: {{ (index .Chart.Dependencies 0).Alias | quote }}
-            """;
+            """ }
+        };
         var subchart = new HelmChart
         {
             Name = "child",
             Version = "1.0.0",
-            ValuesYaml = "marker: default\n"
-        };
-        subchart.Templates["templates/child.yaml"] = """
+            ValuesYaml = "marker: default\n",
+            Templates = { ["templates/child.yaml"] = """
             apiVersion: v1
             kind: ConfigMap
             metadata:
@@ -636,7 +736,8 @@ public class EdgeCaseTests
               marker: {{ .Values.marker | quote }}
               templateName: {{ .Template.Name | quote }}
               templateBasePath: {{ .Template.BasePath | quote }}
-            """;
+            """ }
+        };
         chart.Subcharts["child"] = subchart;
         var values = new Dictionary<string, object?>
         {
@@ -669,29 +770,20 @@ public class EdgeCaseTests
     [Fact]
     public void AliasedSubchart_RendersEveryAliasInstanceOfSameDependency()
     {
-        var chart = new HelmChart { Name = "parent", Version = "1.0.0", ValuesYaml = "" };
-        chart.Dependencies.Add(new HelmChartDependency
+        var chart = new HelmChart
         {
-            Name = "child",
-            Alias = "cache",
-            Version = "1.0.0",
-            Condition = "cache.enabled"
-        });
-        chart.Dependencies.Add(new HelmChartDependency
-        {
-            Name = "child",
-            Alias = "session",
-            Version = "1.0.0",
-            Condition = "session.enabled"
-        });
-
-        var subchart = new HelmChart
-        {
-            Name = "child",
-            Version = "1.0.0",
-            ValuesYaml = "marker: default\n"
-        };
-        subchart.Templates["templates/child.yaml"] = """
+            Name = "parent", Version = "1.0.0", ValuesYaml = "",
+            Dependencies =
+            {
+                new HelmChartDependency { Name = "child", Alias = "cache", Version = "1.0.0", Condition = "cache.enabled" },
+                new HelmChartDependency { Name = "child", Alias = "session", Version = "1.0.0", Condition = "session.enabled" }
+            },
+            Subcharts =
+            {
+                ["child"] = new HelmChart
+                {
+                    Name = "child", Version = "1.0.0", ValuesYaml = "marker: default\n",
+                    Templates = { ["templates/child.yaml"] = """
             apiVersion: v1
             kind: ConfigMap
             metadata:
@@ -699,8 +791,10 @@ public class EdgeCaseTests
             data:
               marker: {{ .Values.marker | quote }}
               templateName: {{ .Template.Name | quote }}
-            """;
-        chart.Subcharts["child"] = subchart;
+            """ }
+                }
+            }
+        };
 
         var values = new Dictionary<string, object?>
         {
@@ -741,15 +835,11 @@ public class EdgeCaseTests
         bool tagValue,
         bool expectedEnabled)
     {
-        var chart = new HelmChart { Name = "parent", Version = "1.0.0", ValuesYaml = "" };
-        chart.Dependencies.Add(new HelmChartDependency
+        var chart = new HelmChart
         {
-            Name = "child",
-            Version = "1.0.0",
-            Condition = "child.enabled",
-            Tags = ["optional"]
-        });
-        chart.Templates["templates/parent.yaml"] = """
+            Name = "parent", Version = "1.0.0", ValuesYaml = "",
+            Dependencies = { new HelmChartDependency { Name = "child", Version = "1.0.0", Condition = "child.enabled", Tags = ["optional"] } },
+            Templates = { ["templates/parent.yaml"] = """
             apiVersion: v1
             kind: ConfigMap
             metadata:
@@ -757,15 +847,21 @@ public class EdgeCaseTests
             data:
               dependencyCount: {{ len .Chart.Dependencies | quote }}
               hasSubchart: {{ hasKey .Subcharts "child" | quote }}
-            """;
-        var subchart = new HelmChart { Name = "child", Version = "1.0.0", ValuesYaml = "" };
-        subchart.Templates["templates/child.yaml"] = """
+            """ },
+            Subcharts =
+            {
+                ["child"] = new HelmChart
+                {
+                    Name = "child", Version = "1.0.0", ValuesYaml = "",
+                    Templates = { ["templates/child.yaml"] = """
             apiVersion: v1
             kind: ConfigMap
             metadata:
               name: child
-            """;
-        chart.Subcharts["child"] = subchart;
+            """ }
+                }
+            }
+        };
 
         var childValues = new Dictionary<string, object?>();
         if (conditionValue.HasValue)
@@ -803,31 +899,32 @@ public class EdgeCaseTests
         bool? conditionValue,
         bool expectedEnabled)
     {
-        var chart = new HelmChart { Name = "parent", Version = "1.0.0", ValuesYaml = "" };
-        chart.Dependencies.Add(new HelmChartDependency
+        var chart = new HelmChart
         {
-            Name = "child",
-            Version = "1.0.0",
-            Enabled = declaredEnabled,
-            Condition = "child.enabled",
-            Tags = ["optional"]
-        });
-        chart.Templates["templates/parent.yaml"] = """
+            Name = "parent", Version = "1.0.0", ValuesYaml = "",
+            Dependencies = { new HelmChartDependency { Name = "child", Version = "1.0.0", Enabled = declaredEnabled, Condition = "child.enabled", Tags = ["optional"] } },
+            Templates = { ["templates/parent.yaml"] = """
             apiVersion: v1
             kind: ConfigMap
             metadata:
               name: parent
             data:
               dependencyCount: {{ len .Chart.Dependencies | quote }}
-            """;
-        var subchart = new HelmChart { Name = "child", Version = "1.0.0", ValuesYaml = "" };
-        subchart.Templates["templates/child.yaml"] = """
+            """ },
+            Subcharts =
+            {
+                ["child"] = new HelmChart
+                {
+                    Name = "child", Version = "1.0.0", ValuesYaml = "",
+                    Templates = { ["templates/child.yaml"] = """
             apiVersion: v1
             kind: ConfigMap
             metadata:
               name: child
-            """;
-        chart.Subcharts["child"] = subchart;
+            """ }
+                }
+            }
+        };
 
         var values = new Dictionary<string, object?>();
         if (tagValue.HasValue)
@@ -860,28 +957,28 @@ public class EdgeCaseTests
     [Fact]
     public async Task Dependencies_DoNotReevaluateConditionsAfterImports()
     {
-        var chart = new HelmChart { Name = "parent", Version = "1.0.0", ValuesYaml = "" };
-        chart.Dependencies.Add(new HelmChartDependency
+        var chart = new HelmChart
         {
-            Name = "importer",
-            Version = "1.0.0",
-            ImportValues = ["gates"]
-        });
-        chart.Dependencies.Add(new HelmChartDependency
-        {
-            Name = "sibling",
-            Version = "1.0.0",
-            Condition = "flags.sibling"
-        });
-        chart.Subcharts["importer"] = new HelmChart
-        {
-            Name = "importer",
-            Version = "1.0.0",
-            ValuesYaml = "exports:\n  gates:\n    flags:\n      sibling: false\n"
+            Name = "parent", Version = "1.0.0", ValuesYaml = "",
+            Dependencies =
+            {
+                new HelmChartDependency { Name = "importer", Version = "1.0.0", ImportValues = ["gates"] },
+                new HelmChartDependency { Name = "sibling", Version = "1.0.0", Condition = "flags.sibling" }
+            },
+            Subcharts =
+            {
+                ["importer"] = new HelmChart
+                {
+                    Name = "importer", Version = "1.0.0",
+                    ValuesYaml = "exports:\n  gates:\n    flags:\n      sibling: false\n"
+                },
+                ["sibling"] = new HelmChart
+                {
+                    Name = "sibling", Version = "1.0.0", ValuesYaml = "",
+                    Templates = { ["templates/sibling.yaml"] = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: sibling\n" }
+                }
+            }
         };
-        var sibling = new HelmChart { Name = "sibling", Version = "1.0.0", ValuesYaml = "" };
-        sibling.Templates["templates/sibling.yaml"] = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: sibling\n";
-        chart.Subcharts["sibling"] = sibling;
 
         var values = await HelmValues.BuildAsync(
             chart,
@@ -908,16 +1005,16 @@ public class EdgeCaseTests
         {
             Name = "parent",
             Version = "1.0.0",
-            ValuesYaml = "global:\n  shared: parent-global\n"
-        };
-        chart.Dependencies.Add(new HelmChartDependency { Name = "child", Version = "1.0.0" });
-        var child = new HelmChart
-        {
-            Name = "child",
-            Version = "1.0.0",
-            ValuesYaml = "marker: child-default\n"
-        };
-        child.Templates["templates/child.yaml"] = """
+            ValuesYaml = "global:\n  shared: parent-global\n",
+            Dependencies = { new HelmChartDependency { Name = "child", Version = "1.0.0" } },
+            Subcharts =
+            {
+                ["child"] = new HelmChart
+                {
+                    Name = "child",
+                    Version = "1.0.0",
+                    ValuesYaml = "marker: child-default\n",
+                    Templates = { ["templates/child.yaml"] = """
             apiVersion: v1
             kind: ConfigMap
             metadata:
@@ -925,8 +1022,10 @@ public class EdgeCaseTests
             data:
               marker: {{ .Values.marker | quote }}
               global: {{ .Values.global.shared | quote }}
-            """;
-        chart.Subcharts["child"] = child;
+            """ }
+                }
+            }
+        };
 
         var result = new HelmTemplateRenderer(
             chart,
@@ -941,8 +1040,10 @@ public class EdgeCaseTests
     [Fact]
     public void RangeWithVariables_PreservesContextAndSetsDot()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             {{- range $index, $item := .Values.items }}
             item-{{ $index }}:
               variable: {{ $item.name | quote }}
@@ -953,7 +1054,8 @@ public class EdgeCaseTests
               hasCustomApi: {{ .Capabilities.APIVersions.Has "example.test/v1" | quote }}
               templateName: {{ .Template.Name | quote }}
             {{- end }}
-            """;
+            """ }
+        };
         var values = new Dictionary<string, object?>
         {
             ["items"] = new List<object?>
@@ -988,15 +1090,18 @@ public class EdgeCaseTests
     [Fact]
     public void ReleaseObject()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             name: {{ .Release.Name | quote }}
             namespace: {{ .Release.Namespace | quote }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(chart, "my-release", "production",
             new Dictionary<string, object?>());
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         Assert.Contains("my-release", result);
         Assert.Contains("production", result);
     }
@@ -1004,17 +1109,20 @@ public class EdgeCaseTests
     [Fact]
     public void VariableAssignment()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             {{- $name := "my-var" }}
             {{- $count := 42 }}
             name: {{ $name | quote }}
             count: {{ $count }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?>());
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         Assert.Contains("my-var", result);
         Assert.Contains("42", result);
     }
@@ -1022,25 +1130,32 @@ public class EdgeCaseTests
     [Fact]
     public void VariableInDict()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             {{- $labels := dict "app" .Release.Name "version" .Chart.Version }}
             labels:
               app: {{ index $labels "app" | quote }}
               version: {{ index $labels "version" | quote }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(chart, "my-app", "default",
             new Dictionary<string, object?>());
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         Assert.Contains("my-app", result);
     }
 
     [Fact]
     public void IncludeFunction()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/_helpers.tpl"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates =
+            {
+                ["templates/_helpers.tpl"] = """
             {{- define "test.fullname" -}}
             {{ .Release.Name }}-{{ .Chart.Name }}
             {{- end }}
@@ -1048,19 +1163,21 @@ public class EdgeCaseTests
             app: {{ include "test.fullname" . }}
             version: {{ .Chart.Version }}
             {{- end }}
-            """;
-        chart.Templates["templates/cm.yaml"] = """
+            """,
+                ["templates/cm.yaml"] = """
             apiVersion: v1
             kind: ConfigMap
             metadata:
               name: {{ include "test.fullname" . }}
               labels:
                 {{- include "test.labels" . | nindent 4 }}
-            """;
+            """
+            }
+        };
         var renderer = new HelmTemplateRenderer(chart, "my-release", "default",
             new Dictionary<string, object?>());
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         Assert.Contains("my-release-test", result);
         Assert.Contains("1.0.0", result);
     }
@@ -1068,8 +1185,10 @@ public class EdgeCaseTests
     [Fact]
     public void DeepNestedBlocks()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             {{- if .Values.level1 }}
             level1
             {{- if .Values.level2 }}
@@ -1082,11 +1201,12 @@ public class EdgeCaseTests
             end1
             {{- end }}
             done
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?> { ["level1"] = true, ["level2"] = true, ["level3"] = true });
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         Assert.Contains("level1", result);
         Assert.Contains("level2", result);
         Assert.Contains("level3", result);
@@ -1096,8 +1216,10 @@ public class EdgeCaseTests
     [Fact]
     public void ElseIf_Pattern()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             {{- if eq .Values.env "prod" }}
             production
             {{- else if eq .Values.env "staging" }}
@@ -1105,11 +1227,12 @@ public class EdgeCaseTests
             {{- else }}
             development
             {{- end }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?> { ["env"] = "staging" });
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         Assert.Contains("staging", result);
         Assert.DoesNotContain("production", result);
         Assert.DoesNotContain("development", result);
@@ -1118,15 +1241,18 @@ public class EdgeCaseTests
     [Fact]
     public void CommentIgnored()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             {{/* This is a comment */}}
             data: value
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?>());
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         Assert.Contains("data: value", result);
         Assert.DoesNotContain("comment", result);
     }
@@ -1134,8 +1260,10 @@ public class EdgeCaseTests
     [Fact]
     public void MultilineYamlOutput()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             apiVersion: v1
             kind: ConfigMap
             metadata:
@@ -1145,11 +1273,12 @@ public class EdgeCaseTests
                 server:
                   port: 8080
                   host: 0.0.0.0
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?>());
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         Assert.Contains("server:", result);
         Assert.Contains("port: 8080", result);
     }
@@ -1157,11 +1286,17 @@ public class EdgeCaseTests
     [Fact]
     public void LargeTemplate_Rendering()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
         var sb = new System.Text.StringBuilder();
         for (var i = 0; i < 50; i++)
             sb.AppendLine($"  key{i}: value{i}");
-        chart.Templates["templates/test.yaml"] = $"apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: test\ndata:\n{sb}";
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates =
+            {
+                ["templates/test.yaml"] = $"apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: test\ndata:\n{sb}"
+            }
+        };
 
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?>());
@@ -1177,14 +1312,20 @@ public class EdgeCaseTests
         // render — TemplateParseException is caught per-template, collected,
         // and the remaining templates still get a chance to render before
         // InvalidOperationException is thrown at the end.
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/broken.yaml"] = "{{ if true }}";
-        chart.Templates["templates/valid.yaml"] = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: test\n";
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates =
+            {
+                ["templates/broken.yaml"] = "{{ if true }}",
+                ["templates/valid.yaml"] = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: test\n"
+            }
+        };
 
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?>());
 
-        var ex = Assert.Throws<InvalidOperationException>(() => renderer.Render());
+        var ex = Assert.Throws<InvalidOperationException>(renderer.Render);
         Assert.Contains("broken.yaml", ex.Message);
         Assert.Contains(nameof(TemplateParseException), ex.Message);
         Assert.Contains("1 template(s)", ex.Message); // only 1 failing template
@@ -1195,18 +1336,32 @@ public class EdgeCaseTests
     {
         // A malformed template inside a subchart should also be caught
         // per-template — covering the subchart loop catch block.
-        var chart = new HelmChart { Name = "parent", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/parent.yaml"] = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: parent\n";
+        var chart = new HelmChart
+        {
+            Name = "parent", Version = "1.0.0", ValuesYaml = "",
+            Templates =
+            {
+                ["templates/parent.yaml"] = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: parent\n"
+            }
+        };
 
-        var subchart = new HelmChart { Name = "child", Version = "1.0.0", ValuesYaml = "" };
-        subchart.Templates["templates/broken.yaml"] = "{{ if true }}";
-        subchart.Templates["templates/valid.yaml"] = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: child\n";
+        var subchart = new HelmChart
+        {
+            Name = "child",
+            Version = "1.0.0",
+            ValuesYaml = "",
+            Templates =
+            {
+                ["templates/broken.yaml"] = "{{ if true }}",
+                ["templates/valid.yaml"] = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: child\n"
+            }
+        };
         chart.Subcharts["child"] = subchart;
 
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?>());
 
-        var ex = Assert.Throws<InvalidOperationException>(() => renderer.Render());
+        var ex = Assert.Throws<InvalidOperationException>(renderer.Render);
         Assert.Contains("broken.yaml", ex.Message);
         Assert.Contains(nameof(TemplateParseException), ex.Message);
     }
@@ -1215,13 +1370,16 @@ public class EdgeCaseTests
     public void MalformedTemplate_InnerExceptionIsTemplateParseException()
     {
         // The first collected error should be exposed as the inner exception.
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/broken.yaml"] = "{{ if true }}";
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/broken.yaml"] = "{{ if true }}" }
+        };
 
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?>());
 
-        var ex = Assert.Throws<InvalidOperationException>(() => renderer.Render());
+        var ex = Assert.Throws<InvalidOperationException>(renderer.Render);
         Assert.IsType<TemplateParseException>(ex.InnerException);
     }
 
@@ -1234,23 +1392,28 @@ public class EdgeCaseTests
         // the per-template error collection in Render() can catch and
         // collect it — the failing template should be reported but the
         // remaining valid templates should still render.
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates =
+            {
+                ["templates/_helpers.tpl"] =
+                    "{{ define \"broken.helper\" }}{{ range }}{{ end }}{{ end }}",
+                ["templates/deployment.yaml"] =
+                    "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ include \"broken.helper\" . }}"
+            }
+        };
 
         // Named template (define) with malformed body. Using bare {{ range }}
         // (no pipeline) so ExtractDefines' depth counter does not treat it as a
         // block opener (it checks StartsWith("range ")), but the AST parser
         // does — producing TemplateParseException for missing 'end'.
-        chart.Templates["templates/_helpers.tpl"] =
-            "{{ define \"broken.helper\" }}{{ range }}{{ end }}{{ end }}";
-
-        // Template that includes the broken named template
-        chart.Templates["templates/deployment.yaml"] =
-            "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ include \"broken.helper\" . }}";
+        // Template that includes the broken named template.
 
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?>());
 
-        var ex = Assert.Throws<InvalidOperationException>(() => renderer.Render());
+        var ex = Assert.Throws<InvalidOperationException>(renderer.Render);
         Assert.Contains("deployment.yaml", ex.Message);
         Assert.Contains(nameof(TemplateParseException), ex.Message);
         Assert.Contains("1 template(s)", ex.Message); // only deployment.yaml fails
@@ -1261,8 +1424,10 @@ public class EdgeCaseTests
     {
         // cert-manager templates do toYaml .Values.cainjector.extraArgs
         // where extraArgs may be nil. Helm toYaml nil → "null\n", not empty.
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             apiVersion: v1
             kind: ConfigMap
             metadata:
@@ -1270,11 +1435,12 @@ public class EdgeCaseTests
             data:
               extra: |-
                 {{- toYaml .Values.extraArgs | nindent 4 }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?> { ["extraArgs"] = null });
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         // nil should serialize as "null" + newline, then nindent adds indentation
         Assert.Contains("    null", result);
     }
@@ -1284,8 +1450,10 @@ public class EdgeCaseTests
     {
         // cert-manager uses toYaml .Values.featureGates | nindent
         // where featureGates is {} (empty dict). Helm toYaml {} → "{}\n"
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             apiVersion: v1
             kind: ConfigMap
             metadata:
@@ -1293,11 +1461,12 @@ public class EdgeCaseTests
             data:
               features: |-
                 {{- toYaml .Values.featureGates | nindent 4 }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?> { ["featureGates"] = new Dictionary<string, object?>() });
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         Assert.Contains("    {}", result);
     }
 
@@ -1307,8 +1476,10 @@ public class EdgeCaseTests
         // Helm v4 toYaml preserves explicit null-valued map entries. Chart
         // defaults may prune nulls during values coalescing, but serialization
         // itself must keep explicit null overrides.
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             apiVersion: v1
             kind: ConfigMap
             metadata:
@@ -1316,7 +1487,8 @@ public class EdgeCaseTests
             data:
               values: |-
                 {{- toYaml .Values.resources | nindent 4 }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?>
             {
@@ -1331,7 +1503,7 @@ public class EdgeCaseTests
                 }
             });
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         Assert.Contains("    limits: null", result);
         Assert.Contains("    requests:", result);
         Assert.Contains("      cpu: 1m", result);
@@ -1341,8 +1513,10 @@ public class EdgeCaseTests
     [Fact]
     public void ToYaml_DictionaryWithOnlyNullValuesRendersNullEntry()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             apiVersion: v1
             kind: ConfigMap
             metadata:
@@ -1350,14 +1524,15 @@ public class EdgeCaseTests
             data:
               values: |-
                 {{- toYaml .Values.resources | nindent 4 }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?>
             {
                 ["resources"] = new Dictionary<string, object?> { ["limits"] = null }
             });
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         Assert.Contains("    limits: null", result);
     }
 
@@ -1367,8 +1542,10 @@ public class EdgeCaseTests
         // cert-manager: {{- with .Values.cainjector.extraArgs }}
         // {{- toYaml . | nindent 10 }}{{- end }}
         // with on nil → skips body entirely
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             apiVersion: v1
             kind: ConfigMap
             metadata:
@@ -1378,19 +1555,22 @@ public class EdgeCaseTests
               extra: |-
             {{- toYaml . | nindent 4 }}
             {{- end }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?> { ["extraArgs"] = null });
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         Assert.DoesNotContain("extra: |-", result);
     }
 
     [Fact]
     public void WithBlock_ToYaml_NonEmptyRendersValues()
     {
-        var chart = new HelmChart { Name = "test", Version = "1.0.0", ValuesYaml = "" };
-        chart.Templates["templates/test.yaml"] = """
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
             apiVersion: v1
             kind: ConfigMap
             metadata:
@@ -1400,7 +1580,8 @@ public class EdgeCaseTests
               extra: |-
             {{- toYaml . | nindent 4 }}
             {{- end }}
-            """;
+            """ }
+        };
         var renderer = new HelmTemplateRenderer(chart, "rel", "default",
             new Dictionary<string, object?>
             {
@@ -1411,7 +1592,7 @@ public class EdgeCaseTests
                 }
             });
         var result = renderer.Render();
-        _output.WriteLine(result);
+        output.WriteLine(result);
         Assert.Contains("extra: |-", result);
         Assert.Contains("log-level:", result);
         Assert.Contains("enable-feature:", result);
