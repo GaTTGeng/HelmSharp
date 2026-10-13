@@ -243,6 +243,7 @@ public sealed class HelmProvenanceTrustedKey
                     SignatureSubpacketTag.KeyExpireTime,
                     SignatureSubpacketTag.KeyFlags,
                     SignatureSubpacketTag.PrimaryUserId,
+                    SignatureSubpacketTag.Revocable,
                     SignatureSubpacketTag.RevocationKey,
                     SignatureSubpacketTag.IssuerFingerprint,
                 },
@@ -253,6 +254,7 @@ public sealed class HelmProvenanceTrustedKey
                     SignatureSubpacketTag.ExpireTime,
                     SignatureSubpacketTag.KeyExpireTime,
                     SignatureSubpacketTag.KeyFlags,
+                    SignatureSubpacketTag.Revocable,
                     SignatureSubpacketTag.RevocationKey,
                     SignatureSubpacketTag.IssuerFingerprint,
                 },
@@ -276,6 +278,7 @@ public sealed class HelmProvenanceTrustedKey
             PgpSignature.KeyRevocation or PgpSignature.SubkeyRevocation or PgpSignature.CertificationRevocation =>
                 [
                     SignatureSubpacketTag.CreationTime,
+                    SignatureSubpacketTag.ExpireTime,
                     SignatureSubpacketTag.RevocationReason,
                     SignatureSubpacketTag.IssuerFingerprint,
                     SignatureSubpacketTag.SignatureTarget,
@@ -809,7 +812,8 @@ public sealed class HelmProvenanceTrustedKey
         foreach (var signature in key.GetKeySignatures())
         {
             if (signature.SignatureType != revocationType || !HasSupportedPolicySubpackets(signature) ||
-                IsWeakHashAlgorithm(signature.HashAlgorithm))
+                IsWeakHashAlgorithm(signature.HashAlgorithm) ||
+                IsSignatureExpired(signature, DateTime.UtcNow))
                 continue;
 
             foreach (var revoker in revokers)

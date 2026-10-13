@@ -1,7 +1,6 @@
 using System.Security.Cryptography;
 using Org.BouncyCastle.Bcpg;
 using Org.BouncyCastle.Bcpg.OpenPgp;
-using Org.BouncyCastle.Security;
 
 namespace HelmSharp.Action;
 
@@ -187,59 +186,34 @@ public sealed class HelmProvenanceSigningKey : IDisposable
 
     private static IEnumerable<object> ReadPgpObjects(byte[] data)
     {
-        Stream input = new MemoryStream(data, writable: false);
-        try
+        using var input = new MemoryStream(data, writable: false);
+        // Armored input is text; binary keyrings are raw packets. Detect armor by header.
+        if (data.Length >= 27 && data[0] == (byte)'-' && data[1] == (byte)'-')
         {
-            // Armored input is text; binary keyrings are raw packets. Detect armor by header.
-            if (data.Length >= 27 && data[0] == (byte)'-' && data[1] == (byte)'-')
+            var armored = new ArmoredInputStream(input);
+            var factory = new PgpObjectFactory(armored);
+            while (true)
             {
-                var armored = new ArmoredInputStream(input);
-                var factory = new PgpObjectFactory(armored);
-                while (true)
-                {
-                    object? next;
-                    try
-                    {
-                        next = factory.NextPgpObject();
-                    }
-                    catch (EndOfStreamException)
-                    {
-                        break;
-                    }
-
-                    if (next is null)
-                        break;
-                    if (next is PgpMarker)
-                        continue;
-                    yield return next;
-                }
-            }
-            else
-            {
-                var factory = new PgpObjectFactory(input);
-                while (true)
-                {
-                    object? next;
-                    try
-                    {
-                        next = factory.NextPgpObject();
-                    }
-                    catch (EndOfStreamException)
-                    {
-                        break;
-                    }
-
-                    if (next is null)
-                        break;
-                    if (next is PgpMarker)
-                        continue;
-                    yield return next;
-                }
+                var next = factory.NextPgpObject();
+                if (next is null)
+                    break;
+                if (next is PgpMarker)
+                    continue;
+                yield return next;
             }
         }
-        finally
+        else
         {
-            // MemoryStream over a caller-owned buffer: nothing to release beyond the wrapper.
+            var factory = new PgpObjectFactory(input);
+            while (true)
+            {
+                var next = factory.NextPgpObject();
+                if (next is null)
+                    break;
+                if (next is PgpMarker)
+                    continue;
+                yield return next;
+            }
         }
     }
 
