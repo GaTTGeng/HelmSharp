@@ -256,6 +256,7 @@ public sealed class HelmProvenanceTrustedKey
                     SignatureSubpacketTag.KeyExpireTime,
                     SignatureSubpacketTag.KeyFlags,
                     SignatureSubpacketTag.EmbeddedSignature,
+                    SignatureSubpacketTag.IssuerFingerprint,
                 },
             PgpSignature.PrimaryKeyBinding =>
                 new[]
