@@ -2047,6 +2047,54 @@ public class HelmProvenanceTests
     }
 
     [Fact]
+    public void FromKeyringData_Version6PrimaryRejectsVersion4DirectKeySignature()
+    {
+        var keyGenerator = new RsaKeyPairGenerator();
+        keyGenerator.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
+        var pair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, keyGenerator.GenerateKeyPair(), DateTime.UtcNow);
+        var version6Primary = new PgpPublicKey(new PublicKeyPacket(
+            6,
+            pair.PublicKey.Algorithm,
+            pair.PublicKey.CreationTime,
+            pair.PublicKey.PublicKeyPacket.Key));
+
+        // The RSA signature verifies mathematically, but a V6 key cannot use V4
+        // policy signatures to establish flags or satisfy the required Direct Key assertion.
+        var directKeyGenerator = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
+        directKeyGenerator.InitSign(PgpSignature.DirectKey, pair.PrivateKey);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        packets.SetKeyFlags(true, PgpKeyFlags.CanSign);
+        directKeyGenerator.SetHashedSubpackets(packets.Generate());
+        var directKeySignature = directKeyGenerator.GenerateCertification(version6Primary);
+        Assert.Equal(4, directKeySignature.Version);
+        version6Primary = PgpPublicKey.AddCertification(version6Primary, directKeySignature);
+
+        using var keyBytes = new MemoryStream();
+        version6Primary.Encode(keyBytes);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(keyBytes.ToArray()));
+
+        Assert.Contains("signing key", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void IsUsableSigningKeyFor_MixedVersionPrimaryAndSubkeyAreRejected()
+    {
+        var (_, publicRing) = CreateRingWithSigningSubkey();
+        var masterV4 = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+        var subkeyV4 = publicRing.GetPublicKeys().Single(key => !key.IsMasterKey);
+        var masterV6 = new PgpPublicKey(new PublicKeyPacket(
+            6,
+            masterV4.Algorithm,
+            masterV4.CreationTime,
+            masterV4.PublicKeyPacket.Key));
+
+        Assert.False(HelmProvenanceTrustedKey.IsUsableSigningKeyFor(subkeyV4, masterV6));
+    }
+
+    [Fact]
     public void FromKeyringData_Version6UidCertificationCannotReplaceDirectKeyExpiry()
     {
         const string userId = "V6 signer <v6@example.com>";

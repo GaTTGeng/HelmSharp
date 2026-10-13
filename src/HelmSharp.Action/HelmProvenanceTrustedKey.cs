@@ -181,6 +181,10 @@ public sealed class HelmProvenanceTrustedKey
             return false;
         if (!key.IsMasterKey && (master is null || !master.IsMasterKey))
             return false;
+        // RFC 9580 requires a subkey to use its primary key's version; otherwise,
+        // even a mathematically valid binding cannot establish a valid certificate.
+        if (master is not null && key.Version != master.Version)
+            return false;
         // RFC 9580 requires a valid Direct Key signature before a V6 primary is used;
         // a surviving UID certification cannot replace one stripped from the certificate.
         var primary = master ?? key;
@@ -266,6 +270,15 @@ public sealed class HelmProvenanceTrustedKey
         return IsValidRevocationReason(signature) &&
             !HelmProvenance.HasUnsupportedCriticalSubpackets(signature, supportedTags);
     }
+
+    private static bool IsPolicySignatureVersionCompatible(PgpPublicKey signingKey, PgpSignature signature)
+        => (signingKey.Version, signature.Version) switch
+        {
+            // Version 3 signatures from V4 keys are accepted only for historical interoperability.
+            (4, 3 or 4) => true,
+            (6, 6) => true,
+            _ => false,
+        };
 
     private static bool IsValidRevocationReason(PgpSignature signature)
     {
@@ -359,7 +372,9 @@ public sealed class HelmProvenanceTrustedKey
     {
         try
         {
-            if (!HasSupportedPolicySubpackets(signature) ||
+            if (master.Version != subkey.Version ||
+                !IsPolicySignatureVersionCompatible(master, signature) ||
+                !HasSupportedPolicySubpackets(signature) ||
                 IsWeakHashAlgorithm(signature.HashAlgorithm) ||
                 !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, master))
                 return false;
@@ -397,6 +412,7 @@ public sealed class HelmProvenanceTrustedKey
             {
                 var embedded = embeddedSignatures[index];
                 if (embedded.SignatureType != PgpSignature.PrimaryKeyBinding ||
+                    !IsPolicySignatureVersionCompatible(subkey, embedded) ||
                     !HasSupportedPolicySubpackets(embedded) ||
                     IsWeakHashAlgorithm(embedded.HashAlgorithm) ||
                     !HelmProvenance.HasSufficientSignatureHash(embedded.HashAlgorithm, subkey) ||
@@ -544,7 +560,9 @@ public sealed class HelmProvenanceTrustedKey
     {
         try
         {
-            if (signature.SignatureType != signatureType || !HasSupportedPolicySubpackets(signature) ||
+            if (signature.SignatureType != signatureType ||
+                !IsPolicySignatureVersionCompatible(key, signature) ||
+                !HasSupportedPolicySubpackets(signature) ||
                 IsWeakHashAlgorithm(signature.HashAlgorithm) ||
                 !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, key))
                 return false;
@@ -643,7 +661,8 @@ public sealed class HelmProvenanceTrustedKey
             {
                 try
                 {
-                    if (!HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, revoker))
+                    if (!IsPolicySignatureVersionCompatible(revoker, signature) ||
+                        !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, revoker))
                         continue;
 
                     signature.InitVerify(revoker);
@@ -835,7 +854,8 @@ public sealed class HelmProvenanceTrustedKey
     {
         try
         {
-            if (!HasSupportedPolicySubpackets(signature) ||
+            if (!IsPolicySignatureVersionCompatible(key, signature) ||
+                !HasSupportedPolicySubpackets(signature) ||
                 IsWeakHashAlgorithm(signature.HashAlgorithm) ||
                 !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, key))
                 return false;
