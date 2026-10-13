@@ -458,7 +458,7 @@ public static class HelmProvenance
         if (signature.Version == 3)
             return true;
 
-        if (signature.Version is not (4 or 6))
+        if (signature.Version != 4)
             return false;
 
         var hashed = signature.GetHashedSubPackets();
@@ -477,8 +477,6 @@ public static class HelmProvenance
             // but explicitly prohibits V3 signatures with ECDSA and EdDSA algorithms.
             (4, 3) => !IsEllipticCurveSignatureAlgorithm(keyAlgorithm),
             (4, 4) => true,
-            // RFC 9580 §5.2.3.3.1 prohibits Ed25519Legacy in V6 signature packets.
-            (6, 6) => keyAlgorithm != PublicKeyAlgorithmTag.EdDsa_Legacy,
             _ => false,
         };
 

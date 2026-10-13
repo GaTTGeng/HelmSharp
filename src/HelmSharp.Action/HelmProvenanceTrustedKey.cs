@@ -59,7 +59,8 @@ public sealed class HelmProvenanceTrustedKey
     /// not expired, and its key flags (or algorithm) permit signing. Verification must
     /// fail closed when this is false.
     /// </summary>
-    internal bool IsUsableSigningKey => IsUsableSigningKeyFor(_publicKey, _master, _certificateKeys);
+    internal bool IsUsableSigningKey => !IsExpiredAt(DateTime.UtcNow) &&
+        IsUsableSigningKeyFor(_publicKey, _master, _certificateKeys);
 
     internal static bool IsUsableSigningKeyFor(PgpPublicKey key, PgpPublicKey? master)
         => IsUsableSigningKeyFor(key, master, master is null ? [key] : [key, master]);
@@ -177,6 +178,11 @@ public sealed class HelmProvenanceTrustedKey
         PgpPublicKey? master,
         IReadOnlyList<PgpPublicKey> certificateKeys)
     {
+        // Bouncy Castle 2.7.0 parses only V2, V3, and V4 signature packets. V5/V6
+        // public keys cannot establish their policy without the corresponding support.
+        if (key.Version is 5 or 6 || master?.Version is 5 or 6)
+            return false;
+
         // A mathematical signature from a revoked or expired key, or from material that
         // is not authorized to sign (encryption-only subkeys), must never be trusted.
         if (HasValidRevocation(key, master, certificateKeys) ||
@@ -187,12 +193,6 @@ public sealed class HelmProvenanceTrustedKey
         // RFC 9580 requires a subkey to use its primary key's version; otherwise,
         // even a mathematically valid binding cannot establish a valid certificate.
         if (master is not null && key.Version != master.Version)
-            return false;
-        // RFC 9580 requires a valid Direct Key signature before a V6 primary is used;
-        // a surviving UID certification cannot replace one stripped from the certificate.
-        var primary = master ?? key;
-        if (primary is { IsMasterKey: true, Version: 6 } &&
-            GetLatestValidPrimaryDirectKeySignature(primary, certificateKeys) is null)
             return false;
         if (!AlgorithmCanSign(key))
             return false;
@@ -219,10 +219,13 @@ public sealed class HelmProvenanceTrustedKey
 
     private static bool HasSupportedPolicySubpackets(PgpSignature signature)
     {
+        if (signature.Version is not (3 or 4))
+            return false;
+
         // V3 signatures carry creation time in the signature packet itself. Modern
         // signatures require the timestamp in the hashed area so policy ordering cannot
         // be influenced by an unhashed or missing value.
-        if (signature.Version is 4 or 5 or 6)
+        if (signature.Version == 4)
         {
             var hashed = signature.GetHashedSubPackets();
             if (hashed is null || !hashed.HasSubpacket(SignatureSubpacketTag.CreationTime))
@@ -658,11 +661,7 @@ public sealed class HelmProvenanceTrustedKey
             // Bouncy Castle's parameterless GetValidSeconds reads packet metadata without
             // proving the self-signature. Only a certification verified by the primary
             // key may define its lifetime.
-            // V6 stores primary-key-wide expiration in a Direct Key signature; a later
-            // certification for one UID must not replace that certificate-wide policy.
-            var primarySelfSignature = key.Version == 6
-                ? GetLatestValidPrimaryDirectKeySignature(key, certificateKeys ?? [key])
-                : GetLatestValidPrimarySelfSignature(key, certificateKeys ?? [key]);
+            var primarySelfSignature = GetLatestValidPrimarySelfSignature(key, certificateKeys ?? [key]);
             var primaryLifetime = primarySelfSignature?.GetHashedSubPackets()?.GetKeyExpirationTime() ?? 0;
             return primaryLifetime <= 0 ? null : key.CreationTime.AddSeconds(primaryLifetime);
         }
@@ -694,23 +693,6 @@ public sealed class HelmProvenanceTrustedKey
                 ? HasValidSelfCertification(signature, key, certificateKeys)
                 : HasValidDirectKeySignature(signature, key, certificateKeys);
             if (!isValid)
-                continue;
-            if (latest is null || signature.CreationTime > latest.CreationTime)
-                latest = signature;
-        }
-
-        return latest;
-    }
-
-    private static PgpSignature? GetLatestValidPrimaryDirectKeySignature(
-        PgpPublicKey key,
-        IReadOnlyList<PgpPublicKey> certificateKeys)
-    {
-        PgpSignature? latest = null;
-        foreach (var signature in key.GetSignatures())
-        {
-            if (signature.SignatureType != PgpSignature.DirectKey ||
-                !HasValidDirectKeySignature(signature, key, certificateKeys))
                 continue;
             if (latest is null || signature.CreationTime > latest.CreationTime)
                 latest = signature;
@@ -759,17 +741,6 @@ public sealed class HelmProvenanceTrustedKey
             if (key.Version == 4 && keyContents.Length <= ushort.MaxValue)
             {
                 keyPrefix = [0x99, (byte)(keyContents.Length >> 8), (byte)keyContents.Length];
-            }
-            else if (key.Version is 5 or 6)
-            {
-                var packetTag = key.Version == 5 ? (byte)0x9A : (byte)0x9B;
-                keyPrefix = [
-                    packetTag,
-                    (byte)(keyContents.Length >> 24),
-                    (byte)(keyContents.Length >> 16),
-                    (byte)(keyContents.Length >> 8),
-                    (byte)keyContents.Length,
-                ];
             }
             else
             {
@@ -879,7 +850,6 @@ public sealed class HelmProvenanceTrustedKey
         var expectedLength = signature.Version switch
         {
             4 => 20,
-            6 => 32,
             _ => 0,
         };
         if (expectedLength == 0 || expectedFingerprint.Length != expectedLength)
@@ -1090,20 +1060,7 @@ public sealed class HelmProvenanceTrustedKey
         var factory = new PgpObjectFactory(packetInput);
         while (true)
         {
-            object? next;
-            try
-            {
-                next = factory.NextPgpObject();
-            }
-            catch (EndOfStreamException)
-            {
-                break;
-            }
-            catch (IOException)
-            {
-                break;
-            }
-
+            var next = factory.NextPgpObject();
             if (next is null)
                 break;
             if (next is PgpMarker)
@@ -1202,17 +1159,6 @@ public sealed class HelmProvenanceTrustedKey
         if (key.Version == 4 && keyContents.Length <= ushort.MaxValue)
         {
             keyPrefix = [0x99, (byte)(keyContents.Length >> 8), (byte)keyContents.Length];
-        }
-        else if (key.Version is 5 or 6)
-        {
-            var packetTag = key.Version == 5 ? (byte)0x9A : (byte)0x9B;
-            keyPrefix = [
-                packetTag,
-                (byte)(keyContents.Length >> 24),
-                (byte)(keyContents.Length >> 16),
-                (byte)(keyContents.Length >> 8),
-                (byte)keyContents.Length,
-            ];
         }
         else
         {

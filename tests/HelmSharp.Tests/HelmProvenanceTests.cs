@@ -1014,8 +1014,9 @@ public class HelmProvenanceTests
     [InlineData(3, 4, PublicKeyAlgorithmTag.Ed25519, false)]
     [InlineData(3, 4, PublicKeyAlgorithmTag.Ed448, false)]
     [InlineData(4, 4, PublicKeyAlgorithmTag.ECDsa, true)]
-    [InlineData(6, 6, PublicKeyAlgorithmTag.Ed25519, true)]
+    [InlineData(6, 6, PublicKeyAlgorithmTag.Ed25519, false)]
     [InlineData(6, 6, PublicKeyAlgorithmTag.EdDsa_Legacy, false)]
+    [InlineData(5, 5, PublicKeyAlgorithmTag.RsaGeneral, false)]
     [InlineData(6, 4, PublicKeyAlgorithmTag.RsaGeneral, false)]
     [InlineData(4, 6, PublicKeyAlgorithmTag.RsaGeneral, false)]
     [InlineData(3, 6, PublicKeyAlgorithmTag.RsaGeneral, false)]
@@ -1627,6 +1628,20 @@ public class HelmProvenanceTests
         var trustedKey = Assert.Single(HelmProvenanceTrustedKey.FromKeyringData(PrependMarkerPacket(ring.ToArray())));
 
         Assert.NotNull(trustedKey.UserId);
+    }
+
+    [Fact]
+    public void FromKeyringData_UnsupportedSignaturePacketAfterValidKeyFailsClosed()
+    {
+        var (_, publicRing, _, _) = CreateTestKeys();
+        using var keyring = new MemoryStream();
+        publicRing.Encode(keyring);
+        // A new-format Signature packet containing version 6 is unsupported by the
+        // pinned parser; it must not be treated as a clean end of the keyring stream.
+        keyring.Write([0xC2, 0x01, 0x06]);
+
+        Assert.Throws<UnsupportedPacketVersionException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(keyring.ToArray()));
     }
 
     [Fact]
@@ -2597,14 +2612,14 @@ public class HelmProvenanceTests
     }
 
     [Fact]
-    public void FromKeyringData_Version6PrimaryWithoutDirectKeySignatureIsRejected()
+    public void FromKeyringData_Version6PrimaryIsRejected()
     {
         const string userId = "V6 signer <v6@example.com>";
         var keyGenerator = new RsaKeyPairGenerator();
         keyGenerator.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
         var pair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, keyGenerator.GenerateKeyPair(), DateTime.UtcNow);
         var v6Packet = new PublicKeyPacket(
-            (byte)6,
+            6,
             pair.PublicKey.Algorithm,
             pair.PublicKey.CreationTime,
             pair.PublicKey.PublicKeyPacket.Key);
@@ -2622,39 +2637,6 @@ public class HelmProvenanceTests
 
         using var keyBytes = new MemoryStream();
         primary.Encode(keyBytes);
-
-        var exception = Assert.Throws<ArgumentException>(
-            () => HelmProvenanceTrustedKey.FromKeyringData(keyBytes.ToArray()));
-
-        Assert.Contains("signing key", exception.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public void FromKeyringData_Version6PrimaryRejectsVersion4DirectKeySignature()
-    {
-        var keyGenerator = new RsaKeyPairGenerator();
-        keyGenerator.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
-        var pair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, keyGenerator.GenerateKeyPair(), DateTime.UtcNow);
-        var version6Primary = new PgpPublicKey(new PublicKeyPacket(
-            6,
-            pair.PublicKey.Algorithm,
-            pair.PublicKey.CreationTime,
-            pair.PublicKey.PublicKeyPacket.Key));
-
-        // The RSA signature verifies mathematically, but a V6 key cannot use V4
-        // policy signatures to establish flags or satisfy the required Direct Key assertion.
-        var directKeyGenerator = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
-        directKeyGenerator.InitSign(PgpSignature.DirectKey, pair.PrivateKey);
-        var packets = new PgpSignatureSubpacketGenerator();
-        packets.SetSignatureCreationTime(false, DateTime.UtcNow);
-        packets.SetKeyFlags(true, PgpKeyFlags.CanSign);
-        directKeyGenerator.SetHashedSubpackets(packets.Generate());
-        var directKeySignature = directKeyGenerator.GenerateCertification(version6Primary);
-        Assert.Equal(4, directKeySignature.Version);
-        version6Primary = PgpPublicKey.AddCertification(version6Primary, directKeySignature);
-
-        using var keyBytes = new MemoryStream();
-        version6Primary.Encode(keyBytes);
 
         var exception = Assert.Throws<ArgumentException>(
             () => HelmProvenanceTrustedKey.FromKeyringData(keyBytes.ToArray()));
@@ -2675,52 +2657,6 @@ public class HelmProvenanceTests
             masterV4.PublicKeyPacket.Key));
 
         Assert.False(HelmProvenanceTrustedKey.IsUsableSigningKeyFor(subkeyV4, masterV6));
-    }
-
-    [Fact]
-    public void FromKeyringData_Version6UidCertificationCannotReplaceDirectKeyExpiry()
-    {
-        const string userId = "V6 signer <v6@example.com>";
-        var createdAt = DateTime.UtcNow.AddMinutes(-1);
-        var keyGenerator = new RsaKeyPairGenerator();
-        keyGenerator.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
-        var pair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, keyGenerator.GenerateKeyPair(), createdAt);
-        var v6Packet = new PublicKeyPacket(
-            6,
-            pair.PublicKey.Algorithm,
-            pair.PublicKey.CreationTime,
-            pair.PublicKey.PublicKeyPacket.Key);
-        PgpPublicKey primary = new(v6Packet);
-
-        var directKeyGenerator = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
-        directKeyGenerator.InitSign(PgpSignature.DirectKey, pair.PrivateKey);
-        var directKeyPackets = new PgpSignatureSubpacketGenerator();
-        directKeyPackets.SetSignatureCreationTime(false, createdAt.AddSeconds(1));
-        directKeyPackets.SetKeyExpirationTime(false, 5);
-        directKeyPackets.SetKeyFlags(true, PgpKeyFlags.CanSign);
-        directKeyGenerator.SetHashedSubpackets(directKeyPackets.Generate());
-        primary = PgpPublicKey.AddCertification(primary, directKeyGenerator.GenerateCertification(primary));
-
-        // A later UID certification without KeyExpirationTime must not erase V6's
-        // primary-key-wide expiration assertion from the Direct Key signature.
-        var certificationGenerator = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha256);
-        certificationGenerator.InitSign(PgpSignature.PositiveCertification, pair.PrivateKey);
-        var certificationPackets = new PgpSignatureSubpacketGenerator();
-        certificationPackets.SetSignatureCreationTime(false, DateTime.UtcNow);
-        certificationPackets.SetKeyFlags(true, PgpKeyFlags.CanSign);
-        certificationGenerator.SetHashedSubpackets(certificationPackets.Generate());
-        primary = PgpPublicKey.AddCertification(
-            primary,
-            userId,
-            certificationGenerator.GenerateCertification(userId, primary));
-
-        using var keyBytes = new MemoryStream();
-        primary.Encode(keyBytes);
-
-        var exception = Assert.Throws<ArgumentException>(
-            () => HelmProvenanceTrustedKey.FromKeyringData(keyBytes.ToArray()));
-
-        Assert.Contains("signing key", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
