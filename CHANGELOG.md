@@ -19,6 +19,10 @@ This project follows semantic versioning once stable releases begin.
 - Hardened Kubernetes wait controls by rejecting non-positive waiter timeouts and documenting standard polling, cancellation, Job waiting, and unsupported Helm status-watcher semantics (#233).
 - Retried Kubernetes API discovery briefly on apply when a custom-resource kind is not yet registered, so a CRD and its custom resource can ship in one release without intermittent install failures.
 
+### Fixed
+
+- Plugin listing now falls back to default metadata when an installed plugin's `plugin.json` contains valid JSON with unsupported value types, so one malformed plugin does not interrupt listing (#265).
+
 ### Security
 
 - Enforced decompressed resource limits for chart archive loading and repository extraction (compressed input size, total decompressed bytes, per-entry bytes, entry count, decompression amplification, and packaged dependency depth), metered on every decompressed byte and every tar entry and shared across nested dependency archives. Repository downloads abort mid-stream at the compressed-input limit instead of buffering oversized responses, pull/extraction applies the budgets before any archive traversal, directory-sourced dependency archives are size-checked before buffering, cached extractions are scoped to the active limit profile, and dependency and pull operations honor the configured limits. Explicit trusted-chart options and partial-extraction cleanup on failure (#261).
