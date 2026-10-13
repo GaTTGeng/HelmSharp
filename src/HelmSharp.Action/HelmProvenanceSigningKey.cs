@@ -85,29 +85,37 @@ public sealed class HelmProvenanceSigningKey : IDisposable
 
     private static PgpSecretKey LoadSecretKey(byte[] data, char[]? passphrase)
     {
-        var keys = ReadSecretKeyCandidates(data, out var publicKeys);
+        var keys = ReadSecretKeyCandidates(data, out var publicKeys, out var secretPublicKeys);
         if (keys.Count == 0)
             throw new PgpException("No OpenPGP secret key found in the supplied key material.");
 
-        var certificateKeys = keys
-            .SelectMany(candidate => candidate.Master is null
-                ? new[] { candidate.Key.PublicKey }
-                : new[] { candidate.Key.PublicKey, candidate.Master })
-            .Concat(publicKeys)
+        // Prefer explicit public certificates over the public halves embedded in secret
+        // packets. GPG may export an older secret-key packet alongside a refreshed public
+        // certificate, and the latter can carry a revocation absent from the stale copy.
+        var certificateKeys = publicKeys
+            .Concat(secretPublicKeys)
             .DistinctBy(key => Convert.ToHexString(key.GetFingerprint()), StringComparer.Ordinal)
             .ToArray();
+        var certificatesByFingerprint = certificateKeys.ToDictionary(
+            key => Convert.ToHexString(key.GetFingerprint()),
+            StringComparer.Ordinal);
         var hasSigningCandidate = false;
         var hasUnsupportedSigningVersion = false;
         foreach (var candidate in keys)
         {
             var key = candidate.Key;
-            if (key.PublicKey.Version != 4)
+            var fingerprint = Convert.ToHexString(key.PublicKey.GetFingerprint());
+            var publicKey = certificatesByFingerprint.GetValueOrDefault(fingerprint) ?? key.PublicKey;
+            var master = candidate.Master is null
+                ? null
+                : certificatesByFingerprint.GetValueOrDefault(Convert.ToHexString(candidate.Master.GetFingerprint())) ?? candidate.Master;
+            if (publicKey.Version != 4)
             {
                 hasUnsupportedSigningVersion = true;
                 continue;
             }
 
-            if (!HelmProvenanceTrustedKey.IsUsableSigningKeyFor(key.PublicKey, candidate.Master, certificateKeys))
+            if (!HelmProvenanceTrustedKey.IsUsableSigningKeyFor(publicKey, master, certificateKeys))
                 continue;
             hasSigningCandidate = true;
 
@@ -140,10 +148,14 @@ public sealed class HelmProvenanceSigningKey : IDisposable
                 : "Secret key could not be unlocked with the supplied passphrase.");
     }
 
-    private static List<SecretKeyCandidate> ReadSecretKeyCandidates(byte[] data, out List<PgpPublicKey> certificateKeys)
+    private static List<SecretKeyCandidate> ReadSecretKeyCandidates(
+        byte[] data,
+        out List<PgpPublicKey> publicKeys,
+        out List<PgpPublicKey> secretPublicKeys)
     {
         var result = new List<SecretKeyCandidate>();
-        certificateKeys = [];
+        publicKeys = [];
+        secretPublicKeys = [];
         foreach (var obj in ReadPgpObjects(data))
         {
             switch (obj)
@@ -151,20 +163,20 @@ public sealed class HelmProvenanceSigningKey : IDisposable
                 case PgpSecretKeyRing ring:
                     var keys = ring.GetSecretKeys().ToList();
                     var master = keys.FirstOrDefault(k => k.PublicKey.IsMasterKey)?.PublicKey;
-                    certificateKeys.AddRange(keys.Select(key => key.PublicKey));
+                    secretPublicKeys.AddRange(keys.Select(key => key.PublicKey));
                     result.AddRange(keys.Select(key => new SecretKeyCandidate(key, master)));
                     break;
                 case PgpSecretKey key:
-                    certificateKeys.Add(key.PublicKey);
+                    secretPublicKeys.Add(key.PublicKey);
                     result.Add(new SecretKeyCandidate(key, key.PublicKey.IsMasterKey ? key.PublicKey : null));
                     break;
                 case PgpPublicKeyRing pubRing:
                     // Public certificates can revoke secret signing keys, but cannot be
                     // candidates because they do not contain private signing material.
-                    certificateKeys.AddRange(pubRing.GetPublicKeys());
+                    publicKeys.AddRange(pubRing.GetPublicKeys());
                     break;
                 case PgpPublicKey publicKey:
-                    certificateKeys.Add(publicKey);
+                    publicKeys.Add(publicKey);
                     break;
             }
         }

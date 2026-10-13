@@ -426,6 +426,72 @@ public class HelmProvenanceTests
         return ms.ToArray();
     }
 
+    private static byte[] CreateSigningKeyringWithDesignatedCertificationRevocation(bool revokeDirectKey)
+    {
+        const string userId = "Designated revocation <designated@example.com>";
+        const string revokerUserId = "Designated revoker <revoker@example.com>";
+        var (revokerSecretRing, revokerPublicRing, revokerSigningKey, _) = CreateTestKeys(revokerUserId);
+        using var revokerSigningKeyLifetime = revokerSigningKey;
+        var revokerSecret = revokerSecretRing.GetSecretKeys().Single(key => key.PublicKey.IsMasterKey);
+        var (secretRing, publicRing, signingKey, _) = CreateTestKeys(userId);
+        using var signingKeyLifetime = signingKey;
+        var primarySecret = secretRing.GetSecretKeys().Single(key => key.PublicKey.IsMasterKey);
+        var primary = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+        var creationTime = DateTime.UtcNow.AddMinutes(1);
+
+        if (revokeDirectKey)
+        {
+            foreach (var certification in primary.GetSignaturesForId(userId).ToArray())
+                primary = PgpPublicKey.RemoveCertification(primary, userId, certification);
+
+            var directKeyGenerator = new PgpSignatureGenerator(primarySecret.PublicKey.Algorithm, HashAlgorithmTag.Sha512);
+            directKeyGenerator.InitSign(PgpSignature.DirectKey, primarySecret.ExtractPrivateKey(null)!);
+            var directKeyPackets = new PgpSignatureSubpacketGenerator();
+            directKeyPackets.SetSignatureCreationTime(false, creationTime);
+            directKeyPackets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
+            directKeyPackets.AddRevocationKey(false, revokerSecret.PublicKey.Algorithm, revokerSecret.PublicKey.GetFingerprint());
+            directKeyGenerator.SetHashedSubpackets(directKeyPackets.Generate());
+            var directKey = directKeyGenerator.GenerateCertification(primary);
+            primary = PgpPublicKey.AddCertification(primary, directKey);
+
+            var revocationGenerator = new PgpSignatureGenerator(revokerSecret.PublicKey.Algorithm, HashAlgorithmTag.Sha512);
+            revocationGenerator.InitSign(PgpSignature.CertificationRevocation, revokerSecret.ExtractPrivateKey(null)!);
+            var revocationPackets = new PgpSignatureSubpacketGenerator();
+            revocationPackets.SetSignatureCreationTime(false, creationTime.AddSeconds(30));
+            revocationGenerator.SetHashedSubpackets(revocationPackets.Generate());
+            primary = PgpPublicKey.AddCertification(primary, revocationGenerator.GenerateCertification(primary));
+        }
+        else
+        {
+            foreach (var existingCertification in primary.GetSignaturesForId(userId).ToArray())
+                primary = PgpPublicKey.RemoveCertification(primary, userId, existingCertification);
+
+            var certificationPackets = new PgpSignatureSubpacketGenerator();
+            certificationPackets.SetSignatureCreationTime(false, creationTime);
+            certificationPackets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
+            certificationPackets.AddRevocationKey(false, revokerSecret.PublicKey.Algorithm, revokerSecret.PublicKey.GetFingerprint());
+            var certificationGenerator = new PgpSignatureGenerator(primarySecret.PublicKey.Algorithm, HashAlgorithmTag.Sha512);
+            certificationGenerator.InitSign(PgpSignature.PositiveCertification, primarySecret.ExtractPrivateKey(null)!);
+            certificationGenerator.SetHashedSubpackets(certificationPackets.Generate());
+            var certification = certificationGenerator.GenerateCertification(userId, primary);
+            primary = PgpPublicKey.AddCertification(primary, userId, certification);
+
+            var revocationGenerator = new PgpSignatureGenerator(revokerSecret.PublicKey.Algorithm, HashAlgorithmTag.Sha512);
+            revocationGenerator.InitSign(PgpSignature.CertificationRevocation, revokerSecret.ExtractPrivateKey(null)!);
+            var revocationPackets = new PgpSignatureSubpacketGenerator();
+            revocationPackets.SetSignatureCreationTime(false, creationTime.AddSeconds(30));
+            revocationGenerator.SetHashedSubpackets(revocationPackets.Generate());
+            var revocation = revocationGenerator.GenerateCertification(userId, primary);
+            primary = PgpPublicKey.AddCertification(primary, userId, revocation);
+        }
+
+        var updatedPublicRing = PgpPublicKeyRing.InsertPublicKey(publicRing, primary);
+        using var keyMaterial = new MemoryStream();
+        updatedPublicRing.Encode(keyMaterial);
+        revokerPublicRing.Encode(keyMaterial);
+        return keyMaterial.ToArray();
+    }
+
     private static byte[] CreateSignatureTargetDigest(
         PgpSignature signature,
         HashAlgorithmTag hashAlgorithm = HashAlgorithmTag.Sha256)
@@ -2642,6 +2708,41 @@ public class HelmProvenanceTests
         Assert.Contains("No OpenPGP secret key is authorized", exception.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FromSecretKeyData_UsesRefreshedPublicCertificateForSecretKeyPolicy(bool publicRingFirst)
+    {
+        const string userId = "Refreshed certificate <refreshed@example.com>";
+        var (secretRing, publicRing, signingKey, _) = CreateTestKeys(userId);
+        using var signingKeyLifetime = signingKey;
+        var primarySecret = secretRing.GetSecretKeys().Single(key => key.PublicKey.IsMasterKey);
+        var primary = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+        var revocationGenerator = new PgpSignatureGenerator(primarySecret.PublicKey.Algorithm, HashAlgorithmTag.Sha512);
+        revocationGenerator.InitSign(PgpSignature.KeyRevocation, primarySecret.ExtractPrivateKey(null)!);
+        var revocationPackets = new PgpSignatureSubpacketGenerator();
+        revocationPackets.SetSignatureCreationTime(false, DateTime.UtcNow.AddSeconds(1));
+        revocationGenerator.SetHashedSubpackets(revocationPackets.Generate());
+        var revokedPrimary = PgpPublicKey.AddCertification(primary, revocationGenerator.GenerateCertification(primary));
+        var refreshedPublicRing = PgpPublicKeyRing.InsertPublicKey(publicRing, revokedPrimary);
+        using var keyMaterial = new MemoryStream();
+        if (publicRingFirst)
+        {
+            refreshedPublicRing.Encode(keyMaterial);
+            secretRing.Encode(keyMaterial);
+        }
+        else
+        {
+            secretRing.Encode(keyMaterial);
+            refreshedPublicRing.Encode(keyMaterial);
+        }
+
+        var exception = Assert.Throws<PgpException>(
+            () => HelmProvenanceSigningKey.FromSecretKeyData(keyMaterial.ToArray()));
+
+        Assert.Contains("No OpenPGP secret key is authorized", exception.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void IsUsableSigningKeyFor_Version6PrimaryWithoutDirectKeySignatureRejectsSigningSubkey()
     {
@@ -3104,6 +3205,18 @@ public class HelmProvenanceTests
         var ex = Assert.Throws<ArgumentException>(
             () => HelmProvenanceTrustedKey.FromKeyringData(revokedBytes));
         Assert.Contains("signing key", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FromKeyringData_DesignatedRevokerCanRevokeSigningAssertions(bool revokeDirectKey)
+    {
+        var revokedBytes = CreateSigningKeyringWithDesignatedCertificationRevocation(revokeDirectKey);
+
+        var trustedKeys = HelmProvenanceTrustedKey.FromKeyringData(revokedBytes);
+
+        Assert.Single(trustedKeys);
     }
 
     [Fact]

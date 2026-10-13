@@ -159,7 +159,7 @@ public sealed class HelmProvenanceTrustedKey
             trusted.Add(new HelmProvenanceTrustedKey(
                 candidate.Key,
                 candidate.Master,
-                ComputeExpiry(candidate.Key, candidate.Master),
+                ComputeExpiry(candidate.Key, candidate.Master, certificateKeys),
                 certificateKeys));
         }
 
@@ -191,13 +191,14 @@ public sealed class HelmProvenanceTrustedKey
         // RFC 9580 requires a valid Direct Key signature before a V6 primary is used;
         // a surviving UID certification cannot replace one stripped from the certificate.
         var primary = master ?? key;
-        if (primary.IsMasterKey && primary.Version == 6 && GetLatestValidPrimaryDirectKeySignature(primary) is null)
+        if (primary is { IsMasterKey: true, Version: 6 } &&
+            GetLatestValidPrimaryDirectKeySignature(primary, certificateKeys) is null)
             return false;
         if (!AlgorithmCanSign(key))
             return false;
-        if (IsExpiredAt(ComputeEffectiveExpiry(key, master), DateTime.UtcNow))
+        if (IsExpiredAt(ComputeEffectiveExpiry(key, master, certificateKeys), DateTime.UtcNow))
             return false;
-        return KeyFlagsPermitSigning(key, master);
+        return KeyFlagsPermitSigning(key, master, certificateKeys);
     }
 
     /// <summary>
@@ -476,7 +477,10 @@ public sealed class HelmProvenanceTrustedKey
     /// without a key-flags subpacket keep their historical unrestricted usage, gated
     /// only by <see cref="AlgorithmCanSign"/>.
     /// </summary>
-    private static bool KeyFlagsPermitSigning(PgpPublicKey key, PgpPublicKey? master)
+    private static bool KeyFlagsPermitSigning(
+        PgpPublicKey key,
+        PgpPublicKey? master,
+        IReadOnlyList<PgpPublicKey> certificateKeys)
     {
         // Third-party certifications must not widen what a key may do, so a primary key
         // only trusts key flags it asserted itself; a subkey is governed by its binding
@@ -494,11 +498,11 @@ public sealed class HelmProvenanceTrustedKey
             if (key.IsMasterKey)
             {
                 var validPrimaryAssertion = sig.SignatureType == PgpSignature.DirectKey
-                    ? HasValidDirectKeySignature(sig, key)
+                    ? HasValidDirectKeySignature(sig, key, certificateKeys)
                     : sig.SignatureType is (PgpSignature.PositiveCertification
                         or PgpSignature.CasualCertification or PgpSignature.NoCertification
                         or PgpSignature.DefaultCertification)
-                        && HasValidSelfCertification(sig, key);
+                        && HasValidSelfCertification(sig, key, certificateKeys);
                 if (!validPrimaryAssertion)
                     continue;
             }
@@ -589,28 +593,36 @@ public sealed class HelmProvenanceTrustedKey
         => subkey.GetKeySignatures().Where(signature => signature.SignatureType == PgpSignature.SubkeyBinding
             && HasValidSubkeyBinding(signature, master, subkey));
 
-    private static bool HasValidSelfCertification(PgpSignature signature, PgpPublicKey key)
+    private static bool HasValidSelfCertification(
+        PgpSignature signature,
+        PgpPublicKey key,
+        IReadOnlyList<PgpPublicKey> certificateKeys)
     {
         foreach (var userId in key.GetUserIds())
         {
             if (HasValidUserIdSignature(signature, userId, key))
-                return !IsCertificationRevoked(key, userId, signature);
+                return !IsCertificationRevoked(key, userId, signature, certificateKeys);
         }
 
         return false;
     }
 
-    private static bool IsCertificationRevoked(PgpPublicKey key, string userId, PgpSignature certification)
+    private static bool IsCertificationRevoked(
+        PgpPublicKey key,
+        string userId,
+        PgpSignature certification,
+        IReadOnlyList<PgpPublicKey> certificateKeys)
     {
+        var revokers = GetAuthorizedRevokers(key, certificateKeys);
         foreach (var signature in key.GetSignaturesForId(userId))
         {
             if (signature.SignatureType != PgpSignature.CertificationRevocation ||
                 signature.CreationTime < certification.CreationTime ||
-                !HasValidUserIdSignature(signature, userId, key) ||
                 !RevocationTargetsSignature(signature, certification))
                 continue;
 
-            return true;
+            if (revokers.Any(revoker => HasValidUserIdSignature(signature, userId, key, revoker)))
+                return true;
         }
 
         // A later self-certification can reauthorize the UID after a targetless legacy
@@ -623,7 +635,10 @@ public sealed class HelmProvenanceTrustedKey
     /// of <c>GetValidSeconds</c> verifies a subkey's binding signature before trusting
     /// its expiration, so a forged binding packet cannot extend a subkey's lifetime.
     /// </summary>
-    private static DateTime? ComputeExpiry(PgpPublicKey key, PgpPublicKey? master)
+    private static DateTime? ComputeExpiry(
+        PgpPublicKey key,
+        PgpPublicKey? master,
+        IReadOnlyList<PgpPublicKey>? certificateKeys = null)
     {
         if (key.IsMasterKey)
         {
@@ -643,8 +658,8 @@ public sealed class HelmProvenanceTrustedKey
             // V6 stores primary-key-wide expiration in a Direct Key signature; a later
             // certification for one UID must not replace that certificate-wide policy.
             var primarySelfSignature = key.Version == 6
-                ? GetLatestValidPrimaryDirectKeySignature(key)
-                : GetLatestValidPrimarySelfSignature(key);
+                ? GetLatestValidPrimaryDirectKeySignature(key, certificateKeys ?? [key])
+                : GetLatestValidPrimarySelfSignature(key, certificateKeys ?? [key]);
             var primaryLifetime = primarySelfSignature?.GetHashedSubPackets()?.GetKeyExpirationTime() ?? 0;
             return primaryLifetime <= 0 ? null : key.CreationTime.AddSeconds(primaryLifetime);
         }
@@ -659,7 +674,9 @@ public sealed class HelmProvenanceTrustedKey
         return validSeconds <= 0 ? null : key.CreationTime.AddSeconds(validSeconds);
     }
 
-    private static PgpSignature? GetLatestValidPrimarySelfSignature(PgpPublicKey key)
+    private static PgpSignature? GetLatestValidPrimarySelfSignature(
+        PgpPublicKey key,
+        IReadOnlyList<PgpPublicKey> certificateKeys)
     {
         PgpSignature? latest = null;
         foreach (var signature in key.GetSignatures())
@@ -671,8 +688,8 @@ public sealed class HelmProvenanceTrustedKey
                 continue;
 
             var isValid = isCertification
-                ? HasValidSelfCertification(signature, key)
-                : HasValidDirectKeySignature(signature, key);
+                ? HasValidSelfCertification(signature, key, certificateKeys)
+                : HasValidDirectKeySignature(signature, key, certificateKeys);
             if (!isValid)
                 continue;
             if (latest is null || signature.CreationTime > latest.CreationTime)
@@ -682,12 +699,15 @@ public sealed class HelmProvenanceTrustedKey
         return latest;
     }
 
-    private static PgpSignature? GetLatestValidPrimaryDirectKeySignature(PgpPublicKey key)
+    private static PgpSignature? GetLatestValidPrimaryDirectKeySignature(
+        PgpPublicKey key,
+        IReadOnlyList<PgpPublicKey> certificateKeys)
     {
         PgpSignature? latest = null;
         foreach (var signature in key.GetSignatures())
         {
-            if (signature.SignatureType != PgpSignature.DirectKey || !HasValidDirectKeySignature(signature, key))
+            if (signature.SignatureType != PgpSignature.DirectKey ||
+                !HasValidDirectKeySignature(signature, key, certificateKeys))
                 continue;
             if (latest is null || signature.CreationTime > latest.CreationTime)
                 latest = signature;
@@ -696,37 +716,57 @@ public sealed class HelmProvenanceTrustedKey
         return latest;
     }
 
-    private static bool HasValidDirectKeySignature(PgpSignature signature, PgpPublicKey key)
+    private static bool HasValidDirectKeySignature(
+        PgpSignature signature,
+        PgpPublicKey key,
+        IReadOnlyList<PgpPublicKey> certificateKeys)
         => HasValidPrimaryKeySignature(signature, key, PgpSignature.DirectKey)
-            && !IsDirectKeySignatureRevoked(signature, key);
+            && !IsDirectKeySignatureRevoked(signature, key, certificateKeys);
 
-    private static bool IsDirectKeySignatureRevoked(PgpSignature directKeySignature, PgpPublicKey key)
+    private static bool IsDirectKeySignatureRevoked(
+        PgpSignature directKeySignature,
+        PgpPublicKey key,
+        IReadOnlyList<PgpPublicKey> certificateKeys)
         // A Certification Revocation is hashed over the same primary-key data as the
         // Direct Key assertion it cancels, and revocation wins equal creation times.
-        => key.GetSignatures().Any(revocation =>
+    {
+        var revokers = GetAuthorizedRevokers(key, certificateKeys);
+        return key.GetSignatures().Any(revocation =>
             revocation.SignatureType == PgpSignature.CertificationRevocation &&
             revocation.CreationTime >= directKeySignature.CreationTime &&
             RevocationTargetsSignature(revocation, directKeySignature) &&
-            HasValidPrimaryKeySignature(revocation, key, PgpSignature.CertificationRevocation));
+            revokers.Any(revoker => HasValidPrimaryKeySignature(
+                revocation,
+                key,
+                PgpSignature.CertificationRevocation,
+                revoker)));
+    }
 
     private static bool HasValidPrimaryKeySignature(PgpSignature signature, PgpPublicKey key, int signatureType)
+        => HasValidPrimaryKeySignature(signature, key, signatureType, key);
+
+    private static bool HasValidPrimaryKeySignature(
+        PgpSignature signature,
+        PgpPublicKey key,
+        int signatureType,
+        PgpPublicKey signer)
     {
         try
         {
             if (signature.SignatureType != signatureType ||
-                !IsPolicySignatureVersionCompatible(key, signature) ||
+                !IsPolicySignatureVersionCompatible(signer, signature) ||
                 !HasSupportedPolicySubpackets(signature) ||
-                !IssuerFingerprintMatches(signature, key) ||
+                !IssuerFingerprintMatches(signature, signer) ||
                 IsWeakHashAlgorithm(signature.HashAlgorithm) ||
-                !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, key))
+                !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, signer))
                 return false;
 
-            signature.InitVerify(key);
+            signature.InitVerify(signer);
             var keyContents = key.PublicKeyPacket.GetEncodedContents();
             byte[] keyPrefix;
             if (key.Version == 4 && keyContents.Length <= ushort.MaxValue)
             {
-                keyPrefix = [(byte)0x99, (byte)(keyContents.Length >> 8), (byte)keyContents.Length];
+                keyPrefix = [0x99, (byte)(keyContents.Length >> 8), (byte)keyContents.Length];
             }
             else if (key.Version is 5 or 6)
             {
@@ -758,13 +798,16 @@ public sealed class HelmProvenanceTrustedKey
         }
     }
 
-    private static DateTime? ComputeEffectiveExpiry(PgpPublicKey key, PgpPublicKey? master)
+    private static DateTime? ComputeEffectiveExpiry(
+        PgpPublicKey key,
+        PgpPublicKey? master,
+        IReadOnlyList<PgpPublicKey> certificateKeys)
     {
-        var keyExpiry = ComputeExpiry(key, master);
+        var keyExpiry = ComputeExpiry(key, master, certificateKeys);
         if (master is null || key.IsMasterKey)
             return keyExpiry;
 
-        var primaryExpiry = ComputeExpiry(master, null);
+        var primaryExpiry = ComputeExpiry(master, null, certificateKeys);
         return keyExpiry is null ? primaryExpiry
             : primaryExpiry is null ? keyExpiry
             : keyExpiry < primaryExpiry ? keyExpiry : primaryExpiry;
@@ -798,12 +841,7 @@ public sealed class HelmProvenanceTrustedKey
         IReadOnlyList<PgpPublicKey> certificateKeys)
     {
         var primary = master ?? key;
-        var allowedFingerprints = GetAuthorizedRevokerFingerprints(primary);
-        allowedFingerprints.Add(Convert.ToHexString(primary.GetFingerprint()));
-
-        var revokers = certificateKeys
-            .Where(candidate => allowedFingerprints.Contains(Convert.ToHexString(candidate.GetFingerprint())))
-            .ToArray();
+        var revokers = GetAuthorizedRevokers(primary, certificateKeys);
         var revocationType = key.IsMasterKey ? PgpSignature.KeyRevocation : PgpSignature.SubkeyRevocation;
         foreach (var signature in key.GetKeySignatures())
         {
@@ -879,18 +917,34 @@ public sealed class HelmProvenanceTrustedKey
         return true;
     }
 
+    private static IReadOnlyList<PgpPublicKey> GetAuthorizedRevokers(
+        PgpPublicKey primary,
+        IReadOnlyList<PgpPublicKey> certificateKeys)
+    {
+        var authorizedFingerprints = GetAuthorizedRevokerFingerprints(primary);
+        authorizedFingerprints.Add(Convert.ToHexString(primary.GetFingerprint()));
+        return certificateKeys
+            .Append(primary)
+            .DistinctBy(candidate => Convert.ToHexString(candidate.GetFingerprint()), StringComparer.Ordinal)
+            .Where(candidate => authorizedFingerprints.Contains(Convert.ToHexString(candidate.GetFingerprint())))
+            .ToArray();
+    }
+
     private static HashSet<string> GetAuthorizedRevokerFingerprints(PgpPublicKey primary)
     {
         var fingerprints = new HashSet<string>(StringComparer.Ordinal);
         foreach (var signature in primary.GetSignatures())
         {
+            // Discover declarations from cryptographically valid self-assertions without
+            // checking their revocations here. Revocation verification consumes this set,
+            // so following revocation status recursively would make authorization circular.
             var isValidAssertion = signature.SignatureType == PgpSignature.DirectKey
-                ? HasValidDirectKeySignature(signature, primary)
+                ? HasValidPrimaryKeySignature(signature, primary, PgpSignature.DirectKey)
                 : (signature.SignatureType is PgpSignature.PositiveCertification
                     or PgpSignature.CasualCertification
                     or PgpSignature.NoCertification
                     or PgpSignature.DefaultCertification)
-                    && HasValidSelfCertification(signature, primary);
+                    && primary.GetUserIds().Any(userId => HasValidUserIdSignature(signature, userId, primary));
             if (!isValidAssertion)
                 continue;
 
@@ -1047,23 +1101,71 @@ public sealed class HelmProvenanceTrustedKey
     }
 
     private static bool HasValidUserIdSignature(PgpSignature signature, string userId, PgpPublicKey key)
+        => HasValidUserIdSignature(signature, userId, key, key);
+
+    private static bool HasValidUserIdSignature(
+        PgpSignature signature,
+        string userId,
+        PgpPublicKey key,
+        PgpPublicKey signer)
     {
         try
         {
-            if (!IsPolicySignatureVersionCompatible(key, signature) ||
+            if (!IsPolicySignatureVersionCompatible(signer, signature) ||
                 !HasSupportedPolicySubpackets(signature) ||
-                !IssuerFingerprintMatches(signature, key) ||
+                !IssuerFingerprintMatches(signature, signer) ||
                 IsWeakHashAlgorithm(signature.HashAlgorithm) ||
-                !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, key))
+                !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, signer))
                 return false;
 
-            signature.InitVerify(key);
-            return signature.VerifyCertification(userId, key) && !IsSignatureExpired(signature, DateTime.UtcNow);
+            signature.InitVerify(signer);
+            var verified = signer.GetFingerprint().AsSpan().SequenceEqual(key.GetFingerprint())
+                ? signature.VerifyCertification(userId, key)
+                : VerifyUserIdCertification(signature, userId, key);
+            return verified && !IsSignatureExpired(signature, DateTime.UtcNow);
         }
         catch (PgpException)
         {
             return false;
         }
+    }
+
+    private static bool VerifyUserIdCertification(PgpSignature signature, string userId, PgpPublicKey key)
+    {
+        // The library helper assumes the certified key also signed the UID; designated
+        // revokers sign the same certification data with their own key instead.
+        var keyContents = key.PublicKeyPacket.GetEncodedContents();
+        byte[] keyPrefix;
+        if (key.Version == 4 && keyContents.Length <= ushort.MaxValue)
+        {
+            keyPrefix = [0x99, (byte)(keyContents.Length >> 8), (byte)keyContents.Length];
+        }
+        else if (key.Version is 5 or 6)
+        {
+            var packetTag = key.Version == 5 ? (byte)0x9A : (byte)0x9B;
+            keyPrefix = [
+                packetTag,
+                (byte)(keyContents.Length >> 24),
+                (byte)(keyContents.Length >> 16),
+                (byte)(keyContents.Length >> 8),
+                (byte)keyContents.Length,
+            ];
+        }
+        else
+        {
+            return false;
+        }
+
+        var userIdBytes = System.Text.Encoding.UTF8.GetBytes(userId);
+        signature.Update(keyPrefix);
+        signature.Update(keyContents);
+        signature.Update(0xB4);
+        signature.Update((byte)(userIdBytes.Length >> 24));
+        signature.Update((byte)(userIdBytes.Length >> 16));
+        signature.Update((byte)(userIdBytes.Length >> 8));
+        signature.Update((byte)userIdBytes.Length);
+        signature.Update(userIdBytes);
+        return signature.Verify();
     }
 
     private static bool IsWeakHashAlgorithm(HashAlgorithmTag algorithm)
