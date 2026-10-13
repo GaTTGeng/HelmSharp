@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Org.BouncyCastle.Bcpg;
 using Org.BouncyCastle.Bcpg.OpenPgp;
+using Org.BouncyCastle.Bcpg.Sig;
 using Org.BouncyCastle.Crypto;
 using Org.BouncyCastle.Crypto.Generators;
 using Org.BouncyCastle.Crypto.Parameters;
@@ -327,6 +328,55 @@ public class HelmProvenanceTests
         return ms.ToArray();
     }
 
+    private static byte[] CreateSigningKeyringWithCriticalIssuerFingerprintRevocation(byte[]? issuerFingerprint = null)
+    {
+        const string userId = "Issuer Fingerprint Revocation <issuer-fingerprint@example.com>";
+        var (secretRing, publicRing, signingKey, _) = CreateTestKeys(userId);
+        signingKey.Dispose();
+
+        var secret = secretRing.GetSecretKeys().First();
+        var primary = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+        var generator = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha512);
+        generator.InitSign(PgpSignature.KeyRevocation, secret.ExtractPrivateKey(null)!);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        packets.SetRevocationReason(true, RevocationReasonTag.KeySuperseded, "test revocation");
+        packets.AddCustomSubpacket(new IssuerFingerprint(true, 4, issuerFingerprint ?? primary.GetFingerprint()));
+        generator.SetHashedSubpackets(packets.Generate());
+
+        var revokedPrimary = PgpPublicKey.AddCertification(primary, generator.GenerateCertification(primary));
+        var revokedRing = PgpPublicKeyRing.InsertPublicKey(publicRing, revokedPrimary);
+        using var ms = new MemoryStream();
+        revokedRing.Encode(ms);
+        return ms.ToArray();
+    }
+
+    private static byte[] CreateSigningKeyringWithCriticalIssuerFingerprintCertificationRevocation(
+        byte[]? issuerFingerprint = null)
+    {
+        const string userId = "Issuer Fingerprint Certification Revocation <issuer-fingerprint@example.com>";
+        var (secretRing, publicRing, signingKey, _) = CreateTestKeys(userId);
+        signingKey.Dispose();
+
+        var secret = secretRing.GetSecretKeys().First();
+        var primary = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+        var generator = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha512);
+        generator.InitSign(PgpSignature.CertificationRevocation, secret.ExtractPrivateKey(null)!);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        packets.AddCustomSubpacket(new IssuerFingerprint(true, 4, issuerFingerprint ?? primary.GetFingerprint()));
+        generator.SetHashedSubpackets(packets.Generate());
+
+        var revokedPrimary = PgpPublicKey.AddCertification(
+            primary,
+            userId,
+            generator.GenerateCertification(userId, primary));
+        var revokedRing = PgpPublicKeyRing.InsertPublicKey(publicRing, revokedPrimary);
+        using var ms = new MemoryStream();
+        revokedRing.Encode(ms);
+        return ms.ToArray();
+    }
+
     /// <summary>Binary public keyring containing a single signing key that is already expired.</summary>
     private static byte[] CreateExpiredSigningKeyring(string userId = "Expired <expired@example.com>")
     {
@@ -535,6 +585,34 @@ public class HelmProvenanceTests
             Assert.Equal(trustedKey.KeyId, result.SignerKeyId);
             Assert.NotNull(result.ExpectedSha256);
             Assert.Equal(result.ExpectedSha256, result.ActualSha256);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Verify_ClearSignedMessageWithoutHashArmorHeader_Succeeds()
+    {
+        var work = TempDir();
+        try
+        {
+            var tgz = await CreateTestChartArchiveAsync(work);
+            var (_, _, signingKey, trustedKey) = CreateTestKeys();
+            var provenancePath = await HelmProvenance.SignAsync(tgz, signingKey);
+            var provenance = await File.ReadAllTextAsync(provenancePath);
+            Assert.Contains("Hash: SHA512\n\n", provenance, StringComparison.Ordinal);
+
+            await File.WriteAllTextAsync(
+                provenancePath,
+                provenance.Replace("Hash: SHA512\n\n", "\n", StringComparison.Ordinal));
+
+            var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
+
+            Assert.True(result.IsValid, result.FailureReason);
+            Assert.True(result.SignatureValid);
+            Assert.True(result.SignerTrusted);
         }
         finally
         {
@@ -2529,6 +2607,48 @@ public class HelmProvenanceTests
         var ex = Assert.Throws<ArgumentException>(
             () => HelmProvenanceTrustedKey.FromKeyringData(revokedBytes));
         Assert.Contains("signing key", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void FromKeyringData_CriticalIssuerFingerprintRevocation_IsHonored()
+    {
+        var revokedBytes = CreateSigningKeyringWithCriticalIssuerFingerprintRevocation();
+
+        var ex = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(revokedBytes));
+        Assert.Contains("signing key", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void FromKeyringData_CriticalIssuerFingerprintMustMatchRevoker()
+    {
+        var forgedRevocationBytes = CreateSigningKeyringWithCriticalIssuerFingerprintRevocation(
+            RandomNumberGenerator.GetBytes(20));
+
+        var trustedKeys = HelmProvenanceTrustedKey.FromKeyringData(forgedRevocationBytes);
+
+        Assert.Single(trustedKeys);
+    }
+
+    [Fact]
+    public void FromKeyringData_CriticalIssuerFingerprintCertificationRevocation_IsHonored()
+    {
+        var revokedBytes = CreateSigningKeyringWithCriticalIssuerFingerprintCertificationRevocation();
+
+        var ex = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(revokedBytes));
+        Assert.Contains("signing key", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void FromKeyringData_CriticalIssuerFingerprintCertificationRevocationMustMatchSigner()
+    {
+        var forgedRevocationBytes = CreateSigningKeyringWithCriticalIssuerFingerprintCertificationRevocation(
+            RandomNumberGenerator.GetBytes(20));
+
+        var trustedKeys = HelmProvenanceTrustedKey.FromKeyringData(forgedRevocationBytes);
+
+        Assert.Single(trustedKeys);
     }
 
     [Fact]

@@ -865,7 +865,6 @@ public static class HelmProvenance
         }
 
         var position = firstLineEnd + 1;
-        var sawHashHeader = false;
         while (position <= text.Length)
         {
             var lineEnd = text.IndexOf('\n', position);
@@ -875,9 +874,8 @@ public static class HelmProvenance
             var line = text.AsSpan(position, lineEnd - position);
             if (line.IsEmpty)
             {
-                if (!sawHashHeader)
-                    return false;
-
+                // RFC 9580 §7.1 makes legacy Hash headers optional; the signature
+                // packet itself identifies the hash algorithm used for verification.
                 bodyStart = lineEnd + 1;
                 return true;
             }
@@ -893,7 +891,6 @@ public static class HelmProvenance
                 return false;
             }
 
-            sawHashHeader = true;
             position = lineEnd + 1;
         }
 

@@ -1,5 +1,6 @@
 using Org.BouncyCastle.Asn1.Nist;
 using Org.BouncyCastle.Bcpg;
+using Org.BouncyCastle.Bcpg.Sig;
 using Org.BouncyCastle.Bcpg.OpenPgp;
 
 namespace HelmSharp.Action;
@@ -263,7 +264,11 @@ public sealed class HelmProvenanceTrustedKey
                     SignatureSubpacketTag.ExpireTime,
                 },
             PgpSignature.KeyRevocation or PgpSignature.SubkeyRevocation or PgpSignature.CertificationRevocation =>
-                [SignatureSubpacketTag.CreationTime, SignatureSubpacketTag.RevocationReason],
+                [
+                    SignatureSubpacketTag.CreationTime,
+                    SignatureSubpacketTag.RevocationReason,
+                    SignatureSubpacketTag.IssuerFingerprint,
+                ],
             _ => Array.Empty<SignatureSubpacketTag>(),
         };
 
@@ -369,6 +374,7 @@ public sealed class HelmProvenanceTrustedKey
             if (master.Version != subkey.Version ||
                 !IsPolicySignatureVersionCompatible(master, signature) ||
                 !HasSupportedPolicySubpackets(signature) ||
+                !IssuerFingerprintMatches(signature, master) ||
                 IsWeakHashAlgorithm(signature.HashAlgorithm) ||
                 !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, master))
                 return false;
@@ -408,6 +414,7 @@ public sealed class HelmProvenanceTrustedKey
                 if (embedded.SignatureType != PgpSignature.PrimaryKeyBinding ||
                     !IsPolicySignatureVersionCompatible(subkey, embedded) ||
                     !HasSupportedPolicySubpackets(embedded) ||
+                    !IssuerFingerprintMatches(embedded, subkey) ||
                     IsWeakHashAlgorithm(embedded.HashAlgorithm) ||
                     !HelmProvenance.HasSufficientSignatureHash(embedded.HashAlgorithm, subkey) ||
                     IsSignatureExpired(embedded, DateTime.UtcNow))
@@ -557,6 +564,7 @@ public sealed class HelmProvenanceTrustedKey
             if (signature.SignatureType != signatureType ||
                 !IsPolicySignatureVersionCompatible(key, signature) ||
                 !HasSupportedPolicySubpackets(signature) ||
+                !IssuerFingerprintMatches(signature, key) ||
                 IsWeakHashAlgorithm(signature.HashAlgorithm) ||
                 !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, key))
                 return false;
@@ -656,6 +664,7 @@ public sealed class HelmProvenanceTrustedKey
                 try
                 {
                     if (!IsPolicySignatureVersionCompatible(revoker, signature) ||
+                        !IssuerFingerprintMatches(signature, revoker) ||
                         !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, revoker))
                         continue;
 
@@ -675,6 +684,47 @@ public sealed class HelmProvenanceTrustedKey
         }
 
         return false;
+    }
+
+    private static bool IssuerFingerprintMatches(PgpSignature signature, PgpPublicKey revoker)
+    {
+        // Unhashed issuer metadata is advisory; only accept a fingerprint bound by the signature.
+        var hashed = signature.GetHashedSubPackets();
+        if (hashed is null || !hashed.HasSubpacket(SignatureSubpacketTag.IssuerFingerprint))
+            return true;
+
+        var expectedFingerprint = revoker.GetFingerprint();
+        var expectedLength = signature.Version switch
+        {
+            4 => 20,
+            6 => 32,
+            _ => 0,
+        };
+        if (expectedLength == 0 || expectedFingerprint.Length != expectedLength)
+            return false;
+
+        var issuerFingerprints = hashed.GetSubpackets(SignatureSubpacketTag.IssuerFingerprint);
+        if (issuerFingerprints.Length == 0)
+            return false;
+
+        foreach (var subpacket in issuerFingerprints)
+        {
+            if (subpacket is not IssuerFingerprint issuerFingerprint)
+                return false;
+
+            var data = issuerFingerprint.GetData();
+            if (data.Length != expectedLength + 1 ||
+                data[0] != signature.Version ||
+                issuerFingerprint.KeyVersion != signature.Version)
+                return false;
+
+            var fingerprint = issuerFingerprint.GetFingerprint();
+            if (fingerprint.Length != expectedLength ||
+                !fingerprint.AsSpan().SequenceEqual(expectedFingerprint))
+                return false;
+        }
+
+        return true;
     }
 
     private static HashSet<string> GetAuthorizedRevokerFingerprints(PgpPublicKey primary)
@@ -850,6 +900,7 @@ public sealed class HelmProvenanceTrustedKey
         {
             if (!IsPolicySignatureVersionCompatible(key, signature) ||
                 !HasSupportedPolicySubpackets(signature) ||
+                !IssuerFingerprintMatches(signature, key) ||
                 IsWeakHashAlgorithm(signature.HashAlgorithm) ||
                 !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, key))
                 return false;
