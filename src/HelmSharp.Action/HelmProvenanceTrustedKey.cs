@@ -881,11 +881,15 @@ public sealed class HelmProvenanceTrustedKey
                 continue;
 
             // Revocable=false commits the binding signer not to revoke that assertion;
-            // a later subkey revocation therefore cannot invalidate the bound subkey.
-            if (revocationType == PgpSignature.SubkeyRevocation && master is not null &&
-                GetValidSubkeyBindings(key, master).Any(binding =>
-                    binding.CreationTime <= signature.CreationTime && IsNonRevocable(binding)))
-                continue;
+            // only the latest binding at the revocation time governs this commitment.
+            if (revocationType == PgpSignature.SubkeyRevocation && master is not null)
+            {
+                var governingBinding = GetValidSubkeyBindings(key, master)
+                    .Where(binding => binding.CreationTime <= signature.CreationTime)
+                    .MaxBy(binding => binding.CreationTime);
+                if (governingBinding is not null && IsNonRevocable(governingBinding))
+                    continue;
+            }
 
             foreach (var revoker in revokers)
             {
@@ -1090,7 +1094,17 @@ public sealed class HelmProvenanceTrustedKey
         // Renewed copies of one certificate can carry different verified self-signatures.
         // Merge by full fingerprints so a stale packet copy cannot hide the renewal and
         // distinct keys that collide on the short key ID remain separate.
-        return candidates
+        var mergedPrimaryKeys = candidates
+            .SelectMany<KeyCandidate, PgpPublicKey>(candidate => candidate.Key.IsMasterKey
+                ? [candidate.Key]
+                : candidate.Master is null ? [] : [candidate.Master])
+            .GroupBy(key => Convert.ToHexString(key.GetFingerprint()), StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                MergePublicKeys,
+                StringComparer.Ordinal);
+
+        var mergedCandidates = candidates
             .GroupBy(candidate => string.Concat(
                 candidate.Master is null ? string.Empty : Convert.ToHexString(candidate.Master.GetFingerprint()),
                 ":",
@@ -1101,9 +1115,25 @@ public sealed class HelmProvenanceTrustedKey
                 var masters = group.Where(candidate => candidate.Master is not null)
                     .Select(candidate => candidate.Master!)
                     .ToArray();
-                var master = key.IsMasterKey ? key : masters.Length == 0 ? null : MergePublicKeys(masters);
+                var masterFingerprint = key.IsMasterKey
+                    ? Convert.ToHexString(key.GetFingerprint())
+                    : masters.Length == 0 ? null : Convert.ToHexString(masters[0].GetFingerprint());
+                var master = masterFingerprint is not null && mergedPrimaryKeys.TryGetValue(masterFingerprint, out var mergedMaster)
+                    ? mergedMaster
+                    : null;
+                if (key.IsMasterKey && master is not null)
+                    key = master;
                 return new KeyCandidate(key, master);
             })
+            .ToArray();
+
+        // A primary-only refresh may have arrived as a separate key object rather than
+        // inside the old ring; attach its merged packet set to every related subkey.
+        return mergedCandidates
+            .DistinctBy(candidate => string.Concat(
+                candidate.Master is null ? string.Empty : Convert.ToHexString(candidate.Master.GetFingerprint()),
+                ":",
+                Convert.ToHexString(candidate.Key.GetFingerprint())), StringComparer.Ordinal)
             .ToList();
     }
 
@@ -1149,24 +1179,17 @@ public sealed class HelmProvenanceTrustedKey
         var validUserIds = new List<(string UserId, PgpSignature Certification, bool IsPrimary)>();
         foreach (var userId in key.GetUserIds())
         {
-            PgpSignature? latestCertification = null;
-            foreach (var signature in key.GetSignaturesForId(userId))
-            {
-                if ((signature.SignatureType is PgpSignature.PositiveCertification
+            var latestCertification = key.GetSignaturesForId(userId)
+                .Where(signature => (signature.SignatureType is PgpSignature.PositiveCertification
                     or PgpSignature.CasualCertification or PgpSignature.NoCertification
                     or PgpSignature.DefaultCertification) &&
-                    HasValidUserIdSignature(signature, userId, key))
-                {
-                    if (latestCertification is null || signature.CreationTime > latestCertification.CreationTime)
-                        latestCertification = signature;
-                }
-            }
+                    HasValidUserIdSignature(signature, userId, key) &&
+                    !IsCertificationRevoked(key, userId, signature, certificateKeys))
+                .MaxBy(signature => signature.CreationTime);
 
-            // A UID is useful only when its self-certification is authentic and has not
-            // subsequently been revoked by the primary or an authorized designated revoker.
-            var isRevoked = latestCertification is not null &&
-                IsCertificationRevoked(key, userId, latestCertification, certificateKeys);
-            if (latestCertification is not null && !isRevoked)
+            // Targeted revocations invalidate one assertion, so select the newest
+            // surviving self-certification rather than dropping the entire user ID.
+            if (latestCertification is not null)
             {
                 var isPrimary = latestCertification.GetHashedSubPackets()?.IsPrimaryUserId() == true;
                 validUserIds.Add((userId, latestCertification, isPrimary));
