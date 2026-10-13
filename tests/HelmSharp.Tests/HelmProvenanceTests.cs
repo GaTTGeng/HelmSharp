@@ -696,6 +696,62 @@ public class HelmProvenanceTests
     }
 
     [Fact]
+    public void FromKeyringData_LatestUserCertificationWithoutKeyFlagsSupersedesOlderFlags()
+    {
+        const string userId = "Latest assertion <latest@example.com>";
+        var (secretRing, publicRing, _, _) = CreateTestKeys(
+            userId,
+            createdAt: DateTime.UtcNow.AddMinutes(-5));
+        var primarySecret = secretRing.GetSecretKeys().First();
+        var primary = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+        var certification = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha512);
+        certification.InitSign(PgpSignature.PositiveCertification, primarySecret.ExtractPrivateKey(null)!);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        certification.SetHashedSubpackets(packets.Generate());
+        primary = PgpPublicKey.AddCertification(
+            primary,
+            userId,
+            certification.GenerateCertification(userId, primary));
+        var updatedRing = PgpPublicKeyRing.InsertPublicKey(publicRing, primary);
+        using var ms = new MemoryStream();
+        updatedRing.Encode(ms);
+
+        var trustedKey = Assert.Single(HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
+
+        Assert.Equal(userId, trustedKey.UserId);
+    }
+
+    [Fact]
+    public void FromKeyringData_LatestSubkeyBindingWithoutKeyFlagsSupersedesOlderFlags()
+    {
+        var (secretRing, publicRing) = CreateRingWithSigningSubkey();
+        var primarySecret = secretRing.GetSecretKeys().First();
+        var master = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+        var subkey = publicRing.GetPublicKeys().Single(key => !key.IsMasterKey);
+        var previousBinding = subkey.GetKeySignatures()
+            .Single(signature => signature.SignatureType == PgpSignature.SubkeyBinding);
+        var backSignature = previousBinding.GetHashedSubPackets()!.GetEmbeddedSignatures()[0];
+        subkey = PgpPublicKey.RemoveCertification(subkey, previousBinding);
+
+        Thread.Sleep(1100);
+        var binding = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha512);
+        binding.InitSign(PgpSignature.SubkeyBinding, primarySecret.ExtractPrivateKey(null)!);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        packets.AddEmbeddedSignature(false, backSignature);
+        binding.SetHashedSubpackets(packets.Generate());
+        subkey = PgpPublicKey.AddCertification(subkey, binding.GenerateCertification(master, subkey));
+        var updatedRing = PgpPublicKeyRing.InsertPublicKey(publicRing, subkey);
+        using var ms = new MemoryStream();
+        updatedRing.Encode(ms);
+
+        var trustedKey = Assert.Single(HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
+
+        Assert.Equal(Convert.ToHexString(subkey.GetFingerprint()).ToLowerInvariant(), trustedKey.Fingerprint);
+    }
+
+    [Fact]
     public void FromKeyringData_ExpiredDirectKeyAssertionCannotAuthorizeSigning()
     {
         var keyGenerator = new RsaKeyPairGenerator();
@@ -885,6 +941,28 @@ public class HelmProvenanceTests
             var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
             Assert.False(result.IsValid);
             Assert.Contains("not found", result.FailureReason, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Verify_OversizedProvenanceFile_FailsWithinConfiguredLimit()
+    {
+        var work = TempDir();
+        try
+        {
+            var tgz = await CreateTestChartArchiveAsync(work);
+            var (_, _, signingKey, trustedKey) = CreateTestKeys();
+            await HelmProvenance.SignAsync(tgz, signingKey);
+            await File.WriteAllBytesAsync(tgz + ".prov", new byte[16 * 1024 * 1024 + 1]);
+
+            var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
+
+            Assert.False(result.IsValid);
+            Assert.Contains("16 MiB verification limit", result.FailureReason, StringComparison.Ordinal);
         }
         finally
         {

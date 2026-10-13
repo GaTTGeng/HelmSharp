@@ -276,7 +276,6 @@ public sealed class HelmProvenanceTrustedKey
                 : GetValidSubkeyBindings(key, master);
 
         PgpSignature? governing = null;
-        var hasValidatedAssertion = false;
         foreach (var sig in assertions)
         {
             if (key.IsMasterKey)
@@ -291,18 +290,18 @@ public sealed class HelmProvenanceTrustedKey
                     continue;
             }
 
-            hasValidatedAssertion = true;
-            var hashed = sig.GetHashedSubPackets();
-            if (hashed is null || !hashed.HasSubpacket(SignatureSubpacketTag.KeyFlags))
-                continue;
             if (governing is null || sig.CreationTime > governing.CreationTime)
                 governing = sig;
         }
 
         if (governing is null)
-            return hasValidatedAssertion;
+            return false;
 
-        var flags = governing.GetHashedSubPackets()!.GetKeyFlags();
+        var hashed = governing.GetHashedSubPackets();
+        if (hashed is null || !hashed.HasSubpacket(SignatureSubpacketTag.KeyFlags))
+            return AlgorithmCanSign(key);
+
+        var flags = hashed.GetKeyFlags();
         return (flags & PgpKeyFlags.CanSign) != 0;
     }
 

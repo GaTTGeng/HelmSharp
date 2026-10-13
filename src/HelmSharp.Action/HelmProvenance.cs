@@ -50,6 +50,7 @@ public static class HelmProvenance
     private const string SignedMessageHeader = "-----BEGIN PGP SIGNED MESSAGE-----";
     private const string SignatureHeader = "-----BEGIN PGP SIGNATURE-----";
     private const string SignatureFooter = "-----END PGP SIGNATURE-----";
+    private const int MaxProvenanceFileBytes = 16 * 1024 * 1024;
 
     // Provenance files are UTF-8 without a BOM, matching Helm's Go writer. Reading or
     // hashing as ASCII would replace non-ASCII metadata bytes with '?' and invalidate
@@ -146,9 +147,25 @@ public static class HelmProvenance
 
         // --- 1. Compute the archive digest and read the provenance file ---
         var archiveName = Path.GetFileName(chartTgzPath);
-        var chartBytes = await File.ReadAllBytesAsync(chartTgzPath, cancellationToken).ConfigureAwait(false);
-        var actualSha256 = Convert.ToHexString(SHA256.HashData(chartBytes)).ToLowerInvariant();
-        var provenanceBytes = await File.ReadAllBytesAsync(provPath, cancellationToken).ConfigureAwait(false);
+        await using var chartStream = new FileStream(
+            chartTgzPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 81920,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        var chartHash = await SHA256.HashDataAsync(chartStream, cancellationToken).ConfigureAwait(false);
+        var actualSha256 = Convert.ToHexString(chartHash).ToLowerInvariant();
+        var provenanceBytes = await ReadBoundedFileAsync(
+            provPath,
+            MaxProvenanceFileBytes,
+            cancellationToken).ConfigureAwait(false);
+        if (provenanceBytes is null)
+        {
+            return Fail(null, null, null, expectedSha256: null, actualSha256,
+                $"Provenance file exceeds the {MaxProvenanceFileBytes / (1024 * 1024)} MiB verification limit.");
+        }
+
         if (!TryDecodeUtf8WithoutBom(provenanceBytes, out var provContent))
         {
             return Fail(null, null, null, expectedSha256: null, actualSha256,
@@ -684,6 +701,35 @@ public static class HelmProvenance
         catch (DecoderFallbackException)
         {
             return false;
+        }
+    }
+
+    private static async Task<byte[]?> ReadBoundedFileAsync(
+        string path,
+        int maxBytes,
+        CancellationToken cancellationToken)
+    {
+        await using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 81920,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        if (stream.Length > maxBytes)
+            return null;
+
+        using var content = new MemoryStream((int)stream.Length);
+        var buffer = new byte[81920];
+        while (true)
+        {
+            var bytesRead = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            if (bytesRead == 0)
+                return content.ToArray();
+            if (content.Length + bytesRead > maxBytes)
+                return null;
+
+            await content.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken).ConfigureAwait(false);
         }
     }
 
