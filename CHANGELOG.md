@@ -35,6 +35,7 @@ This project follows semantic versioning once stable releases begin.
 - Clear-signed provenance and trusted-key policy signatures reject unsupported critical subpackets, preventing unknown certificate, direct-key, subkey-binding, and embedded back-signature extensions from granting signing authority. Clear-signed provenance also rejects unsigned text around the signed message, malformed armor headers, and non-canonical signature types; signing rejects unsafe archive paths while accepting conventional directory records.
 - Provenance verification rejects files that are not strict UTF-8 without a byte-order mark, and trusted ECDSA signers are limited to NIST P-256, P-384, or P-521 curves.
 - Provenance verification streams chart hashing and caps `.prov` input at 16 MiB; trusted-key policy now lets the latest valid self-signature or subkey binding supersede older KeyFlags, including when the latest assertion omits KeyFlags.
+- Trusted-key verification honors V2/V3 key-packet expiration and rejects modern policy signatures without hashed creation times; provenance verification rejects non-V6 signatures made by V6 keys.
 
 ### Removed
 

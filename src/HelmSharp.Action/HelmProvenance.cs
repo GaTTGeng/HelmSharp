@@ -237,6 +237,11 @@ public static class HelmProvenance
         {
             try
             {
+                // RFC 9580 requires V6 keys to produce V6 signatures. Keep trying
+                // other trusted keys so a mixed V4/V6 trust set can still match V4.
+                if (trusted.PublicKey.Version == 6 && parsedSignature.Version != 6)
+                    continue;
+
                 if (IsWeakHashAlgorithm(parsedSignature.HashAlgorithm))
                 {
                     weakHashSignature = true;

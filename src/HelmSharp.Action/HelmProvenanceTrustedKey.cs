@@ -211,6 +211,16 @@ public sealed class HelmProvenanceTrustedKey
 
     private static bool HasSupportedPolicySubpackets(PgpSignature signature)
     {
+        // V3 signatures carry creation time in the signature packet itself. Modern
+        // signatures require the timestamp in the hashed area so policy ordering cannot
+        // be influenced by an unhashed or missing value.
+        if (signature.Version is 4 or 5 or 6)
+        {
+            var hashed = signature.GetHashedSubPackets();
+            if (hashed is null || !hashed.HasSubpacket(SignatureSubpacketTag.CreationTime))
+                return false;
+        }
+
         var supportedTags = signature.SignatureType switch
         {
             PgpSignature.PositiveCertification or PgpSignature.CasualCertification or
@@ -409,6 +419,16 @@ public sealed class HelmProvenanceTrustedKey
     {
         if (key.IsMasterKey)
         {
+            // V2/V3 public-key packets store validity directly as days on the key,
+            // whereas V4+ keys derive expiry from a verified self-signature.
+            if (key.Version is 2 or 3)
+            {
+                var packetValiditySeconds = key.GetValidSeconds();
+                return packetValiditySeconds <= 0
+                    ? null
+                    : key.CreationTime.AddSeconds(packetValiditySeconds);
+            }
+
             // Bouncy Castle's parameterless GetValidSeconds reads packet metadata without
             // proving the self-signature. Only a certification verified by the primary
             // key may define its lifetime.

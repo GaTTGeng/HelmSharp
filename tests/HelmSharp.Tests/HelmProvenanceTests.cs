@@ -206,6 +206,46 @@ public class HelmProvenanceTests
     private static void AddUnknownCriticalSubpacket(PgpSignatureSubpacketGenerator packets)
         => AddCriticalSubpacket(packets, (SignatureSubpacketTag)100);
 
+    private static PgpSignature RemoveHashedCreationTime(PgpSignature signature)
+    {
+        var packetField = typeof(PgpSignature).GetField(
+            "sigPck",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Could not find the OpenPGP signature packet field.");
+        var packet = (SignaturePacket)(packetField.GetValue(signature)
+            ?? throw new InvalidOperationException("The OpenPGP signature packet was missing."));
+        var withoutCreationTime = new SignaturePacket(
+            packet.Version,
+            packet.SignatureType,
+            packet.KeyId,
+            packet.KeyAlgorithm,
+            packet.HashAlgorithm,
+            packet.GetHashedSubPackets()
+                .Where(subpacket => subpacket.SubpacketType != SignatureSubpacketTag.CreationTime)
+                .ToArray(),
+            packet.GetUnhashedSubPackets(),
+            packet.GetFingerprint(),
+            packet.GetSignature());
+        var signatureConstructor = typeof(PgpSignature).GetConstructor(
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
+            binder: null,
+            [typeof(SignaturePacket)],
+            modifiers: null)
+            ?? throw new InvalidOperationException("Could not find the OpenPGP signature constructor.");
+        return (PgpSignature)(signatureConstructor.Invoke([withoutCreationTime])
+            ?? throw new InvalidOperationException("Could not construct the malformed OpenPGP signature."));
+    }
+
+    private static bool HasSupportedPolicySubpackets(PgpSignature signature)
+    {
+        var method = typeof(HelmProvenanceTrustedKey).GetMethod(
+            "HasSupportedPolicySubpackets",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Could not find the trusted-key policy validator.");
+        return (bool)(method.Invoke(null, [signature])
+            ?? throw new InvalidOperationException("The policy validator returned no result."));
+    }
+
     /// <summary>Binary public keyring containing a single signing key that is revoked.</summary>
     private static byte[] CreateRevokedSigningKeyring(string userId = "Revoked <revoked@example.com>")
     {
@@ -460,6 +500,39 @@ public class HelmProvenanceTests
     }
 
     [Fact]
+    public async Task Verify_Version4SignatureByVersion6TrustedKey_FailsClosed()
+    {
+        var work = TempDir();
+        try
+        {
+            var tgz = await CreateTestChartArchiveAsync(work);
+            var (_, _, signingKey, trustedV4Key) = CreateTestKeys();
+            await HelmProvenance.SignAsync(tgz, signingKey);
+
+            PgpPublicKey version6Primary = new(new PublicKeyPacket(
+                (byte)6,
+                trustedV4Key.PublicKey.Algorithm,
+                trustedV4Key.PublicKey.CreationTime,
+                trustedV4Key.PublicKey.PublicKeyPacket.Key));
+            var trustedKeyConstructor = typeof(HelmProvenanceTrustedKey).GetConstructors(
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .Single();
+            var trustedVersion6Key = (HelmProvenanceTrustedKey)trustedKeyConstructor.Invoke(
+                [version6Primary, null, null, new[] { version6Primary }]);
+
+            var result = await HelmProvenance.VerifyAsync(tgz, [trustedVersion6Key]);
+
+            Assert.False(result.IsValid);
+            Assert.Contains("signature is invalid", result.FailureReason, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("cryptographically valid but the signing key", result.FailureReason, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task SignAndVerify_PassphraseProtectedKey_Succeeds()
     {
         var work = TempDir();
@@ -693,6 +766,70 @@ public class HelmProvenanceTests
             () => HelmProvenanceTrustedKey.FromKeyringData(ms.ToArray()));
 
         Assert.Contains("No usable", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FromPublicKeyData_ExpiredVersion3PrimaryUsesPacketValidityPeriod()
+    {
+        const string userId = "Expired V3 <expired-v3@example.com>";
+        var keyGenerator = new RsaKeyPairGenerator();
+        keyGenerator.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
+        var createdAt = DateTime.UtcNow.AddDays(-3);
+        var pair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, keyGenerator.GenerateKeyPair(), createdAt);
+        var packet = new PublicKeyPacket(
+            (byte)3,
+            pair.PublicKey.Algorithm,
+            pair.PublicKey.CreationTime,
+            pair.PublicKey.PublicKeyPacket.Key);
+        var validityField = typeof(PublicKeyPacket).GetField(
+            "m_validDays",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Could not find the V3 key validity field.");
+        validityField.SetValue(packet, 1);
+        PgpPublicKey primary = new(packet);
+
+        var certification = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha512);
+        certification.InitSign(PgpSignature.PositiveCertification, pair.PrivateKey);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        packets.SetKeyFlags(true, PgpKeyFlags.CanSign);
+        certification.SetHashedSubpackets(packets.Generate());
+        primary = PgpPublicKey.AddCertification(
+            primary,
+            userId,
+            certification.GenerateCertification(userId, primary));
+        using var keyBytes = new MemoryStream();
+        primary.Encode(keyBytes);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromPublicKeyData(keyBytes.ToArray()));
+
+        Assert.Contains("No usable", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(PgpSignature.PositiveCertification)]
+    [InlineData(PgpSignature.DirectKey)]
+    [InlineData(PgpSignature.SubkeyBinding)]
+    [InlineData(PgpSignature.PrimaryKeyBinding)]
+    [InlineData(PgpSignature.KeyRevocation)]
+    [InlineData(PgpSignature.SubkeyRevocation)]
+    [InlineData(PgpSignature.CertificationRevocation)]
+    public void PolicySignatureWithoutHashedCreationTimeIsRejected(int signatureType)
+    {
+        var (secretRing, _, _, _) = CreateTestKeys();
+        var secret = secretRing.GetSecretKeys().First();
+        var generator = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha512);
+        generator.InitSign(signatureType, secret.ExtractPrivateKey(null)!);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        generator.SetHashedSubpackets(packets.Generate());
+        var validSignature = generator.Generate();
+        Assert.True(HasSupportedPolicySubpackets(validSignature));
+
+        var malformedSignature = RemoveHashedCreationTime(validSignature);
+
+        Assert.False(HasSupportedPolicySubpackets(malformedSignature));
     }
 
     [Fact]
