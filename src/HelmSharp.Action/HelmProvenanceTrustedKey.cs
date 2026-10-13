@@ -265,6 +265,7 @@ public sealed class HelmProvenanceTrustedKey
                     SignatureSubpacketTag.ExpireTime,
                     SignatureSubpacketTag.KeyExpireTime,
                     SignatureSubpacketTag.KeyFlags,
+                    SignatureSubpacketTag.Revocable,
                     SignatureSubpacketTag.EmbeddedSignature,
                     SignatureSubpacketTag.IssuerFingerprint,
                 },
@@ -610,7 +611,70 @@ public sealed class HelmProvenanceTrustedKey
                 return !IsCertificationRevoked(key, userId, signature, certificateKeys);
         }
 
+        foreach (var userAttribute in key.GetUserAttributes())
+        {
+            if (signature.SignatureType is not (PgpSignature.PositiveCertification
+                or PgpSignature.CasualCertification or PgpSignature.NoCertification
+                or PgpSignature.DefaultCertification) ||
+                !HasValidUserAttributeSignature(signature, userAttribute, key, key) ||
+                IsUserAttributeCertificationRevoked(key, userAttribute, signature, certificateKeys))
+                continue;
+
+            return true;
+        }
+
         return false;
+    }
+
+    private static bool IsUserAttributeCertificationRevoked(
+        PgpPublicKey key,
+        PgpUserAttributeSubpacketVector userAttribute,
+        PgpSignature certification,
+        IReadOnlyList<PgpPublicKey> certificateKeys)
+    {
+        if (IsNonRevocable(certification))
+            return false;
+
+        var revokers = GetAuthorizedRevokers(key, certificateKeys);
+        foreach (var signature in key.GetSignaturesForUserAttribute(userAttribute))
+        {
+            if (signature.SignatureType != PgpSignature.CertificationRevocation ||
+                signature.CreationTime < certification.CreationTime ||
+                !RevocationTargetsSignature(signature, certification))
+                continue;
+
+            if (revokers.Any(revoker => HasValidUserAttributeSignature(
+                signature, userAttribute, key, revoker)))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool HasValidUserAttributeSignature(
+        PgpSignature signature,
+        PgpUserAttributeSubpacketVector userAttribute,
+        PgpPublicKey key,
+        PgpPublicKey signer)
+    {
+        try
+        {
+            if (!IsPolicySignatureVersionCompatible(signer, signature) ||
+                !HasSupportedPolicySubpackets(signature) ||
+                !IssuerFingerprintMatches(signature, signer) ||
+                IsWeakHashAlgorithm(signature.HashAlgorithm) ||
+                !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, signer))
+                return false;
+
+            signature.InitVerify(signer);
+            return signature.VerifyCertification(userAttribute, key) &&
+                !IsSignatureExpired(signature, DateTime.UtcNow);
+        }
+        catch (Exception exception) when (exception is PgpException or IOException
+            or InvalidOperationException or ArgumentException)
+        {
+            return false;
+        }
     }
 
     private static bool IsCertificationRevoked(
@@ -814,6 +878,13 @@ public sealed class HelmProvenanceTrustedKey
             if (signature.SignatureType != revocationType || !HasSupportedPolicySubpackets(signature) ||
                 IsWeakHashAlgorithm(signature.HashAlgorithm) ||
                 IsSignatureExpired(signature, DateTime.UtcNow))
+                continue;
+
+            // Revocable=false commits the binding signer not to revoke that assertion;
+            // a later subkey revocation therefore cannot invalidate the bound subkey.
+            if (revocationType == PgpSignature.SubkeyRevocation && master is not null &&
+                GetValidSubkeyBindings(key, master).Any(binding =>
+                    binding.CreationTime <= signature.CreationTime && IsNonRevocable(binding)))
                 continue;
 
             foreach (var revoker in revokers)
