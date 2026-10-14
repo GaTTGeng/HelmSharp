@@ -42,7 +42,7 @@ function Get-PublicApi([string] $packageDir) {
                 continue
             }
 
-            if ($line -match '^\s*public\s+(?:static\s+)?(?:[A-Za-z0-9_<>,\.\?\[\]]+\s+)+([A-Za-z_][A-Za-z0-9_]*)\s*\{\s*get;') {
+            if ($line -match '^\s*public\s+(?:static\s+)?(?:[A-Za-z0-9_<>,\.\?\[\]]+\s+)+([A-Za-z_][A-Za-z0-9_]*)\s*(?:\{\s*get;|=>)') {
                 $currentType.Properties.Add($matches[1])
                 continue
             }

@@ -130,6 +130,9 @@
 | 类型类别 | `class` |
 | 源文件 | `src/HelmSharp.Engine/TemplateParser.cs` |
 
+### 属性
+- `Defines`
+
 ### 方法
 - `Parse(...)`
 

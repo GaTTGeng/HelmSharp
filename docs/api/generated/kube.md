@@ -36,5 +36,8 @@ Use this page as a member index. Start with the package guide for usage recommen
 | Kind | `record` |
 | Source | `src/HelmSharp.Kube/KubernetesManifestApplier.cs` |
 
+### Properties
+- `DisplayName`
+
 ### Methods
 - `Parse(...)`

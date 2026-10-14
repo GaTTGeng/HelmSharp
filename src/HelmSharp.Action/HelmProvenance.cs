@@ -392,18 +392,6 @@ public static class HelmProvenance
                     "OpenPGP clear-signed provenance must use a canonical-text document signature.");
             }
 
-            // Distinguish "valid signature by an untrusted key" from "no valid signature at all".
-            foreach (var parsedSignature in parsedSignatures)
-            {
-                using var signatureStream = new MemoryStream();
-                parsedSignature.Encode(signatureStream);
-                if (TryVerifyAgainstEmbeddedIssuer(signedBody, signatureStream.ToArray(), out var untrustedFp, out var untrustedId, out var untrustedUid))
-                {
-                    return Fail(untrustedFp, untrustedId, untrustedUid, ExtractSha256(provContent, archiveName), actualSha256,
-                        "Signature is cryptographically valid but the signing key is not in the trusted key set.");
-                }
-            }
-
             return Fail(null, null, null, ExtractSha256(provContent, archiveName), actualSha256,
                 "OpenPGP signature is invalid or does not match any trusted key.");
         }
@@ -601,6 +589,11 @@ public static class HelmProvenance
 
                 continue;
             }
+
+            // Chart metadata fields are a root mapping; nested annotation or dependency
+            // fields must not overwrite a top-level key in this flattened result.
+            if (char.IsWhiteSpace(line[0]))
+                continue;
 
             var sep = trimmed.IndexOf(':');
             if (sep > 0)
@@ -923,7 +916,7 @@ public static class HelmProvenance
             }
 
             const string hashHeader = "Hash: ";
-            if (!line.StartsWith(hashHeader, StringComparison.OrdinalIgnoreCase))
+            if (!line.StartsWith(hashHeader, StringComparison.Ordinal))
                 return false;
 
             var hashValue = line[hashHeader.Length..];
@@ -1018,45 +1011,6 @@ public static class HelmProvenance
         HashAlgorithmTag.Sha512 => 512,
         _ => 0,
     };
-
-    /// <summary>
-    /// Attempts verification against the key that actually produced the signature, using
-    /// public keys embedded in the provenance file when present. Used only to distinguish
-    /// "valid but untrusted" from "invalid" in failure diagnostics; never grants trust.
-    /// </summary>
-    private static bool TryVerifyAgainstEmbeddedIssuer(
-        string signedBody,
-        byte[] signaturePacket,
-        out string? fingerprint,
-        out string? keyId,
-        out string? userId)
-    {
-        fingerprint = null;
-        keyId = null;
-        userId = null;
-        try
-        {
-            var sig = ParseSignatures(signaturePacket).FirstOrDefault();
-            if (sig is null)
-                return false;
-            // Without the issuer public key we cannot verify; report the key ID only.
-            if (sig.KeyId != 0)
-            {
-                keyId = sig.KeyId.ToString("x16");
-                return false;
-            }
-
-            return false;
-        }
-        catch (PgpException)
-        {
-            return false;
-        }
-        catch (IOException)
-        {
-            return false;
-        }
-    }
 
     private static bool IsLegacyPseudoSignature(string provContent)
     {
@@ -1245,14 +1199,19 @@ public static class HelmProvenance
     private static int FindFilesSectionStart(string[] lines)
     {
         var searchFrom = 0;
+        var sawDocumentEnd = false;
         for (var i = 0; i < lines.Length; i++)
         {
             if (lines[i] == "...")
             {
                 searchFrom = i + 1;
+                sawDocumentEnd = true;
                 break;
             }
         }
+
+        if (!sawDocumentEnd)
+            return -1;
 
         for (var i = searchFrom; i < lines.Length; i++)
         {

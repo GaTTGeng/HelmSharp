@@ -16,6 +16,7 @@ Use this page as a member index. Start with the package guide for usage recommen
 - `ExitCode`
 - `StandardError`
 - `StandardOutput`
+- `Succeeded`
 
 ## HelmClient
 
@@ -241,6 +242,11 @@ Use this page as a member index. Start with the package guide for usage recommen
 | Kind | `class` |
 | Source | `src/HelmSharp.Action/HelmProvenanceTrustedKey.cs` |
 
+### Properties
+- `Fingerprint`
+- `KeyId`
+- `UserId`
+
 ### Methods
 - `FromKeyringData(...)`
 - `FromKeyringFile(...)`
@@ -259,6 +265,7 @@ Use this page as a member index. Start with the package guide for usage recommen
 - `DigestMatches`
 - `ExpectedSha256`
 - `FailureReason`
+- `IsValid`
 - `SignatureValid`
 - `SignerFingerprint`
 - `SignerKeyId`

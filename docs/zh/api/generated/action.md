@@ -16,6 +16,7 @@
 - `ExitCode`
 - `StandardError`
 - `StandardOutput`
+- `Succeeded`
 
 ## HelmClient
 
@@ -241,6 +242,11 @@
 | 类型类别 | `class` |
 | 源文件 | `src/HelmSharp.Action/HelmProvenanceTrustedKey.cs` |
 
+### 属性
+- `Fingerprint`
+- `KeyId`
+- `UserId`
+
 ### 方法
 - `FromKeyringData(...)`
 - `FromKeyringFile(...)`
@@ -259,6 +265,7 @@
 - `DigestMatches`
 - `ExpectedSha256`
 - `FailureReason`
+- `IsValid`
 - `SignatureValid`
 - `SignerFingerprint`
 - `SignerKeyId`

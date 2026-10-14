@@ -103,7 +103,7 @@ bool intact = await HelmProvenance.CheckDigestAsync(@"C:\charts\chart-1.0.0.tgz"
 
 | 类型 | 工厂方法 | 说明 |
 | --- | --- | --- |
-| `HelmProvenanceSigningKey` | `FromSecretKeyData`、`FromSecretKeyFile` | 接受二进制或 ASCII 装甲的私钥与密钥环，支持口令。`IDisposable`，销毁时清零内存中的口令。 |
+| `HelmProvenanceSigningKey` | `FromSecretKeyData`、`FromSecretKeyFile` | 接受二进制或 ASCII 装甲的私钥与密钥环，支持口令；签名密钥必须使用 OpenPGP V4 数据包，暂不支持 V3 和 V6 签名密钥。`IDisposable`，销毁时清零内存中的口令。 |
 | `HelmProvenanceTrustedKey` | `FromPublicKeyData`、`FromPublicKeyFile`、`FromKeyringFile`、`FromKeyringData` | 接受二进制或 ASCII 装甲的公钥与密钥环；也接受私钥环，仅使用其公钥部分。 |
 
 两种类型都会立即复制调用方缓冲区。密钥材料与口令从不写入日志。

@@ -5,6 +5,25 @@
 此页列出公开类型和成员，便于查找。使用建议、边界和示例请先阅读对应包文档。
 
 
+## ChartArchiveLimitExceededException
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `class` |
+| 源文件 | `src/HelmSharp.Chart/ChartArchiveLimitExceededException.cs` |
+
+### 属性
+- `Limit`
+- `LimitValue`
+- `ObservedValue`
+
+## ChartArchiveLimitKind
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `enum` |
+| 源文件 | `src/HelmSharp.Chart/ChartArchiveLimitExceededException.cs` |
+
 ## HelmChart
 
 | 字段 | 值 |
@@ -36,6 +55,25 @@
 - `Type`
 - `ValuesYaml`
 - `Version`
+
+## HelmChartArchiveLimits
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `class` |
+| 源文件 | `src/HelmSharp.Chart/HelmChartArchiveLimits.cs` |
+
+### 属性
+- `Default`
+- `MaxCompressedBytes`
+- `MaxCompressionRatio`
+- `MaxDependencyDepth`
+- `MaxEntryBytes`
+- `MaxEntryCount`
+- `MaxTotalExtractedBytes`
+
+### 方法
+- `ForTrustedCharts(...)`
 
 ## HelmChartDependency
 

@@ -103,7 +103,7 @@ Legacy files remain parseable by `ExtractSha256` and `ExtractMetadata` so you ca
 
 | Type | Factory methods | Notes |
 | --- | --- | --- |
-| `HelmProvenanceSigningKey` | `FromSecretKeyData`, `FromSecretKeyFile` | Accepts binary or ASCII-armored secret keys and keyrings. Optional passphrase. `IDisposable` zeroes the in-memory passphrase. |
+| `HelmProvenanceSigningKey` | `FromSecretKeyData`, `FromSecretKeyFile` | Accepts binary or ASCII-armored secret keys and keyrings. Signing keys must use OpenPGP V4 packets; V3 and V6 signing keys are currently unsupported. Optional passphrase. `IDisposable` zeroes the in-memory passphrase. |
 | `HelmProvenanceTrustedKey` | `FromPublicKeyData`, `FromPublicKeyFile`, `FromKeyringFile`, `FromKeyringData` | Accepts binary or ASCII-armored public keys and keyrings. Secret keyrings are accepted; only public halves are used. |
 
 Both types copy caller buffers immediately. Key material and passphrases are never logged.

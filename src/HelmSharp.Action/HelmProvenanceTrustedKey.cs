@@ -524,7 +524,7 @@ public sealed class HelmProvenanceTrustedKey
                 !IssuerFingerprintMatches(signature, master) ||
                 IsWeakHashAlgorithm(signature.HashAlgorithm) ||
                 !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, master) ||
-                (validAt is not null && signature.CreationTime > validationTime))
+                signature.CreationTime > validationTime)
                 return false;
 
             signature.InitVerify(master);
@@ -570,7 +570,7 @@ public sealed class HelmProvenanceTrustedKey
                     !IssuerFingerprintMatches(embedded, subkey) ||
                     IsWeakHashAlgorithm(embedded.HashAlgorithm) ||
                     !HelmProvenance.HasSufficientSignatureHash(embedded.HashAlgorithm, subkey) ||
-                    (validAt is not null && embedded.CreationTime > validationTime) ||
+                    embedded.CreationTime > validationTime ||
                     IsSignatureExpired(embedded, validationTime))
                     continue;
 
@@ -628,16 +628,18 @@ public sealed class HelmProvenanceTrustedKey
     {
         try
         {
+            var validationTime = DateTime.UtcNow;
             if (!IsPolicySignatureVersionCompatible(signer, signature) ||
                 !HasSupportedPolicySubpackets(signature) ||
                 !IssuerFingerprintMatches(signature, signer) ||
                 IsWeakHashAlgorithm(signature.HashAlgorithm) ||
-                !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, signer))
+                !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, signer) ||
+                signature.CreationTime > validationTime)
                 return false;
 
             signature.InitVerify(signer);
             return signature.VerifyCertification(userAttribute, key) &&
-                !IsSignatureExpired(signature, DateTime.UtcNow);
+                !IsSignatureExpired(signature, validationTime);
         }
         catch (Exception exception) when (exception is PgpException or IOException
             or InvalidOperationException or ArgumentException)
@@ -822,7 +824,7 @@ public sealed class HelmProvenanceTrustedKey
         {
             var validationTime = validAt ?? DateTime.UtcNow;
             if (signature.SignatureType != signatureType ||
-                (validAt is not null && signature.CreationTime > validationTime) ||
+                signature.CreationTime > validationTime ||
                 !IsPolicySignatureVersionCompatible(signer, signature) ||
                 !HasSupportedPolicySubpackets(signature) ||
                 !IssuerFingerprintMatches(signature, signer) ||
@@ -900,11 +902,13 @@ public sealed class HelmProvenanceTrustedKey
     {
         var primary = master ?? key;
         var revocationType = key.IsMasterKey ? PgpSignature.KeyRevocation : PgpSignature.SubkeyRevocation;
+        var validationTime = DateTime.UtcNow;
         foreach (var signature in key.GetKeySignatures())
         {
             if (signature.SignatureType != revocationType || !HasSupportedPolicySubpackets(signature) ||
                 IsWeakHashAlgorithm(signature.HashAlgorithm) ||
-                IsSignatureExpired(signature, DateTime.UtcNow))
+                signature.CreationTime > validationTime ||
+                IsSignatureExpired(signature, validationTime))
                 continue;
 
             // Revocable=false commits the binding signer not to revoke that assertion;
@@ -1258,18 +1262,20 @@ public sealed class HelmProvenanceTrustedKey
     {
         try
         {
+            var validationTime = DateTime.UtcNow;
             if (!IsPolicySignatureVersionCompatible(signer, signature) ||
                 !HasSupportedPolicySubpackets(signature) ||
                 !IssuerFingerprintMatches(signature, signer) ||
                 IsWeakHashAlgorithm(signature.HashAlgorithm) ||
-                !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, signer))
+                !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, signer) ||
+                signature.CreationTime > validationTime)
                 return false;
 
             signature.InitVerify(signer);
             var verified = signer.GetFingerprint().AsSpan().SequenceEqual(key.GetFingerprint())
                 ? signature.VerifyCertification(userId, key)
                 : VerifyUserIdCertification(signature, userId, key);
-            return verified && !IsSignatureExpired(signature, DateTime.UtcNow);
+            return verified && !IsSignatureExpired(signature, validationTime);
         }
         catch (PgpException)
         {
