@@ -650,8 +650,8 @@ public sealed class HelmProvenanceTrustedKey
             if (!IsPolicySignatureVersionCompatible(signer, signature) ||
                 !HasSupportedPolicySubpackets(signature) ||
                 !IssuerFingerprintMatches(signature, signer) ||
-                IsWeakHashAlgorithm(signature.HashAlgorithm) ||
-                !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, signer) ||
+                IsDisallowedPolicyHash(signature) ||
+                !HasSufficientPolicySignatureHash(signature, signer) ||
                 signature.CreationTime > validationTime)
                 return false;
 
@@ -846,8 +846,8 @@ public sealed class HelmProvenanceTrustedKey
                 !IsPolicySignatureVersionCompatible(signer, signature) ||
                 !HasSupportedPolicySubpackets(signature) ||
                 !IssuerFingerprintMatches(signature, signer) ||
-                IsWeakHashAlgorithm(signature.HashAlgorithm) ||
-                !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, signer))
+                IsDisallowedPolicyHash(signature) ||
+                !HasSufficientPolicySignatureHash(signature, signer))
                 return false;
 
             signature.InitVerify(signer);
@@ -924,7 +924,7 @@ public sealed class HelmProvenanceTrustedKey
         foreach (var signature in key.GetKeySignatures())
         {
             if (signature.SignatureType != revocationType || !HasSupportedPolicySubpackets(signature) ||
-                IsWeakHashAlgorithm(signature.HashAlgorithm) ||
+                IsDisallowedPolicyHash(signature) ||
                 signature.CreationTime > validationTime ||
                 IsSignatureExpired(signature, validationTime))
                 continue;
@@ -948,7 +948,7 @@ public sealed class HelmProvenanceTrustedKey
                 {
                     if (!IsPolicySignatureVersionCompatible(revoker, signature) ||
                         !IssuerFingerprintMatches(signature, revoker) ||
-                        !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, revoker))
+                        !HasSufficientPolicySignatureHash(signature, revoker))
                         continue;
 
                     signature.InitVerify(revoker);
@@ -1284,8 +1284,8 @@ public sealed class HelmProvenanceTrustedKey
             if (!IsPolicySignatureVersionCompatible(signer, signature) ||
                 !HasSupportedPolicySubpackets(signature) ||
                 !IssuerFingerprintMatches(signature, signer) ||
-                IsWeakHashAlgorithm(signature.HashAlgorithm) ||
-                !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, signer) ||
+                IsDisallowedPolicyHash(signature) ||
+                !HasSufficientPolicySignatureHash(signature, signer) ||
                 signature.CreationTime > validationTime)
                 return false;
 
@@ -1327,6 +1327,20 @@ public sealed class HelmProvenanceTrustedKey
         signature.Update(userIdBytes);
         return signature.Verify();
     }
+
+    private static bool IsDisallowedPolicyHash(PgpSignature signature)
+        => IsWeakHashAlgorithm(signature.HashAlgorithm) &&
+            !(signature.HashAlgorithm == HashAlgorithmTag.Sha1 && IsKeyRevocationSignature(signature.SignatureType));
+
+    private static bool HasSufficientPolicySignatureHash(PgpSignature signature, PgpPublicKey signer)
+        // Older OpenPGP certificates commonly use SHA-1 key/subkey revocations. Keep the
+        // signer's normal algorithm and key-size requirements even for this removal-only packet.
+        => (signature.HashAlgorithm == HashAlgorithmTag.Sha1 &&
+                IsKeyRevocationSignature(signature.SignatureType) && AlgorithmCanSign(signer)) ||
+            HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, signer);
+
+    private static bool IsKeyRevocationSignature(int signatureType)
+        => signatureType is PgpSignature.KeyRevocation or PgpSignature.SubkeyRevocation;
 
     private static bool IsWeakHashAlgorithm(HashAlgorithmTag algorithm)
         => algorithm is HashAlgorithmTag.MD5 or HashAlgorithmTag.Sha1 or HashAlgorithmTag.RipeMD160;
