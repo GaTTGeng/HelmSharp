@@ -589,7 +589,6 @@ public sealed class HelmProvenanceTrustedKey
         if (IsNonRevocable(certification))
             return false;
 
-        var revokers = GetAuthorizedRevokers(key, certificateKeys);
         foreach (var signature in key.GetSignaturesForUserAttribute(userAttribute))
         {
             if (signature.SignatureType != PgpSignature.CertificationRevocation ||
@@ -597,6 +596,7 @@ public sealed class HelmProvenanceTrustedKey
                 !RevocationTargetsSignature(signature, certification))
                 continue;
 
+            var revokers = GetAuthorizedRevokers(key, certificateKeys, signature.CreationTime);
             if (revokers.Any(revoker => HasValidUserAttributeSignature(
                 signature, userAttribute, key, revoker)))
                 return true;
@@ -640,7 +640,6 @@ public sealed class HelmProvenanceTrustedKey
         if (IsNonRevocable(certification))
             return false;
 
-        var revokers = GetAuthorizedRevokers(key, certificateKeys);
         foreach (var signature in key.GetSignaturesForId(userId))
         {
             if (signature.SignatureType != PgpSignature.CertificationRevocation ||
@@ -648,6 +647,7 @@ public sealed class HelmProvenanceTrustedKey
                 !RevocationTargetsSignature(signature, certification))
                 continue;
 
+            var revokers = GetAuthorizedRevokers(key, certificateKeys, signature.CreationTime);
             if (revokers.Any(revoker => HasValidUserIdSignature(signature, userId, key, revoker)))
                 return true;
         }
@@ -800,11 +800,14 @@ public sealed class HelmProvenanceTrustedKey
         PgpSignature signature,
         PgpPublicKey key,
         int signatureType,
-        PgpPublicKey signer)
+        PgpPublicKey signer,
+        DateTime? validAt = null)
     {
         try
         {
+            var validationTime = validAt ?? DateTime.UtcNow;
             if (signature.SignatureType != signatureType ||
+                (validAt is not null && signature.CreationTime > validationTime) ||
                 !IsPolicySignatureVersionCompatible(signer, signature) ||
                 !HasSupportedPolicySubpackets(signature) ||
                 !IssuerFingerprintMatches(signature, signer) ||
@@ -828,7 +831,7 @@ public sealed class HelmProvenanceTrustedKey
             // key revocations only; a direct-key signature hashes the primary packet.
             signature.Update(keyPrefix);
             signature.Update(keyContents);
-            return signature.Verify() && !IsSignatureExpired(signature, DateTime.UtcNow);
+            return signature.Verify() && !IsSignatureExpired(signature, validationTime);
         }
         catch (Exception exception) when (exception is PgpException or IOException
             or InvalidOperationException or ArgumentException)
@@ -881,7 +884,6 @@ public sealed class HelmProvenanceTrustedKey
         IReadOnlyList<PgpPublicKey> certificateKeys)
     {
         var primary = master ?? key;
-        var revokers = GetAuthorizedRevokers(primary, certificateKeys);
         var revocationType = key.IsMasterKey ? PgpSignature.KeyRevocation : PgpSignature.SubkeyRevocation;
         foreach (var signature in key.GetKeySignatures())
         {
@@ -901,7 +903,9 @@ public sealed class HelmProvenanceTrustedKey
                     continue;
             }
 
-            foreach (var revoker in revokers)
+            // Revoker declarations are evaluated when this revocation was issued. A later
+            // replacement cannot erase a revocation that was authorized at that time.
+            foreach (var revoker in GetAuthorizedRevokers(primary, certificateKeys, signature.CreationTime))
             {
                 try
                 {
@@ -970,9 +974,10 @@ public sealed class HelmProvenanceTrustedKey
 
     private static IReadOnlyList<PgpPublicKey> GetAuthorizedRevokers(
         PgpPublicKey primary,
-        IReadOnlyList<PgpPublicKey> certificateKeys)
+        IReadOnlyList<PgpPublicKey> certificateKeys,
+        DateTime validAt)
     {
-        var authorizedFingerprints = GetAuthorizedRevokerFingerprints(primary, certificateKeys);
+        var authorizedFingerprints = GetAuthorizedRevokerFingerprints(primary, certificateKeys, validAt);
         var primaryFingerprint = Convert.ToHexString(primary.GetFingerprint());
         return certificateKeys
             .Append(primary)
@@ -988,12 +993,13 @@ public sealed class HelmProvenanceTrustedKey
 
     private static Dictionary<string, HashSet<PublicKeyAlgorithmTag>> GetAuthorizedRevokerFingerprints(
         PgpPublicKey primary,
-        IReadOnlyList<PgpPublicKey> certificateKeys)
+        IReadOnlyList<PgpPublicKey> certificateKeys,
+        DateTime validAt)
     {
         // RFC 9580 places Revocation Key declarations on Direct Key signatures and
         // requires the most recent valid self-signature on an object to govern it.
         // Ignore older declarations so a replacement can remove a former revoker.
-        var latestDirectKey = GetLatestUnrevokedDirectKeySignature(primary, certificateKeys);
+        var latestDirectKey = GetLatestUnrevokedDirectKeySignature(primary, certificateKeys, validAt);
         return latestDirectKey?.GetHashedSubPackets()?.GetRevocationKeys()
             .Where(IsValidRevocationKeyDeclaration)
             .GroupBy(revocationKey => Convert.ToHexString(revocationKey.GetFingerprint()), StringComparer.Ordinal)
@@ -1012,14 +1018,15 @@ public sealed class HelmProvenanceTrustedKey
 
     private static PgpSignature? GetLatestUnrevokedDirectKeySignature(
         PgpPublicKey primary,
-        IReadOnlyList<PgpPublicKey> certificateKeys)
+        IReadOnlyList<PgpPublicKey> certificateKeys,
+        DateTime validAt)
     {
         PgpSignature? latest = null;
         foreach (var signature in primary.GetSignatures())
         {
             if (signature.SignatureType != PgpSignature.DirectKey ||
-                !HasValidPrimaryKeySignature(signature, primary, PgpSignature.DirectKey) ||
-                IsDirectKeySignatureRevokedByItsDeclaration(signature, primary, certificateKeys))
+                !HasValidPrimaryKeySignature(signature, primary, PgpSignature.DirectKey, primary, validAt) ||
+                IsDirectKeySignatureRevokedByItsDeclaration(signature, primary, certificateKeys, validAt))
                 continue;
 
             if (latest is null || signature.CreationTime > latest.CreationTime)
@@ -1032,7 +1039,8 @@ public sealed class HelmProvenanceTrustedKey
     private static bool IsDirectKeySignatureRevokedByItsDeclaration(
         PgpSignature directKeySignature,
         PgpPublicKey primary,
-        IReadOnlyList<PgpPublicKey> certificateKeys)
+        IReadOnlyList<PgpPublicKey> certificateKeys,
+        DateTime? validAt = null)
     {
         if (IsNonRevocable(directKeySignature))
             return false;
@@ -1059,12 +1067,14 @@ public sealed class HelmProvenanceTrustedKey
         return primary.GetSignatures().Any(revocation =>
             revocation.SignatureType == PgpSignature.CertificationRevocation &&
             revocation.CreationTime >= directKeySignature.CreationTime &&
+            (validAt is null || revocation.CreationTime <= validAt.Value) &&
             RevocationTargetsSignature(revocation, directKeySignature) &&
             revokers.Any(revoker => HasValidPrimaryKeySignature(
                 revocation,
                 primary,
                 PgpSignature.CertificationRevocation,
-                revoker)));
+                revoker,
+                validAt)));
     }
 
     private static bool IsNonRevocable(PgpSignature signature)

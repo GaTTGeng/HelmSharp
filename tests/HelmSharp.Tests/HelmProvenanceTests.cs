@@ -603,7 +603,9 @@ public class HelmProvenanceTests
         }
     }
 
-    private static byte[] CreateSigningKeyringWithHistoricalDesignatedRevoker(bool revokeDeclaration)
+    private static byte[] CreateSigningKeyringWithHistoricalDesignatedRevoker(
+        bool revokeDeclaration,
+        int keyRevocationOffsetSeconds = 60)
     {
         const string userId = "Historical revocation <historical@example.com>";
         const string revokerUserId = "Historical revoker <historical-revoker@example.com>";
@@ -649,7 +651,7 @@ public class HelmProvenanceTests
         var keyRevocationGenerator = new PgpSignatureGenerator(revokerSecret.PublicKey.Algorithm, HashAlgorithmTag.Sha512);
         keyRevocationGenerator.InitSign(PgpSignature.KeyRevocation, revokerSecret.ExtractPrivateKey(null)!);
         var keyRevocationPackets = new PgpSignatureSubpacketGenerator();
-        keyRevocationPackets.SetSignatureCreationTime(false, creationTime.AddSeconds(60));
+        keyRevocationPackets.SetSignatureCreationTime(false, creationTime.AddSeconds(keyRevocationOffsetSeconds));
         keyRevocationGenerator.SetHashedSubpackets(keyRevocationPackets.Generate());
         primary = PgpPublicKey.AddCertification(primary, keyRevocationGenerator.GenerateCertification(primary));
 
@@ -3949,6 +3951,30 @@ public class HelmProvenanceTests
     }
 
     [Fact]
+    public void FromKeyringData_RevocationByDesignatedRevokerRemainsEffectiveAfterRemoval()
+    {
+        var keyringData = CreateSigningKeyringWithHistoricalDesignatedRevoker(
+            revokeDeclaration: false,
+            keyRevocationOffsetSeconds: 20);
+
+        var trustedKeys = HelmProvenanceTrustedKey.FromKeyringData(keyringData);
+
+        Assert.DoesNotContain(trustedKeys, key => key.UserId == "Historical revocation <historical@example.com>");
+    }
+
+    [Fact]
+    public void FromKeyringData_RevocationBeforeRevokerDesignationIsIgnored()
+    {
+        var keyringData = CreateSigningKeyringWithHistoricalDesignatedRevoker(
+            revokeDeclaration: false,
+            keyRevocationOffsetSeconds: -10);
+
+        var trustedKeys = HelmProvenanceTrustedKey.FromKeyringData(keyringData);
+
+        Assert.Contains(trustedKeys, key => key.UserId == "Historical revocation <historical@example.com>");
+    }
+
+    [Fact]
     public void FromKeyringData_CriticalIssuerFingerprintCertificationRevocationMustMatchSigner()
     {
         var forgedRevocationBytes = CreateSigningKeyringWithCriticalIssuerFingerprintCertificationRevocation(
@@ -4206,6 +4232,40 @@ public class HelmProvenanceTests
         Assert.Equal(
             "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
             meta["sha256"]);
+    }
+
+    [Fact]
+    public void ExtractMetadata_IndentedFilesTextInMetadataDoesNotStartDigestSection()
+    {
+        const string digest = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
+        const string fakeDigest = "11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff";
+        var prov = $"""
+            -----BEGIN PGP SIGNED MESSAGE-----
+            Hash: SHA512
+
+            name: demo
+            annotations: |
+              files:
+              fake-1.2.3.tgz: sha256:{fakeDigest}
+            version: 1.2.3
+
+            ...
+            files:
+              demo-1.2.3.tgz: sha256:{digest}
+
+            -----BEGIN PGP SIGNATURE-----
+
+            AAAA
+            -----END PGP SIGNATURE-----
+            """;
+
+        var meta = HelmProvenance.ExtractMetadata(prov);
+
+        Assert.Equal("demo", meta["name"]);
+        Assert.Equal("1.2.3", meta["version"]);
+        Assert.Equal("sha256:" + digest, meta["files.demo-1.2.3.tgz"]);
+        Assert.Equal(digest, meta["sha256"]);
+        Assert.DoesNotContain("files.fake-1.2.3.tgz", meta.Keys);
     }
 
     [Fact]

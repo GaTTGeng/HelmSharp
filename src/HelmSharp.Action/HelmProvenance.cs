@@ -563,14 +563,24 @@ public static class HelmProvenance
         if (body is null)
             return result;
 
+        var sawDocumentEnd = false;
         var inFilesSection = false;
         foreach (var line in body.Split('\n'))
         {
             var trimmed = line.Trim();
-            if (trimmed.Length == 0 || trimmed == "...")
+            if (trimmed.Length == 0)
                 continue;
 
-            if (trimmed == "files:")
+            // Helm starts its provenance digest map only after the metadata document ends.
+            // Requiring the marker and section header at column zero keeps block-scalar
+            // metadata that mentions an indented "files:" from entering digest-map mode.
+            if (line == "...")
+            {
+                sawDocumentEnd = true;
+                continue;
+            }
+
+            if (sawDocumentEnd && line == "files:")
             {
                 inFilesSection = true;
                 continue;
