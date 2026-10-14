@@ -5,8 +5,6 @@ using System.Formats.Tar;
 using System.IO.Compression;
 using Org.BouncyCastle.Bcpg;
 using Org.BouncyCastle.Bcpg.OpenPgp;
-using Org.BouncyCastle.Crypto;
-using Org.BouncyCastle.Security;
 using HelmSharp.Chart;
 
 namespace HelmSharp.Action;
@@ -123,7 +121,7 @@ public static class HelmProvenance
     /// unknown or untrusted keys, and invalid signatures.
     /// </summary>
     /// <param name="chartTgzPath">Chart archive to verify.</param>
-    /// <param name="trustedKeys">OpenPGP public keys authorized to sign provenance for this chart. Must not be empty.</param>
+    /// <param name="trustedKeys">OpenPGP public keys authorized to sign provenance for this chart. Must not be empty; null entries are ignored.</param>
     /// <param name="provPath">Provenance file path; defaults to <c>{archive}.prov</c>.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Verification result describing each check and the signer identity.</returns>
@@ -131,14 +129,14 @@ public static class HelmProvenance
     /// <exception cref="ArgumentException"><paramref name="trustedKeys"/> is null or empty.</exception>
     public static async Task<HelmProvenanceVerificationResult> VerifyAsync(
         string chartTgzPath,
-        IEnumerable<HelmProvenanceTrustedKey> trustedKeys,
+        IEnumerable<HelmProvenanceTrustedKey?> trustedKeys,
         string? provPath = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(chartTgzPath);
         ArgumentNullException.ThrowIfNull(trustedKeys);
 
-        var trustedList = trustedKeys.Where(k => k is not null).ToList();
+        var trustedList = trustedKeys.OfType<HelmProvenanceTrustedKey>().ToList();
         if (trustedList.Count == 0)
             throw new ArgumentException("At least one trusted key is required for authenticity verification.", nameof(trustedKeys));
 
@@ -215,6 +213,7 @@ public static class HelmProvenance
         bool invalidSignatureType = false;
         bool missingCreationTime = false;
         bool unsupportedCriticalSubpacket = false;
+        bool trustedKeyMatchedFutureSignature = false;
         bool trustedKeyMatchedExpiredSignature = false;
         bool trustedKeyMatchedButUnusable = false;
         string? signerFingerprint = null;
@@ -223,6 +222,9 @@ public static class HelmProvenance
         string? expiredFingerprint = null;
         string? expiredKeyId = null;
         string? expiredUserId = null;
+        string? futureFingerprint = null;
+        string? futureKeyId = null;
+        string? futureUserId = null;
         string? unusableFingerprint = null;
         string? unusableKeyId = null;
         string? unusableUserId = null;
@@ -282,7 +284,17 @@ public static class HelmProvenance
                     parsedSignature.Update(CanonicalizeForHash(signedBody));
                     if (parsedSignature.Verify())
                     {
-                        if (IsSignatureExpired(parsedSignature, DateTime.UtcNow))
+                        var verificationTime = DateTime.UtcNow;
+                        if (parsedSignature.CreationTime > verificationTime)
+                        {
+                            trustedKeyMatchedFutureSignature = true;
+                            futureFingerprint ??= trusted.Fingerprint;
+                            futureKeyId ??= trusted.KeyId;
+                            futureUserId ??= trusted.UserId;
+                            continue;
+                        }
+
+                        if (IsSignatureExpired(parsedSignature, verificationTime))
                         {
                             trustedKeyMatchedExpiredSignature = true;
                             expiredFingerprint ??= trusted.Fingerprint;
@@ -326,18 +338,23 @@ public static class HelmProvenance
 
         if (!signatureValid)
         {
-            if (weakHashSignature)
+            // A verified signature from a trusted key carries stronger diagnostic
+            // evidence than an unverified companion packet with a rejected hash.
+            if (trustedKeyMatchedFutureSignature)
             {
-                return Fail(null, null, null,
-                    ExtractSha256(provContent, archiveName), actualSha256,
-                    "OpenPGP provenance signatures using MD5, SHA-1, or RIPEMD-160 are not accepted.");
-            }
-
-            if (understrengthHashSignature)
-            {
-                return Fail(null, null, null,
-                    ExtractSha256(provContent, archiveName), actualSha256,
-                    "OpenPGP provenance signature hash is too weak for the signing key algorithm and curve.");
+                var futureExpectedSha256 = ExtractSha256(signedBody, archiveName);
+                var futureDigestMatches = futureExpectedSha256 is not null &&
+                    string.Equals(futureExpectedSha256, actualSha256, StringComparison.OrdinalIgnoreCase);
+                return new HelmProvenanceVerificationResult(
+                    signatureValid: true,
+                    signerTrusted: true,
+                    futureDigestMatches,
+                    futureFingerprint,
+                    futureKeyId,
+                    futureUserId,
+                    futureExpectedSha256,
+                    actualSha256,
+                    "Provenance signature creation time is in the future.");
             }
 
             if (trustedKeyMatchedExpiredSignature)
@@ -372,6 +389,20 @@ public static class HelmProvenance
                     unusableExpectedSha256,
                     actualSha256,
                     "Signature is cryptographically valid but the signing key is revoked, expired, or not authorized to sign.");
+            }
+
+            if (weakHashSignature)
+            {
+                return Fail(null, null, null,
+                    ExtractSha256(provContent, archiveName), actualSha256,
+                    "OpenPGP provenance signatures using MD5, SHA-1, or RIPEMD-160 are not accepted.");
+            }
+
+            if (understrengthHashSignature)
+            {
+                return Fail(null, null, null,
+                    ExtractSha256(provContent, archiveName), actualSha256,
+                    "OpenPGP provenance signature hash is too weak for the signing key algorithm and curve.");
             }
 
             if (missingCreationTime)
@@ -601,7 +632,7 @@ public static class HelmProvenance
                 var key = trimmed[..sep].Trim();
                 var value = trimmed[(sep + 1)..].Trim();
                 // Strip simple YAML quoting so callers see the scalar value.
-                if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
+                if (value is ['"', .., '"'])
                     value = value[1..^1];
                 result[key] = value;
             }
@@ -724,7 +755,7 @@ public static class HelmProvenance
             else
             {
                 // Only "- " (dash + space) is the escape prefix; "-x" is ordinary text.
-                sb.Append(line.Length >= 2 && line[0] == '-' && line[1] == ' ' ? line[2..] : line);
+                sb.Append(line is ['-', ' ', ..] ? line[2..] : line);
             }
 
             if (i < lines.Length - 1)
@@ -751,7 +782,7 @@ public static class HelmProvenance
             }
         }
 
-        return [(byte)(crc >> 16), (byte)(crc >> 8), (byte)crc];
+        return [(byte)((crc >> 16) & 0xff), (byte)((crc >> 8) & 0xff), (byte)(crc & 0xff)];
     }
 
     // --- Verification internals ---
@@ -1041,10 +1072,18 @@ public static class HelmProvenance
             base64Lines.Add(trimmed);
         }
 
-        // Legacy payload is a single base64 blob of a 64-byte SHA-512 digest (88 chars + '=').
-        return base64Lines.Count == 1
-               && base64Lines[0].Length is >= 86 and <= 90
-               && !region.Contains("wsC", StringComparison.Ordinal); // real armor rarely starts this way is not a reliable check; length+comment is
+        // Legacy payload is the raw 64-byte SHA-512 digest, not an encoded OpenPGP packet.
+        if (base64Lines is not [var payload] || payload.Length != 88)
+            return false;
+
+        try
+        {
+            return Convert.FromBase64String(payload).Length == SHA512.HashSizeInBytes;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
     }
 
     private static string? ExtractSignedBodyText(string provContent)

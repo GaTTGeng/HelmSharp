@@ -80,6 +80,30 @@ public class HelmProvenanceTests
         return (secretRing, publicRing, signingKey, trustedKey);
     }
 
+    private static byte[] CreatePublicKeyRingBytes(DateTime keyCreatedAt, DateTime signatureCreatedAt)
+    {
+        var generator = new RsaKeyPairGenerator();
+        generator.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
+        var pair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, generator.GenerateKeyPair(), keyCreatedAt);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, signatureCreatedAt);
+        packets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
+        var ringGenerator = new PgpKeyRingGenerator(
+            (int)PgpSignature.PositiveCertification,
+            pair,
+            "Future signer <future@example.com>",
+            SymmetricKeyAlgorithmTag.Null,
+            HashAlgorithmTag.Sha512,
+            (char[])null!,
+            false,
+            packets.Generate(),
+            null,
+            new SecureRandom());
+        using var keyBytes = new MemoryStream();
+        ringGenerator.GeneratePublicKeyRing().Encode(keyBytes);
+        return keyBytes.ToArray();
+    }
+
     private static (PgpSecretKeyRing SecretRing, PgpPublicKeyRing PublicRing) CreateDsaKeyRings(string userId)
     {
         var random = new SecureRandom();
@@ -253,7 +277,8 @@ public class HelmProvenanceTests
         bool expiredPrimary = false,
         bool expiredBinding = false,
         bool expiredSubkeyKeyLifetime = false,
-        bool nonRevocableBinding = false)
+        bool nonRevocableBinding = false,
+        DateTime? signingSubkeyCreatedAt = null)
     {
         var kpg = new RsaKeyPairGenerator();
         kpg.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
@@ -278,12 +303,14 @@ public class HelmProvenanceTests
             null,
             new SecureRandom());
 
+        var subkeyCreatedAt = signingSubkeyCreatedAt ?? createdAt;
+        var bindingCreatedAt = signingSubkeyCreatedAt is null ? createdAt : DateTime.UtcNow;
         var signingPair = new PgpKeyPair(
             PublicKeyAlgorithmTag.RsaGeneral,
             kpg.GenerateKeyPair(),
-            createdAt);
+            subkeyCreatedAt);
         var signingFlags = new PgpSignatureSubpacketGenerator();
-        signingFlags.SetSignatureCreationTime(false, createdAt);
+        signingFlags.SetSignatureCreationTime(false, bindingCreatedAt);
         signingFlags.SetKeyFlags(true, PgpKeyFlags.CanSign);
         if (nonRevocableBinding)
             signingFlags.SetRevocable(true, false);
@@ -302,7 +329,7 @@ public class HelmProvenanceTests
             HashAlgorithmTag.Sha256);
         backSignatureGenerator.InitSign(PgpSignature.PrimaryKeyBinding, signingPair.PrivateKey);
         var backSignaturePackets = new PgpSignatureSubpacketGenerator();
-        backSignaturePackets.SetSignatureCreationTime(false, createdAt);
+        backSignaturePackets.SetSignatureCreationTime(false, bindingCreatedAt);
         backSignatureGenerator.SetHashedSubpackets(backSignaturePackets.Generate());
         signingFlags.AddEmbeddedSignature(
             false,
@@ -2325,6 +2352,87 @@ public class HelmProvenanceTests
     }
 
     [Fact]
+    public async Task Verify_FutureDatedDocumentSignatureWithExpiry_FailsClosed()
+    {
+        var work = TempDir();
+        try
+        {
+            var tgz = await CreateTestChartArchiveAsync(work);
+            var (_, _, signingKey, trustedKey) = CreateTestKeys();
+            var provenancePath = await HelmProvenance.SignAsync(tgz, signingKey);
+            var body = ExtractCleartextBodyForTest(await File.ReadAllTextAsync(provenancePath));
+            var futureProvenance = CreateClearSignedProvForTest(
+                body,
+                signingKey,
+                DateTime.UtcNow.AddHours(1),
+                expirationSeconds: 3600);
+            await File.WriteAllTextAsync(provenancePath, futureProvenance);
+
+            var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
+
+            Assert.False(result.IsValid);
+            Assert.True(result.SignatureValid);
+            Assert.True(result.SignerTrusted);
+            Assert.True(result.DigestMatches);
+            Assert.Contains("creation time is in the future", result.FailureReason, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Verify_WeakCompanionSignatureDoesNotHideExpiredTrustedSignature()
+    {
+        var work = TempDir();
+        try
+        {
+            var tgz = await CreateTestChartArchiveAsync(work);
+            var (secretRing, _, signingKey, trustedKey) = CreateTestKeys();
+            var provenancePath = await HelmProvenance.SignAsync(tgz, signingKey);
+            var provenance = await File.ReadAllTextAsync(provenancePath);
+            var body = ExtractCleartextBodyForTest(provenance);
+            var expiredProvenance = CreateClearSignedProvForTest(
+                body,
+                signingKey,
+                DateTime.UtcNow.AddMinutes(-2),
+                expirationSeconds: 30);
+
+            var secret = secretRing.GetSecretKeys().First();
+            var privateKey = secret.ExtractPrivateKey(null)!;
+            var weakGenerator = new PgpSignatureGenerator(secret.PublicKey.Algorithm, HashAlgorithmTag.Sha1);
+            weakGenerator.InitSign(PgpSignature.CanonicalTextDocument, privateKey);
+            weakGenerator.SetHashedSubpackets(new PgpSignatureSubpacketGenerator().Generate());
+            var canonicalBody = body.Replace("\r\n", "\n", StringComparison.Ordinal);
+            if (canonicalBody.EndsWith("\n", StringComparison.Ordinal))
+                canonicalBody = canonicalBody[..^1];
+            var canonicalBytes = Encoding.UTF8.GetBytes(string.Join("\r\n", canonicalBody.Split('\n')
+                .Select(line => line.TrimEnd(' ', '\t'))));
+            weakGenerator.Update(canonicalBytes, 0, canonicalBytes.Length);
+            await using var weakSignatureBytes = new MemoryStream();
+            using (var armor = new ArmoredOutputStream(weakSignatureBytes))
+                weakGenerator.Generate().Encode(armor);
+            var weakSignatureArmor = Encoding.ASCII.GetString(weakSignatureBytes.ToArray());
+            var combined = ReplaceSignaturePayload(
+                expiredProvenance,
+                [.. ExtractSignaturePayload(expiredProvenance), .. ExtractSignaturePayload(weakSignatureArmor)]);
+            await File.WriteAllTextAsync(provenancePath, combined);
+
+            var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
+
+            Assert.False(result.IsValid);
+            Assert.True(result.SignatureValid);
+            Assert.True(result.SignerTrusted);
+            Assert.Contains("signature has expired", result.FailureReason, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Verify_UnsignedTextAndUnknownArmorHeaders_FailClosed()
     {
         var work = TempDir();
@@ -2784,6 +2892,49 @@ public class HelmProvenanceTests
                 () => HelmProvenanceTrustedKey.FromKeyringData(keyBytes.ToArray()));
             Assert.Contains("No usable", exception.Message, StringComparison.Ordinal);
         }
+    }
+
+    [Fact]
+    public void FromKeyringData_FutureCreatedPrimaryAndSigningSubkeyAreRejected()
+    {
+        var future = DateTime.UtcNow.AddHours(1);
+        var primaryException = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(CreatePublicKeyRingBytes(future, DateTime.UtcNow)));
+        Assert.Contains("No usable", primaryException.Message, StringComparison.Ordinal);
+
+        var (_, subkeyRing) = CreateRingWithSigningSubkey(signingSubkeyCreatedAt: future);
+        using var subkeyBytes = new MemoryStream();
+        subkeyRing.Encode(subkeyBytes);
+        var subkeyException = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(subkeyBytes.ToArray()));
+        Assert.Contains("No usable", subkeyException.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(PublicKeyAlgorithmTag.Ed25519)]
+    [InlineData(PublicKeyAlgorithmTag.Ed448)]
+    public void AlgorithmCanSign_NativeEdDsaAlgorithmsAreNotAdvertised(PublicKeyAlgorithmTag algorithm)
+    {
+        AsymmetricCipherKeyPair keyPair;
+        if (algorithm == PublicKeyAlgorithmTag.Ed25519)
+        {
+            var generator = new Ed25519KeyPairGenerator();
+            generator.Init(new Ed25519KeyGenerationParameters(new SecureRandom()));
+            keyPair = generator.GenerateKeyPair();
+        }
+        else
+        {
+            var generator = new Ed448KeyPairGenerator();
+            generator.Init(new Ed448KeyGenerationParameters(new SecureRandom()));
+            keyPair = generator.GenerateKeyPair();
+        }
+
+        var pair = new PgpKeyPair(
+            algorithm,
+            keyPair,
+            DateTime.UtcNow);
+
+        Assert.False(HelmProvenanceTrustedKey.AlgorithmCanSign(pair.PublicKey));
     }
 
     [Fact]

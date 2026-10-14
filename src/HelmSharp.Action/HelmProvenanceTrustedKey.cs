@@ -79,6 +79,10 @@ public sealed class HelmProvenanceTrustedKey
     /// <returns>Trusted key wrapper.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="publicKeyData"/> is null.</exception>
     /// <exception cref="ArgumentException"><paramref name="publicKeyData"/> is empty or contains no usable signing key.</exception>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "ReSharper",
+        "UnusedMember.Global",
+        Justification = "Public key import API for callers outside this assembly.")]
     public static HelmProvenanceTrustedKey FromPublicKeyData(byte[] publicKeyData)
     {
         var keys = LoadTrustedSigningKeys(publicKeyData, nameof(publicKeyData));
@@ -94,6 +98,10 @@ public sealed class HelmProvenanceTrustedKey
     /// <returns>Trusted key wrapper.</returns>
     /// <exception cref="FileNotFoundException">The file does not exist.</exception>
     /// <exception cref="ArgumentException">The file contains no usable signing key.</exception>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "ReSharper",
+        "UnusedMember.Global",
+        Justification = "Public key import API for callers outside this assembly.")]
     public static HelmProvenanceTrustedKey FromPublicKeyFile(string path)
     {
         if (!File.Exists(path))
@@ -112,6 +120,10 @@ public sealed class HelmProvenanceTrustedKey
     /// <returns>One wrapper per usable signing key found.</returns>
     /// <exception cref="FileNotFoundException">The file does not exist.</exception>
     /// <exception cref="ArgumentException">The file contains no usable signing key.</exception>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "ReSharper",
+        "UnusedMember.Global",
+        Justification = "Public key import API for callers outside this assembly.")]
     public static IReadOnlyList<HelmProvenanceTrustedKey> FromKeyringFile(string path)
     {
         if (!File.Exists(path))
@@ -178,6 +190,13 @@ public sealed class HelmProvenanceTrustedKey
         PgpPublicKey? master,
         IReadOnlyList<PgpPublicKey> certificateKeys)
     {
+        var validationTime = DateTime.UtcNow;
+        // A future packet creation time cannot establish that the key exists yet,
+        // even when its self-certification or subkey binding is otherwise valid.
+        if (key.CreationTime > validationTime ||
+            (master is not null && master.CreationTime > validationTime))
+            return false;
+
         // Bouncy Castle 2.7.0 parses only V2, V3, and V4 signature packets. V5/V6
         // public keys cannot establish their policy without the corresponding support.
         if (key.Version is 5 or 6 || master?.Version is 5 or 6)
@@ -196,24 +215,23 @@ public sealed class HelmProvenanceTrustedKey
             return false;
         if (!AlgorithmCanSign(key))
             return false;
-        if (IsExpiredAt(ComputeEffectiveExpiry(key, master, certificateKeys), DateTime.UtcNow))
+        if (IsExpiredAt(ComputeEffectiveExpiry(key, master, certificateKeys), validationTime))
             return false;
         return KeyFlagsPermitSigning(key, master, certificateKeys);
     }
 
     /// <summary>
     /// Algorithms and key sizes permitted for OpenPGP signing. RSA keys below 2048 bits,
-    /// ECDSA curves outside NIST P-256/P-384/P-521, DSA, and encryption-only algorithms
-    /// are excluded even when key flags claim otherwise.
+    /// ECDSA curves outside NIST P-256/P-384/P-521, DSA, native EdDSA, and encryption-only
+    /// algorithms are excluded even when key flags claim otherwise. Bouncy Castle 2.7.0
+    /// cannot parse native EdDSA signature packets; only its legacy EdDSA format is usable.
     /// </summary>
-    private static bool AlgorithmCanSign(PgpPublicKey key) => key.Algorithm switch
+    internal static bool AlgorithmCanSign(PgpPublicKey key) => key.Algorithm switch
     {
         PublicKeyAlgorithmTag.RsaGeneral or PublicKeyAlgorithmTag.RsaSign => key.BitStrength >= 2048,
         PublicKeyAlgorithmTag.ECDsa => key.PublicKeyPacket.Key is ECPublicBcpgKey ecKey &&
             SupportedEcdsaCurveOids.Contains(ecKey.CurveOid.Id),
-        PublicKeyAlgorithmTag.EdDsa_Legacy or
-        PublicKeyAlgorithmTag.Ed25519 or
-        PublicKeyAlgorithmTag.Ed448 => true,
+        PublicKeyAlgorithmTag.EdDsa_Legacy => true,
         _ => false,
     };
 
