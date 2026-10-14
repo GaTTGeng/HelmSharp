@@ -1,20 +1,10 @@
 using HelmSharp.Chart;
 
-namespace HelmSharp.Action;
+namespace HelmSharp.Kube;
 
 /// <summary>
-/// Three-way merge for Kubernetes resources during upgrades.
-/// Compares: last deployed manifest vs new manifest vs live resource.
-/// Preserves manual modifications that don't conflict with the new manifest.
+/// Merges the previous desired manifest, new chart output, and current live resource during upgrades.
 /// </summary>
-[System.Diagnostics.CodeAnalysis.SuppressMessage(
-    "ReSharper",
-    "UnusedType.Global",
-    Justification = "The isolated merge helper is retained for a future upgrade lifecycle integration.")]
-[System.Diagnostics.CodeAnalysis.SuppressMessage(
-    "ReSharper",
-    "UnusedMember.Global",
-    Justification = "The isolated merge entry point is retained for a future upgrade lifecycle integration.")]
 internal static class ThreeWayMerge
 {
     /// <summary>

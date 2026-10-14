@@ -354,12 +354,21 @@ public class HelmClient : IHelmClient
 
         // --- 9. Apply the main manifest ---
         var applier = new KubernetesManifestApplier(client, options.FieldManager);
+        var previousManifest = isUpgrade
+            ? existingHistory
+                .Where(record => string.Equals(record.Status, "deployed", StringComparison.OrdinalIgnoreCase))
+                .MaxBy(record => record.Revision)
+                ?.Manifest
+            : null;
+        var applyOperation = previousManifest is null
+            ? applier.ApplyAsync(mainManifest, ns, operationToken)
+            : applier.ApplyUpgradeAsync(mainManifest, previousManifest, ns, operationToken);
         var applied = 0;
         var appliedResources = new List<string>();
         Exception? applyError = null;
         try
         {
-            await foreach (var resource in applier.ApplyAsync(mainManifest, ns, operationToken))
+            await foreach (var resource in applyOperation.WithCancellation(operationToken))
             {
                 applied++;
                 appliedResources.Add($"Applied {resource}");

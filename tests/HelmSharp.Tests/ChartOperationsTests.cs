@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using HelmSharp.Action;
 using HelmSharp.Chart;
 using HelmSharp.Kube;
@@ -895,6 +896,62 @@ public class ChartOperationsTests : IDisposable
         using var historyJson = JsonDocument.Parse(history.StandardOutput);
         Assert.Equal([1, 2, 3, 4], historyJson.RootElement.EnumerateArray()
             .Select(record => record.GetProperty("revision").GetInt32()));
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_UpgradePreservesLiveOnlyFieldsAndAppliesChartChangesAndRemovals()
+    {
+        var chartDir = await CreateMinimalChartAsync("upgrade-preservation-chart");
+        var templatePath = Path.Combine(chartDir, "templates", "configmap.yaml");
+        const string resourcePath = "/api/v1/namespaces/test-ns/configmaps/upgrade-preservation";
+        await File.WriteAllTextAsync(templatePath, """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: upgrade-preservation
+            data:
+              chartOwned: before
+              chartRemoved: obsolete
+            """);
+
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "upgrade-preservation",
+            Chart = chartDir
+        }));
+
+        var liveResource = JsonNode.Parse(releaseState.ConfigMaps[resourcePath])!;
+        liveResource["data"]!["operatorAdded"] = "retain";
+        liveResource["metadata"]!["annotations"] = new JsonObject
+        {
+            ["operator.example/managed"] = "retain"
+        };
+        releaseState.ConfigMaps[resourcePath] = liveResource.ToJsonString(ReleaseLifecycleState.JsonDefaults);
+
+        await File.WriteAllTextAsync(templatePath, """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: upgrade-preservation
+            data:
+              chartOwned: after
+            """);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "upgrade-preservation",
+            Chart = chartDir
+        }));
+
+        using var applied = JsonDocument.Parse(releaseState.ConfigMaps[resourcePath]);
+        var root = applied.RootElement;
+        var data = root.GetProperty("data");
+        Assert.Equal("after", data.GetProperty("chartOwned").GetString());
+        Assert.False(data.TryGetProperty("chartRemoved", out _));
+        Assert.Equal("retain", data.GetProperty("operatorAdded").GetString());
+        Assert.Equal("retain", root.GetProperty("metadata").GetProperty("annotations")
+            .GetProperty("operator.example/managed").GetString());
     }
 
     [Fact]
