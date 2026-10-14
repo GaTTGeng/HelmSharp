@@ -22,20 +22,20 @@ internal static class ThreeWayMerge
         string newManifest,
         string? liveManifest)
     {
-        var lastDoc = HelmYaml.DeserializeDictionary(lastManifest);
-        var newDoc = HelmYaml.DeserializeDictionary(newManifest);
+        var lastDoc = HelmYaml.DeserializeDictionary(lastManifest, StringComparer.Ordinal);
+        var newDoc = HelmYaml.DeserializeDictionary(newManifest, StringComparer.Ordinal);
 
         // No live resource: nothing to reconcile, apply the desired manifest as-is.
         if (liveManifest is null)
             return newManifest;
 
-        var liveDoc = HelmYaml.DeserializeDictionary(liveManifest);
+        var liveDoc = HelmYaml.DeserializeDictionary(liveManifest, StringComparer.Ordinal);
 
         // Start with the new manifest
         var merged = DeepCopyDict(newDoc);
 
         // Deep merge at every level
-        DeepThreeWayMerge(lastDoc, newDoc, liveDoc, merged);
+        DeepThreeWayMerge(lastDoc, newDoc, liveDoc, merged, isRoot: true, isMetadata: false);
 
         return HelmYaml.Serialize(merged);
     }
@@ -47,20 +47,23 @@ internal static class ThreeWayMerge
         IDictionary<string, object?> last,
         IDictionary<string, object?> newVals,
         IDictionary<string, object?> live,
-        IDictionary<string, object?> merged)
+        IDictionary<string, object?> merged,
+        bool isRoot,
+        bool isMetadata)
     {
         // Collect all keys from all three sources
-        var allKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var allKeys = new HashSet<string>(StringComparer.Ordinal);
         foreach (var k in last.Keys) allKeys.Add(k);
         foreach (var k in newVals.Keys) allKeys.Add(k);
         foreach (var k in live.Keys) allKeys.Add(k);
 
         foreach (var key in allKeys)
         {
-            // Skip fields managed by Kubernetes: they are cluster-authoritative and must never
-            // be taken from the live object or forced from the chart.
-            if (key is "resourceVersion" or "uid" or "generation" or "creationTimestamp" or
-                "managedFields" or "selfLink" or "ownerReferences" or "status")
+            // Status is cluster-owned at the resource root; identity bookkeeping is cluster-owned
+            // only beneath metadata. Nested user fields with the same names remain chart data.
+            if ((isRoot && key == "status") ||
+                (isMetadata && key is "resourceVersion" or "uid" or "generation" or "creationTimestamp" or
+                    "managedFields" or "selfLink"))
                 continue;
 
             var hasLast = last.TryGetValue(key, out var lastVal);
@@ -77,10 +80,37 @@ internal static class ThreeWayMerge
                 if (!merged.TryGetValue(key, out var mergedChild) ||
                     mergedChild is not IDictionary<string, object?> mergedChildDict)
                 {
-                    mergedChildDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                    mergedChildDict = new Dictionary<string, object?>(StringComparer.Ordinal);
                     merged[key] = mergedChildDict;
                 }
-                DeepThreeWayMerge(lastDict, newDict, liveDict, mergedChildDict);
+                DeepThreeWayMerge(
+                    lastDict,
+                    newDict,
+                    liveDict,
+                    mergedChildDict,
+                    isRoot: false,
+                    isMetadata: isRoot && key == "metadata");
+                continue;
+            }
+
+            // If the chart removes an entire mapping, reconcile its children individually so
+            // unchanged chart fields disappear while live edits and live-only children survive.
+            if (hasLive && hasLast && !hasNew &&
+                lastVal is IDictionary<string, object?> removedLastMap &&
+                liveVal is IDictionary<string, object?> removedLiveMap)
+            {
+                var remaining = new Dictionary<string, object?>(StringComparer.Ordinal);
+                DeepThreeWayMerge(
+                    removedLastMap,
+                    new Dictionary<string, object?>(StringComparer.Ordinal),
+                    removedLiveMap,
+                    remaining,
+                    isRoot: false,
+                    isMetadata: isRoot && key == "metadata");
+                if (remaining.Count == 0)
+                    merged.Remove(key);
+                else
+                    merged[key] = remaining;
                 continue;
             }
 
@@ -102,6 +132,12 @@ internal static class ThreeWayMerge
                     merged[key] = liveVal;
                 }
                 // Otherwise keep new value (already in merged)
+            }
+            else if (!hasLive && hasLast && hasNew)
+            {
+                // A live-only deletion survives when the chart leaves the prior value unchanged.
+                if (DeepEquals(lastVal, newVal))
+                    merged.Remove(key);
             }
             else if (hasLive && hasLast && !hasNew)
             {
@@ -165,10 +201,10 @@ internal static class ThreeWayMerge
         return a.Equals(b);
     }
 
-    // Case-insensitive deep copy so merge mutation never leaks into the parsed source documents.
+    // Ordinal deep copy so case-sensitive Kubernetes map keys remain distinct.
     private static Dictionary<string, object?> DeepCopyDict(Dictionary<string, object?> dict)
     {
-        var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        var result = new Dictionary<string, object?>(StringComparer.Ordinal);
         foreach (var kvp in dict)
         {
             result[kvp.Key] = DeepCopyValue(kvp.Value);
@@ -183,7 +219,7 @@ internal static class ThreeWayMerge
             Dictionary<string, object?> d => DeepCopyDict(d),
             IDictionary<string, object?> d => new Dictionary<string, object?>(
                 d.ToDictionary(kv => kv.Key, kv => DeepCopyValue(kv.Value)),
-                StringComparer.OrdinalIgnoreCase),
+                StringComparer.Ordinal),
             IList<object?> list => list.Select(DeepCopyValue).ToList(),
             string s => new string(s),
             _ => value

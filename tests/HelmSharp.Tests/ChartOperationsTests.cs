@@ -911,6 +911,7 @@ public class ChartOperationsTests : IDisposable
               name: upgrade-preservation
             data:
               chartOwned: before
+              liveDeleted: retain-delete
               chartRemoved: obsolete
             """);
 
@@ -924,6 +925,7 @@ public class ChartOperationsTests : IDisposable
 
         var liveResource = JsonNode.Parse(releaseState.ConfigMaps[resourcePath])!;
         liveResource["data"]!["operatorAdded"] = "retain";
+        liveResource["data"]!.AsObject().Remove("liveDeleted");
         liveResource["metadata"]!["annotations"] = new JsonObject
         {
             ["operator.example/managed"] = "retain"
@@ -937,6 +939,7 @@ public class ChartOperationsTests : IDisposable
               name: upgrade-preservation
             data:
               chartOwned: after
+              liveDeleted: retain-delete
             """);
         await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
         {
@@ -949,6 +952,7 @@ public class ChartOperationsTests : IDisposable
         var data = root.GetProperty("data");
         Assert.Equal("after", data.GetProperty("chartOwned").GetString());
         Assert.False(data.TryGetProperty("chartRemoved", out _));
+        Assert.False(data.TryGetProperty("liveDeleted", out _));
         Assert.Equal("retain", data.GetProperty("operatorAdded").GetString());
         Assert.Equal("retain", root.GetProperty("metadata").GetProperty("annotations")
             .GetProperty("operator.example/managed").GetString());
