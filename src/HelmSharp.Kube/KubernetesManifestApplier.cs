@@ -28,6 +28,8 @@ public sealed class KubernetesManifestApplier
     private readonly string _fieldManager;
     private readonly Func<TimeSpan, CancellationToken, Task> _discoveryDelay;
     private readonly Dictionary<(string ApiVersion, string Kind), DiscoveredResource> _discoveredResources = new();
+    private IReadOnlyDictionary<ManifestIdentity, string> _previousManifestByIdentity =
+        new Dictionary<ManifestIdentity, string>();
 
     /// <param name="client">Kubernetes client used for all API operations.</param>
     /// <param name="fieldManager">Field manager name recorded on create/replace calls (server-side apply bookkeeping).</param>
@@ -110,6 +112,30 @@ public sealed class KubernetesManifestApplier
             }
             yield return identity.DisplayName;
         }
+    }
+
+    /// <summary>
+    /// Applies an upgrade manifest while preserving live changes that the previous release
+    /// manifest shows HelmSharp does not own.
+    /// </summary>
+    /// <param name="manifest">New multi-document YAML manifest rendered from the chart.</param>
+    /// <param name="previousManifest">Manifest recorded by the previously deployed release revision.</param>
+    /// <param name="defaultNamespace">Namespace used when a document omits <c>metadata.namespace</c>.</param>
+    /// <param name="cancellationToken">Cancels API calls.</param>
+    internal async IAsyncEnumerable<string> ApplyUpgradeAsync(
+        string manifest,
+        string previousManifest,
+        string defaultNamespace,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        _previousManifestByIdentity = SplitDocuments(previousManifest)
+            .Select(document => (Document: document, Identity: ManifestIdentity.Parse(document, defaultNamespace)))
+            .Where(item => item.Identity is not null)
+            .GroupBy(item => item.Identity!)
+            .ToDictionary(group => group.Key, group => group.First().Document);
+
+        await foreach (var resource in ApplyAsync(manifest, defaultNamespace, cancellationToken))
+            yield return resource;
     }
 
     /// <summary>
@@ -265,7 +291,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.CoreV1.CreateNamespaceAsync(KubernetesYaml.Deserialize<V1Namespace>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1Namespace>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1Namespace>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.CoreV1.ReplaceNamespaceAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -276,7 +303,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.CoreV1.CreateNamespacedConfigMapAsync(KubernetesYaml.Deserialize<V1ConfigMap>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1ConfigMap>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1ConfigMap>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.CoreV1.ReplaceNamespacedConfigMapAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -288,7 +316,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.CoreV1.CreateNamespacedSecretAsync(KubernetesYaml.Deserialize<V1Secret>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1Secret>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1Secret>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.CoreV1.ReplaceNamespacedSecretAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -300,7 +329,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.CoreV1.CreateNamespacedServiceAsync(KubernetesYaml.Deserialize<V1Service>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1Service>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1Service>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         // ClusterIP(s) and IpFamilyPolicy are allocated/immutable after
@@ -320,7 +350,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.CoreV1.CreateNamespacedServiceAccountAsync(KubernetesYaml.Deserialize<V1ServiceAccount>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1ServiceAccount>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1ServiceAccount>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.CoreV1.ReplaceNamespacedServiceAccountAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -332,7 +363,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.CoreV1.CreateNamespacedPersistentVolumeClaimAsync(KubernetesYaml.Deserialize<V1PersistentVolumeClaim>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1PersistentVolumeClaim>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1PersistentVolumeClaim>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.CoreV1.ReplaceNamespacedPersistentVolumeClaimAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -344,7 +376,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.CoreV1.CreatePersistentVolumeAsync(KubernetesYaml.Deserialize<V1PersistentVolume>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1PersistentVolume>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1PersistentVolume>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.CoreV1.ReplacePersistentVolumeAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -355,7 +388,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.CoreV1.CreateNamespacedLimitRangeAsync(KubernetesYaml.Deserialize<V1LimitRange>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1LimitRange>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1LimitRange>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.CoreV1.ReplaceNamespacedLimitRangeAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -367,7 +401,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.CoreV1.CreateNamespacedResourceQuotaAsync(KubernetesYaml.Deserialize<V1ResourceQuota>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1ResourceQuota>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1ResourceQuota>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.CoreV1.ReplaceNamespacedResourceQuotaAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -379,7 +414,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.CoreV1.CreateNamespacedPodAsync(KubernetesYaml.Deserialize<V1Pod>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1Pod>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1Pod>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.CoreV1.ReplaceNamespacedPodAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -391,7 +427,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.CoreV1.CreateNamespacedEndpointsAsync(KubernetesYaml.Deserialize<V1Endpoints>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1Endpoints>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1Endpoints>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.CoreV1.ReplaceNamespacedEndpointsAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -403,7 +440,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.CoreV1.CreateNamespacedReplicationControllerAsync(KubernetesYaml.Deserialize<V1ReplicationController>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1ReplicationController>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1ReplicationController>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.CoreV1.ReplaceNamespacedReplicationControllerAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -417,7 +455,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.AppsV1.CreateNamespacedDeploymentAsync(KubernetesYaml.Deserialize<V1Deployment>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1Deployment>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1Deployment>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.AppsV1.ReplaceNamespacedDeploymentAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -429,7 +468,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.AppsV1.CreateNamespacedStatefulSetAsync(KubernetesYaml.Deserialize<V1StatefulSet>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1StatefulSet>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1StatefulSet>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.AppsV1.ReplaceNamespacedStatefulSetAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -441,7 +481,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.AppsV1.CreateNamespacedDaemonSetAsync(KubernetesYaml.Deserialize<V1DaemonSet>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1DaemonSet>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1DaemonSet>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.AppsV1.ReplaceNamespacedDaemonSetAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -453,7 +494,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.AppsV1.CreateNamespacedReplicaSetAsync(KubernetesYaml.Deserialize<V1ReplicaSet>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1ReplicaSet>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1ReplicaSet>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.AppsV1.ReplaceNamespacedReplicaSetAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -467,7 +509,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.BatchV1.CreateNamespacedJobAsync(KubernetesYaml.Deserialize<V1Job>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1Job>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1Job>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         // The Job selector is controller-assigned and immutable — carry
@@ -482,7 +525,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.BatchV1.CreateNamespacedCronJobAsync(KubernetesYaml.Deserialize<V1CronJob>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1CronJob>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1CronJob>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.BatchV1.ReplaceNamespacedCronJobAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -496,7 +540,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.NetworkingV1.CreateNamespacedIngressAsync(KubernetesYaml.Deserialize<V1Ingress>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1Ingress>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1Ingress>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.NetworkingV1.ReplaceNamespacedIngressAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -508,7 +553,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.NetworkingV1.CreateNamespacedNetworkPolicyAsync(KubernetesYaml.Deserialize<V1NetworkPolicy>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1NetworkPolicy>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1NetworkPolicy>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.NetworkingV1.ReplaceNamespacedNetworkPolicyAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -520,7 +566,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.NetworkingV1.CreateIngressClassAsync(KubernetesYaml.Deserialize<V1IngressClass>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1IngressClass>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1IngressClass>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.NetworkingV1.ReplaceIngressClassAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -533,7 +580,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.RbacAuthorizationV1.CreateNamespacedRoleAsync(KubernetesYaml.Deserialize<V1Role>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1Role>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1Role>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.RbacAuthorizationV1.ReplaceNamespacedRoleAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -545,7 +593,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.RbacAuthorizationV1.CreateNamespacedRoleBindingAsync(KubernetesYaml.Deserialize<V1RoleBinding>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1RoleBinding>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1RoleBinding>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.RbacAuthorizationV1.ReplaceNamespacedRoleBindingAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -557,7 +606,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.RbacAuthorizationV1.CreateClusterRoleAsync(KubernetesYaml.Deserialize<V1ClusterRole>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1ClusterRole>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1ClusterRole>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.RbacAuthorizationV1.ReplaceClusterRoleAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -568,7 +618,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.RbacAuthorizationV1.CreateClusterRoleBindingAsync(KubernetesYaml.Deserialize<V1ClusterRoleBinding>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1ClusterRoleBinding>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1ClusterRoleBinding>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.RbacAuthorizationV1.ReplaceClusterRoleBindingAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -581,7 +632,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.AutoscalingV2.CreateNamespacedHorizontalPodAutoscalerAsync(KubernetesYaml.Deserialize<V2HorizontalPodAutoscaler>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V2HorizontalPodAutoscaler>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V2HorizontalPodAutoscaler>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.AutoscalingV2.ReplaceNamespacedHorizontalPodAutoscalerAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -593,7 +645,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.AutoscalingV1.CreateNamespacedHorizontalPodAutoscalerAsync(KubernetesYaml.Deserialize<V1HorizontalPodAutoscaler>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1HorizontalPodAutoscaler>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1HorizontalPodAutoscaler>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.AutoscalingV1.ReplaceNamespacedHorizontalPodAutoscalerAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -607,7 +660,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.PolicyV1.CreateNamespacedPodDisruptionBudgetAsync(KubernetesYaml.Deserialize<V1PodDisruptionBudget>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1PodDisruptionBudget>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1PodDisruptionBudget>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.PolicyV1.ReplaceNamespacedPodDisruptionBudgetAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -621,7 +675,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.StorageV1.CreateStorageClassAsync(KubernetesYaml.Deserialize<V1StorageClass>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1StorageClass>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1StorageClass>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.StorageV1.ReplaceStorageClassAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -632,7 +687,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.StorageV1.CreateCSIDriverAsync(KubernetesYaml.Deserialize<V1CSIDriver>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1CSIDriver>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1CSIDriver>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.StorageV1.ReplaceCSIDriverAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -643,7 +699,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.StorageV1.CreateCSINodeAsync(KubernetesYaml.Deserialize<V1CSINode>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1CSINode>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1CSINode>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.StorageV1.ReplaceCSINodeAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -654,7 +711,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.StorageV1.CreateVolumeAttachmentAsync(KubernetesYaml.Deserialize<V1VolumeAttachment>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1VolumeAttachment>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1VolumeAttachment>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.StorageV1.ReplaceVolumeAttachmentAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -667,7 +725,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.SchedulingV1.CreatePriorityClassAsync(KubernetesYaml.Deserialize<V1PriorityClass>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1PriorityClass>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1PriorityClass>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.SchedulingV1.ReplacePriorityClassAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -680,7 +739,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.ApiextensionsV1.CreateCustomResourceDefinitionAsync(KubernetesYaml.Deserialize<V1CustomResourceDefinition>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1CustomResourceDefinition>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1CustomResourceDefinition>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.ApiextensionsV1.ReplaceCustomResourceDefinitionAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -693,7 +753,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.AdmissionregistrationV1.CreateMutatingWebhookConfigurationAsync(KubernetesYaml.Deserialize<V1MutatingWebhookConfiguration>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1MutatingWebhookConfiguration>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1MutatingWebhookConfiguration>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.AdmissionregistrationV1.ReplaceMutatingWebhookConfigurationAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -704,7 +765,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.AdmissionregistrationV1.CreateValidatingWebhookConfigurationAsync(KubernetesYaml.Deserialize<V1ValidatingWebhookConfiguration>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1ValidatingWebhookConfiguration>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1ValidatingWebhookConfiguration>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.AdmissionregistrationV1.ReplaceValidatingWebhookConfigurationAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -717,7 +779,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.ApiregistrationV1.CreateAPIServiceAsync(KubernetesYaml.Deserialize<V1APIService>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1APIService>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1APIService>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.ApiregistrationV1.ReplaceAPIServiceAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -730,7 +793,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.CoordinationV1.CreateNamespacedLeaseAsync(KubernetesYaml.Deserialize<V1Lease>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1Lease>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1Lease>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.CoordinationV1.ReplaceNamespacedLeaseAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -744,7 +808,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.NodeV1.CreateRuntimeClassAsync(KubernetesYaml.Deserialize<V1RuntimeClass>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1RuntimeClass>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1RuntimeClass>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.NodeV1.ReplaceRuntimeClassAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -757,7 +822,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.DiscoveryV1.CreateNamespacedEndpointSliceAsync(KubernetesYaml.Deserialize<V1EndpointSlice>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1EndpointSlice>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1EndpointSlice>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.DiscoveryV1.ReplaceNamespacedEndpointSliceAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -771,7 +837,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.FlowcontrolApiserverV1.CreateFlowSchemaAsync(KubernetesYaml.Deserialize<V1FlowSchema>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1FlowSchema>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1FlowSchema>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.FlowcontrolApiserverV1.ReplaceFlowSchemaAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -782,7 +849,8 @@ public sealed class KubernetesManifestApplier
                     () => _client.FlowcontrolApiserverV1.CreatePriorityLevelConfigurationAsync(KubernetesYaml.Deserialize<V1PriorityLevelConfiguration>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1PriorityLevelConfiguration>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1PriorityLevelConfiguration>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.FlowcontrolApiserverV1.ReplacePriorityLevelConfigurationAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -795,6 +863,44 @@ public sealed class KubernetesManifestApplier
         }
 
         return identity;
+    }
+
+    private string MergeWithLiveResource(ManifestIdentity identity, string desiredManifest, object liveResource)
+    {
+        if (!TryGetPreviousManifest(identity, out var previousManifest))
+            return desiredManifest;
+
+        // The typed Kubernetes read result already contains the same live object whose
+        // resourceVersion is used by the following Replace request.
+        var liveManifest = JsonSerializer.Serialize(liveResource);
+        return ThreeWayMerge.MergeResource(previousManifest, desiredManifest, liveManifest);
+    }
+
+    private bool TryGetPreviousManifest(ManifestIdentity identity, out string previousManifest)
+    {
+        if (_previousManifestByIdentity.TryGetValue(identity, out previousManifest!))
+            return true;
+
+        // Discovery can reveal that a custom resource is cluster-scoped only after its
+        // prior manifest was parsed, when the default namespace was still attached.
+        if (string.IsNullOrWhiteSpace(identity.Namespace))
+        {
+            var matches = _previousManifestByIdentity
+                .Where(pair => pair.Key.ApiVersion == identity.ApiVersion &&
+                               pair.Key.Kind == identity.Kind &&
+                               pair.Key.Name == identity.Name)
+                .Select(pair => pair.Value)
+                .Take(2)
+                .ToArray();
+            if (matches.Length == 1)
+            {
+                previousManifest = matches[0];
+                return true;
+            }
+        }
+
+        previousManifest = string.Empty;
+        return false;
     }
 
     private async Task<ManifestIdentity> ApplyDiscoveredResourceAsync(ManifestIdentity identity, string yaml, CancellationToken ct)
@@ -811,6 +917,8 @@ public sealed class KubernetesManifestApplier
                 () => _client.CustomObjects.CreateNamespacedCustomObjectAsync(item, resource.Group, resource.Version, identity.Namespace, resource.Plural, null, _fieldManager, null, null, ct),
                 existing =>
                 {
+                    item = HelmYaml.DeserializeDictionary(MergeWithLiveResource(identity, yaml, existing));
+                    SetNamespace(item, identity.Namespace);
                     SetResourceVersion(item, existing);
                     return _client.CustomObjects.ReplaceNamespacedCustomObjectAsync(item, resource.Group, resource.Version, identity.Namespace, resource.Plural, identity.Name, null, _fieldManager, null, ct);
                 });
@@ -824,6 +932,8 @@ public sealed class KubernetesManifestApplier
             () => _client.CustomObjects.CreateClusterCustomObjectAsync(item, resource.Group, resource.Version, resource.Plural, null, _fieldManager, null, null, ct),
             existing =>
             {
+                item = HelmYaml.DeserializeDictionary(MergeWithLiveResource(identity, yaml, existing));
+                SetNamespace(item, namespaceName: null);
                 SetResourceVersion(item, existing);
                 return _client.CustomObjects.ReplaceClusterCustomObjectAsync(item, resource.Group, resource.Version, resource.Plural, identity.Name, null, _fieldManager, null, ct);
             });

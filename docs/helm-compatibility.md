@@ -37,6 +37,10 @@ Exact CLI colors, progress text, terminal formatting, and plugin execution are n
 | Release history in Kubernetes Secrets | Supported | Release records can be persisted without Helm CLI. |
 | OCI registry and provenance | Planned | API surface exists or is planned; production parity is not complete. |
 
+### Upgrade resource ownership
+
+For resources present in the previously deployed release manifest, `HelmClient` upgrades compare that recorded manifest, the newly rendered chart manifest, and the live Kubernetes object. Live-only fields and live edits to fields unchanged by the chart are preserved. Chart changes take effect, and a chart-removed field is removed when its live value still matches the previous chart value; a live edit to that field is retained. Kubernetes-managed fields such as `resourceVersion`, `uid`, and `status` remain cluster-authoritative. Lists are merged as whole values rather than with Kubernetes strategic-merge semantics. Resources without a prior manifest entry, reinstall-after-uninstall, and direct `KubernetesManifestApplier.ApplyAsync` calls use the desired manifest for replacement and do not have a three-way ownership baseline. This behavior is covered through the install/upgrade lifecycle path; see the focused merge and lifecycle tests.
+
 ## Known boundaries
 
 These are the areas to check before betting a production workflow on exact Helm behavior:

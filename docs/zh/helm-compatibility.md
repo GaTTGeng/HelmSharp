@@ -34,6 +34,10 @@ CLI 颜色、进度文案、终端格式和插件执行不是目标，除非它�
 | Kubernetes Secrets 发布历史 | 已支持 | 不依赖 Helm CLI 也能保存发布记录。 |
 | OCI 注册表和来源证明 | 计划中 | API 或方向存在，但还不是完整生产对齐。 |
 
+### 升级时的资源字段归属
+
+对于上一已部署 release 清单中已有的资源，`HelmClient` 升级会比较该 revision 保存的清单、新渲染的 Chart 清单和 Kubernetes 当前对象。只存在于 live 对象中的字段，以及 Chart 未修改的 live 字段值会保留。Chart 的变更会生效；若 Chart 删除某字段且 live 值仍等于上一 Chart 值，该字段也会删除；若 live 已修改该字段，则保留 live 值。`resourceVersion`、`uid` 和 `status` 等 Kubernetes 管理字段仍以集群为准。列表按整体值合并，不使用 Kubernetes strategic merge 语义。没有先前清单条目的资源、卸载后重新安装，以及直接调用 `KubernetesManifestApplier.ApplyAsync` 时，替换会使用期望清单，不执行三方归属合并。该行为由实际 install/upgrade 生命周期路径覆盖；详见合并和生命周期专项测试。
+
 ## 已知边界
 
 如果生产流程依赖以下行为，接入前应先验证：
