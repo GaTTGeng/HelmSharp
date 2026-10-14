@@ -493,7 +493,8 @@ public class HelmProvenanceTests
         bool invalidRevocationKeyClass = false,
         bool mismatchedRevocationKeyAlgorithm = false,
         bool useDsaRevoker = false,
-        HashAlgorithmTag revocationHashAlgorithm = HashAlgorithmTag.Sha512)
+        HashAlgorithmTag revocationHashAlgorithm = HashAlgorithmTag.Sha512,
+        bool useVersion3Revoker = false)
     {
         const string userId = "Designated revocation <designated@example.com>";
         const string revokerUserId = "Designated revoker <revoker@example.com>";
@@ -501,6 +502,13 @@ public class HelmProvenanceTests
             CreateRevokerKeyRings(revokerUserId, useDsaRevoker);
         using var revokerSigningKeyLifetime = revokerSigningKey;
         var revokerSecret = revokerSecretRing.GetSecretKeys().Single(key => key.PublicKey.IsMasterKey);
+        var declaredRevoker = useVersion3Revoker
+            ? new PgpPublicKey(new PublicKeyPacket(
+                3,
+                revokerSecret.PublicKey.Algorithm,
+                revokerSecret.PublicKey.CreationTime,
+                revokerSecret.PublicKey.PublicKeyPacket.Key))
+            : revokerSecret.PublicKey;
         var (secretRing, publicRing, signingKey, _) = CreateTestKeys(userId);
         using var signingKeyLifetime = signingKey;
         var primarySecret = secretRing.GetSecretKeys().Single(key => key.PublicKey.IsMasterKey);
@@ -519,7 +527,7 @@ public class HelmProvenanceTests
             directKeyPackets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
             AddRevocationKeyDeclaration(
                 directKeyPackets,
-                revokerSecret.PublicKey,
+                declaredRevoker,
                 invalidRevocationKeyClass,
                 mismatchedRevocationKeyAlgorithm);
             directKeyGenerator.SetHashedSubpackets(directKeyPackets.Generate());
@@ -547,7 +555,7 @@ public class HelmProvenanceTests
             directKeyPackets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
             AddRevocationKeyDeclaration(
                 directKeyPackets,
-                revokerSecret.PublicKey,
+                declaredRevoker,
                 invalidRevocationKeyClass,
                 mismatchedRevocationKeyAlgorithm);
             directKeyGenerator.SetHashedSubpackets(directKeyPackets.Generate());
@@ -576,7 +584,14 @@ public class HelmProvenanceTests
         var updatedPublicRing = PgpPublicKeyRing.InsertPublicKey(publicRing, primary);
         using var keyMaterial = new MemoryStream();
         updatedPublicRing.Encode(keyMaterial);
-        revokerPublicRing.Encode(keyMaterial);
+        if (useVersion3Revoker)
+        {
+            declaredRevoker.Encode(keyMaterial);
+        }
+        else
+        {
+            revokerPublicRing.Encode(keyMaterial);
+        }
         return keyMaterial.ToArray();
     }
 
@@ -4058,16 +4073,19 @@ public class HelmProvenanceTests
     }
 
     [Theory]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(false, false, true)]
     public void FromKeyringData_InvalidRevocationKeyDeclarationCannotAuthorizeRevocation(
         bool invalidClass,
-        bool mismatchedAlgorithm)
+        bool mismatchedAlgorithm,
+        bool useVersion3Revoker)
     {
         var keyringData = CreateSigningKeyringWithDesignatedCertificationRevocation(
             revokeDirectKey: false,
             invalidRevocationKeyClass: invalidClass,
-            mismatchedRevocationKeyAlgorithm: mismatchedAlgorithm);
+            mismatchedRevocationKeyAlgorithm: mismatchedAlgorithm,
+            useVersion3Revoker: useVersion3Revoker);
 
         var trustedKeys = HelmProvenanceTrustedKey.FromKeyringData(keyringData);
 

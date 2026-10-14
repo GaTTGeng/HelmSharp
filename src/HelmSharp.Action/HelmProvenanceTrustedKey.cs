@@ -1002,7 +1002,9 @@ public sealed class HelmProvenanceTrustedKey
             {
                 var fingerprint = Convert.ToHexString(candidate.GetFingerprint());
                 return fingerprint == primaryFingerprint ||
-                    (authorizedFingerprints.TryGetValue(fingerprint, out var algorithms) && algorithms.Contains(candidate.Algorithm));
+                    (candidate.Version == 4 &&
+                        authorizedFingerprints.TryGetValue(fingerprint, out var algorithms) &&
+                        algorithms.Contains(candidate.Algorithm));
             })
             .ToArray();
     }
@@ -1026,7 +1028,8 @@ public sealed class HelmProvenanceTrustedKey
     }
 
     private static bool IsValidRevocationKeyDeclaration(RevocationKey revocationKey)
-        => ((int)revocationKey.SignatureClass & 0x80) != 0 &&
+        => revocationKey.GetFingerprint().Length == 20 &&
+            ((int)revocationKey.SignatureClass & 0x80) != 0 &&
             ((int)revocationKey.SignatureClass & 0x3f) == 0 &&
             revocationKey.Algorithm is PublicKeyAlgorithmTag.RsaGeneral or PublicKeyAlgorithmTag.RsaSign or
                 PublicKeyAlgorithmTag.Dsa or PublicKeyAlgorithmTag.ECDsa or PublicKeyAlgorithmTag.EdDsa_Legacy or
@@ -1077,7 +1080,9 @@ public sealed class HelmProvenanceTrustedKey
             {
                 var fingerprint = Convert.ToHexString(candidate.GetFingerprint());
                 return fingerprint == primaryFingerprint ||
-                    (authorizedFingerprints.TryGetValue(fingerprint, out var algorithms) && algorithms.Contains(candidate.Algorithm));
+                    (candidate.Version == 4 &&
+                        authorizedFingerprints.TryGetValue(fingerprint, out var algorithms) &&
+                        algorithms.Contains(candidate.Algorithm));
             })
             .ToArray();
         return primary.GetSignatures().Any(revocation =>
