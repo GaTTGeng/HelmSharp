@@ -70,4 +70,88 @@ public sealed class ThreeWayMergeTests
         var data = (IDictionary<string, object?>)document["data"]!;
         Assert.Equal("chart", data["marker"]);
     }
+
+    [Fact]
+    public void MergeResource_PreservesLiveDeletionWhenChartValueIsUnchanged()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "data:\n  operatorRemoved: value\n",
+            "data:\n  operatorRemoved: value\n",
+            "data: {}\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var data = (IDictionary<string, object?>)document["data"]!;
+        Assert.False(data.ContainsKey("operatorRemoved"));
+    }
+
+    [Fact]
+    public void MergeResource_ReconcilesChildrenWhenChartRemovesAMapping()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            """
+            metadata:
+              name: settings
+              annotations:
+                chart-owned: unchanged
+            """,
+            """
+            metadata:
+              name: settings
+            """,
+            """
+            metadata:
+              name: settings
+              annotations:
+                chart-owned: unchanged
+                operator-owned: retain
+            """);
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var metadata = (IDictionary<string, object?>)document["metadata"]!;
+        var annotations = (IDictionary<string, object?>)metadata["annotations"]!;
+        Assert.False(annotations.ContainsKey("chart-owned"));
+        Assert.Equal("retain", annotations["operator-owned"]);
+    }
+
+    [Fact]
+    public void MergeResource_ScopesKubernetesManagedFieldExclusionsToTheirSchemaPaths()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: example.com/v1\nkind: Thing\nmetadata:\n  name: thing\n",
+            "apiVersion: example.com/v1\nkind: Thing\nmetadata:\n  name: thing\n",
+            """
+            apiVersion: example.com/v1
+            kind: Thing
+            metadata:
+              name: thing
+            data:
+              status: operator-data
+            spec:
+              uid: user-field
+            status:
+              phase: Running
+            """);
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var data = (IDictionary<string, object?>)document["data"]!;
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        Assert.Equal("operator-data", data["status"]);
+        Assert.Equal("user-field", spec["uid"]);
+        Assert.False(document.ContainsKey("status"));
+    }
+
+    [Fact]
+    public void MergeResource_PreservesCaseSensitiveKubernetesMapKeys()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "data:\n  FOO: upper\n  foo: lower\n",
+            "data:\n  FOO: upper\n  foo: lower\n",
+            "data:\n  FOO: upper\n  foo: lower\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var data = (IDictionary<string, object?>)document["data"]!;
+        Assert.Equal(2, data.Count);
+        Assert.Equal("upper", data["FOO"]);
+        Assert.Equal("lower", data["foo"]);
+    }
 }
