@@ -479,44 +479,24 @@ public sealed class HelmProvenanceTrustedKey
 
     /// <summary>
     /// Whether the governing key-flags subpacket authorizes data signing.
-    /// Flags are asserted by verified direct-key or user-ID signatures on a primary
-    /// key and binding signatures on a subkey; the most recent assertion wins. Keys
-    /// without a key-flags subpacket keep their historical unrestricted usage, gated
-    /// only by <see cref="AlgorithmCanSign"/>.
+    /// Flags are asserted by verified direct-key or primary-identity signatures on a
+    /// primary key and binding signatures on a subkey; the most recent assertion wins.
+    /// Keys without a key-flags subpacket keep their historical unrestricted usage,
+    /// gated only by <see cref="AlgorithmCanSign"/>.
     /// </summary>
     private static bool KeyFlagsPermitSigning(
         PgpPublicKey key,
         PgpPublicKey? master,
         IReadOnlyList<PgpPublicKey> certificateKeys)
     {
-        // Third-party certifications must not widen what a key may do, so a primary key
-        // only trusts key flags it asserted itself; a subkey is governed by its binding
-        // signature. A subkey is governed only by a cryptographically verified binding
-        // signature issued by its primary key; raw packet metadata is attacker-controlled.
-        var assertions = key.IsMasterKey
-            ? key.GetSignatures()
+        // Primary-key flags follow the same Direct Key / primary-identity policy as
+        // primary-key expiry; a newer certification on a secondary UID cannot change them.
+        // Subkeys use only cryptographically verified bindings from their primary key.
+        var governing = key.IsMasterKey
+            ? GetLatestValidPrimarySelfSignature(key, certificateKeys)
             : master is null
-                ? Enumerable.Empty<PgpSignature>()
-                : GetValidSubkeyBindings(key, master);
-
-        PgpSignature? governing = null;
-        foreach (var sig in assertions)
-        {
-            if (key.IsMasterKey)
-            {
-                var validPrimaryAssertion = sig.SignatureType == PgpSignature.DirectKey
-                    ? HasValidDirectKeySignature(sig, key, certificateKeys)
-                    : sig.SignatureType is (PgpSignature.PositiveCertification
-                        or PgpSignature.CasualCertification or PgpSignature.NoCertification
-                        or PgpSignature.DefaultCertification)
-                        && HasValidSelfCertification(sig, key, certificateKeys);
-                if (!validPrimaryAssertion)
-                    continue;
-            }
-
-            if (governing is null || sig.CreationTime > governing.CreationTime)
-                governing = sig;
-        }
+                ? null
+                : GetValidSubkeyBindings(key, master).MaxBy(signature => signature.CreationTime);
 
         if (governing is null)
             return false;
@@ -599,32 +579,6 @@ public sealed class HelmProvenanceTrustedKey
     private static IEnumerable<PgpSignature> GetValidSubkeyBindings(PgpPublicKey subkey, PgpPublicKey master)
         => subkey.GetKeySignatures().Where(signature => signature.SignatureType == PgpSignature.SubkeyBinding
             && HasValidSubkeyBinding(signature, master, subkey));
-
-    private static bool HasValidSelfCertification(
-        PgpSignature signature,
-        PgpPublicKey key,
-        IReadOnlyList<PgpPublicKey> certificateKeys)
-    {
-        foreach (var userId in key.GetUserIds())
-        {
-            if (HasValidUserIdSignature(signature, userId, key))
-                return !IsCertificationRevoked(key, userId, signature, certificateKeys);
-        }
-
-        foreach (var userAttribute in key.GetUserAttributes())
-        {
-            if (signature.SignatureType is not (PgpSignature.PositiveCertification
-                or PgpSignature.CasualCertification or PgpSignature.NoCertification
-                or PgpSignature.DefaultCertification) ||
-                !HasValidUserAttributeSignature(signature, userAttribute, key, key) ||
-                IsUserAttributeCertificationRevoked(key, userAttribute, signature, certificateKeys))
-                continue;
-
-            return true;
-        }
-
-        return false;
-    }
 
     private static bool IsUserAttributeCertificationRevoked(
         PgpPublicKey key,

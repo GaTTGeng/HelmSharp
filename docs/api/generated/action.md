@@ -123,6 +123,7 @@ Use this page as a member index. Start with the package guide for usage recommen
 
 ### Properties
 - `ApiVersions`
+- `ArchiveLimits`
 - `DefaultNamespace`
 - `FieldManager`
 - `KubeConfigContent`
@@ -215,10 +216,54 @@ Use this page as a member index. Start with the package guide for usage recommen
 | Source | `src/HelmSharp.Action/HelmProvenance.cs` |
 
 ### Methods
+- `CheckDigestAsync(...)`
 - `ExtractMetadata(...)`
 - `ExtractSha256(...)`
-- `GenerateProvFileAsync(...)`
+- `SignAsync(...)`
 - `VerifyAsync(...)`
+
+## HelmProvenanceSigningKey
+
+| Field | Value |
+| --- | --- |
+| Kind | `class` |
+| Source | `src/HelmSharp.Action/HelmProvenanceSigningKey.cs` |
+
+### Methods
+- `Dispose(...)`
+- `FromSecretKeyData(...)`
+- `FromSecretKeyFile(...)`
+
+## HelmProvenanceTrustedKey
+
+| Field | Value |
+| --- | --- |
+| Kind | `class` |
+| Source | `src/HelmSharp.Action/HelmProvenanceTrustedKey.cs` |
+
+### Methods
+- `FromKeyringData(...)`
+- `FromKeyringFile(...)`
+- `FromPublicKeyData(...)`
+- `FromPublicKeyFile(...)`
+
+## HelmProvenanceVerificationResult
+
+| Field | Value |
+| --- | --- |
+| Kind | `class` |
+| Source | `src/HelmSharp.Action/HelmProvenanceVerificationResult.cs` |
+
+### Properties
+- `ActualSha256`
+- `DigestMatches`
+- `ExpectedSha256`
+- `FailureReason`
+- `SignatureValid`
+- `SignerFingerprint`
+- `SignerKeyId`
+- `SignerTrusted`
+- `SignerUserId`
 
 ## HelmRollbackRequest
 

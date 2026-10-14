@@ -1581,6 +1581,126 @@ public class HelmProvenanceTests
     }
 
     [Fact]
+    public void FromKeyringData_SecondaryUserCertificationCannotAuthorizePrimaryKeySigning()
+    {
+        const string primaryUserId = "Primary identity <primary@example.com>";
+        const string secondaryUserId = "Secondary identity <secondary@example.com>";
+        var (secretRing, publicRing, _, _) = CreateTestKeys(primaryUserId);
+        var primarySecret = secretRing.GetSecretKeys().Single(key => key.PublicKey.IsMasterKey);
+        var primary = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+        var primaryCertification = primary.GetSignaturesForId(primaryUserId).Single();
+        primary = PgpPublicKey.RemoveCertification(primary, primaryUserId, primaryCertification);
+
+        var earlierPrimaryCertificationGenerator = new PgpSignatureGenerator(
+            PublicKeyAlgorithmTag.RsaGeneral,
+            HashAlgorithmTag.Sha512);
+        earlierPrimaryCertificationGenerator.InitSign(
+            PgpSignature.PositiveCertification,
+            primarySecret.ExtractPrivateKey(null)!);
+        var earlierPrimaryPackets = new PgpSignatureSubpacketGenerator();
+        earlierPrimaryPackets.SetSignatureCreationTime(false, DateTime.UtcNow.AddMinutes(-2));
+        earlierPrimaryPackets.SetPrimaryUserId(false, true);
+        earlierPrimaryPackets.SetKeyFlags(true, PgpKeyFlags.CanSign);
+        earlierPrimaryCertificationGenerator.SetHashedSubpackets(earlierPrimaryPackets.Generate());
+        primary = PgpPublicKey.AddCertification(
+            primary,
+            primaryUserId,
+            earlierPrimaryCertificationGenerator.GenerateCertification(primaryUserId, primary));
+
+        var primaryCertificationGenerator = new PgpSignatureGenerator(
+            PublicKeyAlgorithmTag.RsaGeneral,
+            HashAlgorithmTag.Sha512);
+        primaryCertificationGenerator.InitSign(
+            PgpSignature.PositiveCertification,
+            primarySecret.ExtractPrivateKey(null)!);
+        var primaryPackets = new PgpSignatureSubpacketGenerator();
+        primaryPackets.SetSignatureCreationTime(false, DateTime.UtcNow.AddMinutes(-1));
+        primaryPackets.SetPrimaryUserId(false, true);
+        primaryPackets.SetKeyFlags(true, PgpKeyFlags.CanCertify);
+        primaryCertificationGenerator.SetHashedSubpackets(primaryPackets.Generate());
+        primary = PgpPublicKey.AddCertification(
+            primary,
+            primaryUserId,
+            primaryCertificationGenerator.GenerateCertification(primaryUserId, primary));
+
+        var secondaryCertificationGenerator = new PgpSignatureGenerator(
+            PublicKeyAlgorithmTag.RsaGeneral,
+            HashAlgorithmTag.Sha512);
+        secondaryCertificationGenerator.InitSign(
+            PgpSignature.PositiveCertification,
+            primarySecret.ExtractPrivateKey(null)!);
+        var secondaryPackets = new PgpSignatureSubpacketGenerator();
+        secondaryPackets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        secondaryPackets.SetPrimaryUserId(false, false);
+        secondaryPackets.SetKeyFlags(true, PgpKeyFlags.CanSign);
+        secondaryCertificationGenerator.SetHashedSubpackets(secondaryPackets.Generate());
+        primary = PgpPublicKey.AddCertification(
+            primary,
+            secondaryUserId,
+            secondaryCertificationGenerator.GenerateCertification(secondaryUserId, primary));
+        var updatedRing = PgpPublicKeyRing.InsertPublicKey(publicRing, primary);
+        using var bytes = new MemoryStream();
+        updatedRing.Encode(bytes);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => HelmProvenanceTrustedKey.FromKeyringData(bytes.ToArray()));
+
+        Assert.Contains("No usable", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FromKeyringData_SecondaryUserCertificationCannotDisablePrimaryKeySigning()
+    {
+        const string primaryUserId = "Primary identity <primary@example.com>";
+        const string secondaryUserId = "Secondary identity <secondary@example.com>";
+        var (secretRing, publicRing, _, _) = CreateTestKeys(primaryUserId);
+        var primarySecret = secretRing.GetSecretKeys().Single(key => key.PublicKey.IsMasterKey);
+        var primary = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
+        var originalCertification = primary.GetSignaturesForId(primaryUserId).Single();
+        primary = PgpPublicKey.RemoveCertification(primary, primaryUserId, originalCertification);
+
+        var primaryCertificationGenerator = new PgpSignatureGenerator(
+            PublicKeyAlgorithmTag.RsaGeneral,
+            HashAlgorithmTag.Sha512);
+        primaryCertificationGenerator.InitSign(
+            PgpSignature.PositiveCertification,
+            primarySecret.ExtractPrivateKey(null)!);
+        var primaryPackets = new PgpSignatureSubpacketGenerator();
+        primaryPackets.SetSignatureCreationTime(false, DateTime.UtcNow.AddMinutes(-2));
+        primaryPackets.SetPrimaryUserId(false, true);
+        primaryPackets.SetKeyFlags(true, PgpKeyFlags.CanSign);
+        primaryCertificationGenerator.SetHashedSubpackets(primaryPackets.Generate());
+        primary = PgpPublicKey.AddCertification(
+            primary,
+            primaryUserId,
+            primaryCertificationGenerator.GenerateCertification(primaryUserId, primary));
+
+        var secondaryCertificationGenerator = new PgpSignatureGenerator(
+            PublicKeyAlgorithmTag.RsaGeneral,
+            HashAlgorithmTag.Sha512);
+        secondaryCertificationGenerator.InitSign(
+            PgpSignature.PositiveCertification,
+            primarySecret.ExtractPrivateKey(null)!);
+        var secondaryPackets = new PgpSignatureSubpacketGenerator();
+        secondaryPackets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        secondaryPackets.SetPrimaryUserId(false, false);
+        secondaryPackets.SetKeyFlags(true, PgpKeyFlags.CanCertify);
+        secondaryCertificationGenerator.SetHashedSubpackets(secondaryPackets.Generate());
+        primary = PgpPublicKey.AddCertification(
+            primary,
+            secondaryUserId,
+            secondaryCertificationGenerator.GenerateCertification(secondaryUserId, primary));
+        var updatedRing = PgpPublicKeyRing.InsertPublicKey(publicRing, primary);
+        using var bytes = new MemoryStream();
+        updatedRing.Encode(bytes);
+
+        var trustedKeys = HelmProvenanceTrustedKey.FromKeyringData(bytes.ToArray());
+
+        Assert.Contains(trustedKeys, trustedKey =>
+            trustedKey.Fingerprint == Convert.ToHexString(primary.GetFingerprint()).ToLowerInvariant());
+    }
+
+    [Fact]
     public void FromKeyringData_LatestSubkeyBindingWithoutKeyFlagsSupersedesOlderFlags()
     {
         var (secretRing, publicRing) = CreateRingWithSigningSubkey();
