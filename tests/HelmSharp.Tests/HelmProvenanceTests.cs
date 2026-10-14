@@ -92,7 +92,8 @@ public class HelmProvenanceTests
             userId,
             SymmetricKeyAlgorithmTag.Null,
             HashAlgorithmTag.Sha256,
-            null!,
+            // Distinguish the char[] overload from Bouncy Castle's byte[] overload.
+            (char[])null!,
             false,
             packets.Generate(),
             null,
