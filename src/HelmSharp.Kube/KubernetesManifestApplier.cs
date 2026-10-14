@@ -128,14 +128,24 @@ public sealed class KubernetesManifestApplier
         string defaultNamespace,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        var priorMergeBaseline = _previousManifestByIdentity;
         _previousManifestByIdentity = SplitDocuments(previousManifest)
             .Select(document => (Document: document, Identity: ManifestIdentity.Parse(document, defaultNamespace)))
             .Where(item => item.Identity is not null)
             .GroupBy(item => item.Identity!)
             .ToDictionary(group => group.Key, group => group.First().Document);
 
-        await foreach (var resource in ApplyAsync(manifest, defaultNamespace, cancellationToken))
-            yield return resource;
+        try
+        {
+            await foreach (var resource in ApplyAsync(manifest, defaultNamespace, cancellationToken))
+                yield return resource;
+        }
+        finally
+        {
+            // Atomic failure recovery reuses this applier to restore the prior manifest.
+            // Keep the three-way baseline scoped to the upgrade apply, not recovery.
+            _previousManifestByIdentity = priorMergeBaseline;
+        }
     }
 
     /// <summary>

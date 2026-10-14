@@ -148,6 +148,46 @@ public sealed class KubernetesManifestApplierTests
     }
 
     [Fact]
+    public async Task ApplyUpgradeAsync_ClearsMergeBaselineBeforeApplyingAtomicRestore()
+    {
+        const string previousManifest = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: settings
+            data:
+              mode: previous
+            """;
+        const string upgradedManifest = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: settings
+            data:
+              mode: failed-upgrade
+            """;
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/configmaps/settings", HttpStatusCode.OK, """
+                { "apiVersion": "v1", "kind": "ConfigMap", "metadata": { "name": "settings", "resourceVersion": "42" }, "data": { "mode": "previous" } }
+                """)
+            .Respond(HttpMethod.Put, "/api/v1/namespaces/release-ns/configmaps/settings", HttpStatusCode.OK)
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/configmaps/settings", HttpStatusCode.OK, """
+                { "apiVersion": "v1", "kind": "ConfigMap", "metadata": { "name": "settings", "resourceVersion": "43" }, "data": { "mode": "failed-upgrade" } }
+                """)
+            .Respond(HttpMethod.Put, "/api/v1/namespaces/release-ns/configmaps/settings", HttpStatusCode.OK);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await AsyncEnumerableTestExtensions.DrainAsync(
+            applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"));
+        await AsyncEnumerableTestExtensions.DrainAsync(applier.ApplyAsync(previousManifest, "release-ns"));
+
+        var replaceRequests = handler.Requests.Where(request => request.Method == HttpMethod.Put).ToArray();
+        Assert.Equal(2, replaceRequests.Length);
+        Assert.Contains("\"mode\":\"failed-upgrade\"", replaceRequests[0].Content);
+        Assert.Contains("\"mode\":\"previous\"", replaceRequests[1].Content);
+    }
+
+    [Fact]
     public async Task ApplyAsync_UsesDiscoveryForNamespacedCustomResources()
     {
         var handler = new KubernetesApiHandler()
