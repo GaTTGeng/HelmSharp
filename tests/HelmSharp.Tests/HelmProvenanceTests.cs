@@ -76,6 +76,43 @@ public class HelmProvenanceTests
         return (secretRing, publicRing, signingKey, trustedKey);
     }
 
+    private static (PgpSecretKeyRing SecretRing, PgpPublicKeyRing PublicRing) CreateDsaKeyRings(string userId)
+    {
+        var random = new SecureRandom();
+        var parametersGenerator = new DsaParametersGenerator();
+        parametersGenerator.Init(1024, 80, random);
+        var keyGenerator = new DsaKeyPairGenerator();
+        keyGenerator.Init(new DsaKeyGenerationParameters(random, parametersGenerator.GenerateParameters()));
+        var keyPair = new PgpKeyPair(PublicKeyAlgorithmTag.Dsa, keyGenerator.GenerateKeyPair(), DateTime.UtcNow);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
+        var ringGenerator = new PgpKeyRingGenerator(
+            (int)PgpSignature.PositiveCertification,
+            keyPair,
+            userId,
+            SymmetricKeyAlgorithmTag.Null,
+            HashAlgorithmTag.Sha256,
+            null!,
+            false,
+            packets.Generate(),
+            null,
+            random);
+        return (ringGenerator.GenerateSecretKeyRing(), ringGenerator.GeneratePublicKeyRing());
+    }
+
+    private static (PgpSecretKeyRing SecretRing, PgpPublicKeyRing PublicRing, IDisposable? Lifetime)
+        CreateRevokerKeyRings(string userId, bool useDsaRevoker)
+    {
+        if (useDsaRevoker)
+        {
+            var (secretRing, publicRing) = CreateDsaKeyRings(userId);
+            return (secretRing, publicRing, null);
+        }
+
+        var (rsaSecretRing, rsaPublicRing, signingKey, _) = CreateTestKeys(userId);
+        return (rsaSecretRing, rsaPublicRing, signingKey);
+    }
+
     private static byte[] CreateRevokedSigningKeyMaterial(
         PgpSecretKey revokerSecret,
         PgpPublicKeyRing revokerPublicRing,
@@ -453,11 +490,14 @@ public class HelmProvenanceTests
     private static byte[] CreateSigningKeyringWithDesignatedCertificationRevocation(
         bool revokeDirectKey,
         bool invalidRevocationKeyClass = false,
-        bool mismatchedRevocationKeyAlgorithm = false)
+        bool mismatchedRevocationKeyAlgorithm = false,
+        bool useDsaRevoker = false,
+        HashAlgorithmTag revocationHashAlgorithm = HashAlgorithmTag.Sha512)
     {
         const string userId = "Designated revocation <designated@example.com>";
         const string revokerUserId = "Designated revoker <revoker@example.com>";
-        var (revokerSecretRing, revokerPublicRing, revokerSigningKey, _) = CreateTestKeys(revokerUserId);
+        var (revokerSecretRing, revokerPublicRing, revokerSigningKey) =
+            CreateRevokerKeyRings(revokerUserId, useDsaRevoker);
         using var revokerSigningKeyLifetime = revokerSigningKey;
         var revokerSecret = revokerSecretRing.GetSecretKeys().Single(key => key.PublicKey.IsMasterKey);
         var (secretRing, publicRing, signingKey, _) = CreateTestKeys(userId);
@@ -485,7 +525,9 @@ public class HelmProvenanceTests
             var directKey = directKeyGenerator.GenerateCertification(primary);
             primary = PgpPublicKey.AddCertification(primary, directKey);
 
-            var revocationGenerator = new PgpSignatureGenerator(revokerSecret.PublicKey.Algorithm, HashAlgorithmTag.Sha512);
+            var revocationGenerator = new PgpSignatureGenerator(
+                revokerSecret.PublicKey.Algorithm,
+                revocationHashAlgorithm);
             revocationGenerator.InitSign(PgpSignature.CertificationRevocation, revokerSecret.ExtractPrivateKey(null)!);
             var revocationPackets = new PgpSignatureSubpacketGenerator();
             revocationPackets.SetSignatureCreationTime(false, creationTime.AddSeconds(30));
@@ -519,7 +561,9 @@ public class HelmProvenanceTests
             var certification = certificationGenerator.GenerateCertification(userId, primary);
             primary = PgpPublicKey.AddCertification(primary, userId, certification);
 
-            var revocationGenerator = new PgpSignatureGenerator(revokerSecret.PublicKey.Algorithm, HashAlgorithmTag.Sha512);
+            var revocationGenerator = new PgpSignatureGenerator(
+                revokerSecret.PublicKey.Algorithm,
+                revocationHashAlgorithm);
             revocationGenerator.InitSign(PgpSignature.CertificationRevocation, revokerSecret.ExtractPrivateKey(null)!);
             var revocationPackets = new PgpSignatureSubpacketGenerator();
             revocationPackets.SetSignatureCreationTime(false, creationTime.AddSeconds(30));
@@ -3706,6 +3750,51 @@ public class HelmProvenanceTests
         Assert.Equal(2, trustedKeys.Count);
         Assert.Contains(trustedKeys, key => key.UserId is null);
         Assert.Contains(trustedKeys, key => key.UserId == "Designated revoker <revoker@example.com>");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void FromKeyringData_DsaDesignatedRevokerWithSha256RevocationIsHonored(bool revokeDirectKey)
+    {
+        var revokedBytes = CreateSigningKeyringWithDesignatedCertificationRevocation(
+            revokeDirectKey,
+            useDsaRevoker: true,
+            revocationHashAlgorithm: HashAlgorithmTag.Sha256);
+
+        if (revokeDirectKey)
+        {
+            var exception = Assert.Throws<ArgumentException>(
+                () => HelmProvenanceTrustedKey.FromKeyringData(revokedBytes));
+            Assert.Contains("No usable", exception.Message, StringComparison.Ordinal);
+        }
+        else
+        {
+            var trustedKey = Assert.Single(HelmProvenanceTrustedKey.FromKeyringData(revokedBytes));
+            Assert.Null(trustedKey.UserId);
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void FromKeyringData_DsaDesignatedRevokerWithSha224CannotRevoke(bool revokeDirectKey)
+    {
+        var keyringData = CreateSigningKeyringWithDesignatedCertificationRevocation(
+            revokeDirectKey,
+            useDsaRevoker: true,
+            revocationHashAlgorithm: HashAlgorithmTag.Sha224);
+
+        var trustedKeys = HelmProvenanceTrustedKey.FromKeyringData(keyringData);
+
+        if (revokeDirectKey)
+        {
+            Assert.Contains(trustedKeys, key => key.UserId is null);
+        }
+        else
+        {
+            Assert.Contains(trustedKeys, key => key.UserId == "Designated revocation <designated@example.com>");
+        }
     }
 
     [Theory]

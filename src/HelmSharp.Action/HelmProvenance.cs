@@ -977,6 +977,11 @@ public static class HelmProvenance
     private static int GetMinimumSignatureHashBits(PgpPublicKey key) => key.Algorithm switch
     {
         PublicKeyAlgorithmTag.RsaGeneral or PublicKeyAlgorithmTag.RsaSign => 256,
+        // DSA needs a digest at least as large as q; retain the 256-bit floor used for
+        // other modern signing policies, and fail closed when the DSA parameters are absent.
+        PublicKeyAlgorithmTag.Dsa => key.PublicKeyPacket.Key is DsaPublicBcpgKey dsaKey
+            ? Math.Max(256, dsaKey.Q.BitLength)
+            : int.MaxValue,
         PublicKeyAlgorithmTag.ECDsa or PublicKeyAlgorithmTag.EdDsa_Legacy => key.BitStrength switch
         {
             <= 256 => 256,
