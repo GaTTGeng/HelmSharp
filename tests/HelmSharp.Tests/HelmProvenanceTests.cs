@@ -1110,6 +1110,9 @@ public class HelmProvenanceTests
     }
 
     [Theory]
+    [InlineData(3, 2, PublicKeyAlgorithmTag.RsaGeneral, true)]
+    [InlineData(3, 2, PublicKeyAlgorithmTag.RsaSign, true)]
+    [InlineData(3, 2, PublicKeyAlgorithmTag.Dsa, false)]
     [InlineData(3, 3, PublicKeyAlgorithmTag.RsaGeneral, true)]
     [InlineData(3, 4, PublicKeyAlgorithmTag.RsaGeneral, true)]
     [InlineData(4, 3, PublicKeyAlgorithmTag.RsaGeneral, true)]
@@ -1700,6 +1703,7 @@ public class HelmProvenanceTests
 
         var trusted = HelmProvenanceTrustedKey.FromPublicKeyData(keyBytes.ToArray());
         Assert.Equal(Convert.ToHexString(primary.GetFingerprint()).ToLowerInvariant(), trusted.Fingerprint);
+        Assert.Equal(32, trusted.Fingerprint.Length);
     }
 
     [Fact]
@@ -4875,6 +4879,43 @@ public class HelmProvenanceTests
         }
     }
 
+    [Theory]
+    [InlineData("../")]
+    [InlineData("root/../")]
+    [InlineData("/outside/")]
+    public async Task SignAsync_RejectsUnsafeDirectoryEntryPaths(string unsafeDirectoryName)
+    {
+        var work = TempDir();
+        try
+        {
+            var archivePath = Path.Combine(work, "rootchart-0.1.0.tgz");
+            await using (var file = File.Create(archivePath))
+            await using (var gzip = new System.IO.Compression.GZipStream(file, System.IO.Compression.CompressionLevel.Optimal))
+            await using (var tar = new System.Formats.Tar.TarWriter(gzip))
+            {
+                await tar.WriteEntryAsync(new System.Formats.Tar.PaxTarEntry(
+                    System.Formats.Tar.TarEntryType.Directory, unsafeDirectoryName));
+                var rootYaml = Encoding.UTF8.GetBytes(DefaultChartYaml.Replace("provchart", "rootchart", StringComparison.Ordinal));
+                await tar.WriteEntryAsync(new System.Formats.Tar.PaxTarEntry(
+                    System.Formats.Tar.TarEntryType.RegularFile, "rootchart/Chart.yaml")
+                {
+                    DataStream = new MemoryStream(rootYaml)
+                });
+            }
+
+            var (_, _, signingKey, _) = CreateTestKeys();
+
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(
+                () => HelmProvenance.SignAsync(archivePath, signingKey));
+
+            Assert.Contains("unsafe", exception.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task SignAsync_AllowsExplicitDirectoryEntriesWithTrailingSlash()
     {
@@ -4992,6 +5033,75 @@ public class HelmProvenanceTests
             await HelmProvenance.SignAsync(tgz, signingKey);
 
             Assert.True(await HelmProvenance.CheckDigestAsync(tgz));
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CheckDigestAsync_RejectsOversizedArchiveBeforeHashing()
+    {
+        var work = TempDir();
+        try
+        {
+            var archivePath = Path.Combine(work, "oversized-chart.tgz");
+            await using (var archive = new FileStream(archivePath, FileMode.Create, FileAccess.Write, FileShare.None))
+                archive.SetLength(HelmChartArchiveLimits.Default.MaxCompressedBytes + 1);
+            await File.WriteAllTextAsync(archivePath + ".prov", "placeholder");
+
+            var exception = await Assert.ThrowsAsync<ChartArchiveLimitExceededException>(
+                () => HelmProvenance.CheckDigestAsync(archivePath));
+
+            Assert.Equal(ChartArchiveLimitKind.CompressedBytes, exception.Limit);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task VerifyAsync_RejectsOversizedArchiveBeforeHashing()
+    {
+        var work = TempDir();
+        try
+        {
+            var archivePath = Path.Combine(work, "oversized-chart.tgz");
+            await using (var archive = new FileStream(archivePath, FileMode.Create, FileAccess.Write, FileShare.None))
+                archive.SetLength(HelmChartArchiveLimits.Default.MaxCompressedBytes + 1);
+            await File.WriteAllTextAsync(archivePath + ".prov", "placeholder");
+            var (_, _, _, trustedKey) = CreateTestKeys();
+
+            var exception = await Assert.ThrowsAsync<ChartArchiveLimitExceededException>(
+                () => HelmProvenance.VerifyAsync(archivePath, [trustedKey]));
+
+            Assert.Equal(ChartArchiveLimitKind.CompressedBytes, exception.Limit);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CheckDigestAsync_RejectsOversizedProvenanceFile()
+    {
+        var work = TempDir();
+        try
+        {
+            var archivePath = await CreateTestChartArchiveAsync(work);
+            await using (var provenance = new FileStream(
+                archivePath + ".prov",
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None))
+            {
+                provenance.SetLength(16L * 1024 * 1024 + 1);
+            }
+
+            Assert.False(await HelmProvenance.CheckDigestAsync(archivePath));
         }
         finally
         {

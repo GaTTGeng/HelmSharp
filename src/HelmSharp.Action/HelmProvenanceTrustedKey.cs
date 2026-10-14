@@ -43,7 +43,7 @@ public sealed class HelmProvenanceTrustedKey
         _certificateKeys = certificateKeys;
     }
 
-    /// <summary>Hex-encoded OpenPGP V4 key fingerprint (40 hex characters).</summary>
+    /// <summary>Hex-encoded OpenPGP key fingerprint (32 characters for V2/V3 keys or 40 for V4 keys).</summary>
     public string Fingerprint => Convert.ToHexString(_publicKey.GetFingerprint()).ToLowerInvariant();
 
     /// <summary>Hex-encoded 64-bit OpenPGP key ID.</summary>

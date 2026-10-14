@@ -73,6 +73,7 @@ public static class HelmProvenance
     /// <returns>Path of the generated <c>.prov</c> file.</returns>
     /// <exception cref="FileNotFoundException">The chart archive does not exist.</exception>
     /// <exception cref="InvalidDataException">The archive has no readable <c>Chart.yaml</c>.</exception>
+    /// <exception cref="ChartArchiveLimitExceededException">The chart archive exceeds the default compressed-size limit.</exception>
     /// <exception cref="PgpException">The signing key cannot be unlocked or signing fails.</exception>
     /// <exception cref="NotSupportedException">The signing key is not version 4, which the current signature generator cannot encode.</exception>
     public static async Task<string> SignAsync(
@@ -87,16 +88,10 @@ public static class HelmProvenance
             throw new FileNotFoundException($"Chart archive not found: {chartTgzPath}", chartTgzPath);
 
         // --- 1. Hash the archive and read chart metadata under the shared archive budget ---
-        var archiveLength = new FileInfo(chartTgzPath).Length;
-        var archiveLimits = HelmChartArchiveLimits.Default;
-        if (archiveLength > archiveLimits.MaxCompressedBytes)
-            throw new ChartArchiveLimitExceededException(
-                ChartArchiveLimitKind.CompressedBytes,
-                archiveLimits.MaxCompressedBytes,
-                archiveLength);
-
         await using var archive = new FileStream(
             chartTgzPath, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, useAsync: true);
+        EnsureCompressedArchiveWithinLimit(archive);
+        var archiveLength = archive.Length;
         var sha256 = Convert.ToHexString(await SHA256.HashDataAsync(archive, cancellationToken).ConfigureAwait(false))
             .ToLowerInvariant();
         archive.Position = 0;
@@ -127,6 +122,7 @@ public static class HelmProvenance
     /// <returns>Verification result describing each check and the signer identity.</returns>
     /// <exception cref="FileNotFoundException">The chart archive does not exist.</exception>
     /// <exception cref="ArgumentException"><paramref name="trustedKeys"/> is null or empty.</exception>
+    /// <exception cref="ChartArchiveLimitExceededException">The chart archive exceeds the default compressed-size limit.</exception>
     public static async Task<HelmProvenanceVerificationResult> VerifyAsync(
         string chartTgzPath,
         IEnumerable<HelmProvenanceTrustedKey?> trustedKeys,
@@ -158,6 +154,7 @@ public static class HelmProvenance
             FileShare.Read,
             bufferSize: 81920,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
+        EnsureCompressedArchiveWithinLimit(chartStream);
         var chartHash = await SHA256.HashDataAsync(chartStream, cancellationToken).ConfigureAwait(false);
         var actualSha256 = Convert.ToHexString(chartHash).ToLowerInvariant();
         var provenanceBytes = await ReadBoundedFileAsync(
@@ -491,6 +488,8 @@ public static class HelmProvenance
         PublicKeyAlgorithmTag keyAlgorithm) =>
         (keyVersion, signatureVersion) switch
         {
+            // Version 2 keys use the same legacy RSA signing format as V3 keys.
+            (2, 3) => keyAlgorithm is PublicKeyAlgorithmTag.RsaGeneral or PublicKeyAlgorithmTag.RsaSign,
             (3, 3) => !IsEllipticCurveSignatureAlgorithm(keyAlgorithm),
             // V3 RSA public keys can be authenticated by V4 signatures; newer
             // signature packets do not need to match the key packet version.
@@ -518,6 +517,7 @@ public static class HelmProvenance
     /// <param name="provPath">Provenance file path; defaults to <c>{archive}.prov</c>.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>True when the recorded digest matches the archive bytes.</returns>
+    /// <exception cref="ChartArchiveLimitExceededException">The chart archive exceeds the default compressed-size limit.</exception>
     public static async Task<bool> CheckDigestAsync(
         string chartTgzPath,
         string? provPath = null,
@@ -528,9 +528,23 @@ public static class HelmProvenance
         if (!File.Exists(provPath))
             return false;
 
-        var chartBytes = await File.ReadAllBytesAsync(chartTgzPath, cancellationToken).ConfigureAwait(false);
-        var actualHash = Convert.ToHexString(SHA256.HashData(chartBytes)).ToLowerInvariant();
-        var provContent = await File.ReadAllTextAsync(provPath, Utf8NoBom, cancellationToken).ConfigureAwait(false);
+        await using var chartStream = new FileStream(
+            chartTgzPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 81920,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        EnsureCompressedArchiveWithinLimit(chartStream);
+        var actualHash = Convert.ToHexString(await SHA256.HashDataAsync(chartStream, cancellationToken).ConfigureAwait(false))
+            .ToLowerInvariant();
+        var provenanceBytes = await ReadBoundedFileAsync(
+            provPath,
+            MaxProvenanceFileBytes,
+            cancellationToken).ConfigureAwait(false);
+        if (provenanceBytes is null || !TryDecodeUtf8WithoutBom(provenanceBytes, out var provContent))
+            return false;
+
         var expectedHash = ExtractSha256(provContent, Path.GetFileName(chartTgzPath));
 
         return expectedHash is not null &&
@@ -858,6 +872,16 @@ public static class HelmProvenance
 
             await content.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    private static void EnsureCompressedArchiveWithinLimit(FileStream archive)
+    {
+        var limit = HelmChartArchiveLimits.Default.MaxCompressedBytes;
+        if (archive.Length > limit)
+            throw new ChartArchiveLimitExceededException(
+                ChartArchiveLimitKind.CompressedBytes,
+                limit,
+                archive.Length);
     }
 
     private static bool TryParseClearSign(string provContent, out string signedBody, out byte[] signaturePacket)
@@ -1335,11 +1359,19 @@ public static class HelmProvenance
         while ((await reader.GetNextEntryAsync(copyData: false, cancellationToken: cancellationToken).ConfigureAwait(false)) is { } entry)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            // Directory records are structural; common tar writers add a trailing slash.
+            // Directory records are structural, but still validate their paths because
+            // archives can carry traversal or absolute directory names too.
+            var entryName = entry.Name;
+            if (entry.EntryType is TarEntryType.Directory &&
+                (entryName.EndsWith('/') || entryName.EndsWith('\\')))
+            {
+                entryName = entryName[..^1];
+            }
+
+            var name = NormalizeArchiveEntryName(entryName);
             if (entry.EntryType is TarEntryType.Directory)
                 continue;
 
-            var name = NormalizeArchiveEntryName(entry.Name);
             if (entry.DataStream is null)
                 continue;
             archiveEntryNames.Add(name);
