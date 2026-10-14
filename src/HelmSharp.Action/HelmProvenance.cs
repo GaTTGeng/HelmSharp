@@ -473,6 +473,9 @@ public static class HelmProvenance
         (keyVersion, signatureVersion) switch
         {
             (3, 3) => !IsEllipticCurveSignatureAlgorithm(keyAlgorithm),
+            // V3 RSA public keys can be authenticated by V4 signatures; newer
+            // signature packets do not need to match the key packet version.
+            (3, 4) => keyAlgorithm is PublicKeyAlgorithmTag.RsaGeneral or PublicKeyAlgorithmTag.RsaSign,
             // RFC 9580 retains V3 signatures from V4 keys for historical verification,
             // but explicitly prohibits V3 signatures with ECDSA and EdDSA algorithms.
             (4, 3) => !IsEllipticCurveSignatureAlgorithm(keyAlgorithm),

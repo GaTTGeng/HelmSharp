@@ -878,7 +878,8 @@ public class HelmProvenanceTests
         int signatureType = PgpSignature.CanonicalTextDocument,
         SignatureSubpacketTag? criticalSubpacketTag = null,
         byte[]? issuerFingerprint = null,
-        bool criticalIssuerFingerprint = false)
+        bool criticalIssuerFingerprint = false,
+        int? issuerFingerprintKeyVersion = null)
     {
         var secretKey = signingKey.GetSecretKey();
         var signatureGenerator = new PgpSignatureGenerator(secretKey.PublicKey.Algorithm, HashAlgorithmTag.Sha512);
@@ -892,7 +893,7 @@ public class HelmProvenanceTests
         if (issuerFingerprint is not null)
             packets.AddCustomSubpacket(new IssuerFingerprint(
                 criticalIssuerFingerprint,
-                secretKey.PublicKey.Version,
+                issuerFingerprintKeyVersion ?? secretKey.PublicKey.Version,
                 issuerFingerprint));
         signatureGenerator.SetHashedSubpackets(packets.Generate());
 
@@ -1063,6 +1064,9 @@ public class HelmProvenanceTests
     [Theory]
     [InlineData(3, 3, PublicKeyAlgorithmTag.RsaGeneral, true)]
     [InlineData(3, 4, PublicKeyAlgorithmTag.RsaGeneral, true)]
+    [InlineData(4, 3, PublicKeyAlgorithmTag.RsaGeneral, true)]
+    [InlineData(4, 3, PublicKeyAlgorithmTag.RsaSign, true)]
+    [InlineData(4, 3, PublicKeyAlgorithmTag.Dsa, false)]
     [InlineData(3, 4, PublicKeyAlgorithmTag.Dsa, true)]
     [InlineData(3, 4, PublicKeyAlgorithmTag.ECDsa, false)]
     [InlineData(3, 4, PublicKeyAlgorithmTag.EdDsa_Legacy, false)]
@@ -1528,6 +1532,95 @@ public class HelmProvenanceTests
             () => HelmProvenanceTrustedKey.FromPublicKeyData(keyBytes.ToArray()));
 
         Assert.Contains("No usable", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FromPublicKeyData_AcceptsVersion4CertificationOnVersion3RsaPrimary()
+    {
+        const string userId = "V3 RSA <v3-rsa@example.com>";
+        var (secretRing, publicRing, _, _) = CreateTestKeys(userId);
+        var primarySecret = secretRing.GetSecretKeys().First();
+        var originalPrimary = publicRing.GetPublicKeys().First(key => key.IsMasterKey);
+        var primary = new PgpPublicKey(new PublicKeyPacket(
+            (byte)3,
+            originalPrimary.Algorithm,
+            originalPrimary.CreationTime,
+            originalPrimary.PublicKeyPacket.Key));
+        var certification = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaGeneral, HashAlgorithmTag.Sha512);
+        certification.InitSign(PgpSignature.PositiveCertification, primarySecret.ExtractPrivateKey(null)!);
+        var packets = new PgpSignatureSubpacketGenerator();
+        packets.SetSignatureCreationTime(false, DateTime.UtcNow);
+        packets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
+        packets.AddCustomSubpacket(new IssuerFingerprint(false, 3, primary.GetFingerprint()));
+        certification.SetHashedSubpackets(packets.Generate());
+        primary = PgpPublicKey.AddCertification(
+            primary,
+            userId,
+            certification.GenerateCertification(userId, primary));
+        using var keyBytes = new MemoryStream();
+        primary.Encode(keyBytes);
+
+        var trusted = HelmProvenanceTrustedKey.FromPublicKeyData(keyBytes.ToArray());
+        Assert.Equal(Convert.ToHexString(primary.GetFingerprint()).ToLowerInvariant(), trusted.Fingerprint);
+    }
+
+    [Fact]
+    public async Task Verify_AcceptsVersion4SignatureFromVersion3RsaPrimary()
+    {
+        const string userId = "V3 RSA signer <v3-rsa@example.com>";
+        var work = TempDir();
+        try
+        {
+            var tgz = await CreateTestChartArchiveAsync(work);
+            var (secretRing, _, signingKey, _) = CreateTestKeys(userId);
+            using var signingKeyLifetime = signingKey;
+            var primarySecret = secretRing.GetSecretKeys().First();
+            var version4Primary = primarySecret.PublicKey;
+            var version3Primary = new PgpPublicKey(new PublicKeyPacket(
+                (byte)3,
+                version4Primary.Algorithm,
+                version4Primary.CreationTime,
+                version4Primary.PublicKeyPacket.Key));
+            var selfCertification = new PgpSignatureGenerator(
+                PublicKeyAlgorithmTag.RsaGeneral,
+                HashAlgorithmTag.Sha512);
+            selfCertification.InitSign(
+                PgpSignature.PositiveCertification,
+                primarySecret.ExtractPrivateKey(null)!);
+            var certificationPackets = new PgpSignatureSubpacketGenerator();
+            certificationPackets.SetSignatureCreationTime(false, DateTime.UtcNow);
+            certificationPackets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
+            certificationPackets.AddCustomSubpacket(
+                new IssuerFingerprint(false, 3, version3Primary.GetFingerprint()));
+            selfCertification.SetHashedSubpackets(certificationPackets.Generate());
+            version3Primary = PgpPublicKey.AddCertification(
+                version3Primary,
+                userId,
+                selfCertification.GenerateCertification(userId, version3Primary));
+            using var keyBytes = new MemoryStream();
+            version3Primary.Encode(keyBytes);
+            var trustedKey = HelmProvenanceTrustedKey.FromPublicKeyData(keyBytes.ToArray());
+
+            var provenancePath = await HelmProvenance.SignAsync(tgz, signingKey);
+            var body = ExtractCleartextBodyForTest(await File.ReadAllTextAsync(provenancePath));
+            var version4Signature = CreateClearSignedProvForTest(
+                body,
+                signingKey,
+                DateTime.UtcNow,
+                issuerFingerprint: version3Primary.GetFingerprint(),
+                issuerFingerprintKeyVersion: 3);
+            await File.WriteAllTextAsync(provenancePath, version4Signature);
+
+            var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
+
+            Assert.True(result.IsValid, result.FailureReason);
+            Assert.True(result.SignatureValid);
+            Assert.True(result.SignerTrusted);
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
     }
 
     [Theory]

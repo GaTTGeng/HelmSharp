@@ -955,8 +955,9 @@ public sealed class HelmProvenanceTrustedKey
             return true;
 
         var expectedFingerprint = revoker.GetFingerprint();
-        var expectedLength = signature.Version switch
+        var expectedLength = revoker.Version switch
         {
+            3 => 16,
             4 => 20,
             _ => 0,
         };
@@ -974,8 +975,8 @@ public sealed class HelmProvenanceTrustedKey
 
             var data = issuerFingerprint.GetData();
             if (data.Length != expectedLength + 1 ||
-                data[0] != signature.Version ||
-                issuerFingerprint.KeyVersion != signature.Version)
+                data[0] != revoker.Version ||
+                issuerFingerprint.KeyVersion != revoker.Version)
                 return false;
 
             var fingerprint = issuerFingerprint.GetFingerprint();
