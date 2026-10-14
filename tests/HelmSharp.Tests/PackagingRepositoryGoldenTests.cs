@@ -2094,6 +2094,11 @@ public sealed class PackagingRepositoryGoldenTests : IDisposable
                 {
                     break;
                 }
+                catch (SocketException) when (_cancellation.IsCancellationRequested)
+                {
+                    // Stopping the listener can surface as a socket error on some runtimes.
+                    break;
+                }
 
                 _ = Task.Run(() => HandleClientAsync(client), _cancellation.Token);
             }

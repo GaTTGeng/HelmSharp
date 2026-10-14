@@ -36,5 +36,8 @@
 | 类型类别 | `record` |
 | 源文件 | `src/HelmSharp.Kube/KubernetesManifestApplier.cs` |
 
+### 属性
+- `DisplayName`
+
 ### 方法
 - `Parse(...)`

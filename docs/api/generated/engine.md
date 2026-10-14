@@ -130,6 +130,9 @@ Use this page as a member index. Start with the package guide for usage recommen
 | Kind | `class` |
 | Source | `src/HelmSharp.Engine/TemplateParser.cs` |
 
+### Properties
+- `Defines`
+
 ### Methods
 - `Parse(...)`
 

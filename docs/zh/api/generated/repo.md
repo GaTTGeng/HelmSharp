@@ -12,6 +12,10 @@
 | 类型类别 | `class` |
 | 源文件 | `src/HelmSharp.Repo/HelmChartRepository.cs` |
 
+### 属性
+- `CacheDirectory`
+- `RepositoryConfigPath`
+
 ### 方法
 - `AddRepositoryAsync(...)`
 - `Dispose(...)`
@@ -115,6 +119,7 @@
 | 源文件 | `src/HelmSharp.Repo/HelmRepoIndexRequest.cs` |
 
 ### 属性
+- `ArchiveLimits`
 - `DirectoryPath`
 - `FailOnInvalidPackage`
 - `MergeIndexPath`
@@ -147,6 +152,7 @@
 | 源文件 | `src/HelmSharp.Repo/HelmRepositoryOptions.cs` |
 
 ### 属性
+- `ArchiveLimits`
 - `CacheDirectory`
 - `ConfigDirectory`
 - `RepositoryConfigPath`

@@ -16,6 +16,7 @@
 - `ExitCode`
 - `StandardError`
 - `StandardOutput`
+- `Succeeded`
 
 ## HelmClient
 
@@ -123,6 +124,7 @@
 
 ### 属性
 - `ApiVersions`
+- `ArchiveLimits`
 - `DefaultNamespace`
 - `FieldManager`
 - `KubeConfigContent`
@@ -215,10 +217,60 @@
 | 源文件 | `src/HelmSharp.Action/HelmProvenance.cs` |
 
 ### 方法
+- `CheckDigestAsync(...)`
 - `ExtractMetadata(...)`
 - `ExtractSha256(...)`
-- `GenerateProvFileAsync(...)`
+- `SignAsync(...)`
 - `VerifyAsync(...)`
+
+## HelmProvenanceSigningKey
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `class` |
+| 源文件 | `src/HelmSharp.Action/HelmProvenanceSigningKey.cs` |
+
+### 方法
+- `Dispose(...)`
+- `FromSecretKeyData(...)`
+- `FromSecretKeyFile(...)`
+
+## HelmProvenanceTrustedKey
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `class` |
+| 源文件 | `src/HelmSharp.Action/HelmProvenanceTrustedKey.cs` |
+
+### 属性
+- `Fingerprint`
+- `KeyId`
+- `UserId`
+
+### 方法
+- `FromKeyringData(...)`
+- `FromKeyringFile(...)`
+- `FromPublicKeyData(...)`
+- `FromPublicKeyFile(...)`
+
+## HelmProvenanceVerificationResult
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `class` |
+| 源文件 | `src/HelmSharp.Action/HelmProvenanceVerificationResult.cs` |
+
+### 属性
+- `ActualSha256`
+- `DigestMatches`
+- `ExpectedSha256`
+- `FailureReason`
+- `IsValid`
+- `SignatureValid`
+- `SignerFingerprint`
+- `SignerKeyId`
+- `SignerTrusted`
+- `SignerUserId`
 
 ## HelmRollbackRequest
 

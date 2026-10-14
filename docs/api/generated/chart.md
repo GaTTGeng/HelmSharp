@@ -5,6 +5,25 @@
 Use this page as a member index. Start with the package guide for usage recommendations, boundaries, and examples.
 
 
+## ChartArchiveLimitExceededException
+
+| Field | Value |
+| --- | --- |
+| Kind | `class` |
+| Source | `src/HelmSharp.Chart/ChartArchiveLimitExceededException.cs` |
+
+### Properties
+- `Limit`
+- `LimitValue`
+- `ObservedValue`
+
+## ChartArchiveLimitKind
+
+| Field | Value |
+| --- | --- |
+| Kind | `enum` |
+| Source | `src/HelmSharp.Chart/ChartArchiveLimitExceededException.cs` |
+
 ## HelmChart
 
 | Field | Value |
@@ -36,6 +55,25 @@ Use this page as a member index. Start with the package guide for usage recommen
 - `Type`
 - `ValuesYaml`
 - `Version`
+
+## HelmChartArchiveLimits
+
+| Field | Value |
+| --- | --- |
+| Kind | `class` |
+| Source | `src/HelmSharp.Chart/HelmChartArchiveLimits.cs` |
+
+### Properties
+- `Default`
+- `MaxCompressedBytes`
+- `MaxCompressionRatio`
+- `MaxDependencyDepth`
+- `MaxEntryBytes`
+- `MaxEntryCount`
+- `MaxTotalExtractedBytes`
+
+### Methods
+- `ForTrustedCharts(...)`
 
 ## HelmChartDependency
 

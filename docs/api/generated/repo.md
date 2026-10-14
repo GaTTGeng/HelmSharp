@@ -12,6 +12,10 @@ Use this page as a member index. Start with the package guide for usage recommen
 | Kind | `class` |
 | Source | `src/HelmSharp.Repo/HelmChartRepository.cs` |
 
+### Properties
+- `CacheDirectory`
+- `RepositoryConfigPath`
+
 ### Methods
 - `AddRepositoryAsync(...)`
 - `Dispose(...)`
@@ -115,6 +119,7 @@ Use this page as a member index. Start with the package guide for usage recommen
 | Source | `src/HelmSharp.Repo/HelmRepoIndexRequest.cs` |
 
 ### Properties
+- `ArchiveLimits`
 - `DirectoryPath`
 - `FailOnInvalidPackage`
 - `MergeIndexPath`
@@ -147,6 +152,7 @@ Use this page as a member index. Start with the package guide for usage recommen
 | Source | `src/HelmSharp.Repo/HelmRepositoryOptions.cs` |
 
 ### Properties
+- `ArchiveLimits`
 - `CacheDirectory`
 - `ConfigDirectory`
 - `RepositoryConfigPath`

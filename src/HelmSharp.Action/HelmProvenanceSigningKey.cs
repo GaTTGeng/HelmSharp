@@ -1,0 +1,231 @@
+using System.Security.Cryptography;
+using Org.BouncyCastle.Bcpg;
+using Org.BouncyCastle.Bcpg.OpenPgp;
+
+namespace HelmSharp.Action;
+
+/// <summary>
+/// OpenPGP private-key material used to produce authenticating <c>.prov</c> signatures.
+/// Holds key bytes and an optional passphrase in memory only; never logs or persists secrets.
+/// </summary>
+public sealed class HelmProvenanceSigningKey : IDisposable
+{
+    private readonly byte[] _secretKeyData;
+    private char[]? _passphrase;
+    private bool _disposed;
+
+    private HelmProvenanceSigningKey(byte[] secretKeyData, char[]? passphrase)
+    {
+        _secretKeyData = secretKeyData;
+        _passphrase = passphrase;
+    }
+
+    /// <summary>
+    /// Wraps binary or ASCII-armored OpenPGP secret-key material (a single secret key,
+    /// secret key ring, or GPG secring export).
+    /// </summary>
+    /// <param name="secretKeyData">Encoded secret key bytes; copied immediately.</param>
+    /// <param name="passphrase">Optional passphrase protecting the secret key. The caller retains ownership of the buffer; this type copies it and clears its copy on dispose.</param>
+    /// <returns>Signing key wrapper.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="secretKeyData"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="secretKeyData"/> is empty.</exception>
+    /// <exception cref="PgpException">The data does not contain a usable secret key.</exception>
+    /// <exception cref="NotSupportedException">The selected signing key is not version 4, which the current signature generator cannot encode.</exception>
+    public static HelmProvenanceSigningKey FromSecretKeyData(byte[] secretKeyData, char[]? passphrase = null)
+    {
+        ArgumentNullException.ThrowIfNull(secretKeyData);
+        if (secretKeyData.Length == 0)
+            throw new ArgumentException("Secret key data must not be empty.", nameof(secretKeyData));
+
+        // Validate parseability up front so callers get a clear error at construction.
+        _ = LoadSecretKey(secretKeyData, passphrase);
+        return new HelmProvenanceSigningKey((byte[])secretKeyData.Clone(), passphrase is null ? null : (char[])passphrase.Clone());
+    }
+
+    /// <summary>
+    /// Loads binary or ASCII-armored OpenPGP secret-key material from a file.
+    /// </summary>
+    /// <param name="path">Path to a secret key or keyring file.</param>
+    /// <param name="passphrase">Optional passphrase protecting the secret key.</param>
+    /// <returns>Signing key wrapper.</returns>
+    /// <exception cref="FileNotFoundException">The file does not exist.</exception>
+    public static HelmProvenanceSigningKey FromSecretKeyFile(string path, char[]? passphrase = null)
+    {
+        if (!File.Exists(path))
+            throw new FileNotFoundException($"Secret key file not found: {path}", path);
+
+        var secretKeyData = File.ReadAllBytes(path);
+        try
+        {
+            return FromSecretKeyData(secretKeyData, passphrase);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(secretKeyData);
+        }
+    }
+
+    /// <summary>Loads and unlocks the secret key for signing.</summary>
+    internal PgpSecretKey GetSecretKey()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return LoadSecretKey(_secretKeyData, _passphrase);
+    }
+
+    /// <summary>Passphrase buffer for unlocking the secret key during signing; null when unprotected.</summary>
+    internal char[]? Passphrase
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return _passphrase;
+        }
+    }
+
+    private static PgpSecretKey LoadSecretKey(byte[] data, char[]? passphrase)
+    {
+        var keys = ReadSecretKeyCandidates(data, out var publicKeys, out var secretPublicKeys);
+        if (keys.Count == 0)
+            throw new PgpException("No OpenPGP secret key found in the supplied key material.");
+
+        // Merge explicit certificates with the public halves embedded in secret packets.
+        // Either source can be stale while the other carries newer policy or revocations.
+        var certificatesByFingerprint = secretPublicKeys
+            .Concat(publicKeys)
+            .GroupBy(key => Convert.ToHexString(key.GetFingerprint()), StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, HelmProvenanceTrustedKey.MergePublicKeys, StringComparer.Ordinal);
+        var certificateKeys = certificatesByFingerprint.Values.ToArray();
+        var hasSigningCandidate = false;
+        var hasUnsupportedSigningVersion = false;
+        foreach (var candidate in keys)
+        {
+            var key = candidate.Key;
+            var fingerprint = Convert.ToHexString(key.PublicKey.GetFingerprint());
+            var publicKey = certificatesByFingerprint.GetValueOrDefault(fingerprint) ?? key.PublicKey;
+            var master = candidate.Master is null
+                ? null
+                : certificatesByFingerprint.GetValueOrDefault(Convert.ToHexString(candidate.Master.GetFingerprint())) ?? candidate.Master;
+            if (publicKey.Version != 4)
+            {
+                hasUnsupportedSigningVersion = true;
+                continue;
+            }
+
+            if (!HelmProvenanceTrustedKey.IsUsableSigningKeyFor(publicKey, master, certificateKeys))
+                continue;
+            hasSigningCandidate = true;
+
+            // ExtractPrivateKey returns null for passphrase-protected keys when the
+            // passphrase is missing or wrong; an unencrypted key ignores the passphrase.
+            // Only inspect secret material after the matching public key is authorized
+            // to sign, so certification-only keys are never selected accidentally.
+            try
+            {
+                if (key.ExtractPrivateKeyUtf8(passphrase) is not null)
+                    return key;
+            }
+            catch (PgpException)
+            {
+                // Wrong passphrase or corrupt key material; try the next candidate.
+            }
+        }
+
+        if (!hasSigningCandidate)
+        {
+            if (hasUnsupportedSigningVersion)
+                throw new NotSupportedException("Only OpenPGP version 4 signing keys are supported by the current provenance signature generator.");
+
+            throw new PgpException("No OpenPGP secret key is authorized to sign provenance data.");
+        }
+
+        throw new PgpException(
+            passphrase is null
+                ? "Secret key is passphrase-protected; a passphrase is required."
+                : "Secret key could not be unlocked with the supplied passphrase.");
+    }
+
+    private static List<SecretKeyCandidate> ReadSecretKeyCandidates(
+        byte[] data,
+        out List<PgpPublicKey> publicKeys,
+        out List<PgpPublicKey> secretPublicKeys)
+    {
+        var result = new List<SecretKeyCandidate>();
+        publicKeys = [];
+        secretPublicKeys = [];
+        foreach (var obj in ReadPgpObjects(data))
+        {
+            switch (obj)
+            {
+                case PgpSecretKeyRing ring:
+                    var keys = ring.GetSecretKeys().ToList();
+                    var master = keys.FirstOrDefault(k => k.PublicKey.IsMasterKey)?.PublicKey;
+                    secretPublicKeys.AddRange(keys.Select(key => key.PublicKey));
+                    result.AddRange(keys.Select(key => new SecretKeyCandidate(key, master)));
+                    break;
+                case PgpSecretKey key:
+                    secretPublicKeys.Add(key.PublicKey);
+                    result.Add(new SecretKeyCandidate(key, key.PublicKey.IsMasterKey ? key.PublicKey : null));
+                    break;
+                case PgpPublicKeyRing pubRing:
+                    // Public certificates can revoke secret signing keys, but cannot be
+                    // candidates because they do not contain private signing material.
+                    publicKeys.AddRange(pubRing.GetPublicKeys());
+                    break;
+                case PgpPublicKey publicKey:
+                    publicKeys.Add(publicKey);
+                    break;
+            }
+        }
+
+        return result;
+    }
+
+    private sealed record SecretKeyCandidate(PgpSecretKey Key, PgpPublicKey? Master);
+
+    private static IEnumerable<object> ReadPgpObjects(byte[] data)
+    {
+        using var input = new MemoryStream(data, writable: false);
+        // Armored input is text; binary keyrings are raw packets. Detect armor by header.
+        if (data.Length >= 27 && data[0] == (byte)'-' && data[1] == (byte)'-')
+        {
+            var armored = new ArmoredInputStream(input);
+            var factory = new PgpObjectFactory(armored);
+            while (true)
+            {
+                var next = factory.NextPgpObject();
+                if (next is null)
+                    break;
+                if (next is PgpMarker)
+                    continue;
+                yield return next;
+            }
+        }
+        else
+        {
+            var factory = new PgpObjectFactory(input);
+            while (true)
+            {
+                var next = factory.NextPgpObject();
+                if (next is null)
+                    break;
+                if (next is PgpMarker)
+                    continue;
+                yield return next;
+            }
+        }
+    }
+
+    /// <summary>Zeroes the owned secret-key and passphrase copies.</summary>
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+        _disposed = true;
+        CryptographicOperations.ZeroMemory(_secretKeyData);
+        if (_passphrase is not null)
+        {
+            Array.Clear(_passphrase);
+            _passphrase = null;
+        }
+    }
+}

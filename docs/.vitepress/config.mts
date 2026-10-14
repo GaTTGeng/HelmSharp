@@ -31,6 +31,7 @@ const englishSidebar = [
       { text: 'Install and upgrade releases', link: '/guide/release-workflows' },
       { text: 'Apply manifests directly', link: '/guide/kubernetes-operations' },
       { text: 'Package charts and manage dependencies', link: '/guide/chart-distribution' },
+      { text: 'Sign and verify chart provenance', link: '/guide/chart-provenance' },
       { text: 'Troubleshoot failures', link: '/guide/error-handling' }
     ]
   },
@@ -123,6 +124,7 @@ const chineseSidebar = [
       { text: '安装和升级 Release', link: '/zh/guide/release-workflows' },
       { text: '直接提交清单', link: '/zh/guide/kubernetes-operations' },
       { text: '打包 Chart 与管理依赖', link: '/zh/guide/chart-distribution' },
+      { text: '签名与验证 Chart 溯源', link: '/zh/guide/chart-provenance' },
       { text: '排查失败', link: '/zh/guide/error-handling' }
     ]
   },
