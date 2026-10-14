@@ -509,23 +509,29 @@ public sealed class HelmProvenanceTrustedKey
         return (flags & PgpKeyFlags.CanSign) != 0;
     }
 
-    private static bool HasValidSubkeyBinding(PgpSignature signature, PgpPublicKey master, PgpPublicKey subkey)
+    private static bool HasValidSubkeyBinding(
+        PgpSignature signature,
+        PgpPublicKey master,
+        PgpPublicKey subkey,
+        DateTime? validAt = null)
     {
         try
         {
+            var validationTime = validAt ?? DateTime.UtcNow;
             if (master.Version != subkey.Version ||
                 !IsPolicySignatureVersionCompatible(master, signature) ||
                 !HasSupportedPolicySubpackets(signature) ||
                 !IssuerFingerprintMatches(signature, master) ||
                 IsWeakHashAlgorithm(signature.HashAlgorithm) ||
-                !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, master))
+                !HelmProvenance.HasSufficientSignatureHash(signature.HashAlgorithm, master) ||
+                (validAt is not null && signature.CreationTime > validationTime))
                 return false;
 
             signature.InitVerify(master);
             if (!signature.VerifyCertification(master, subkey))
                 return false;
 
-            if (IsSignatureExpired(signature, DateTime.UtcNow))
+            if (IsSignatureExpired(signature, validationTime))
                 return false;
 
             var hashed = signature.GetHashedSubPackets();
@@ -534,7 +540,7 @@ public sealed class HelmProvenanceTrustedKey
                 : 0;
             var permitsSigning = (keyFlags & PgpKeyFlags.CanSign) != 0
                 || (keyFlags == 0 && AlgorithmCanSign(subkey));
-            return !permitsSigning || HasValidBackSignature(signature, master, subkey);
+            return !permitsSigning || HasValidBackSignature(signature, master, subkey, validAt);
         }
         catch (Exception exception) when (exception is PgpException or ArgumentOutOfRangeException)
         {
@@ -542,10 +548,15 @@ public sealed class HelmProvenanceTrustedKey
         }
     }
 
-    private static bool HasValidBackSignature(PgpSignature binding, PgpPublicKey master, PgpPublicKey subkey)
+    private static bool HasValidBackSignature(
+        PgpSignature binding,
+        PgpPublicKey master,
+        PgpPublicKey subkey,
+        DateTime? validAt)
     {
         try
         {
+            var validationTime = validAt ?? DateTime.UtcNow;
             var embeddedSignatures = binding.GetHashedSubPackets()?.GetEmbeddedSignatures();
             if (embeddedSignatures is null)
                 return false;
@@ -559,7 +570,8 @@ public sealed class HelmProvenanceTrustedKey
                     !IssuerFingerprintMatches(embedded, subkey) ||
                     IsWeakHashAlgorithm(embedded.HashAlgorithm) ||
                     !HelmProvenance.HasSufficientSignatureHash(embedded.HashAlgorithm, subkey) ||
-                    IsSignatureExpired(embedded, DateTime.UtcNow))
+                    (validAt is not null && embedded.CreationTime > validationTime) ||
+                    IsSignatureExpired(embedded, validationTime))
                     continue;
 
                 embedded.InitVerify(subkey);
@@ -576,9 +588,12 @@ public sealed class HelmProvenanceTrustedKey
         return false;
     }
 
-    private static IEnumerable<PgpSignature> GetValidSubkeyBindings(PgpPublicKey subkey, PgpPublicKey master)
+    private static IEnumerable<PgpSignature> GetValidSubkeyBindings(
+        PgpPublicKey subkey,
+        PgpPublicKey master,
+        DateTime? validAt = null)
         => subkey.GetKeySignatures().Where(signature => signature.SignatureType == PgpSignature.SubkeyBinding
-            && HasValidSubkeyBinding(signature, master, subkey));
+            && HasValidSubkeyBinding(signature, master, subkey, validAt));
 
     private static bool IsUserAttributeCertificationRevoked(
         PgpPublicKey key,
@@ -896,7 +911,7 @@ public sealed class HelmProvenanceTrustedKey
             // only the latest binding at the revocation time governs this commitment.
             if (revocationType == PgpSignature.SubkeyRevocation && master is not null)
             {
-                var governingBinding = GetValidSubkeyBindings(key, master)
+                var governingBinding = GetValidSubkeyBindings(key, master, signature.CreationTime)
                     .Where(binding => binding.CreationTime <= signature.CreationTime)
                     .MaxBy(binding => binding.CreationTime);
                 if (governingBinding is not null && IsNonRevocable(governingBinding))
