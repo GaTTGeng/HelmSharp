@@ -13,8 +13,10 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
     private readonly string _tempDirectory = Path.Combine(
         Path.GetTempPath(), "helmsharp-failed-upgrade-tests", Guid.NewGuid().ToString("N"));
 
-    [Fact]
-    public async Task UpgradeInstallStreamAsync_PartialFailure_RetryRestoresOnlyResourcesAppliedByFailedAttempt()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UpgradeInstallStreamAsync_PartialFailure_RetryRestoresOnlyResourcesAppliedByFailedAttempt(bool atomic)
     {
         var chartDirectory = Path.Combine(_tempDirectory, "retry-chart");
         Directory.CreateDirectory(Path.Combine(chartDirectory, "templates"));
@@ -51,12 +53,15 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
         Assert.Equal("A", ReadValue(state.ConfigMaps["retry-state"]));
         Assert.Equal("A", ReadValue(state.ConfigMaps["unattempted-state"]));
 
-        state.FailConfigMapWriteFor = "unattempted-state";
+        state.ConfigMapWriteFailuresToSkip["unattempted-state"] = 0;
+        if (atomic)
+            state.ConfigMapWriteFailuresToSkip["retry-state"] = 1;
         await Assert.ThrowsAsync<KubernetesResourceOperationException>(() => DrainAsync(client.UpgradeInstallStreamAsync(
             new HelmUpgradeInstallRequest
             {
                 ReleaseName = "retry-baseline",
                 Chart = chartDirectory,
+                Atomic = atomic,
                 ValuesContent = "value: B\n"
             })));
         Assert.Equal("B", ReadValue(state.ConfigMaps["retry-state"]));
@@ -71,6 +76,28 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
 
         Assert.Equal("A", ReadValue(state.ConfigMaps["retry-state"]));
         Assert.Equal("A", ReadValue(state.ConfigMaps["unattempted-state"]));
+    }
+
+    [Fact]
+    public void GetSuccessfullyAppliedManifest_MatchesClusterScopedProgressName()
+    {
+        const string manifest = """
+            apiVersion: example.com/v1
+            kind: ClusterSetting
+            metadata:
+              name: shared
+              namespace: ignored-by-cluster-scope
+            spec:
+              mode: enabled
+            """;
+
+        var applied = HelmClient.GetSuccessfullyAppliedManifest(
+            manifest,
+            ["Applied ClusterSetting/shared"],
+            "test-ns");
+
+        Assert.Contains("kind: ClusterSetting", applied, StringComparison.Ordinal);
+        Assert.Contains("mode: enabled", applied, StringComparison.Ordinal);
     }
 
     public void Dispose()
@@ -130,10 +157,15 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
             {
                 var configMap = await request.Content!.ReadAsStringAsync(cancellationToken);
                 var name = JsonDocument.Parse(configMap).RootElement.GetProperty("metadata").GetProperty("name").GetString()!;
-                if (string.Equals(state.FailConfigMapWriteFor, name, StringComparison.Ordinal))
+                if (state.ConfigMapWriteFailuresToSkip.TryGetValue(name, out var successfulWritesBeforeFailure))
                 {
-                    state.FailConfigMapWriteFor = null;
-                    return Respond(request, HttpStatusCode.InternalServerError, "{ \"code\": 500 }");
+                    if (successfulWritesBeforeFailure == 0)
+                    {
+                        state.ConfigMapWriteFailuresToSkip.Remove(name);
+                        return Respond(request, HttpStatusCode.InternalServerError, "{ \"code\": 500 }");
+                    }
+
+                    state.ConfigMapWriteFailuresToSkip[name] = successfulWritesBeforeFailure - 1;
                 }
                 state.ConfigMaps[name] = configMap;
                 return Respond(request, request.Method == HttpMethod.Post ? HttpStatusCode.Created : HttpStatusCode.OK, configMap);
@@ -154,7 +186,7 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
     {
         internal Dictionary<string, string> Secrets { get; } = new(StringComparer.Ordinal);
         internal Dictionary<string, string> ConfigMaps { get; } = new(StringComparer.Ordinal);
-        internal string? FailConfigMapWriteFor { get; set; }
+        internal Dictionary<string, int> ConfigMapWriteFailuresToSkip { get; } = new(StringComparer.Ordinal);
     }
 
     private sealed class TestOptionsProvider : IHelmOptionsProvider

@@ -586,7 +586,7 @@ public class HelmClient : IHelmClient
         return string.Join(Environment.NewLine + "---" + Environment.NewLine, documentsByIdentity.Values);
     }
 
-    private static string GetSuccessfullyAppliedManifest(
+    internal static string GetSuccessfullyAppliedManifest(
         string manifest,
         IReadOnlyList<string> appliedResources,
         string defaultNamespace)
@@ -604,7 +604,10 @@ public class HelmClient : IHelmClient
 
             // Applier progress names are yielded in manifest order, one for each successful
             // resource, so matching them identifies the exact successful documents before a failure.
-            if (!string.Equals(appliedResources[appliedIndex], $"Applied {identity.DisplayName}", StringComparison.Ordinal))
+            var namespacedDisplayName = identity.DisplayName;
+            var clusterScopedDisplayName = $"{identity.Kind}/{identity.Name}";
+            if (!string.Equals(appliedResources[appliedIndex], $"Applied {namespacedDisplayName}", StringComparison.Ordinal) &&
+                !string.Equals(appliedResources[appliedIndex], $"Applied {clusterScopedDisplayName}", StringComparison.Ordinal))
                 continue;
 
             appliedDocuments.Add(document);
@@ -823,7 +826,10 @@ public class HelmClient : IHelmClient
                     // recovered subset after earlier failed revisions in its merge baseline.
                     failedRecord = failedRecord with
                     {
-                        AppliedManifest = GetSuccessfullyAppliedManifest(previous.Manifest, restoredResources, ns),
+                        AppliedManifest = MergeAppliedManifests(
+                            failedRecord.AppliedManifest ?? string.Empty,
+                            GetSuccessfullyAppliedManifest(previous.Manifest, restoredResources, ns),
+                            ns),
                         UpdatedAt = DateTimeOffset.UtcNow
                     };
                     try
@@ -1082,6 +1088,20 @@ public class HelmClient : IHelmClient
     private static string ManifestIdentityKey(ManifestIdentity identity)
     {
         return $"{ManifestResourceTypeKey(identity)}/{identity.Namespace}/{identity.Name}";
+    }
+
+    private static string MergeAppliedManifests(string existingManifest, string replacementManifest, string defaultNamespace)
+    {
+        var documentsByIdentity = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var document in KubernetesManifestApplier.SplitDocumentsPublic(existingManifest)
+                     .Concat(KubernetesManifestApplier.SplitDocumentsPublic(replacementManifest)))
+        {
+            var identity = ManifestIdentity.Parse(document, defaultNamespace);
+            if (identity is not null)
+                documentsByIdentity[ManifestIdentityKey(identity)] = document;
+        }
+
+        return string.Join(Environment.NewLine + "---" + Environment.NewLine, documentsByIdentity.Values);
     }
 
     // Type + name without namespace — used to find candidates before scope disambiguation.

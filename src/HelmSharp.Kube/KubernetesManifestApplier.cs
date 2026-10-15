@@ -928,9 +928,7 @@ public sealed class KubernetesManifestApplier
         if (string.IsNullOrWhiteSpace(identity.Namespace))
         {
             var matches = _previousManifestByIdentity
-                .Where(pair => pair.Key.ApiVersion == identity.ApiVersion &&
-                               pair.Key.Kind == identity.Kind &&
-                               pair.Key.Name == identity.Name)
+                .Where(pair => SameResourceTypeAndName(pair.Key, identity))
                 .Select(pair => pair.Value)
                 .Take(2)
                 .ToArray();
@@ -941,8 +939,34 @@ public sealed class KubernetesManifestApplier
             }
         }
 
+        // apiVersion can change while the chart keeps the same Kubernetes object. A
+        // three-way baseline still applies because the API group, kind, scope, and name
+        // identify that object independently of its currently served version.
+        var versionMatches = _previousManifestByIdentity
+            .Where(pair => SameResourceTypeAndName(pair.Key, identity) &&
+                           string.Equals(pair.Key.Namespace, identity.Namespace, StringComparison.Ordinal))
+            .Select(pair => pair.Value)
+            .Take(2)
+            .ToArray();
+        if (versionMatches.Length == 1)
+        {
+            previousManifest = versionMatches[0];
+            return true;
+        }
+
         previousManifest = string.Empty;
         return false;
+    }
+
+    private static bool SameResourceTypeAndName(ManifestIdentity left, ManifestIdentity right)
+        => string.Equals(GetApiGroup(left.ApiVersion), GetApiGroup(right.ApiVersion), StringComparison.Ordinal) &&
+           string.Equals(left.Kind, right.Kind, StringComparison.Ordinal) &&
+           string.Equals(left.Name, right.Name, StringComparison.Ordinal);
+
+    private static string GetApiGroup(string apiVersion)
+    {
+        var separator = apiVersion.IndexOf('/');
+        return separator < 0 ? string.Empty : apiVersion[..separator];
     }
 
     private async Task<ManifestIdentity> ApplyDiscoveredResourceAsync(ManifestIdentity identity, string yaml, CancellationToken ct)
