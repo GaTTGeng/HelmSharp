@@ -838,7 +838,16 @@ public class HelmClient : IHelmClient
                     }
                     catch
                     {
-                        // Keep the original operation failure if recovery metadata cannot be saved.
+                        // A transient write failure must not leave the earlier failed-attempt
+                        // baseline durable after restoration has already changed live resources.
+                        try
+                        {
+                            await store.SaveAsync(failedRecord, CancellationToken.None);
+                        }
+                        catch
+                        {
+                            // Keep the original operation failure if recovery metadata remains unavailable.
+                        }
                     }
                 }
             }

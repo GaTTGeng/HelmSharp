@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using HelmSharp.Action;
 using HelmSharp.Kube;
+using HelmSharp.Release;
 using k8s;
 
 namespace HelmSharp.Tests;
@@ -14,9 +15,10 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
         Path.GetTempPath(), "helmsharp-failed-upgrade-tests", Guid.NewGuid().ToString("N"));
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task UpgradeInstallStreamAsync_PartialFailure_RetryRestoresOnlyResourcesAppliedByFailedAttempt(bool atomic)
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    public async Task UpgradeInstallStreamAsync_PartialFailure_RetryRestoresOnlyResourcesAppliedByFailedAttempt(bool atomic, bool failRestoration)
     {
         var chartDirectory = Path.Combine(_tempDirectory, "retry-chart");
         Directory.CreateDirectory(Path.Combine(chartDirectory, "templates"));
@@ -55,7 +57,11 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
 
         state.ConfigMapWriteFailuresToSkip["unattempted-state"] = 0;
         if (atomic)
-            state.ConfigMapWriteFailuresToSkip["retry-state"] = 1;
+        {
+            if (failRestoration)
+                state.ConfigMapWriteFailuresToSkip["retry-state"] = 1;
+            state.ReleaseSecretReplaceFailuresRemaining = 1;
+        }
         await Assert.ThrowsAsync<KubernetesResourceOperationException>(() => DrainAsync(client.UpgradeInstallStreamAsync(
             new HelmUpgradeInstallRequest
             {
@@ -64,8 +70,18 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
                 Atomic = atomic,
                 ValuesContent = "value: B\n"
             })));
-        Assert.Equal("B", ReadValue(state.ConfigMaps["retry-state"]));
+        Assert.Equal(atomic && !failRestoration ? "A" : "B", ReadValue(state.ConfigMaps["retry-state"]));
         Assert.Equal("A", ReadValue(state.ConfigMaps["unattempted-state"]));
+        if (atomic && !failRestoration)
+        {
+            var failedRevisionSecret = state.Secrets["sh.helm.release.v1.retry-baseline.v2"];
+            var encodedRelease = JsonDocument.Parse(failedRevisionSecret).RootElement
+                .GetProperty("data").GetProperty("release").GetString()!;
+            var failedRecord = HelmV3ReleaseCodec.Decode(Encoding.UTF8.GetString(Convert.FromBase64String(encodedRelease)));
+            Assert.True(
+                (failedRecord.AppliedManifest ?? string.Empty).Contains("value: \"A\"", StringComparison.Ordinal),
+                failedRecord.AppliedManifest);
+        }
 
         await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
         {
@@ -202,6 +218,20 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
                 return Respond(request, HttpStatusCode.Created, body);
             }
 
+            if (request.Method == HttpMethod.Put && path.Contains("/secrets/", StringComparison.Ordinal))
+            {
+                if (state.ReleaseSecretReplaceFailuresRemaining > 0)
+                {
+                    state.ReleaseSecretReplaceFailuresRemaining--;
+                    return Respond(request, HttpStatusCode.InternalServerError, "{ \"code\": 500 }");
+                }
+
+                var body = await request.Content!.ReadAsStringAsync(cancellationToken);
+                var secretName = JsonDocument.Parse(body).RootElement.GetProperty("metadata").GetProperty("name").GetString()!;
+                state.Secrets[secretName] = body;
+                return Respond(request, HttpStatusCode.OK, body);
+            }
+
             if (request.Method == HttpMethod.Get && path.Contains("/configmaps/", StringComparison.Ordinal))
             {
                 var name = path[(path.LastIndexOf('/') + 1)..];
@@ -245,6 +275,7 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
         internal Dictionary<string, string> Secrets { get; } = new(StringComparer.Ordinal);
         internal Dictionary<string, string> ConfigMaps { get; } = new(StringComparer.Ordinal);
         internal Dictionary<string, int> ConfigMapWriteFailuresToSkip { get; } = new(StringComparer.Ordinal);
+        internal int ReleaseSecretReplaceFailuresRemaining { get; set; }
     }
 
     private sealed class TestOptionsProvider : IHelmOptionsProvider
