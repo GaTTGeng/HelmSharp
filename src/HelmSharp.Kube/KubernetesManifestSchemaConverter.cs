@@ -32,7 +32,10 @@ internal static class KubernetesManifestSchemaConverter
                                          targetApiVersion == "networking.k8s.io/v1beta1";
         var horizontalPodAutoscalerMigration = identity.Kind == "HorizontalPodAutoscaler" &&
                                                (identity.ApiVersion, targetApiVersion) is
-                                                   ("autoscaling/v1", "autoscaling/v2") or ("autoscaling/v2", "autoscaling/v1");
+                                                   ("autoscaling/v1", "autoscaling/v2") or
+                                                   ("autoscaling/v2", "autoscaling/v1") or
+                                                   ("autoscaling/v2beta1", "autoscaling/v2") or
+                                                   ("autoscaling/v2beta2", "autoscaling/v2");
         var cronJobMigration = identity is { Kind: "CronJob", ApiVersion: "batch/v1beta1" } &&
                                targetApiVersion == "batch/v1";
         var podDisruptionBudgetMigration = identity is { Kind: "PodDisruptionBudget", ApiVersion: "policy/v1beta1" } &&
@@ -88,6 +91,14 @@ internal static class KubernetesManifestSchemaConverter
         if (!document.TryGetValue("spec", out var specValue) || specValue is not Dictionary<string, object?> spec)
             return true;
 
+        // v2beta2 graduated without a schema change, so preserve its metrics and behavior verbatim.
+        if (sourceApiVersion == "autoscaling/v2beta2" && targetApiVersion == "autoscaling/v2")
+            return true;
+
+        // v2beta1 stored metric names, selectors, and targets in a different shape than v2.
+        if (sourceApiVersion == "autoscaling/v2beta1" && targetApiVersion == "autoscaling/v2")
+            return TryConvertHorizontalPodAutoscalerV2Beta1Metrics(spec);
+
         if (sourceApiVersion == "autoscaling/v1" && targetApiVersion == "autoscaling/v2")
         {
             if (!spec.Remove("targetCPUUtilizationPercentage", out var targetCpuUtilization))
@@ -139,6 +150,89 @@ internal static class KubernetesManifestSchemaConverter
         }
 
         spec["targetCPUUtilizationPercentage"] = averageUtilization;
+        return true;
+    }
+
+    private static bool TryConvertHorizontalPodAutoscalerV2Beta1Metrics(Dictionary<string, object?> spec)
+    {
+        if (!spec.TryGetValue("metrics", out var metricsValue))
+            return true;
+
+        if (metricsValue is not List<object?> metrics)
+            return false;
+
+        foreach (var metricValue in metrics)
+        {
+            if (metricValue is not Dictionary<string, object?> metric)
+                return false;
+
+            var type = HelmYaml.GetString(metric, "type");
+            if (type == "Resource")
+            {
+                if (!metric.TryGetValue("resource", out var resourceValue) ||
+                    resourceValue is not Dictionary<string, object?> resource ||
+                    !TryConvertBeta1MetricTarget(
+                        resource,
+                        "targetAverageUtilization", "Utilization", "averageUtilization",
+                        "targetAverageValue", "AverageValue", "averageValue"))
+                {
+                    return false;
+                }
+
+                continue;
+            }
+
+            if (type is not ("Pods" or "Object" or "External") ||
+                !metric.TryGetValue(type.ToLowerInvariant(), out var sourceValue) ||
+                sourceValue is not Dictionary<string, object?> source ||
+                !source.Remove("metricName", out var metricName) || metricName is not string ||
+                !TryConvertBeta1MetricTarget(
+                    source,
+                    "targetAverageValue", "AverageValue", "averageValue",
+                    "targetValue", "Value", "value"))
+            {
+                return false;
+            }
+
+            var metricIdentifier = new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["name"] = metricName
+            };
+            if (source.Remove("metricSelector", out var selector))
+                metricIdentifier["selector"] = selector;
+            source["metric"] = metricIdentifier;
+        }
+
+        return true;
+    }
+
+    private static bool TryConvertBeta1MetricTarget(
+        Dictionary<string, object?> metric,
+        string firstTargetName,
+        string firstTargetType,
+        string firstTargetValueName,
+        string secondTargetName,
+        string secondTargetType,
+        string secondTargetValueName)
+    {
+        var hasFirstTarget = metric.Remove(firstTargetName, out var firstTarget);
+        var hasSecondTarget = metric.Remove(secondTargetName, out var secondTarget);
+        if (hasFirstTarget == hasSecondTarget)
+        {
+            return false;
+        }
+
+        metric["target"] = hasFirstTarget
+            ? new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["type"] = firstTargetType,
+                [firstTargetValueName] = firstTarget
+            }
+            : new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["type"] = secondTargetType,
+                [secondTargetValueName] = secondTarget
+            };
         return true;
     }
 

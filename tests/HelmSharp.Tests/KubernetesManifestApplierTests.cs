@@ -300,6 +300,139 @@ public sealed class KubernetesManifestApplierTests
     }
 
     [Fact]
+    public void SchemaConverter_ConvertsHpaV2Beta1MetricsBeforeMerge()
+    {
+        const string previousManifest = """
+            apiVersion: autoscaling/v2beta1
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 3
+              metrics:
+                - type: Resource
+                  resource:
+                    name: cpu
+                    targetAverageUtilization: 70
+                - type: External
+                  external:
+                    metricName: queue_depth
+                    metricSelector:
+                      matchLabels:
+                        queue: jobs
+                    targetValue: 20
+            """;
+        const string upgradedManifest = """
+            apiVersion: autoscaling/v2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 5
+              metrics:
+                - type: Resource
+                  resource:
+                    name: cpu
+                    target:
+                      type: Utilization
+                      averageUtilization: 70
+                - type: External
+                  external:
+                    metric:
+                      name: queue_depth
+                      selector:
+                        matchLabels:
+                          queue: jobs
+                    target:
+                      type: Value
+                      value: 20
+            """;
+        const string liveManifest = """
+            apiVersion: autoscaling/v2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 3
+              metrics:
+                - type: Resource
+                  resource:
+                    name: cpu
+                    target:
+                      type: Utilization
+                      averageUtilization: 85
+                - type: External
+                  external:
+                    metric:
+                      name: queue_depth
+                      selector:
+                        matchLabels:
+                          queue: jobs
+                    target:
+                      type: Value
+                      value: 35
+              behavior:
+                scaleDown:
+                  stabilizationWindowSeconds: 60
+            """;
+        var identity = new ManifestIdentity("autoscaling/v2beta1", "HorizontalPodAutoscaler", "scaler", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            previousManifest, identity, "autoscaling/v2", out var convertedPrevious));
+        var merged = HelmYaml.DeserializeDictionary(ThreeWayMerge.MergeResource(
+            convertedPrevious, upgradedManifest, liveManifest));
+        var spec = Assert.IsType<Dictionary<string, object?>>(merged["spec"]);
+        var metrics = Assert.IsType<List<object?>>(spec["metrics"]);
+        var resourceMetric = Assert.IsType<Dictionary<string, object?>>(metrics[0]);
+        var resource = Assert.IsType<Dictionary<string, object?>>(resourceMetric["resource"]);
+        var resourceTarget = Assert.IsType<Dictionary<string, object?>>(resource["target"]);
+        var externalMetric = Assert.IsType<Dictionary<string, object?>>(metrics[1]);
+        var external = Assert.IsType<Dictionary<string, object?>>(externalMetric["external"]);
+        var externalTarget = Assert.IsType<Dictionary<string, object?>>(external["target"]);
+
+        Assert.Equal(85L, resourceTarget["averageUtilization"]);
+        Assert.Equal(35L, externalTarget["value"]);
+        Assert.True(spec.ContainsKey("behavior"));
+        Assert.Equal(5L, spec["maxReplicas"]);
+    }
+
+    [Fact]
+    public void SchemaConverter_PreservesHpaV2Beta2MetricsWhenMovingToV2()
+    {
+        const string previousManifest = """
+            apiVersion: autoscaling/v2beta2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              metrics:
+                - type: Pods
+                  pods:
+                    metric:
+                      name: requests_per_second
+                    target:
+                      type: AverageValue
+                      averageValue: 10
+              behavior:
+                scaleDown:
+                  stabilizationWindowSeconds: 60
+            """;
+        var identity = new ManifestIdentity("autoscaling/v2beta2", "HorizontalPodAutoscaler", "scaler", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            previousManifest, identity, "autoscaling/v2", out var converted));
+        var document = HelmYaml.DeserializeDictionary(converted);
+        var spec = Assert.IsType<Dictionary<string, object?>>(document["spec"]);
+
+        Assert.Equal("autoscaling/v2", HelmYaml.GetString(document, "apiVersion"));
+        Assert.True(spec.ContainsKey("metrics"));
+        Assert.True(spec.ContainsKey("behavior"));
+    }
+
+    [Fact]
     public void SchemaConverter_LeavesHpaWithUnsupportedMetricsUnconverted()
     {
         const string previousManifest = """
