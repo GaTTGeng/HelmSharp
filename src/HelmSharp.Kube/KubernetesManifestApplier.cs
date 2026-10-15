@@ -303,6 +303,12 @@ public sealed class KubernetesManifestApplier
 
     private async Task<ManifestIdentity> ApplyOneAsync(ManifestIdentity identity, string yaml, CancellationToken ct)
     {
+        Task UpsertWithIntentAsync<T>(
+            Func<Task<T>> read,
+            Func<Task<T>> create,
+            Func<T, Task<T>> replace)
+            => UpsertNamespacedAsync(read, create, replace, identity, yaml);
+
         // Typed-client dispatch: known built-in kinds deserialize to strongly typed
         // models and use read/replace/create upserts, preserving fields the typed
         // model carries (for example Service healthCheckNodePort). Unknown kinds fall
@@ -311,7 +317,7 @@ public sealed class KubernetesManifestApplier
         {
             // ─── Core v1 ───
             case ("v1", "Namespace"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoreV1.ReadNamespaceAsync(identity.Name, cancellationToken: ct),
                     () => _client.CoreV1.CreateNamespaceAsync(KubernetesYaml.Deserialize<V1Namespace>(yaml), cancellationToken: ct),
                     existing =>
@@ -323,7 +329,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("v1", "ConfigMap"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoreV1.ReadNamespacedConfigMapAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.CoreV1.CreateNamespacedConfigMapAsync(KubernetesYaml.Deserialize<V1ConfigMap>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -336,7 +342,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("v1", "Secret"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoreV1.ReadNamespacedSecretAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.CoreV1.CreateNamespacedSecretAsync(KubernetesYaml.Deserialize<V1Secret>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -349,7 +355,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("v1", "Service"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoreV1.ReadNamespacedServiceAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.CoreV1.CreateNamespacedServiceAsync(KubernetesYaml.Deserialize<V1Service>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -370,7 +376,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("v1", "ServiceAccount"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoreV1.ReadNamespacedServiceAccountAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.CoreV1.CreateNamespacedServiceAccountAsync(KubernetesYaml.Deserialize<V1ServiceAccount>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -383,7 +389,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("v1", "PersistentVolumeClaim"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoreV1.ReadNamespacedPersistentVolumeClaimAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.CoreV1.CreateNamespacedPersistentVolumeClaimAsync(KubernetesYaml.Deserialize<V1PersistentVolumeClaim>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -396,7 +402,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("v1", "PersistentVolume"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoreV1.ReadPersistentVolumeAsync(identity.Name, cancellationToken: ct),
                     () => _client.CoreV1.CreatePersistentVolumeAsync(KubernetesYaml.Deserialize<V1PersistentVolume>(yaml), cancellationToken: ct),
                     existing =>
@@ -408,7 +414,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("v1", "LimitRange"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoreV1.ReadNamespacedLimitRangeAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.CoreV1.CreateNamespacedLimitRangeAsync(KubernetesYaml.Deserialize<V1LimitRange>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -421,7 +427,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("v1", "ResourceQuota"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoreV1.ReadNamespacedResourceQuotaAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.CoreV1.CreateNamespacedResourceQuotaAsync(KubernetesYaml.Deserialize<V1ResourceQuota>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -434,7 +440,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("v1", "Pod"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoreV1.ReadNamespacedPodAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.CoreV1.CreateNamespacedPodAsync(KubernetesYaml.Deserialize<V1Pod>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -447,7 +453,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("v1", "Endpoints"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoreV1.ReadNamespacedEndpointsAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.CoreV1.CreateNamespacedEndpointsAsync(KubernetesYaml.Deserialize<V1Endpoints>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -460,7 +466,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("v1", "ReplicationController"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoreV1.ReadNamespacedReplicationControllerAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.CoreV1.CreateNamespacedReplicationControllerAsync(KubernetesYaml.Deserialize<V1ReplicationController>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -475,7 +481,7 @@ public sealed class KubernetesManifestApplier
 
             // ─── apps/v1 ───
             case ("apps/v1", "Deployment"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.AppsV1.ReadNamespacedDeploymentAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.AppsV1.CreateNamespacedDeploymentAsync(KubernetesYaml.Deserialize<V1Deployment>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -488,7 +494,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("apps/v1", "StatefulSet"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.AppsV1.ReadNamespacedStatefulSetAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.AppsV1.CreateNamespacedStatefulSetAsync(KubernetesYaml.Deserialize<V1StatefulSet>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -501,7 +507,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("apps/v1", "DaemonSet"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.AppsV1.ReadNamespacedDaemonSetAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.AppsV1.CreateNamespacedDaemonSetAsync(KubernetesYaml.Deserialize<V1DaemonSet>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -514,7 +520,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("apps/v1", "ReplicaSet"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.AppsV1.ReadNamespacedReplicaSetAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.AppsV1.CreateNamespacedReplicaSetAsync(KubernetesYaml.Deserialize<V1ReplicaSet>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -529,7 +535,7 @@ public sealed class KubernetesManifestApplier
 
             // ─── batch/v1 ───
             case ("batch/v1", "Job"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.BatchV1.ReadNamespacedJobAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.BatchV1.CreateNamespacedJobAsync(KubernetesYaml.Deserialize<V1Job>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -545,7 +551,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("batch/v1", "CronJob"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.BatchV1.ReadNamespacedCronJobAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.BatchV1.CreateNamespacedCronJobAsync(KubernetesYaml.Deserialize<V1CronJob>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -560,7 +566,7 @@ public sealed class KubernetesManifestApplier
 
             // ─── networking.k8s.io/v1 ───
             case ("networking.k8s.io/v1", "Ingress"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.NetworkingV1.ReadNamespacedIngressAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.NetworkingV1.CreateNamespacedIngressAsync(KubernetesYaml.Deserialize<V1Ingress>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -573,7 +579,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("networking.k8s.io/v1", "NetworkPolicy"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.NetworkingV1.ReadNamespacedNetworkPolicyAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.NetworkingV1.CreateNamespacedNetworkPolicyAsync(KubernetesYaml.Deserialize<V1NetworkPolicy>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -586,7 +592,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("networking.k8s.io/v1", "IngressClass"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.NetworkingV1.ReadIngressClassAsync(identity.Name, cancellationToken: ct),
                     () => _client.NetworkingV1.CreateIngressClassAsync(KubernetesYaml.Deserialize<V1IngressClass>(yaml), cancellationToken: ct),
                     existing =>
@@ -600,7 +606,7 @@ public sealed class KubernetesManifestApplier
 
             // ─── rbac.authorization.k8s.io/v1 ───
             case ("rbac.authorization.k8s.io/v1", "Role"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.RbacAuthorizationV1.ReadNamespacedRoleAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.RbacAuthorizationV1.CreateNamespacedRoleAsync(KubernetesYaml.Deserialize<V1Role>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -613,7 +619,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("rbac.authorization.k8s.io/v1", "RoleBinding"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.RbacAuthorizationV1.ReadNamespacedRoleBindingAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.RbacAuthorizationV1.CreateNamespacedRoleBindingAsync(KubernetesYaml.Deserialize<V1RoleBinding>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -626,7 +632,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("rbac.authorization.k8s.io/v1", "ClusterRole"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.RbacAuthorizationV1.ReadClusterRoleAsync(identity.Name, cancellationToken: ct),
                     () => _client.RbacAuthorizationV1.CreateClusterRoleAsync(KubernetesYaml.Deserialize<V1ClusterRole>(yaml), cancellationToken: ct),
                     existing =>
@@ -638,7 +644,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("rbac.authorization.k8s.io/v1", "ClusterRoleBinding"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.RbacAuthorizationV1.ReadClusterRoleBindingAsync(identity.Name, cancellationToken: ct),
                     () => _client.RbacAuthorizationV1.CreateClusterRoleBindingAsync(KubernetesYaml.Deserialize<V1ClusterRoleBinding>(yaml), cancellationToken: ct),
                     existing =>
@@ -652,7 +658,7 @@ public sealed class KubernetesManifestApplier
 
             // ─── autoscaling/v2 ───
             case ("autoscaling/v2", "HorizontalPodAutoscaler"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.AutoscalingV2.ReadNamespacedHorizontalPodAutoscalerAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.AutoscalingV2.CreateNamespacedHorizontalPodAutoscalerAsync(KubernetesYaml.Deserialize<V2HorizontalPodAutoscaler>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -665,7 +671,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("autoscaling/v1", "HorizontalPodAutoscaler"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.AutoscalingV1.ReadNamespacedHorizontalPodAutoscalerAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.AutoscalingV1.CreateNamespacedHorizontalPodAutoscalerAsync(KubernetesYaml.Deserialize<V1HorizontalPodAutoscaler>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -680,7 +686,7 @@ public sealed class KubernetesManifestApplier
 
             // ─── policy/v1 ───
             case ("policy/v1", "PodDisruptionBudget"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.PolicyV1.ReadNamespacedPodDisruptionBudgetAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.PolicyV1.CreateNamespacedPodDisruptionBudgetAsync(KubernetesYaml.Deserialize<V1PodDisruptionBudget>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -695,7 +701,7 @@ public sealed class KubernetesManifestApplier
 
             // ─── storage.k8s.io/v1 ───
             case ("storage.k8s.io/v1", "StorageClass"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.StorageV1.ReadStorageClassAsync(identity.Name, cancellationToken: ct),
                     () => _client.StorageV1.CreateStorageClassAsync(KubernetesYaml.Deserialize<V1StorageClass>(yaml), cancellationToken: ct),
                     existing =>
@@ -707,7 +713,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("storage.k8s.io/v1", "CSIDriver"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.StorageV1.ReadCSIDriverAsync(identity.Name, cancellationToken: ct),
                     () => _client.StorageV1.CreateCSIDriverAsync(KubernetesYaml.Deserialize<V1CSIDriver>(yaml), cancellationToken: ct),
                     existing =>
@@ -719,7 +725,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("storage.k8s.io/v1", "CSINode"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.StorageV1.ReadCSINodeAsync(identity.Name, cancellationToken: ct),
                     () => _client.StorageV1.CreateCSINodeAsync(KubernetesYaml.Deserialize<V1CSINode>(yaml), cancellationToken: ct),
                     existing =>
@@ -731,7 +737,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("storage.k8s.io/v1", "VolumeAttachment"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.StorageV1.ReadVolumeAttachmentAsync(identity.Name, cancellationToken: ct),
                     () => _client.StorageV1.CreateVolumeAttachmentAsync(KubernetesYaml.Deserialize<V1VolumeAttachment>(yaml), cancellationToken: ct),
                     existing =>
@@ -745,7 +751,7 @@ public sealed class KubernetesManifestApplier
 
             // ─── scheduling.k8s.io/v1 ───
             case ("scheduling.k8s.io/v1", "PriorityClass"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.SchedulingV1.ReadPriorityClassAsync(identity.Name, cancellationToken: ct),
                     () => _client.SchedulingV1.CreatePriorityClassAsync(KubernetesYaml.Deserialize<V1PriorityClass>(yaml), cancellationToken: ct),
                     existing =>
@@ -759,7 +765,7 @@ public sealed class KubernetesManifestApplier
 
             // ─── apiextensions.k8s.io/v1 ───
             case ("apiextensions.k8s.io/v1", "CustomResourceDefinition"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.ApiextensionsV1.ReadCustomResourceDefinitionAsync(identity.Name, cancellationToken: ct),
                     () => _client.ApiextensionsV1.CreateCustomResourceDefinitionAsync(KubernetesYaml.Deserialize<V1CustomResourceDefinition>(yaml), cancellationToken: ct),
                     existing =>
@@ -773,7 +779,7 @@ public sealed class KubernetesManifestApplier
 
             // ─── admissionregistration.k8s.io/v1 ───
             case ("admissionregistration.k8s.io/v1", "MutatingWebhookConfiguration"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.AdmissionregistrationV1.ReadMutatingWebhookConfigurationAsync(identity.Name, cancellationToken: ct),
                     () => _client.AdmissionregistrationV1.CreateMutatingWebhookConfigurationAsync(KubernetesYaml.Deserialize<V1MutatingWebhookConfiguration>(yaml), cancellationToken: ct),
                     existing =>
@@ -785,7 +791,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("admissionregistration.k8s.io/v1", "ValidatingWebhookConfiguration"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.AdmissionregistrationV1.ReadValidatingWebhookConfigurationAsync(identity.Name, cancellationToken: ct),
                     () => _client.AdmissionregistrationV1.CreateValidatingWebhookConfigurationAsync(KubernetesYaml.Deserialize<V1ValidatingWebhookConfiguration>(yaml), cancellationToken: ct),
                     existing =>
@@ -799,7 +805,7 @@ public sealed class KubernetesManifestApplier
 
             // ─── apiregistration.k8s.io/v1 ───
             case ("apiregistration.k8s.io/v1", "APIService"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.ApiregistrationV1.ReadAPIServiceAsync(identity.Name, cancellationToken: ct),
                     () => _client.ApiregistrationV1.CreateAPIServiceAsync(KubernetesYaml.Deserialize<V1APIService>(yaml), cancellationToken: ct),
                     existing =>
@@ -813,7 +819,7 @@ public sealed class KubernetesManifestApplier
 
             // ─── coordination.k8s.io/v1 ───
             case ("coordination.k8s.io/v1", "Lease"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoordinationV1.ReadNamespacedLeaseAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.CoordinationV1.CreateNamespacedLeaseAsync(KubernetesYaml.Deserialize<V1Lease>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -828,7 +834,7 @@ public sealed class KubernetesManifestApplier
 
             // ─── node.k8s.io/v1 ───
             case ("node.k8s.io/v1", "RuntimeClass"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.NodeV1.ReadRuntimeClassAsync(identity.Name, cancellationToken: ct),
                     () => _client.NodeV1.CreateRuntimeClassAsync(KubernetesYaml.Deserialize<V1RuntimeClass>(yaml), cancellationToken: ct),
                     existing =>
@@ -842,7 +848,7 @@ public sealed class KubernetesManifestApplier
 
             // ─── discovery.k8s.io/v1 ───
             case ("discovery.k8s.io/v1", "EndpointSlice"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.DiscoveryV1.ReadNamespacedEndpointSliceAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.DiscoveryV1.CreateNamespacedEndpointSliceAsync(KubernetesYaml.Deserialize<V1EndpointSlice>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
@@ -857,7 +863,7 @@ public sealed class KubernetesManifestApplier
 
             // ─── flowcontrol.apiserver.k8s.io/v1 ───
             case ("flowcontrol.apiserver.k8s.io/v1", "FlowSchema"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.FlowcontrolApiserverV1.ReadFlowSchemaAsync(identity.Name, cancellationToken: ct),
                     () => _client.FlowcontrolApiserverV1.CreateFlowSchemaAsync(KubernetesYaml.Deserialize<V1FlowSchema>(yaml), cancellationToken: ct),
                     existing =>
@@ -869,7 +875,7 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("flowcontrol.apiserver.k8s.io/v1", "PriorityLevelConfiguration"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.FlowcontrolApiserverV1.ReadPriorityLevelConfigurationAsync(identity.Name, cancellationToken: ct),
                     () => _client.FlowcontrolApiserverV1.CreatePriorityLevelConfigurationAsync(KubernetesYaml.Deserialize<V1PriorityLevelConfiguration>(yaml), cancellationToken: ct),
                     existing =>
@@ -1029,7 +1035,7 @@ public sealed class KubernetesManifestApplier
                     SetNamespace(item, identity.Namespace);
                     SetResourceVersion(item, existing);
                     return _client.CustomObjects.ReplaceNamespacedCustomObjectAsync(item, resource.Group, resource.Version, identity.Namespace, resource.Plural, identity.Name, null, _fieldManager, null, ct);
-                });
+                }, identity, yaml);
             return identity;
         }
 
@@ -1046,7 +1052,7 @@ public sealed class KubernetesManifestApplier
                 SetNamespace(item, namespaceName: null);
                 SetResourceVersion(item, existing);
                 return _client.CustomObjects.ReplaceClusterCustomObjectAsync(item, resource.Group, resource.Version, resource.Plural, identity.Name, null, _fieldManager, null, ct);
-            });
+            }, identity, yaml);
         return identity;
     }
 
@@ -1428,7 +1434,9 @@ public sealed class KubernetesManifestApplier
     private async Task UpsertNamespacedAsync<T>(
         Func<Task<T>> read,
         Func<Task<T>> create,
-        Func<T, Task<T>> replace)
+        Func<T, Task<T>> replace,
+        ManifestIdentity identity,
+        string desiredYaml)
     {
         // 404 from the read means "not created yet" — the create path. Replace is
         // preferred over patch so the applied manifest fully defines the object,
@@ -1442,7 +1450,7 @@ public sealed class KubernetesManifestApplier
             }
             catch (Exception ex) when (IsAmbiguousWriteFailure(ex))
             {
-                _lastApplyMayHaveCommitted |= await ReplaceMayHaveCommittedAsync(read, existing);
+                _lastApplyMayHaveCommitted |= await ReplaceMayHaveCommittedAsync(read, existing, identity, desiredYaml);
                 throw;
             }
         }
@@ -1463,8 +1471,10 @@ public sealed class KubernetesManifestApplier
     private Task UpsertClusterAsync<T>(
         Func<Task<T>> read,
         Func<Task<T>> create,
-        Func<T, Task<T>> replace)
-        => UpsertNamespacedAsync(read, create, replace);
+        Func<T, Task<T>> replace,
+        ManifestIdentity identity,
+        string desiredYaml)
+        => UpsertNamespacedAsync(read, create, replace, identity, desiredYaml);
 
     private static async Task<bool> CreateMayHaveCommittedAsync<T>(Func<Task<T>> read)
     {
@@ -1491,20 +1501,94 @@ public sealed class KubernetesManifestApplier
         return statusCode == 0 || statusCode >= 500;
     }
 
-    private static async Task<bool> ReplaceMayHaveCommittedAsync<T>(Func<Task<T>> read, T before)
+    private async Task<bool> ReplaceMayHaveCommittedAsync<T>(
+        Func<Task<T>> read,
+        T before,
+        ManifestIdentity identity,
+        string desiredYaml)
     {
         try
         {
             var after = await read();
             var beforeVersion = GetResourceVersion(before);
             var afterVersion = GetResourceVersion(after);
-            return beforeVersion is not null && afterVersion is not null &&
-                   !string.Equals(beforeVersion, afterVersion, StringComparison.Ordinal);
+            if (beforeVersion is null || afterVersion is null ||
+                string.Equals(beforeVersion, afterVersion, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            // A controller can advance resourceVersion independently of this replace.
+            // Only record progress if the read-back also reflects the chart-owned payload.
+            var expectedYaml = MergeWithLiveResource(identity, desiredYaml, before!);
+            return ContainsExpectedManifest(expectedYaml, after!);
         }
         catch
         {
             return false;
         }
+    }
+
+    private static bool ContainsExpectedManifest<T>(string expectedYaml, T actualResource)
+    {
+        using var expected = JsonDocument.Parse(JsonSerializer.Serialize(
+            HelmYaml.DeserializeDictionary(expectedYaml, StringComparer.Ordinal)));
+        using var actual = JsonDocument.Parse(JsonSerializer.Serialize(actualResource));
+        return ContainsExpectedValue(expected.RootElement, actual.RootElement, parentName: null);
+    }
+
+    private static bool ContainsExpectedValue(JsonElement expected, JsonElement actual, string? parentName)
+    {
+        if (expected.ValueKind == JsonValueKind.Object)
+        {
+            if (actual.ValueKind != JsonValueKind.Object)
+                return false;
+
+            foreach (var property in expected.EnumerateObject())
+            {
+                if (IsServerManagedField(parentName, property.Name))
+                    continue;
+
+                if (!TryGetPropertyExactThenIgnoreCase(actual, property.Name, out var actualValue) ||
+                    !ContainsExpectedValue(property.Value, actualValue, property.Name))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        if (expected.ValueKind == JsonValueKind.Array)
+        {
+            if (actual.ValueKind != JsonValueKind.Array)
+                return false;
+
+            var expectedItems = expected.EnumerateArray().ToArray();
+            var actualItems = actual.EnumerateArray().ToArray();
+            return expectedItems.Length == actualItems.Length &&
+                   expectedItems.Zip(actualItems).All(pair =>
+                       ContainsExpectedValue(pair.First, pair.Second, parentName));
+        }
+
+        if (expected.ValueKind == JsonValueKind.Number && actual.ValueKind == JsonValueKind.Number)
+            return expected.GetDecimal() == actual.GetDecimal();
+
+        return expected.ValueKind == actual.ValueKind &&
+               string.Equals(expected.ToString(), actual.ToString(), StringComparison.Ordinal);
+    }
+
+    private static bool IsServerManagedField(string? parentName, string propertyName)
+        => parentName is null && string.Equals(propertyName, "status", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(parentName, "metadata", StringComparison.OrdinalIgnoreCase) &&
+           propertyName is "resourceVersion" or "uid" or "generation" or "creationTimestamp" or "managedFields" or "selfLink";
+
+    private static bool TryGetPropertyExactThenIgnoreCase(JsonElement element, string name, out JsonElement value)
+    {
+        if (element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out value))
+            return true;
+
+        return TryGetPropertyIgnoreCase(element, name, out value);
     }
 
     private static string? GetResourceVersion<T>(T resource)
