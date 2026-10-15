@@ -162,6 +162,39 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
     }
 
     [Fact]
+    public async Task ApplyAsync_ReportsResourceWhenWriteCommittedBeforeResponseFailure()
+    {
+        var state = new ClusterState();
+        var applier = new KubernetesManifestApplier(
+            new Kubernetes(
+                new KubernetesClientConfiguration { Host = "https://helmsharp.test", SkipTlsVerify = true },
+                new ClusterHandler(state)),
+            "helmsharp-test");
+        const string manifest = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: ambiguous-write
+              namespace: test-ns
+            data:
+              value: committed
+            """;
+
+        await DrainAsync(applier.ApplyAsync(manifest, "test-ns"));
+        state.ConfigMapWriteFailuresAfterCommit.Add("ambiguous-write");
+        var progress = new List<string>();
+
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(async () =>
+        {
+            await foreach (var resource in applier.ApplyAsync(manifest.Replace("committed", "updated", StringComparison.Ordinal), "test-ns"))
+                progress.Add(resource);
+        });
+
+        Assert.Equal(["ConfigMap/test-ns/ambiguous-write"], progress);
+        Assert.Equal("updated", ReadValue(state.ConfigMaps["ambiguous-write"]));
+    }
+
+    [Fact]
     public void GetSuccessfullyAppliedManifest_MatchesClusterScopedProgressName()
     {
         const string manifest = """
@@ -458,7 +491,14 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
 
                     state.ConfigMapWriteFailuresToSkip[name] = successfulWritesBeforeFailure - 1;
                 }
+
+                var configMapNode = JsonNode.Parse(configMap)!.AsObject();
+                configMapNode["metadata"]!["resourceVersion"] = (++state.ConfigMapResourceVersion).ToString();
+                configMap = configMapNode.ToJsonString();
                 state.ConfigMaps[name] = configMap;
+                if (state.ConfigMapWriteFailuresAfterCommit.Remove(name))
+                    return Respond(request, HttpStatusCode.InternalServerError, "{ \"code\": 500 }");
+
                 return Respond(request, request.Method == HttpMethod.Post ? HttpStatusCode.Created : HttpStatusCode.OK, configMap);
             }
 
@@ -478,6 +518,8 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
         internal Dictionary<string, string> Secrets { get; } = new(StringComparer.Ordinal);
         internal Dictionary<string, string> ConfigMaps { get; } = new(StringComparer.Ordinal);
         internal Dictionary<string, int> ConfigMapWriteFailuresToSkip { get; } = new(StringComparer.Ordinal);
+        internal HashSet<string> ConfigMapWriteFailuresAfterCommit { get; } = new(StringComparer.Ordinal);
+        internal int ConfigMapResourceVersion { get; set; }
         internal int ReleaseSecretReplaceFailuresRemaining { get; set; }
     }
 

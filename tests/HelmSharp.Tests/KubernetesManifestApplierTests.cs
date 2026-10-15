@@ -332,7 +332,7 @@ public sealed class KubernetesManifestApplierTests
                     selector:
                       matchLabels:
                         ingress: gateway
-                    targetValue: 100
+                    targetAverageValue: 100
             """;
         const string upgradedManifest = """
             apiVersion: autoscaling/v2
@@ -371,8 +371,8 @@ public sealed class KubernetesManifestApplierTests
                         matchLabels:
                           ingress: gateway
                     target:
-                      type: Value
-                      value: 100
+                      type: AverageValue
+                      averageValue: 100
             """;
         const string liveManifest = """
             apiVersion: autoscaling/v2
@@ -411,8 +411,8 @@ public sealed class KubernetesManifestApplierTests
                         matchLabels:
                           ingress: gateway
                     target:
-                      type: Value
-                      value: 125
+                      type: AverageValue
+                      averageValue: 125
               behavior:
                 scaleDown:
                   stabilizationWindowSeconds: 60
@@ -441,7 +441,8 @@ public sealed class KubernetesManifestApplierTests
         Assert.Equal(35L, externalTarget["value"]);
         Assert.Equal("gateway", describedObject["name"]);
         Assert.Equal("requests_per_second", objectIdentifier["name"]);
-        Assert.Equal(125L, objectTarget["value"]);
+        Assert.Equal("AverageValue", objectTarget["type"]);
+        Assert.Equal(125L, objectTarget["averageValue"]);
         Assert.True(spec.ContainsKey("behavior"));
         Assert.Equal(5L, spec["maxReplicas"]);
     }
