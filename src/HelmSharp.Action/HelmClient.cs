@@ -811,7 +811,13 @@ public class HelmClient : IHelmClient
                     var restoredResources = new List<string>();
                     try
                     {
-                        await foreach (var resource in applier.ApplyAsync(previous.Manifest, ns, CancellationToken.None))
+                        // Treat the failed chart as the old side of the rollback merge so
+                        // operator changes preserved during the upgrade remain live.
+                        await foreach (var resource in applier.ApplyUpgradeAsync(
+                                           previous.Manifest,
+                                           mainManifest,
+                                           ns,
+                                           CancellationToken.None))
                         {
                             output.Add($"Restored {resource}");
                             restoredResources.Add($"Applied {resource}");
