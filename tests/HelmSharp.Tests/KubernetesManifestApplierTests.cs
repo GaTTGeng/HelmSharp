@@ -467,6 +467,42 @@ public sealed class KubernetesManifestApplierTests
     }
 
     [Fact]
+    public void SchemaConverter_ConvertsHpaV2Beta1PodsSelector()
+    {
+        const string previousManifest = """
+            apiVersion: autoscaling/v2beta1
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              metrics:
+                - type: Pods
+                  pods:
+                    metricName: active_sessions
+                    selector:
+                      matchLabels:
+                        app: web
+                    targetAverageValue: 4
+            """;
+        var identity = new ManifestIdentity("autoscaling/v2beta1", "HorizontalPodAutoscaler", "scaler", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            previousManifest, identity, "autoscaling/v2", out var converted));
+        var document = HelmYaml.DeserializeDictionary(converted);
+        var spec = Assert.IsType<Dictionary<string, object?>>(document["spec"]);
+        var metrics = Assert.IsType<List<object?>>(spec["metrics"]);
+        var metric = Assert.IsType<Dictionary<string, object?>>(Assert.Single(metrics));
+        var pods = Assert.IsType<Dictionary<string, object?>>(metric["pods"]);
+        var identifier = Assert.IsType<Dictionary<string, object?>>(pods["metric"]);
+        var selector = Assert.IsType<Dictionary<string, object?>>(identifier["selector"]);
+        var matchLabels = Assert.IsType<Dictionary<string, object?>>(selector["matchLabels"]);
+
+        Assert.Equal("active_sessions", identifier["name"]);
+        Assert.Equal("web", matchLabels["app"]);
+        Assert.False(pods.ContainsKey("selector"));
+    }
+
+    [Fact]
     public void SchemaConverter_PreservesHpaV2Beta2MetricsWhenMovingToV2()
     {
         const string previousManifest = """
@@ -561,6 +597,46 @@ public sealed class KubernetesManifestApplierTests
 
         Assert.Equal("keep", annotations["operator.example/live"]);
         Assert.Equal("rbac.authorization.k8s.io/v1", merged["apiVersion"]);
+    }
+
+    [Theory]
+    [InlineData("StorageClass")]
+    [InlineData("CSIDriver")]
+    [InlineData("CSINode")]
+    [InlineData("VolumeAttachment")]
+    public void SchemaConverter_PreservesLiveFieldsWhenStorageResourceMovesToV1(string kind)
+    {
+        var previousManifest = $$"""
+            apiVersion: storage.k8s.io/v1beta1
+            kind: {{kind}}
+            metadata:
+              name: sample
+            """;
+        var upgradedManifest = $$"""
+            apiVersion: storage.k8s.io/v1
+            kind: {{kind}}
+            metadata:
+              name: sample
+            """;
+        var liveManifest = $$"""
+            apiVersion: storage.k8s.io/v1
+            kind: {{kind}}
+            metadata:
+              name: sample
+              annotations:
+                operator.example/live: keep
+            """;
+        var identity = new ManifestIdentity("storage.k8s.io/v1beta1", kind, "sample", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            previousManifest, identity, "storage.k8s.io/v1", out var convertedPrevious));
+        var merged = HelmYaml.DeserializeDictionary(ThreeWayMerge.MergeResource(
+            convertedPrevious, upgradedManifest, liveManifest));
+        var metadata = Assert.IsType<Dictionary<string, object?>>(merged["metadata"]);
+        var annotations = Assert.IsType<Dictionary<string, object?>>(metadata["annotations"]);
+
+        Assert.Equal("keep", annotations["operator.example/live"]);
+        Assert.Equal("storage.k8s.io/v1", merged["apiVersion"]);
     }
 
     [Theory]
@@ -973,6 +1049,38 @@ public sealed class KubernetesManifestApplierTests
         Assert.False(data.TryGetProperty("retired", out _));
         Assert.Equal("cmV0YWluZWQ=", data.GetProperty("retained").GetString());
         Assert.Equal("b3BlcmF0b3Itb25seQ==", data.GetProperty("live-only").GetString());
+    }
+
+    [Fact]
+    public async Task ApplyAsync_RecognizesAmbiguousSecretCreateWithStringData()
+    {
+        const string manifest = """
+            apiVersion: v1
+            kind: Secret
+            metadata:
+              name: credentials
+            stringData:
+              password: secret-value
+            """;
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/secrets/credentials", HttpStatusCode.NotFound)
+            .Respond(HttpMethod.Post, "/api/v1/namespaces/release-ns/secrets", HttpStatusCode.InternalServerError, """
+                { "kind": "Status", "apiVersion": "v1", "status": "Failure", "code": 500 }
+                """)
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/secrets/credentials", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Secret",
+                  "metadata": { "name": "credentials" },
+                  "data": { "password": "c2VjcmV0LXZhbHVl" }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        await using var applied = applier.ApplyAsync(manifest, "release-ns").GetAsyncEnumerator();
+
+        Assert.True(await applied.MoveNextAsync());
+        Assert.Equal("Secret/release-ns/credentials", applied.Current);
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(() => applied.MoveNextAsync().AsTask());
     }
 
     [Theory]
