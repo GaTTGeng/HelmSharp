@@ -43,9 +43,12 @@ internal static class KubernetesManifestSchemaConverter
         var rbacMigration = identity.ApiVersion == "rbac.authorization.k8s.io/v1beta1" &&
                             targetApiVersion == "rbac.authorization.k8s.io/v1" &&
                             identity.Kind is "Role" or "RoleBinding" or "ClusterRole" or "ClusterRoleBinding";
+        var storageMigration = identity.ApiVersion == "storage.k8s.io/v1beta1" &&
+                               targetApiVersion == "storage.k8s.io/v1" &&
+                               identity.Kind is "StorageClass" or "CSIDriver" or "CSINode" or "VolumeAttachment";
         if (!ingressMigration && !legacyWorkloadMigration && !networkPolicyMigration &&
             !podSecurityPolicyMigration && !legacyIngressBetaMigration && !horizontalPodAutoscalerMigration &&
-            !cronJobMigration && !podDisruptionBudgetMigration && !rbacMigration)
+            !cronJobMigration && !podDisruptionBudgetMigration && !rbacMigration && !storageMigration)
         {
             convertedDocument = document;
             return false;
@@ -221,7 +224,7 @@ internal static class KubernetesManifestSchemaConverter
             {
                 ["name"] = metricName
             };
-            var selectorName = type == "Object" ? "selector" : "metricSelector";
+            var selectorName = type is "Pods" or "Object" ? "selector" : "metricSelector";
             if (source.Remove(selectorName, out var selector))
                 metricIdentifier["selector"] = selector;
             source["metric"] = metricIdentifier;
