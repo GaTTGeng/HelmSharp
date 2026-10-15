@@ -29,6 +29,7 @@ public sealed class KubernetesManifestApplier
     private readonly string _fieldManager;
     private readonly Func<TimeSpan, CancellationToken, Task> _discoveryDelay;
     private readonly Dictionary<(string ApiVersion, string Kind), DiscoveredResource> _discoveredResources = new();
+    private bool _lastApplyMayHaveCommitted;
     private IReadOnlyDictionary<ManifestIdentity, string> _previousManifestByIdentity =
         new Dictionary<ManifestIdentity, string>();
 
@@ -99,18 +100,31 @@ public sealed class KubernetesManifestApplier
             if (identity is null)
                 continue;
 
+            _lastApplyMayHaveCommitted = false;
+            Exception? applyError = null;
             try
             {
                 identity = await ApplyOneAsync(identity, doc, cancellationToken);
             }
-            catch (KubernetesResourceOperationException)
+            catch (KubernetesResourceOperationException ex)
             {
-                throw;
+                applyError = ex;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                throw new KubernetesResourceOperationException(identity, ex);
+                applyError = new KubernetesResourceOperationException(identity, ex);
             }
+
+            if (applyError is not null)
+            {
+                // A request can time out after the API server commits the write. Report
+                // that resource as attempted when read-back confirms the write advanced,
+                // so failure recovery records it in the failed revision's baseline.
+                if (_lastApplyMayHaveCommitted)
+                    yield return identity.DisplayName;
+                throw applyError;
+            }
+
             yield return identity.DisplayName;
         }
     }
@@ -1411,7 +1425,7 @@ public sealed class KubernetesManifestApplier
             : new DiscoveredResource(group, version, match.Name, match.Namespaced);
     }
 
-    private static async Task UpsertNamespacedAsync<T>(
+    private async Task UpsertNamespacedAsync<T>(
         Func<Task<T>> read,
         Func<Task<T>> create,
         Func<T, Task<T>> replace)
@@ -1422,19 +1436,103 @@ public sealed class KubernetesManifestApplier
         try
         {
             var existing = await read();
-            await replace(existing);
+            try
+            {
+                await replace(existing);
+            }
+            catch (Exception ex) when (IsAmbiguousWriteFailure(ex))
+            {
+                _lastApplyMayHaveCommitted |= await ReplaceMayHaveCommittedAsync(read, existing);
+                throw;
+            }
         }
         catch (HttpOperationException ex) when ((int)ex.Response.StatusCode == 404)
         {
-            await create();
+            try
+            {
+                await create();
+            }
+            catch (Exception writeError) when (IsAmbiguousWriteFailure(writeError))
+            {
+                _lastApplyMayHaveCommitted |= await CreateMayHaveCommittedAsync(read);
+                throw;
+            }
         }
     }
 
-    private static Task UpsertClusterAsync<T>(
+    private Task UpsertClusterAsync<T>(
         Func<Task<T>> read,
         Func<Task<T>> create,
         Func<T, Task<T>> replace)
         => UpsertNamespacedAsync(read, create, replace);
+
+    private static async Task<bool> CreateMayHaveCommittedAsync<T>(Func<Task<T>> read)
+    {
+        try
+        {
+            await read();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsAmbiguousWriteFailure(Exception exception)
+    {
+        if (exception is OperationCanceledException)
+            return false;
+
+        if (exception is not HttpOperationException http)
+            return true;
+
+        var statusCode = (int)http.Response.StatusCode;
+        return statusCode == 0 || statusCode >= 500;
+    }
+
+    private static async Task<bool> ReplaceMayHaveCommittedAsync<T>(Func<Task<T>> read, T before)
+    {
+        try
+        {
+            var after = await read();
+            var beforeVersion = GetResourceVersion(before);
+            var afterVersion = GetResourceVersion(after);
+            return beforeVersion is not null && afterVersion is not null &&
+                   !string.Equals(beforeVersion, afterVersion, StringComparison.Ordinal);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string? GetResourceVersion<T>(T resource)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(resource));
+        if (!TryGetPropertyIgnoreCase(document.RootElement, "metadata", out var metadata) ||
+            !TryGetPropertyIgnoreCase(metadata, "resourceVersion", out var resourceVersion))
+        {
+            return null;
+        }
+
+        return resourceVersion.ValueKind == JsonValueKind.String ? resourceVersion.GetString() : null;
+    }
+
+    private static bool TryGetPropertyIgnoreCase(JsonElement element, string name, out JsonElement value)
+    {
+        foreach (var property in element.EnumerateObject())
+        {
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = property.Value;
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
+    }
 
     private static IEnumerable<string> SplitDocuments(string manifest)
     {
