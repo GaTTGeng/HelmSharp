@@ -195,6 +195,43 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
     }
 
     [Fact]
+    public async Task ApplyAsync_DoesNotReportResourceWhenOnlyConcurrentReadbackChangesResourceVersion()
+    {
+        var state = new ClusterState();
+        var applier = new KubernetesManifestApplier(
+            new Kubernetes(
+                new KubernetesClientConfiguration { Host = "https://helmsharp.test", SkipTlsVerify = true },
+                new ClusterHandler(state)),
+            "helmsharp-test");
+        const string manifest = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: ambiguous-write
+              namespace: test-ns
+            data:
+              value: before
+            """;
+
+        await DrainAsync(applier.ApplyAsync(manifest, "test-ns"));
+        state.ConfigMapWriteFailuresWithConcurrentVersionUpdate.Add("ambiguous-write");
+        var progress = new List<string>();
+
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(async () =>
+        {
+            await foreach (var resource in applier.ApplyAsync(
+                             manifest.Replace("before", "requested", StringComparison.Ordinal),
+                             "test-ns"))
+            {
+                progress.Add(resource);
+            }
+        });
+
+        Assert.Empty(progress);
+        Assert.Equal("before", ReadValue(state.ConfigMaps["ambiguous-write"]));
+    }
+
+    [Fact]
     public void GetSuccessfullyAppliedManifest_MatchesClusterScopedProgressName()
     {
         const string manifest = """
@@ -493,6 +530,14 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
                 }
 
                 var configMapNode = JsonNode.Parse(configMap)!.AsObject();
+                if (state.ConfigMapWriteFailuresWithConcurrentVersionUpdate.Remove(name))
+                {
+                    var liveConfigMap = JsonNode.Parse(state.ConfigMaps[name])!.AsObject();
+                    liveConfigMap["metadata"]!["resourceVersion"] = (++state.ConfigMapResourceVersion).ToString();
+                    state.ConfigMaps[name] = liveConfigMap.ToJsonString();
+                    return Respond(request, HttpStatusCode.InternalServerError, "{ \"code\": 500 }");
+                }
+
                 configMapNode["metadata"]!["resourceVersion"] = (++state.ConfigMapResourceVersion).ToString();
                 configMap = configMapNode.ToJsonString();
                 state.ConfigMaps[name] = configMap;
@@ -519,6 +564,7 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
         internal Dictionary<string, string> ConfigMaps { get; } = new(StringComparer.Ordinal);
         internal Dictionary<string, int> ConfigMapWriteFailuresToSkip { get; } = new(StringComparer.Ordinal);
         internal HashSet<string> ConfigMapWriteFailuresAfterCommit { get; } = new(StringComparer.Ordinal);
+        internal HashSet<string> ConfigMapWriteFailuresWithConcurrentVersionUpdate { get; } = new(StringComparer.Ordinal);
         internal int ConfigMapResourceVersion { get; set; }
         internal int ReleaseSecretReplaceFailuresRemaining { get; set; }
     }
