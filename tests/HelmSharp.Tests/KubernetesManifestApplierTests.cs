@@ -283,6 +283,53 @@ public sealed class KubernetesManifestApplierTests
     }
 
     [Fact]
+    public async Task ApplyUpgradeAsync_PreservesLiveFieldsWhenPodSecurityPolicyMovesOutOfExtensionsGroup()
+    {
+        const string previousManifest = """
+            apiVersion: extensions/v1beta1
+            kind: PodSecurityPolicy
+            metadata:
+              name: restricted
+            spec:
+              privileged: false
+            """;
+        const string upgradedManifest = """
+            apiVersion: policy/v1beta1
+            kind: PodSecurityPolicy
+            metadata:
+              name: restricted
+            spec:
+              privileged: false
+            """;
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/policy/v1beta1", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "APIResourceList",
+                  "groupVersion": "policy/v1beta1",
+                  "resources": [{ "name": "podsecuritypolicies", "kind": "PodSecurityPolicy", "namespaced": false }]
+                }
+                """)
+            .Respond(HttpMethod.Get, "/apis/policy/v1beta1/podsecuritypolicies/restricted", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "policy/v1beta1",
+                  "kind": "PodSecurityPolicy",
+                  "metadata": { "name": "restricted", "resourceVersion": "42", "annotations": { "operator.example/live": "keep" } },
+                  "spec": { "privileged": false }
+                }
+                """)
+            .Respond(HttpMethod.Put, "/apis/policy/v1beta1/podsecuritypolicies/restricted", HttpStatusCode.OK);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await AsyncEnumerableTestExtensions.DrainAsync(
+            applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"));
+
+        var replacement = Assert.Single(handler.Requests, request => request.Method == HttpMethod.Put);
+        Assert.Contains("\"apiVersion\":\"policy/v1beta1\"", replacement.Content);
+        Assert.Contains("\"operator.example/live\":\"keep\"", replacement.Content);
+    }
+
+    [Fact]
     public async Task ApplyUpgradeAsync_RemovesDeletedSecretStringDataAndKeepsLiveOnlyData()
     {
         const string previousManifest = """
