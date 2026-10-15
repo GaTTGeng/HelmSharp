@@ -238,6 +238,51 @@ public sealed class KubernetesManifestApplierTests
     }
 
     [Fact]
+    public async Task ApplyUpgradeAsync_PreservesLiveFieldsWhenIngressMovesOutOfExtensionsGroup()
+    {
+        const string previousManifest = """
+            apiVersion: extensions/v1beta1
+            kind: Ingress
+            metadata:
+              name: portal
+            spec:
+              backend:
+                serviceName: portal
+                servicePort: 80
+            """;
+        const string upgradedManifest = """
+            apiVersion: networking.k8s.io/v1
+            kind: Ingress
+            metadata:
+              name: portal
+            spec:
+              defaultBackend:
+                service:
+                  name: portal
+                  port:
+                    number: 80
+            """;
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/networking.k8s.io/v1/namespaces/release-ns/ingresses/portal", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "networking.k8s.io/v1",
+                  "kind": "Ingress",
+                  "metadata": { "name": "portal", "resourceVersion": "42", "annotations": { "operator.example/live": "keep" } },
+                  "spec": { "defaultBackend": { "service": { "name": "portal", "port": { "number": 80 } } }, "rules": [] }
+                }
+                """)
+            .Respond(HttpMethod.Put, "/apis/networking.k8s.io/v1/namespaces/release-ns/ingresses/portal", HttpStatusCode.OK);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await AsyncEnumerableTestExtensions.DrainAsync(
+            applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"));
+
+        var replacement = Assert.Single(handler.Requests, request => request.Method == HttpMethod.Put);
+        Assert.Contains("\"apiVersion\":\"networking.k8s.io/v1\"", replacement.Content);
+        Assert.Contains("\"operator.example/live\":\"keep\"", replacement.Content);
+    }
+
+    [Fact]
     public async Task ApplyUpgradeAsync_RemovesDeletedSecretStringDataAndKeepsLiveOnlyData()
     {
         const string previousManifest = """
