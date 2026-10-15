@@ -397,6 +397,145 @@ public sealed class KubernetesManifestApplierTests
         Assert.Equal("apps/v1", merged["apiVersion"]);
     }
 
+    [Fact]
+    public void SchemaConverter_PreservesLiveFieldsWhenCronJobMovesToBatchV1()
+    {
+        const string previousManifest = """
+            apiVersion: batch/v1beta1
+            kind: CronJob
+            metadata:
+              name: cleanup
+            spec:
+              schedule: "0 * * * *"
+              jobTemplate:
+                spec:
+                  template:
+                    spec:
+                      restartPolicy: Never
+                      containers:
+                        - name: cleanup
+                          image: example/cleanup:old
+            """;
+        const string upgradedManifest = """
+            apiVersion: batch/v1
+            kind: CronJob
+            metadata:
+              name: cleanup
+            spec:
+              schedule: "0 * * * *"
+              jobTemplate:
+                spec:
+                  template:
+                    spec:
+                      restartPolicy: Never
+                      containers:
+                        - name: cleanup
+                          image: example/cleanup:new
+            """;
+        const string liveManifest = """
+            apiVersion: batch/v1
+            kind: CronJob
+            metadata:
+              name: cleanup
+              annotations:
+                operator.example/live: keep
+            spec:
+              schedule: "0 * * * *"
+              jobTemplate:
+                spec:
+                  template:
+                    spec:
+                      restartPolicy: Never
+                      containers:
+                        - name: cleanup
+                          image: example/cleanup:old
+            """;
+        var identity = new ManifestIdentity("batch/v1beta1", "CronJob", "cleanup", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            previousManifest, identity, "batch/v1", out var convertedPrevious));
+        var merged = HelmYaml.DeserializeDictionary(ThreeWayMerge.MergeResource(
+            convertedPrevious, upgradedManifest, liveManifest));
+        var metadata = Assert.IsType<Dictionary<string, object?>>(merged["metadata"]);
+        var annotations = Assert.IsType<Dictionary<string, object?>>(metadata["annotations"]);
+
+        Assert.Equal("keep", annotations["operator.example/live"]);
+        Assert.Equal("batch/v1", merged["apiVersion"]);
+    }
+
+    [Fact]
+    public void SchemaConverter_PreservesLiveFieldsWhenPodDisruptionBudgetMovesToPolicyV1()
+    {
+        const string previousManifest = """
+            apiVersion: policy/v1beta1
+            kind: PodDisruptionBudget
+            metadata:
+              name: web
+            spec:
+              minAvailable: 1
+              selector:
+                matchLabels:
+                  app: web
+            """;
+        const string upgradedManifest = """
+            apiVersion: policy/v1
+            kind: PodDisruptionBudget
+            metadata:
+              name: web
+            spec:
+              minAvailable: 1
+              selector:
+                matchLabels:
+                  app: web
+            """;
+        const string liveManifest = """
+            apiVersion: policy/v1
+            kind: PodDisruptionBudget
+            metadata:
+              name: web
+              annotations:
+                operator.example/live: keep
+            spec:
+              minAvailable: 1
+              selector:
+                matchLabels:
+                  app: web
+            """;
+        var identity = new ManifestIdentity("policy/v1beta1", "PodDisruptionBudget", "web", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            previousManifest, identity, "policy/v1", out var convertedPrevious));
+        var merged = HelmYaml.DeserializeDictionary(ThreeWayMerge.MergeResource(
+            convertedPrevious, upgradedManifest, liveManifest));
+        var metadata = Assert.IsType<Dictionary<string, object?>>(merged["metadata"]);
+        var annotations = Assert.IsType<Dictionary<string, object?>>(metadata["annotations"]);
+
+        Assert.Equal("keep", annotations["operator.example/live"]);
+        Assert.Equal("policy/v1", merged["apiVersion"]);
+    }
+
+    [Fact]
+    public void SchemaConverter_PreservesEmptyPodDisruptionBudgetSelectorSemantics()
+    {
+        const string previousManifest = """
+            apiVersion: policy/v1beta1
+            kind: PodDisruptionBudget
+            metadata:
+              name: web
+            spec:
+              minAvailable: 1
+              selector: {}
+            """;
+        var identity = new ManifestIdentity("policy/v1beta1", "PodDisruptionBudget", "web", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            previousManifest, identity, "policy/v1", out var convertedPrevious));
+        var converted = HelmYaml.DeserializeDictionary(convertedPrevious);
+        var spec = Assert.IsType<Dictionary<string, object?>>(converted["spec"]);
+
+        Assert.Null(spec["selector"]);
+    }
+
     [Theory]
     [InlineData("apps/v1beta1")]
     [InlineData("apps/v1beta2")]

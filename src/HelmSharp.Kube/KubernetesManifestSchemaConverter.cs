@@ -33,8 +33,13 @@ internal static class KubernetesManifestSchemaConverter
         var horizontalPodAutoscalerMigration = identity.Kind == "HorizontalPodAutoscaler" &&
                                                (identity.ApiVersion, targetApiVersion) is
                                                    ("autoscaling/v1", "autoscaling/v2") or ("autoscaling/v2", "autoscaling/v1");
+        var cronJobMigration = identity is { Kind: "CronJob", ApiVersion: "batch/v1beta1" } &&
+                               targetApiVersion == "batch/v1";
+        var podDisruptionBudgetMigration = identity is { Kind: "PodDisruptionBudget", ApiVersion: "policy/v1beta1" } &&
+                                           targetApiVersion == "policy/v1";
         if (!ingressMigration && !legacyWorkloadMigration && !networkPolicyMigration &&
-            !podSecurityPolicyMigration && !legacyIngressBetaMigration && !horizontalPodAutoscalerMigration)
+            !podSecurityPolicyMigration && !legacyIngressBetaMigration && !horizontalPodAutoscalerMigration &&
+            !cronJobMigration && !podDisruptionBudgetMigration)
         {
             convertedDocument = document;
             return false;
@@ -51,10 +56,28 @@ internal static class KubernetesManifestSchemaConverter
             convertedDocument = document;
             return false;
         }
+        else if (podDisruptionBudgetMigration)
+        {
+            ConvertPodDisruptionBudgetSelector(converted);
+        }
 
         converted["apiVersion"] = targetApiVersion;
         convertedDocument = HelmYaml.Serialize(converted);
         return true;
+    }
+
+    private static void ConvertPodDisruptionBudgetSelector(Dictionary<string, object?> document)
+    {
+        if (!document.TryGetValue("spec", out var specValue) || specValue is not Dictionary<string, object?> spec ||
+            !spec.TryGetValue("selector", out var selectorValue) ||
+            selectorValue is not Dictionary<string, object?> selector || selector.Count != 0)
+        {
+            return;
+        }
+
+        // An empty beta selector matched no pods, while an empty v1 selector matches all pods.
+        // A null selector matches no pods in both versions, so preserve the old behavior.
+        spec["selector"] = null;
     }
 
     private static bool TryConvertHorizontalPodAutoscalerSpec(
