@@ -553,22 +553,20 @@ public class HelmClient : IHelmClient
         var previousRecord = history
             .Where(record => string.Equals(record.Status, "deployed", StringComparison.OrdinalIgnoreCase))
             .MaxBy(record => record.Revision);
-        if (previousRecord is null)
-            return null;
 
         var failedRevisions = history
-            .Where(record => record.Revision > previousRecord.Revision &&
+            .Where(record => (previousRecord is null || record.Revision > previousRecord.Revision) &&
                              string.Equals(record.Status, "failed", StringComparison.OrdinalIgnoreCase) &&
                              record.AppliedManifest is not null)
             .OrderBy(record => record.Revision)
             .ToList();
         if (failedRevisions.Count == 0)
-            return previousRecord.Manifest;
+            return previousRecord?.Manifest;
 
-        // Failed upgrades may each change a different prefix of resources before failing.
+        // Failed lifecycle attempts may each apply a different prefix of resources before failing.
         // Overlay their known successes in revision order; later attempts win per identity,
-        // while resources never reached by any attempt retain the deployed revision baseline.
-        var documentsByIdentity = KubernetesManifestApplier.SplitDocumentsPublic(previousRecord.Manifest)
+        // while resources never reached by any attempt retain the deployed baseline, if present.
+        var documentsByIdentity = KubernetesManifestApplier.SplitDocumentsPublic(previousRecord?.Manifest ?? string.Empty)
             .Select(document => (Document: document, Identity: ManifestIdentity.Parse(document, defaultNamespace)))
             .Where(item => item.Identity is not null)
             .GroupBy(item => ManifestIdentityKey(item.Identity!), StringComparer.Ordinal)

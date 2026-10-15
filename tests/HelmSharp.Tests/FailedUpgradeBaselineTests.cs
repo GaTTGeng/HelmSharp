@@ -10,7 +10,7 @@ using k8s;
 
 namespace HelmSharp.Tests;
 
-/// <summary>Regression coverage for retries after an upgrade changed resources before failing.</summary>
+/// <summary>Regression coverage for retries after a lifecycle changed resources before failing.</summary>
 public sealed class FailedUpgradeBaselineTests : IDisposable
 {
     private readonly string _tempDirectory = Path.Combine(
@@ -105,6 +105,60 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
         Assert.Equal("A", ReadValue(state.ConfigMaps["unattempted-state"]));
         Assert.Equal("preserve-me", ReadDataValue(state.ConfigMaps["retry-state"], "operator-only"));
         Assert.Equal("preserve-unattempted", ReadDataValue(state.ConfigMaps["unattempted-state"], "operator-only"));
+    }
+
+    [Fact]
+    public async Task UpgradeInstallStreamAsync_PartialInitialInstallFailure_RetryPreservesLiveOnlyFields()
+    {
+        var chartDirectory = Path.Combine(_tempDirectory, "partial-install-chart");
+        Directory.CreateDirectory(Path.Combine(chartDirectory, "templates"));
+        await File.WriteAllTextAsync(Path.Combine(chartDirectory, "Chart.yaml"), "apiVersion: v2\nname: partial-install-chart\nversion: 0.1.0\n");
+        await File.WriteAllTextAsync(Path.Combine(chartDirectory, "values.yaml"), "value: A\n");
+        await File.WriteAllTextAsync(Path.Combine(chartDirectory, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: applied-before-failure
+            data:
+              value: {{ .Values.value | quote }}
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: fails-first-install
+            data:
+              value: {{ .Values.value | quote }}
+            """);
+
+        var state = new ClusterState();
+        var client = new HelmClient(
+            new TestOptionsProvider(),
+            (_, _, _, _) => Task.FromResult(new Kubernetes(
+                new KubernetesClientConfiguration { Host = "https://helmsharp.test", SkipTlsVerify = true },
+                new ClusterHandler(state))));
+        state.ConfigMapWriteFailuresToSkip["fails-first-install"] = 0;
+
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(() => DrainAsync(client.UpgradeInstallStreamAsync(
+            new HelmUpgradeInstallRequest
+            {
+                ReleaseName = "partial-install-retry",
+                Chart = chartDirectory
+            })));
+
+        var liveConfigMap = JsonNode.Parse(state.ConfigMaps["applied-before-failure"])!;
+        liveConfigMap["data"]!["operator-only"] = "preserve-me";
+        state.ConfigMaps["applied-before-failure"] = liveConfigMap.ToJsonString();
+
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "partial-install-retry",
+            Chart = chartDirectory,
+            ValuesContent = "value: B\n"
+        }));
+
+        Assert.Equal("B", ReadValue(state.ConfigMaps["applied-before-failure"]));
+        Assert.Equal("preserve-me", ReadDataValue(state.ConfigMaps["applied-before-failure"], "operator-only"));
+        Assert.Equal("B", ReadValue(state.ConfigMaps["fails-first-install"]));
     }
 
     [Fact]
