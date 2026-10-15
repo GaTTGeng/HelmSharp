@@ -322,6 +322,17 @@ public sealed class KubernetesManifestApplierTests
                       matchLabels:
                         queue: jobs
                     targetValue: 20
+                - type: Object
+                  object:
+                    target:
+                      apiVersion: networking.k8s.io/v1
+                      kind: Ingress
+                      name: gateway
+                    metricName: requests_per_second
+                    selector:
+                      matchLabels:
+                        ingress: gateway
+                    targetValue: 100
             """;
         const string upgradedManifest = """
             apiVersion: autoscaling/v2
@@ -348,6 +359,20 @@ public sealed class KubernetesManifestApplierTests
                     target:
                       type: Value
                       value: 20
+                - type: Object
+                  object:
+                    describedObject:
+                      apiVersion: networking.k8s.io/v1
+                      kind: Ingress
+                      name: gateway
+                    metric:
+                      name: requests_per_second
+                      selector:
+                        matchLabels:
+                          ingress: gateway
+                    target:
+                      type: Value
+                      value: 100
             """;
         const string liveManifest = """
             apiVersion: autoscaling/v2
@@ -374,6 +399,20 @@ public sealed class KubernetesManifestApplierTests
                     target:
                       type: Value
                       value: 35
+                - type: Object
+                  object:
+                    describedObject:
+                      apiVersion: networking.k8s.io/v1
+                      kind: Ingress
+                      name: gateway
+                    metric:
+                      name: requests_per_second
+                      selector:
+                        matchLabels:
+                          ingress: gateway
+                    target:
+                      type: Value
+                      value: 125
               behavior:
                 scaleDown:
                   stabilizationWindowSeconds: 60
@@ -392,9 +431,17 @@ public sealed class KubernetesManifestApplierTests
         var externalMetric = Assert.IsType<Dictionary<string, object?>>(metrics[1]);
         var external = Assert.IsType<Dictionary<string, object?>>(externalMetric["external"]);
         var externalTarget = Assert.IsType<Dictionary<string, object?>>(external["target"]);
+        var objectMetric = Assert.IsType<Dictionary<string, object?>>(metrics[2]);
+        var objectSource = Assert.IsType<Dictionary<string, object?>>(objectMetric["object"]);
+        var describedObject = Assert.IsType<Dictionary<string, object?>>(objectSource["describedObject"]);
+        var objectIdentifier = Assert.IsType<Dictionary<string, object?>>(objectSource["metric"]);
+        var objectTarget = Assert.IsType<Dictionary<string, object?>>(objectSource["target"]);
 
         Assert.Equal(85L, resourceTarget["averageUtilization"]);
         Assert.Equal(35L, externalTarget["value"]);
+        Assert.Equal("gateway", describedObject["name"]);
+        Assert.Equal("requests_per_second", objectIdentifier["name"]);
+        Assert.Equal(125L, objectTarget["value"]);
         Assert.True(spec.ContainsKey("behavior"));
         Assert.Equal(5L, spec["maxReplicas"]);
     }
@@ -454,6 +501,46 @@ public sealed class KubernetesManifestApplierTests
         Assert.False(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
             previousManifest, identity, "autoscaling/v1", out var converted));
         Assert.Equal(previousManifest, converted);
+    }
+
+    [Theory]
+    [InlineData("Role")]
+    [InlineData("RoleBinding")]
+    [InlineData("ClusterRole")]
+    [InlineData("ClusterRoleBinding")]
+    public void SchemaConverter_PreservesLiveFieldsWhenRbacMovesToV1(string kind)
+    {
+        var previousManifest = $$"""
+            apiVersion: rbac.authorization.k8s.io/v1beta1
+            kind: {{kind}}
+            metadata:
+              name: reader
+            """;
+        var upgradedManifest = $$"""
+            apiVersion: rbac.authorization.k8s.io/v1
+            kind: {{kind}}
+            metadata:
+              name: reader
+            """;
+        var liveManifest = $$"""
+            apiVersion: rbac.authorization.k8s.io/v1
+            kind: {{kind}}
+            metadata:
+              name: reader
+              annotations:
+                operator.example/live: keep
+            """;
+        var identity = new ManifestIdentity("rbac.authorization.k8s.io/v1beta1", kind, "reader", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            previousManifest, identity, "rbac.authorization.k8s.io/v1", out var convertedPrevious));
+        var merged = HelmYaml.DeserializeDictionary(ThreeWayMerge.MergeResource(
+            convertedPrevious, upgradedManifest, liveManifest));
+        var metadata = Assert.IsType<Dictionary<string, object?>>(merged["metadata"]);
+        var annotations = Assert.IsType<Dictionary<string, object?>>(metadata["annotations"]);
+
+        Assert.Equal("keep", annotations["operator.example/live"]);
+        Assert.Equal("rbac.authorization.k8s.io/v1", merged["apiVersion"]);
     }
 
     [Theory]
