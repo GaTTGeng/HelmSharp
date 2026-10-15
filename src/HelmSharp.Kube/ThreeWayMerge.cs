@@ -61,9 +61,19 @@ internal static class ThreeWayMerge
         {
             // Status is cluster-owned at the resource root; identity bookkeeping is cluster-owned
             // only beneath metadata. Nested user fields with the same names remain chart data.
-            if ((isRoot && key == "status") ||
-                (isMetadata && key is "resourceVersion" or "uid" or "generation" or "creationTimestamp" or
-                    "managedFields" or "selfLink"))
+            if (isRoot && key == "status")
+            {
+                // A chart cannot own status, but replacing a CRD without a status subresource
+                // can persist it. Keep the controller's value when the chart omits status.
+                if (!newVals.ContainsKey(key) && live.TryGetValue(key, out var liveStatus))
+                    merged[key] = DeepCopyValue(liveStatus);
+                else
+                    merged.Remove(key);
+                continue;
+            }
+
+            if (isMetadata && key is "resourceVersion" or "uid" or "generation" or "creationTimestamp" or
+                "managedFields" or "selfLink")
             {
                 // `merged` begins with chart output, so skipping reconciliation alone would
                 // still send chart-supplied cluster bookkeeping fields in the replacement.

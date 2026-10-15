@@ -128,8 +128,6 @@ public sealed class ThreeWayMergeTests
               status: operator-data
             spec:
               uid: user-field
-            status:
-              phase: Running
             """);
 
         var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
@@ -180,6 +178,28 @@ public sealed class ThreeWayMergeTests
         Assert.DoesNotContain("managedFields", metadata.Keys);
         Assert.DoesNotContain("selfLink", metadata.Keys);
         Assert.False(document.ContainsKey("status"));
+    }
+
+    [Fact]
+    public void MergeResource_PreservesLiveStatusWhenChartOmitsIt()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: example.com/v1\nkind: Thing\nmetadata:\n  name: thing\n",
+            "apiVersion: example.com/v1\nkind: Thing\nmetadata:\n  name: thing\n",
+            """
+            apiVersion: example.com/v1
+            kind: Thing
+            metadata:
+              name: thing
+            status:
+              phase: Ready
+              observedGeneration: 3
+            """);
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var status = (IDictionary<string, object?>)document["status"]!;
+        Assert.Equal("Ready", status["phase"]);
+        Assert.Equal(3L, status["observedGeneration"]);
     }
 
     [Fact]

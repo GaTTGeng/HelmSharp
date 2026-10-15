@@ -100,6 +100,35 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
         Assert.Contains("mode: enabled", applied, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task GetAttemptedOnlyManifestAsync_DoesNotClassifyLegacyIngressMigrationAsNew()
+    {
+        const string previousManifest = """
+            apiVersion: extensions/v1beta1
+            kind: Ingress
+            metadata:
+              name: portal
+            """;
+        const string attemptedManifest = """
+            apiVersion: networking.k8s.io/v1
+            kind: Ingress
+            metadata:
+              name: portal
+            """;
+        var applier = new KubernetesManifestApplier(
+            KubernetesTestClientBuilder.Create(new KubernetesApiHandler()),
+            "helmsharp-test");
+
+        var attemptedOnly = await HelmClient.GetAttemptedOnlyManifestAsync(
+            applier,
+            previousManifest,
+            attemptedManifest,
+            "test-ns",
+            CancellationToken.None);
+
+        Assert.True(string.IsNullOrWhiteSpace(attemptedOnly));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_tempDirectory))
