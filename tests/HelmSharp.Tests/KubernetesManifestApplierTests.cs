@@ -332,7 +332,12 @@ public sealed class KubernetesManifestApplierTests
                     selector:
                       matchLabels:
                         ingress: gateway
-                    targetAverageValue: 100
+                    averageValue: 100
+                - type: ContainerResource
+                  containerResource:
+                    name: memory
+                    container: web
+                    targetAverageUtilization: 75
             """;
         const string upgradedManifest = """
             apiVersion: autoscaling/v2
@@ -373,6 +378,13 @@ public sealed class KubernetesManifestApplierTests
                     target:
                       type: AverageValue
                       averageValue: 100
+                - type: ContainerResource
+                  containerResource:
+                    name: memory
+                    container: web
+                    target:
+                      type: Utilization
+                      averageUtilization: 75
             """;
         const string liveManifest = """
             apiVersion: autoscaling/v2
@@ -421,6 +433,11 @@ public sealed class KubernetesManifestApplierTests
 
         Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
             previousManifest, identity, "autoscaling/v2", out var convertedPrevious));
+        var convertedSpec = Assert.IsType<Dictionary<string, object?>>(HelmYaml.DeserializeDictionary(convertedPrevious)["spec"]);
+        var convertedMetrics = Assert.IsType<List<object?>>(convertedSpec["metrics"]);
+        var convertedContainerMetric = Assert.IsType<Dictionary<string, object?>>(convertedMetrics[3]);
+        var convertedContainerResource = Assert.IsType<Dictionary<string, object?>>(convertedContainerMetric["containerResource"]);
+        var convertedContainerTarget = Assert.IsType<Dictionary<string, object?>>(convertedContainerResource["target"]);
         var merged = HelmYaml.DeserializeDictionary(ThreeWayMerge.MergeResource(
             convertedPrevious, upgradedManifest, liveManifest));
         var spec = Assert.IsType<Dictionary<string, object?>>(merged["spec"]);
@@ -443,6 +460,8 @@ public sealed class KubernetesManifestApplierTests
         Assert.Equal("requests_per_second", objectIdentifier["name"]);
         Assert.Equal("AverageValue", objectTarget["type"]);
         Assert.Equal(125L, objectTarget["averageValue"]);
+        Assert.Equal("web", convertedContainerResource["container"]);
+        Assert.Equal(75L, convertedContainerTarget["averageUtilization"]);
         Assert.True(spec.ContainsKey("behavior"));
         Assert.Equal(5L, spec["maxReplicas"]);
     }

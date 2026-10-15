@@ -232,6 +232,37 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
     }
 
     [Fact]
+    public async Task ApplyAsync_DoesNotReportResourceWhenAmbiguousCreateFindsAnotherActorsObject()
+    {
+        var state = new ClusterState();
+        var applier = new KubernetesManifestApplier(
+            new Kubernetes(
+                new KubernetesClientConfiguration { Host = "https://helmsharp.test", SkipTlsVerify = true },
+                new ClusterHandler(state)),
+            "helmsharp-test");
+        const string manifest = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: ambiguous-create
+              namespace: test-ns
+            data:
+              value: requested
+            """;
+        state.ConfigMapCreateFailuresWithForeignObject.Add("ambiguous-create");
+        var progress = new List<string>();
+
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(async () =>
+        {
+            await foreach (var resource in applier.ApplyAsync(manifest, "test-ns"))
+                progress.Add(resource);
+        });
+
+        Assert.Empty(progress);
+        Assert.Equal("concurrent", ReadValue(state.ConfigMaps["ambiguous-create"]));
+    }
+
+    [Fact]
     public void GetSuccessfullyAppliedManifest_MatchesClusterScopedProgressName()
     {
         const string manifest = """
@@ -518,6 +549,15 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
             {
                 var configMap = await request.Content!.ReadAsStringAsync(cancellationToken);
                 var name = JsonDocument.Parse(configMap).RootElement.GetProperty("metadata").GetProperty("name").GetString()!;
+                if (request.Method == HttpMethod.Post && state.ConfigMapCreateFailuresWithForeignObject.Remove(name))
+                {
+                    var concurrentObject = JsonNode.Parse(configMap)!.AsObject();
+                    concurrentObject["data"]!["value"] = "concurrent";
+                    concurrentObject["metadata"]!["resourceVersion"] = (++state.ConfigMapResourceVersion).ToString();
+                    state.ConfigMaps[name] = concurrentObject.ToJsonString();
+                    return Respond(request, HttpStatusCode.InternalServerError, "{ \"code\": 500 }");
+                }
+
                 if (state.ConfigMapWriteFailuresToSkip.TryGetValue(name, out var successfulWritesBeforeFailure))
                 {
                     if (successfulWritesBeforeFailure == 0)
@@ -565,6 +605,7 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
         internal Dictionary<string, int> ConfigMapWriteFailuresToSkip { get; } = new(StringComparer.Ordinal);
         internal HashSet<string> ConfigMapWriteFailuresAfterCommit { get; } = new(StringComparer.Ordinal);
         internal HashSet<string> ConfigMapWriteFailuresWithConcurrentVersionUpdate { get; } = new(StringComparer.Ordinal);
+        internal HashSet<string> ConfigMapCreateFailuresWithForeignObject { get; } = new(StringComparer.Ordinal);
         internal int ConfigMapResourceVersion { get; set; }
         internal int ReleaseSecretReplaceFailuresRemaining { get; set; }
     }

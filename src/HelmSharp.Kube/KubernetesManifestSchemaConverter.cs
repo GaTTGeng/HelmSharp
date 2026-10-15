@@ -170,9 +170,10 @@ internal static class KubernetesManifestSchemaConverter
                 return false;
 
             var type = HelmYaml.GetString(metric, "type");
-            if (type == "Resource")
+            if (type is "Resource" or "ContainerResource")
             {
-                if (!metric.TryGetValue("resource", out var resourceValue) ||
+                var resourceKey = type == "ContainerResource" ? "containerResource" : "resource";
+                if (!metric.TryGetValue(resourceKey, out var resourceValue) ||
                     resourceValue is not Dictionary<string, object?> resource ||
                     !TryConvertBeta1MetricTarget(
                         resource,
@@ -200,7 +201,7 @@ internal static class KubernetesManifestSchemaConverter
                     describedObject is not Dictionary<string, object?> ||
                     !TryConvertBeta1MetricTarget(
                         source,
-                        "targetAverageValue", "AverageValue", "averageValue",
+                        "averageValue", "AverageValue", "averageValue",
                         "targetValue", "Value", "value"))
                 {
                     return false;
