@@ -1156,7 +1156,7 @@ public class HelmClient : IHelmClient
             // Keep the previous chart's desired fields while routing only known schema
             // migrations through a served API version. Unknown conversions keep their
             // original document rather than submitting it under a potentially invalid schema.
-            restorationDocuments.Add(TryConvertRestorationDocument(document, identity, apiVersion, out var convertedDocument)
+            restorationDocuments.Add(KubernetesManifestSchemaConverter.TryConvertToApiVersion(document, identity, apiVersion, out var convertedDocument)
                 ? convertedDocument
                 : document);
         }
@@ -1169,115 +1169,6 @@ public class HelmClient : IHelmClient
         string appliedManifest,
         string defaultNamespace)
         => MergeAppliedManifests(restorationManifest, appliedManifest, defaultNamespace);
-
-    private static bool TryConvertRestorationDocument(
-        string document,
-        ManifestIdentity identity,
-        string targetApiVersion,
-        out string convertedDocument)
-    {
-        var ingressMigration = identity is
-                                   { Kind: "Ingress", ApiVersion: "extensions/v1beta1" or "networking.k8s.io/v1beta1" } &&
-                               targetApiVersion == "networking.k8s.io/v1";
-        var legacyWorkloadMigration = identity.Kind is "Deployment" or "DaemonSet" or "ReplicaSet" &&
-                                     identity.ApiVersion == "extensions/v1beta1" &&
-                                     targetApiVersion == "apps/v1";
-        var networkPolicyMigration = identity is { Kind: "NetworkPolicy", ApiVersion: "extensions/v1beta1" } &&
-                                     targetApiVersion == "networking.k8s.io/v1";
-        var podSecurityPolicyMigration = identity is { Kind: "PodSecurityPolicy", ApiVersion: "extensions/v1beta1" } &&
-                                        targetApiVersion == "policy/v1beta1";
-        var legacyIngressBetaMigration = identity is { Kind: "Ingress", ApiVersion: "extensions/v1beta1" } &&
-                                         targetApiVersion == "networking.k8s.io/v1beta1";
-        if (!ingressMigration && !legacyWorkloadMigration && !networkPolicyMigration &&
-            !podSecurityPolicyMigration && !legacyIngressBetaMigration)
-        {
-            convertedDocument = document;
-            return false;
-        }
-
-        var restoredDocument = HelmYaml.DeserializeDictionary(document, StringComparer.Ordinal);
-        if (ingressMigration)
-            ConvertLegacyIngressSpec(restoredDocument);
-        else if (legacyWorkloadMigration)
-            ConvertLegacyWorkloadSelector(restoredDocument);
-
-        restoredDocument["apiVersion"] = targetApiVersion;
-        convertedDocument = HelmYaml.Serialize(restoredDocument);
-        return true;
-    }
-
-    private static void ConvertLegacyWorkloadSelector(Dictionary<string, object?> document)
-    {
-        if (!document.TryGetValue("spec", out var specValue) || specValue is not Dictionary<string, object?> spec ||
-            spec.ContainsKey("selector") ||
-            !spec.TryGetValue("template", out var templateValue) || templateValue is not Dictionary<string, object?> template ||
-            !template.TryGetValue("metadata", out var metadataValue) || metadataValue is not Dictionary<string, object?> metadata ||
-            !metadata.TryGetValue("labels", out var labelsValue) || labelsValue is not Dictionary<string, object?> labels)
-        {
-            return;
-        }
-
-        // extensions/v1beta1 defaulted an omitted workload selector from template labels;
-        // apps/v1 requires that selector to be explicit on create and replace.
-        spec["selector"] = new Dictionary<string, object?>(StringComparer.Ordinal)
-        {
-            ["matchLabels"] = labels
-        };
-    }
-
-    private static void ConvertLegacyIngressSpec(Dictionary<string, object?> document)
-    {
-        if (!document.TryGetValue("spec", out var specValue) || specValue is not Dictionary<string, object?> spec)
-            return;
-
-        if (spec.Remove("backend", out var legacyDefaultBackend) &&
-            legacyDefaultBackend is Dictionary<string, object?> defaultBackend)
-        {
-            spec["defaultBackend"] = ConvertLegacyIngressBackend(defaultBackend);
-        }
-
-        if (!spec.TryGetValue("rules", out var rulesValue) || rulesValue is not List<object?> rules)
-            return;
-
-        foreach (var rule in rules.OfType<Dictionary<string, object?>>())
-        {
-            if (!rule.TryGetValue("http", out var httpValue) || httpValue is not Dictionary<string, object?> http ||
-                !http.TryGetValue("paths", out var pathsValue) || pathsValue is not List<object?> paths)
-            {
-                continue;
-            }
-
-            foreach (var path in paths.OfType<Dictionary<string, object?>>())
-            {
-                if (path.TryGetValue("backend", out var backendValue) && backendValue is Dictionary<string, object?> backend)
-                    path["backend"] = ConvertLegacyIngressBackend(backend);
-
-                path.TryAdd("pathType", "ImplementationSpecific");
-            }
-        }
-    }
-
-    private static Dictionary<string, object?> ConvertLegacyIngressBackend(Dictionary<string, object?> backend)
-    {
-        if (!backend.Remove("serviceName", out var serviceName) ||
-            !backend.Remove("servicePort", out var servicePort))
-        {
-            return backend;
-        }
-
-        var port = new Dictionary<string, object?>(StringComparer.Ordinal);
-        if (servicePort is string portName)
-            port["name"] = portName;
-        else
-            port["number"] = servicePort;
-
-        backend["service"] = new Dictionary<string, object?>(StringComparer.Ordinal)
-        {
-            ["name"] = serviceName,
-            ["port"] = port
-        };
-        return backend;
-    }
 
     // Type + name without namespace — used to find candidates before scope disambiguation.
     private static string ManifestResourceKey(ManifestIdentity identity)

@@ -881,6 +881,19 @@ public sealed class KubernetesManifestApplier
         if (!TryGetPreviousManifest(identity, out var previousManifest))
             return desiredManifest;
 
+        var previousIdentity = ManifestIdentity.Parse(previousManifest, identity.Namespace);
+        if (previousIdentity is null ||
+            !KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+                previousManifest,
+                previousIdentity,
+                identity.ApiVersion,
+                out previousManifest))
+        {
+            // A baseline from an unknown schema cannot safely drive field ownership in
+            // the target version; skip merging rather than treating renamed fields as additions.
+            return desiredManifest;
+        }
+
         // The typed Kubernetes read result already contains the same live object whose
         // resourceVersion is used by the following Replace request.
         var liveManifest = JsonSerializer.Serialize(liveResource);
