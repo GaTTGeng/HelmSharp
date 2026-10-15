@@ -40,9 +40,12 @@ internal static class KubernetesManifestSchemaConverter
                                targetApiVersion == "batch/v1";
         var podDisruptionBudgetMigration = identity is { Kind: "PodDisruptionBudget", ApiVersion: "policy/v1beta1" } &&
                                            targetApiVersion == "policy/v1";
+        var rbacMigration = identity.ApiVersion == "rbac.authorization.k8s.io/v1beta1" &&
+                            targetApiVersion == "rbac.authorization.k8s.io/v1" &&
+                            identity.Kind is "Role" or "RoleBinding" or "ClusterRole" or "ClusterRoleBinding";
         if (!ingressMigration && !legacyWorkloadMigration && !networkPolicyMigration &&
             !podSecurityPolicyMigration && !legacyIngressBetaMigration && !horizontalPodAutoscalerMigration &&
-            !cronJobMigration && !podDisruptionBudgetMigration)
+            !cronJobMigration && !podDisruptionBudgetMigration && !rbacMigration)
         {
             convertedDocument = document;
             return false;
@@ -185,11 +188,27 @@ internal static class KubernetesManifestSchemaConverter
             if (type is not ("Pods" or "Object" or "External") ||
                 !metric.TryGetValue(type.ToLowerInvariant(), out var sourceValue) ||
                 sourceValue is not Dictionary<string, object?> source ||
-                !source.Remove("metricName", out var metricName) || metricName is not string ||
-                !TryConvertBeta1MetricTarget(
-                    source,
-                    "targetAverageValue", "AverageValue", "averageValue",
-                    "targetValue", "Value", "value"))
+                !source.Remove("metricName", out var metricName) || metricName is not string)
+            {
+                return false;
+            }
+
+            if (type == "Object")
+            {
+                // v2beta1 object metrics keep the referenced object and selector beside the metric name.
+                if (!source.Remove("target", out var describedObject) ||
+                    describedObject is not Dictionary<string, object?> ||
+                    !TryConvertBeta1MetricTarget(source, "targetValue", "Value", "value"))
+                {
+                    return false;
+                }
+
+                source["describedObject"] = describedObject;
+            }
+            else if (!TryConvertBeta1MetricTarget(
+                         source,
+                         "targetAverageValue", "AverageValue", "averageValue",
+                         "targetValue", "Value", "value"))
             {
                 return false;
             }
@@ -198,11 +217,29 @@ internal static class KubernetesManifestSchemaConverter
             {
                 ["name"] = metricName
             };
-            if (source.Remove("metricSelector", out var selector))
+            var selectorName = type == "Object" ? "selector" : "metricSelector";
+            if (source.Remove(selectorName, out var selector))
                 metricIdentifier["selector"] = selector;
             source["metric"] = metricIdentifier;
         }
 
+        return true;
+    }
+
+    private static bool TryConvertBeta1MetricTarget(
+        Dictionary<string, object?> metric,
+        string targetName,
+        string targetType,
+        string targetValueName)
+    {
+        if (!metric.Remove(targetName, out var targetValue))
+            return false;
+
+        metric["target"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["type"] = targetType,
+            [targetValueName] = targetValue
+        };
         return true;
     }
 
