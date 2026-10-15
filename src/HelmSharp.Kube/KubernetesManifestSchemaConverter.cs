@@ -21,7 +21,7 @@ internal static class KubernetesManifestSchemaConverter
         var ingressMigration = identity is
                                    { Kind: "Ingress", ApiVersion: "extensions/v1beta1" or "networking.k8s.io/v1beta1" } &&
                                targetApiVersion == "networking.k8s.io/v1";
-        var legacyWorkloadMigration = identity.Kind is "Deployment" or "DaemonSet" or "ReplicaSet" &&
+        var legacyWorkloadMigration = identity.Kind is "Deployment" or "DaemonSet" or "ReplicaSet" or "StatefulSet" &&
                                      identity.ApiVersion is "extensions/v1beta1" or "apps/v1beta1" or "apps/v1beta2" &&
                                      targetApiVersion == "apps/v1";
         var networkPolicyMigration = identity is { Kind: "NetworkPolicy", ApiVersion: "extensions/v1beta1" } &&
