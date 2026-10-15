@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using HelmSharp.Chart;
 using HelmSharp.Kube;
 using k8s.Autorest;
 
@@ -235,6 +236,149 @@ public sealed class KubernetesManifestApplierTests
         var replacement = Assert.Single(handler.Requests, request => request.Method == HttpMethod.Put);
         Assert.Contains("\"apiVersion\":\"autoscaling/v2\"", replacement.Content);
         Assert.Contains("\"operator.example/live\":\"keep\"", replacement.Content);
+    }
+
+    [Fact]
+    public void SchemaConverter_ConvertsHpaV1CpuTargetBeforeMerge()
+    {
+        const string previousManifest = """
+            apiVersion: autoscaling/v1
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 3
+              targetCPUUtilizationPercentage: 70
+            """;
+        const string upgradedManifest = """
+            apiVersion: autoscaling/v2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 5
+              metrics:
+                - type: Resource
+                  resource:
+                    name: cpu
+                    target:
+                      type: Utilization
+                      averageUtilization: 70
+            """;
+        const string liveManifest = """
+            apiVersion: autoscaling/v2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 3
+              metrics:
+                - type: Resource
+                  resource:
+                    name: cpu
+                    target:
+                      type: Utilization
+                      averageUtilization: 80
+            """;
+        var identity = new ManifestIdentity("autoscaling/v1", "HorizontalPodAutoscaler", "scaler", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            previousManifest, identity, "autoscaling/v2", out var convertedPrevious));
+        var merged = HelmYaml.DeserializeDictionary(ThreeWayMerge.MergeResource(
+            convertedPrevious, upgradedManifest, liveManifest));
+        var spec = Assert.IsType<Dictionary<string, object?>>(merged["spec"]);
+        var metrics = Assert.IsType<List<object?>>(spec["metrics"]);
+        var metric = Assert.IsType<Dictionary<string, object?>>(Assert.Single(metrics));
+        var resource = Assert.IsType<Dictionary<string, object?>>(metric["resource"]);
+        var target = Assert.IsType<Dictionary<string, object?>>(resource["target"]);
+
+        Assert.Equal(80L, target["averageUtilization"]);
+        Assert.Equal(5L, spec["maxReplicas"]);
+    }
+
+    [Fact]
+    public void SchemaConverter_LeavesHpaWithUnsupportedMetricsUnconverted()
+    {
+        const string previousManifest = """
+            apiVersion: autoscaling/v2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              metrics:
+                - type: Resource
+                  resource:
+                    name: memory
+                    target:
+                      type: AverageValue
+                      averageValue: 1Gi
+            """;
+        var identity = new ManifestIdentity("autoscaling/v2", "HorizontalPodAutoscaler", "scaler", "release-ns");
+
+        Assert.False(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            previousManifest, identity, "autoscaling/v1", out var converted));
+        Assert.Equal(previousManifest, converted);
+    }
+
+    [Theory]
+    [InlineData("apps/v1beta1")]
+    [InlineData("apps/v1beta2")]
+    public async Task ApplyUpgradeAsync_PreservesLiveFieldsWhenWorkloadMovesToAppsV1(string previousApiVersion)
+    {
+        var previousManifest = $$"""
+            apiVersion: {{previousApiVersion}}
+            kind: Deployment
+            metadata:
+              name: portal
+            spec:
+              template:
+                metadata:
+                  labels:
+                    app: portal
+                spec:
+                  containers:
+                    - name: portal
+                      image: example/portal:old
+            """;
+        const string upgradedManifest = """
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: portal
+            spec:
+              selector:
+                matchLabels:
+                  app: portal
+              template:
+                metadata:
+                  labels:
+                    app: portal
+                spec:
+                  containers:
+                    - name: portal
+                      image: example/portal:new
+            """;
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/apps/v1/namespaces/release-ns/deployments/portal", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "apps/v1",
+                  "kind": "Deployment",
+                  "metadata": { "name": "portal", "resourceVersion": "42", "annotations": { "operator.example/live": "keep" } },
+                  "spec": { "selector": { "matchLabels": { "app": "portal" } }, "template": { "metadata": { "labels": { "app": "portal" } }, "spec": { "containers": [{ "name": "portal", "image": "example/portal:old" }] } } }
+                }
+                """)
+            .Respond(HttpMethod.Put, "/apis/apps/v1/namespaces/release-ns/deployments/portal", HttpStatusCode.OK);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await AsyncEnumerableTestExtensions.DrainAsync(
+            applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"));
+
+        var replacement = Assert.Single(handler.Requests, request => request.Method == HttpMethod.Put);
+        Assert.Contains("\"operator.example/live\":\"keep\"", replacement.Content);
+        Assert.Contains("\"selector\":{\"matchLabels\":{\"app\":\"portal\"}}", replacement.Content);
     }
 
     [Fact]

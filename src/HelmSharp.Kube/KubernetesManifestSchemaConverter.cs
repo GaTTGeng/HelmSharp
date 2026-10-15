@@ -22,7 +22,7 @@ internal static class KubernetesManifestSchemaConverter
                                    { Kind: "Ingress", ApiVersion: "extensions/v1beta1" or "networking.k8s.io/v1beta1" } &&
                                targetApiVersion == "networking.k8s.io/v1";
         var legacyWorkloadMigration = identity.Kind is "Deployment" or "DaemonSet" or "ReplicaSet" &&
-                                     identity.ApiVersion == "extensions/v1beta1" &&
+                                     identity.ApiVersion is "extensions/v1beta1" or "apps/v1beta1" or "apps/v1beta2" &&
                                      targetApiVersion == "apps/v1";
         var networkPolicyMigration = identity is { Kind: "NetworkPolicy", ApiVersion: "extensions/v1beta1" } &&
                                      targetApiVersion == "networking.k8s.io/v1";
@@ -30,11 +30,11 @@ internal static class KubernetesManifestSchemaConverter
                                         targetApiVersion == "policy/v1beta1";
         var legacyIngressBetaMigration = identity is { Kind: "Ingress", ApiVersion: "extensions/v1beta1" } &&
                                          targetApiVersion == "networking.k8s.io/v1beta1";
-        var sameGroupMigration = string.Equals(GetApiGroup(identity.ApiVersion), GetApiGroup(targetApiVersion), StringComparison.Ordinal) &&
-                                 identity.Kind == "HorizontalPodAutoscaler" &&
-                                 GetApiGroup(identity.ApiVersion) == "autoscaling";
+        var horizontalPodAutoscalerMigration = identity.Kind == "HorizontalPodAutoscaler" &&
+                                               (identity.ApiVersion, targetApiVersion) is
+                                                   ("autoscaling/v1", "autoscaling/v2") or ("autoscaling/v2", "autoscaling/v1");
         if (!ingressMigration && !legacyWorkloadMigration && !networkPolicyMigration &&
-            !podSecurityPolicyMigration && !legacyIngressBetaMigration && !sameGroupMigration)
+            !podSecurityPolicyMigration && !legacyIngressBetaMigration && !horizontalPodAutoscalerMigration)
         {
             convertedDocument = document;
             return false;
@@ -45,16 +45,78 @@ internal static class KubernetesManifestSchemaConverter
             ConvertLegacyIngressSpec(converted);
         else if (legacyWorkloadMigration)
             ConvertLegacyWorkloadSelector(converted);
+        else if (horizontalPodAutoscalerMigration &&
+                 !TryConvertHorizontalPodAutoscalerSpec(converted, identity.ApiVersion, targetApiVersion))
+        {
+            convertedDocument = document;
+            return false;
+        }
 
         converted["apiVersion"] = targetApiVersion;
         convertedDocument = HelmYaml.Serialize(converted);
         return true;
     }
 
-    private static string GetApiGroup(string apiVersion)
+    private static bool TryConvertHorizontalPodAutoscalerSpec(
+        Dictionary<string, object?> document,
+        string sourceApiVersion,
+        string targetApiVersion)
     {
-        var separator = apiVersion.IndexOf('/');
-        return separator < 0 ? string.Empty : apiVersion[..separator];
+        if (!document.TryGetValue("spec", out var specValue) || specValue is not Dictionary<string, object?> spec)
+            return true;
+
+        if (sourceApiVersion == "autoscaling/v1" && targetApiVersion == "autoscaling/v2")
+        {
+            if (!spec.Remove("targetCPUUtilizationPercentage", out var targetCpuUtilization))
+                return !spec.ContainsKey("metrics");
+
+            if (spec.ContainsKey("metrics"))
+                return false;
+
+            spec["metrics"] = new List<object?>
+            {
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["type"] = "Resource",
+                    ["resource"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["name"] = "cpu",
+                        ["target"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+                        {
+                            ["type"] = "Utilization",
+                            ["averageUtilization"] = targetCpuUtilization
+                        }
+                    }
+                }
+            };
+            return true;
+        }
+
+        // autoscaling/v1 cannot represent behavior or non-CPU metrics. Refuse to retag
+        // those baselines because their fields would become invisible to three-way merge.
+        if (spec.ContainsKey("behavior"))
+            return false;
+
+        if (!spec.Remove("metrics", out var metricsValue))
+            return true;
+
+        if (metricsValue is not List<object?> metrics || metrics.Count == 0)
+            return metricsValue is List<object?>;
+
+        if (metrics.Count != 1 ||
+            metrics[0] is not Dictionary<string, object?> metric ||
+            !string.Equals(HelmYaml.GetString(metric, "type"), "Resource", StringComparison.Ordinal) ||
+            !metric.TryGetValue("resource", out var resourceValue) || resourceValue is not Dictionary<string, object?> resource ||
+            !string.Equals(HelmYaml.GetString(resource, "name"), "cpu", StringComparison.Ordinal) ||
+            !resource.TryGetValue("target", out var targetValue) || targetValue is not Dictionary<string, object?> target ||
+            !string.Equals(HelmYaml.GetString(target, "type"), "Utilization", StringComparison.Ordinal) ||
+            !target.TryGetValue("averageUtilization", out var averageUtilization))
+        {
+            return false;
+        }
+
+        spec["targetCPUUtilizationPercentage"] = averageUtilization;
+        return true;
     }
 
     private static void ConvertLegacyWorkloadSelector(Dictionary<string, object?> document)
