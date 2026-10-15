@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using HelmSharp.Chart;
 using k8s;
@@ -883,7 +884,38 @@ public sealed class KubernetesManifestApplier
         // The typed Kubernetes read result already contains the same live object whose
         // resourceVersion is used by the following Replace request.
         var liveManifest = JsonSerializer.Serialize(liveResource);
-        return ThreeWayMerge.MergeResource(previousManifest, desiredManifest, liveManifest);
+        return ThreeWayMerge.MergeResource(
+            NormalizeSecretStringData(identity, previousManifest),
+            NormalizeSecretStringData(identity, desiredManifest),
+            liveManifest);
+    }
+
+    private static string NormalizeSecretStringData(ManifestIdentity identity, string manifest)
+    {
+        if (identity.ApiVersion != "v1" || identity.Kind != "Secret")
+            return manifest;
+
+        var document = HelmYaml.DeserializeDictionary(manifest, StringComparer.Ordinal);
+        if (!document.TryGetValue("stringData", out var stringDataValue) ||
+            stringDataValue is not IDictionary<string, object?> stringData)
+            return manifest;
+
+        var data = document.TryGetValue("data", out var dataValue) &&
+                   dataValue is IDictionary<string, object?> existingData
+            ? existingData
+            : new Dictionary<string, object?>(StringComparer.Ordinal);
+
+        // Kubernetes stores stringData as base64 data and never returns stringData on reads.
+        // Canonicalizing both chart revisions lets three-way merge detect removed keys.
+        foreach (var (key, value) in stringData)
+        {
+            var text = value?.ToString() ?? string.Empty;
+            data[key] = Convert.ToBase64String(Encoding.UTF8.GetBytes(text));
+        }
+
+        document["data"] = data;
+        document.Remove("stringData");
+        return HelmYaml.Serialize(document);
     }
 
     private bool TryGetPreviousManifest(ManifestIdentity identity, out string previousManifest)

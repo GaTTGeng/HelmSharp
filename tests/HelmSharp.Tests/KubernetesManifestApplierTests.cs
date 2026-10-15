@@ -188,6 +188,53 @@ public sealed class KubernetesManifestApplierTests
         Assert.Contains("\"mode\":\"previous\"", replaceRequests[1].Content);
     }
 
+    [Fact]
+    public async Task ApplyUpgradeAsync_RemovesDeletedSecretStringDataAndKeepsLiveOnlyData()
+    {
+        const string previousManifest = """
+            apiVersion: v1
+            kind: Secret
+            metadata:
+              name: credentials
+            stringData:
+              retired: removed
+              retained: retained
+            """;
+        const string upgradedManifest = """
+            apiVersion: v1
+            kind: Secret
+            metadata:
+              name: credentials
+            stringData:
+              retained: retained
+            """;
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/secrets/credentials", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Secret",
+                  "metadata": { "name": "credentials", "resourceVersion": "42" },
+                  "data": {
+                    "retired": "cmVtb3ZlZA==",
+                    "retained": "cmV0YWluZWQ=",
+                    "live-only": "b3BlcmF0b3Itb25seQ=="
+                  }
+                }
+                """)
+            .Respond(HttpMethod.Put, "/api/v1/namespaces/release-ns/secrets/credentials", HttpStatusCode.OK);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await AsyncEnumerableTestExtensions.DrainAsync(
+            applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"));
+
+        var replace = Assert.Single(handler.Requests, request => request.Method == HttpMethod.Put);
+        using var json = JsonDocument.Parse(replace.Content!);
+        var data = json.RootElement.GetProperty("data");
+        Assert.False(data.TryGetProperty("retired", out _));
+        Assert.Equal("cmV0YWluZWQ=", data.GetProperty("retained").GetString());
+        Assert.Equal("b3BlcmF0b3Itb25seQ==", data.GetProperty("live-only").GetString());
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
