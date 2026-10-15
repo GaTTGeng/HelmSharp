@@ -189,6 +189,55 @@ public sealed class KubernetesManifestApplierTests
     }
 
     [Fact]
+    public async Task ApplyUpgradeAsync_PreservesLiveFieldsWhenApiVersionChangesWithinGroup()
+    {
+        const string previousManifest = """
+            apiVersion: autoscaling/v1
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 3
+              targetCPUUtilizationPercentage: 70
+            """;
+        const string upgradedManifest = """
+            apiVersion: autoscaling/v2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 5
+              metrics:
+                - type: Resource
+                  resource:
+                    name: cpu
+                    target:
+                      type: Utilization
+                      averageUtilization: 70
+            """;
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/autoscaling/v2/namespaces/release-ns/horizontalpodautoscalers/scaler", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "autoscaling/v2",
+                  "kind": "HorizontalPodAutoscaler",
+                  "metadata": { "name": "scaler", "resourceVersion": "42", "annotations": { "operator.example/live": "keep" } },
+                  "spec": { "minReplicas": 1, "maxReplicas": 3, "metrics": [] }
+                }
+                """)
+            .Respond(HttpMethod.Put, "/apis/autoscaling/v2/namespaces/release-ns/horizontalpodautoscalers/scaler", HttpStatusCode.OK);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await AsyncEnumerableTestExtensions.DrainAsync(
+            applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"));
+
+        var replacement = Assert.Single(handler.Requests, request => request.Method == HttpMethod.Put);
+        Assert.Contains("\"apiVersion\":\"autoscaling/v2\"", replacement.Content);
+        Assert.Contains("\"operator.example/live\":\"keep\"", replacement.Content);
+    }
+
+    [Fact]
     public async Task ApplyUpgradeAsync_RemovesDeletedSecretStringDataAndKeepsLiveOnlyData()
     {
         const string previousManifest = """
