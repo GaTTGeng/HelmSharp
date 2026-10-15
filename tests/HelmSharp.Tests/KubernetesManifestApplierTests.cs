@@ -268,7 +268,7 @@ public sealed class KubernetesManifestApplierTests
                   "apiVersion": "networking.k8s.io/v1",
                   "kind": "Ingress",
                   "metadata": { "name": "portal", "resourceVersion": "42", "annotations": { "operator.example/live": "keep" } },
-                  "spec": { "defaultBackend": { "service": { "name": "portal", "port": { "number": 80 } } }, "rules": [] }
+                  "spec": { "defaultBackend": { "service": { "name": "operator-portal", "port": { "number": 8080 } } }, "rules": [] }
                 }
                 """)
             .Respond(HttpMethod.Put, "/apis/networking.k8s.io/v1/namespaces/release-ns/ingresses/portal", HttpStatusCode.OK);
@@ -280,6 +280,8 @@ public sealed class KubernetesManifestApplierTests
         var replacement = Assert.Single(handler.Requests, request => request.Method == HttpMethod.Put);
         Assert.Contains("\"apiVersion\":\"networking.k8s.io/v1\"", replacement.Content);
         Assert.Contains("\"operator.example/live\":\"keep\"", replacement.Content);
+        Assert.Contains("\"name\":\"operator-portal\"", replacement.Content);
+        Assert.Contains("\"number\":8080", replacement.Content);
     }
 
     [Fact]
