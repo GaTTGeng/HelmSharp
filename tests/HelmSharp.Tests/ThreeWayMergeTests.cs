@@ -141,6 +141,48 @@ public sealed class ThreeWayMergeTests
     }
 
     [Fact]
+    public void MergeResource_RemovesChartSuppliedClusterManagedFields()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: example.com/v1\nkind: Thing\nmetadata:\n  name: thing\n",
+            """
+            apiVersion: example.com/v1
+            kind: Thing
+            metadata:
+              name: thing
+              resourceVersion: chart-version
+              uid: chart-uid
+              generation: 99
+              creationTimestamp: chart-time
+              managedFields: []
+              selfLink: chart-link
+            status:
+              phase: chart-status
+            """,
+            """
+            apiVersion: example.com/v1
+            kind: Thing
+            metadata:
+              name: thing
+              resourceVersion: live-version
+              uid: live-uid
+            status:
+              phase: Running
+            """);
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var metadata = (IDictionary<string, object?>)document["metadata"]!;
+        Assert.Equal("thing", metadata["name"]);
+        Assert.DoesNotContain("resourceVersion", metadata.Keys);
+        Assert.DoesNotContain("uid", metadata.Keys);
+        Assert.DoesNotContain("generation", metadata.Keys);
+        Assert.DoesNotContain("creationTimestamp", metadata.Keys);
+        Assert.DoesNotContain("managedFields", metadata.Keys);
+        Assert.DoesNotContain("selfLink", metadata.Keys);
+        Assert.False(document.ContainsKey("status"));
+    }
+
+    [Fact]
     public void MergeResource_PreservesCaseSensitiveKubernetesMapKeys()
     {
         var merged = ThreeWayMerge.MergeResource(

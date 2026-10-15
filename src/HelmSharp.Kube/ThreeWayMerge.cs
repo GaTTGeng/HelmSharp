@@ -64,7 +64,12 @@ internal static class ThreeWayMerge
             if ((isRoot && key == "status") ||
                 (isMetadata && key is "resourceVersion" or "uid" or "generation" or "creationTimestamp" or
                     "managedFields" or "selfLink"))
+            {
+                // `merged` begins with chart output, so skipping reconciliation alone would
+                // still send chart-supplied cluster bookkeeping fields in the replacement.
+                merged.Remove(key);
                 continue;
+            }
 
             var hasLast = last.TryGetValue(key, out var lastVal);
             var hasNew = newVals.TryGetValue(key, out var newVal);

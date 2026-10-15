@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using HelmSharp.Kube;
 using k8s.Autorest;
 
@@ -185,6 +186,55 @@ public sealed class KubernetesManifestApplierTests
         Assert.Equal(2, replaceRequests.Length);
         Assert.Contains("\"mode\":\"failed-upgrade\"", replaceRequests[0].Content);
         Assert.Contains("\"mode\":\"previous\"", replaceRequests[1].Content);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ApplyUpgradeAsync_PreservesCaseSensitiveCustomResourceFields(bool namespaced)
+    {
+        var resourcePath = namespaced
+            ? "/apis/example.com/v1/namespaces/release-ns/widgets/sample"
+            : "/apis/example.com/v1/widgets/sample";
+        var replacePath = namespaced
+            ? "/apis/example.com/v1/namespaces/release-ns/widgets/sample"
+            : "/apis/example.com/v1/widgets/sample";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/example.com/v1", HttpStatusCode.OK, $$"""
+                {
+                  "kind": "APIResourceList",
+                  "apiVersion": "v1",
+                  "groupVersion": "example.com/v1",
+                  "resources": [{ "name": "widgets", "kind": "Widget", "namespaced": {{namespaced.ToString().ToLowerInvariant()}} }]
+                }
+                """)
+            .Respond(HttpMethod.Get, resourcePath, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "example.com/v1",
+                  "kind": "Widget",
+                  "metadata": { "name": "sample", "resourceVersion": "42" },
+                  "spec": { "config": { "FOO": "chart", "foo": "operator" } }
+                }
+                """)
+            .Respond(HttpMethod.Put, replacePath, HttpStatusCode.OK);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        const string manifest = """
+            apiVersion: example.com/v1
+            kind: Widget
+            metadata:
+              name: sample
+            spec:
+              config:
+                FOO: chart
+            """;
+
+        await AsyncEnumerableTestExtensions.DrainAsync(applier.ApplyUpgradeAsync(manifest, manifest, "release-ns"));
+
+        var replace = Assert.Single(handler.Requests, request => request.Method == HttpMethod.Put);
+        using var json = JsonDocument.Parse(replace.Content!);
+        var config = json.RootElement.GetProperty("spec").GetProperty("config");
+        Assert.Equal("chart", config.GetProperty("FOO").GetString());
+        Assert.Equal("operator", config.GetProperty("foo").GetString());
     }
 
     [Fact]
