@@ -927,7 +927,9 @@ public sealed class KubernetesManifestApplier
                 () => _client.CustomObjects.CreateNamespacedCustomObjectAsync(item, resource.Group, resource.Version, identity.Namespace, resource.Plural, null, _fieldManager, null, null, ct),
                 existing =>
                 {
-                    item = HelmYaml.DeserializeDictionary(MergeWithLiveResource(identity, yaml, existing));
+                    item = HelmYaml.DeserializeDictionary(
+                        MergeWithLiveResource(identity, yaml, existing),
+                        StringComparer.Ordinal);
                     SetNamespace(item, identity.Namespace);
                     SetResourceVersion(item, existing);
                     return _client.CustomObjects.ReplaceNamespacedCustomObjectAsync(item, resource.Group, resource.Version, identity.Namespace, resource.Plural, identity.Name, null, _fieldManager, null, ct);
@@ -942,7 +944,9 @@ public sealed class KubernetesManifestApplier
             () => _client.CustomObjects.CreateClusterCustomObjectAsync(item, resource.Group, resource.Version, resource.Plural, null, _fieldManager, null, null, ct),
             existing =>
             {
-                item = HelmYaml.DeserializeDictionary(MergeWithLiveResource(identity, yaml, existing));
+                item = HelmYaml.DeserializeDictionary(
+                    MergeWithLiveResource(identity, yaml, existing),
+                    StringComparer.Ordinal);
                 SetNamespace(item, namespaceName: null);
                 SetResourceVersion(item, existing);
                 return _client.CustomObjects.ReplaceClusterCustomObjectAsync(item, resource.Group, resource.Version, resource.Plural, identity.Name, null, _fieldManager, null, ct);
