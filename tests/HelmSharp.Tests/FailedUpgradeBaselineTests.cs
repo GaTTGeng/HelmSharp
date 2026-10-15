@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using HelmSharp.Action;
 using HelmSharp.Kube;
 using HelmSharp.Release;
@@ -55,6 +56,10 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
         Assert.Equal("A", ReadValue(state.ConfigMaps["retry-state"]));
         Assert.Equal("A", ReadValue(state.ConfigMaps["unattempted-state"]));
 
+        var liveConfigMap = JsonNode.Parse(state.ConfigMaps["retry-state"])!;
+        liveConfigMap["data"]!["operator-only"] = "preserve-me";
+        state.ConfigMaps["retry-state"] = liveConfigMap.ToJsonString();
+
         state.ConfigMapWriteFailuresToSkip["unattempted-state"] = 0;
         if (atomic)
         {
@@ -72,6 +77,7 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
             })));
         Assert.Equal(atomic && !failRestoration ? "A" : "B", ReadValue(state.ConfigMaps["retry-state"]));
         Assert.Equal("A", ReadValue(state.ConfigMaps["unattempted-state"]));
+        Assert.Equal("preserve-me", ReadDataValue(state.ConfigMaps["retry-state"], "operator-only"));
         if (atomic && !failRestoration)
         {
             var failedRevisionSecret = state.Secrets["sh.helm.release.v1.retry-baseline.v2"];
@@ -92,6 +98,7 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
 
         Assert.Equal("A", ReadValue(state.ConfigMaps["retry-state"]));
         Assert.Equal("A", ReadValue(state.ConfigMaps["unattempted-state"]));
+        Assert.Equal("preserve-me", ReadDataValue(state.ConfigMaps["retry-state"], "operator-only"));
     }
 
     [Fact]
@@ -182,6 +189,9 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
 
     private static string? ReadValue(string configMap)
         => JsonDocument.Parse(configMap).RootElement.GetProperty("data").GetProperty("value").GetString();
+
+    private static string? ReadDataValue(string configMap, string key)
+        => JsonDocument.Parse(configMap).RootElement.GetProperty("data").GetProperty(key).GetString();
 
     private static async Task DrainAsync(IAsyncEnumerable<string> output)
     {
