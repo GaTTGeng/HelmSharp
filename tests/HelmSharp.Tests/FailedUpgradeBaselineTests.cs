@@ -164,7 +164,8 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
             previousManifest,
             attemptedManifest,
             "test-ns");
-        var restored = HelmYaml.DeserializeDictionary(restorationManifest);
+        var baselineManifest = HelmClient.ComposeAtomicRestorationBaseline(restorationManifest, string.Empty, "test-ns");
+        var restored = HelmYaml.DeserializeDictionary(baselineManifest);
 
         Assert.Equal("networking.k8s.io/v1", HelmYaml.GetString(restored, "apiVersion"));
         var spec = Assert.IsType<Dictionary<string, object?>>(restored["spec"]);
@@ -180,6 +181,85 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
         var port = Assert.IsType<Dictionary<string, object?>>(service["port"]);
         Assert.Equal(8080L, port["number"]);
         Assert.False(spec.ContainsKey("defaultBackend"));
+    }
+
+    [Fact]
+    public void ConvertRestorationApiVersions_AddsRequiredSelectorForLegacyDeployment()
+    {
+        const string previousManifest = """
+            apiVersion: extensions/v1beta1
+            kind: Deployment
+            metadata:
+              name: portal
+            spec:
+              template:
+                metadata:
+                  labels:
+                    app: portal
+                spec:
+                  containers:
+                    - name: portal
+                      image: example/portal:old
+            """;
+        const string attemptedManifest = """
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: portal
+            spec:
+              selector:
+                matchLabels:
+                  app: portal
+              template:
+                metadata:
+                  labels:
+                    app: portal
+                spec:
+                  containers:
+                    - name: portal
+                      image: example/portal:new
+            """;
+
+        var restored = HelmYaml.DeserializeDictionary(HelmClient.ConvertRestorationApiVersions(
+            previousManifest,
+            attemptedManifest,
+            "test-ns"));
+        var spec = Assert.IsType<Dictionary<string, object?>>(restored["spec"]);
+        var selector = Assert.IsType<Dictionary<string, object?>>(spec["selector"]);
+        var labels = Assert.IsType<Dictionary<string, object?>>(selector["matchLabels"]);
+
+        Assert.Equal("apps/v1", HelmYaml.GetString(restored, "apiVersion"));
+        Assert.Equal("portal", HelmYaml.GetString(labels, "app"));
+    }
+
+    [Fact]
+    public void ConvertRestorationApiVersions_LeavesUnknownCustomResourceSchemaUntouched()
+    {
+        const string previousManifest = """
+            apiVersion: example.com/v1alpha1
+            kind: CustomWidget
+            metadata:
+              name: widget
+            spec:
+              legacySetting: keep
+            """;
+        const string attemptedManifest = """
+            apiVersion: example.com/v1
+            kind: CustomWidget
+            metadata:
+              name: widget
+            spec:
+              currentSetting: changed
+            """;
+
+        var restoredManifest = HelmClient.ConvertRestorationApiVersions(
+            previousManifest,
+            attemptedManifest,
+            "test-ns");
+        var restored = HelmYaml.DeserializeDictionary(restoredManifest);
+
+        Assert.Equal("example.com/v1alpha1", HelmYaml.GetString(restored, "apiVersion"));
+        Assert.Contains("legacySetting: keep", restoredManifest, StringComparison.Ordinal);
     }
 
     [Fact]

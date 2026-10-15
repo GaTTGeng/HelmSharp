@@ -814,7 +814,7 @@ public class HelmClient : IHelmClient
                         mainManifest,
                         ns);
                     var restorationBaseline = MergeAppliedManifests(
-                        previous.Manifest,
+                        restorationManifest,
                         failedRecord.AppliedManifest ?? string.Empty,
                         ns);
                     try
@@ -1153,20 +1153,76 @@ public class HelmClient : IHelmClient
                 continue;
             }
 
-            // Keep the previous chart's desired fields while routing the restore through
-            // the API version used by the attempted chart for this same logical resource.
-            var restoredDocument = HelmYaml.DeserializeDictionary(document, StringComparer.Ordinal);
-            if (identity is { Kind: "Ingress", ApiVersion: "extensions/v1beta1" } &&
-                apiVersion == "networking.k8s.io/v1")
-            {
-                ConvertLegacyIngressSpec(restoredDocument);
-            }
-
-            restoredDocument["apiVersion"] = apiVersion;
-            restorationDocuments.Add(HelmYaml.Serialize(restoredDocument));
+            // Keep the previous chart's desired fields while routing only known schema
+            // migrations through a served API version. Unknown conversions keep their
+            // original document rather than submitting it under a potentially invalid schema.
+            restorationDocuments.Add(TryConvertRestorationDocument(document, identity, apiVersion, out var convertedDocument)
+                ? convertedDocument
+                : document);
         }
 
         return string.Join(Environment.NewLine + "---" + Environment.NewLine, restorationDocuments);
+    }
+
+    internal static string ComposeAtomicRestorationBaseline(
+        string restorationManifest,
+        string appliedManifest,
+        string defaultNamespace)
+        => MergeAppliedManifests(restorationManifest, appliedManifest, defaultNamespace);
+
+    private static bool TryConvertRestorationDocument(
+        string document,
+        ManifestIdentity identity,
+        string targetApiVersion,
+        out string convertedDocument)
+    {
+        var ingressMigration = identity is
+                                   { Kind: "Ingress", ApiVersion: "extensions/v1beta1" or "networking.k8s.io/v1beta1" } &&
+                               targetApiVersion == "networking.k8s.io/v1";
+        var legacyWorkloadMigration = identity.Kind is "Deployment" or "DaemonSet" or "ReplicaSet" &&
+                                     identity.ApiVersion == "extensions/v1beta1" &&
+                                     targetApiVersion == "apps/v1";
+        var networkPolicyMigration = identity is { Kind: "NetworkPolicy", ApiVersion: "extensions/v1beta1" } &&
+                                     targetApiVersion == "networking.k8s.io/v1";
+        var podSecurityPolicyMigration = identity is { Kind: "PodSecurityPolicy", ApiVersion: "extensions/v1beta1" } &&
+                                        targetApiVersion == "policy/v1beta1";
+        var legacyIngressBetaMigration = identity is { Kind: "Ingress", ApiVersion: "extensions/v1beta1" } &&
+                                         targetApiVersion == "networking.k8s.io/v1beta1";
+        if (!ingressMigration && !legacyWorkloadMigration && !networkPolicyMigration &&
+            !podSecurityPolicyMigration && !legacyIngressBetaMigration)
+        {
+            convertedDocument = document;
+            return false;
+        }
+
+        var restoredDocument = HelmYaml.DeserializeDictionary(document, StringComparer.Ordinal);
+        if (ingressMigration)
+            ConvertLegacyIngressSpec(restoredDocument);
+        else if (legacyWorkloadMigration)
+            ConvertLegacyWorkloadSelector(restoredDocument);
+
+        restoredDocument["apiVersion"] = targetApiVersion;
+        convertedDocument = HelmYaml.Serialize(restoredDocument);
+        return true;
+    }
+
+    private static void ConvertLegacyWorkloadSelector(Dictionary<string, object?> document)
+    {
+        if (!document.TryGetValue("spec", out var specValue) || specValue is not Dictionary<string, object?> spec ||
+            spec.ContainsKey("selector") ||
+            !spec.TryGetValue("template", out var templateValue) || templateValue is not Dictionary<string, object?> template ||
+            !template.TryGetValue("metadata", out var metadataValue) || metadataValue is not Dictionary<string, object?> metadata ||
+            !metadata.TryGetValue("labels", out var labelsValue) || labelsValue is not Dictionary<string, object?> labels)
+        {
+            return;
+        }
+
+        // extensions/v1beta1 defaulted an omitted workload selector from template labels;
+        // apps/v1 requires that selector to be explicit on create and replace.
+        spec["selector"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["matchLabels"] = labels
+        };
     }
 
     private static void ConvertLegacyIngressSpec(Dictionary<string, object?> document)
