@@ -959,14 +959,26 @@ public sealed class KubernetesManifestApplier
     }
 
     private static bool SameResourceTypeAndName(ManifestIdentity left, ManifestIdentity right)
-        => string.Equals(GetApiGroup(left.ApiVersion), GetApiGroup(right.ApiVersion), StringComparison.Ordinal) &&
+        => string.Equals(GetCanonicalApiGroup(left), GetCanonicalApiGroup(right), StringComparison.Ordinal) &&
            string.Equals(left.Kind, right.Kind, StringComparison.Ordinal) &&
            string.Equals(left.Name, right.Name, StringComparison.Ordinal);
 
-    private static string GetApiGroup(string apiVersion)
+    private static string GetCanonicalApiGroup(ManifestIdentity identity)
     {
-        var separator = apiVersion.IndexOf('/');
-        return separator < 0 ? string.Empty : apiVersion[..separator];
+        var separator = identity.ApiVersion.IndexOf('/');
+        var apiGroup = separator < 0 ? string.Empty : identity.ApiVersion[..separator];
+        if (apiGroup != "extensions")
+            return apiGroup;
+
+        // Kubernetes moved several built-in resources out of the legacy extensions
+        // group without changing their stored object identity. Keep aliases narrowly
+        // limited to those known built-ins so unrelated custom resources cannot collide.
+        return identity.Kind switch
+        {
+            "Deployment" or "DaemonSet" or "ReplicaSet" => "apps",
+            "Ingress" or "NetworkPolicy" => "networking.k8s.io",
+            _ => apiGroup
+        };
     }
 
     private async Task<ManifestIdentity> ApplyDiscoveredResourceAsync(ManifestIdentity identity, string yaml, CancellationToken ct)
