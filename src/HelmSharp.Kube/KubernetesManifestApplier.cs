@@ -1462,7 +1462,7 @@ public sealed class KubernetesManifestApplier
             }
             catch (Exception writeError) when (IsAmbiguousWriteFailure(writeError))
             {
-                _lastApplyMayHaveCommitted |= await CreateMayHaveCommittedAsync(read);
+                _lastApplyMayHaveCommitted |= await CreateMayHaveCommittedAsync(read, desiredYaml);
                 throw;
             }
         }
@@ -1476,12 +1476,14 @@ public sealed class KubernetesManifestApplier
         string desiredYaml)
         => UpsertNamespacedAsync(read, create, replace, identity, desiredYaml);
 
-    private static async Task<bool> CreateMayHaveCommittedAsync<T>(Func<Task<T>> read)
+    private static async Task<bool> CreateMayHaveCommittedAsync<T>(Func<Task<T>> read, string desiredYaml)
     {
         try
         {
-            await read();
-            return true;
+            var after = await read();
+            // A different actor may have created this identity after our initial 404.
+            // Only count the ambiguous create as applied when the read-back matches our payload.
+            return ContainsExpectedManifest(desiredYaml, after!);
         }
         catch
         {
