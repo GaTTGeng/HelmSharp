@@ -129,6 +129,35 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
         Assert.True(string.IsNullOrWhiteSpace(attemptedOnly));
     }
 
+    [Fact]
+    public async Task GetAttemptedOnlyManifestAsync_DoesNotClassifyLegacyPodSecurityPolicyMigrationAsNew()
+    {
+        const string previousManifest = """
+            apiVersion: extensions/v1beta1
+            kind: PodSecurityPolicy
+            metadata:
+              name: restricted
+            """;
+        const string attemptedManifest = """
+            apiVersion: policy/v1beta1
+            kind: PodSecurityPolicy
+            metadata:
+              name: restricted
+            """;
+        var applier = new KubernetesManifestApplier(
+            KubernetesTestClientBuilder.Create(new KubernetesApiHandler()),
+            "helmsharp-test");
+
+        var attemptedOnly = await HelmClient.GetAttemptedOnlyManifestAsync(
+            applier,
+            previousManifest,
+            attemptedManifest,
+            "test-ns",
+            CancellationToken.None);
+
+        Assert.True(string.IsNullOrWhiteSpace(attemptedOnly));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_tempDirectory))

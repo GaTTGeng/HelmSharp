@@ -977,6 +977,7 @@ public sealed class KubernetesManifestApplier
         {
             "Deployment" or "DaemonSet" or "ReplicaSet" => "apps",
             "Ingress" or "NetworkPolicy" => "networking.k8s.io",
+            "PodSecurityPolicy" => "policy",
             _ => apiGroup
         };
     }

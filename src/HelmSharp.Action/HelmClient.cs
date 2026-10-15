@@ -1122,6 +1122,7 @@ public class HelmClient : IHelmClient
             {
                 "Deployment" or "DaemonSet" or "ReplicaSet" => "apps",
                 "Ingress" or "NetworkPolicy" => "networking.k8s.io",
+                "PodSecurityPolicy" => "policy",
                 _ => apiGroup
             };
         }
