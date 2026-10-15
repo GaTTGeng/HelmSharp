@@ -809,13 +809,22 @@ public class HelmClient : IHelmClient
                 if (request.Atomic)
                 {
                     var restoredResources = new List<string>();
+                    var restorationManifest = ConvertRestorationApiVersions(
+                        previous.Manifest,
+                        mainManifest,
+                        ns);
+                    var restorationBaseline = MergeAppliedManifests(
+                        previous.Manifest,
+                        failedRecord.AppliedManifest ?? string.Empty,
+                        ns);
                     try
                     {
-                        // Treat the failed chart as the old side of the rollback merge so
-                        // operator changes preserved during the upgrade remain live.
+                        // Only documents confirmed applied by the failed revision belong on
+                        // the old side of the rollback merge; untouched resources use their
+                        // deployed document as both baseline and desired state.
                         await foreach (var resource in applier.ApplyUpgradeAsync(
-                                           previous.Manifest,
-                                           mainManifest,
+                                           restorationManifest,
+                                           restorationBaseline,
                                            ns,
                                            CancellationToken.None))
                         {
@@ -1117,6 +1126,101 @@ public class HelmClient : IHelmClient
         }
 
         return string.Join(Environment.NewLine + "---" + Environment.NewLine, documentsByIdentity.Values);
+    }
+
+    internal static string ConvertRestorationApiVersions(
+        string previousManifest,
+        string attemptedManifest,
+        string defaultNamespace)
+    {
+        var attemptedVersionsByIdentity = KubernetesManifestApplier.SplitDocumentsPublic(attemptedManifest)
+            .Select(document => (Document: document, Identity: ManifestIdentity.Parse(document, defaultNamespace)))
+            .Where(item => item.Identity is not null)
+            .ToDictionary(
+                item => ManifestIdentityKey(item.Identity!),
+                item => item.Identity!.ApiVersion,
+                StringComparer.Ordinal);
+
+        var restorationDocuments = new List<string>();
+        foreach (var document in KubernetesManifestApplier.SplitDocumentsPublic(previousManifest))
+        {
+            var identity = ManifestIdentity.Parse(document, defaultNamespace);
+            if (identity is null ||
+                !attemptedVersionsByIdentity.TryGetValue(ManifestIdentityKey(identity), out var apiVersion) ||
+                string.Equals(identity.ApiVersion, apiVersion, StringComparison.Ordinal))
+            {
+                restorationDocuments.Add(document);
+                continue;
+            }
+
+            // Keep the previous chart's desired fields while routing the restore through
+            // the API version used by the attempted chart for this same logical resource.
+            var restoredDocument = HelmYaml.DeserializeDictionary(document, StringComparer.Ordinal);
+            if (identity is { Kind: "Ingress", ApiVersion: "extensions/v1beta1" } &&
+                apiVersion == "networking.k8s.io/v1")
+            {
+                ConvertLegacyIngressSpec(restoredDocument);
+            }
+
+            restoredDocument["apiVersion"] = apiVersion;
+            restorationDocuments.Add(HelmYaml.Serialize(restoredDocument));
+        }
+
+        return string.Join(Environment.NewLine + "---" + Environment.NewLine, restorationDocuments);
+    }
+
+    private static void ConvertLegacyIngressSpec(Dictionary<string, object?> document)
+    {
+        if (!document.TryGetValue("spec", out var specValue) || specValue is not Dictionary<string, object?> spec)
+            return;
+
+        if (spec.Remove("backend", out var legacyDefaultBackend) &&
+            legacyDefaultBackend is Dictionary<string, object?> defaultBackend)
+        {
+            spec["defaultBackend"] = ConvertLegacyIngressBackend(defaultBackend);
+        }
+
+        if (!spec.TryGetValue("rules", out var rulesValue) || rulesValue is not List<object?> rules)
+            return;
+
+        foreach (var rule in rules.OfType<Dictionary<string, object?>>())
+        {
+            if (!rule.TryGetValue("http", out var httpValue) || httpValue is not Dictionary<string, object?> http ||
+                !http.TryGetValue("paths", out var pathsValue) || pathsValue is not List<object?> paths)
+            {
+                continue;
+            }
+
+            foreach (var path in paths.OfType<Dictionary<string, object?>>())
+            {
+                if (path.TryGetValue("backend", out var backendValue) && backendValue is Dictionary<string, object?> backend)
+                    path["backend"] = ConvertLegacyIngressBackend(backend);
+
+                path.TryAdd("pathType", "ImplementationSpecific");
+            }
+        }
+    }
+
+    private static Dictionary<string, object?> ConvertLegacyIngressBackend(Dictionary<string, object?> backend)
+    {
+        if (!backend.Remove("serviceName", out var serviceName) ||
+            !backend.Remove("servicePort", out var servicePort))
+        {
+            return backend;
+        }
+
+        var port = new Dictionary<string, object?>(StringComparer.Ordinal);
+        if (servicePort is string portName)
+            port["name"] = portName;
+        else
+            port["number"] = servicePort;
+
+        backend["service"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["name"] = serviceName,
+            ["port"] = port
+        };
+        return backend;
     }
 
     // Type + name without namespace — used to find candidates before scope disambiguation.
