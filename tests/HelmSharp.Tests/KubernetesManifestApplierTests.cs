@@ -326,6 +326,80 @@ public sealed class KubernetesManifestApplierTests
     [Theory]
     [InlineData("apps/v1beta1")]
     [InlineData("apps/v1beta2")]
+    public void SchemaConverter_PreservesLiveFieldsWhenStatefulSetMovesToAppsV1(string previousApiVersion)
+    {
+        var previousManifest = $$"""
+            apiVersion: {{previousApiVersion}}
+            kind: StatefulSet
+            metadata:
+              name: database
+            spec:
+              serviceName: database
+              template:
+                metadata:
+                  labels:
+                    app: database
+                spec:
+                  containers:
+                    - name: database
+                      image: example/database:old
+            """;
+        const string upgradedManifest = """
+            apiVersion: apps/v1
+            kind: StatefulSet
+            metadata:
+              name: database
+            spec:
+              serviceName: database
+              selector:
+                matchLabels:
+                  app: database
+              template:
+                metadata:
+                  labels:
+                    app: database
+                spec:
+                  containers:
+                    - name: database
+                      image: example/database:new
+            """;
+        const string liveManifest = """
+            apiVersion: apps/v1
+            kind: StatefulSet
+            metadata:
+              name: database
+              annotations:
+                operator.example/live: keep
+            spec:
+              serviceName: database
+              selector:
+                matchLabels:
+                  app: database
+              template:
+                metadata:
+                  labels:
+                    app: database
+                spec:
+                  containers:
+                    - name: database
+                      image: example/database:old
+            """;
+        var identity = new ManifestIdentity(previousApiVersion, "StatefulSet", "database", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            previousManifest, identity, "apps/v1", out var convertedPrevious));
+        var merged = HelmYaml.DeserializeDictionary(ThreeWayMerge.MergeResource(
+            convertedPrevious, upgradedManifest, liveManifest));
+        var metadata = Assert.IsType<Dictionary<string, object?>>(merged["metadata"]);
+        var annotations = Assert.IsType<Dictionary<string, object?>>(metadata["annotations"]);
+
+        Assert.Equal("keep", annotations["operator.example/live"]);
+        Assert.Equal("apps/v1", merged["apiVersion"]);
+    }
+
+    [Theory]
+    [InlineData("apps/v1beta1")]
+    [InlineData("apps/v1beta2")]
     public async Task ApplyUpgradeAsync_PreservesLiveFieldsWhenWorkloadMovesToAppsV1(string previousApiVersion)
     {
         var previousManifest = $$"""
