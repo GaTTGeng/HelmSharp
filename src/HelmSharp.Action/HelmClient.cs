@@ -939,7 +939,7 @@ public class HelmClient : IHelmClient
 
     /// <summary>
     /// Scope-aware variant of <see cref="GetAttemptedOnlyManifest"/>. A document counts as
-    /// attempted-only when the previous revision has no resource with the same group/kind/name;
+    /// attempted-only when the previous revision has no resource with the same canonical group/kind/name;
     /// when names collide across namespaces, cluster-scoped resources are treated as the same
     /// object while namespaced ones in a different namespace are kept. Scope resolution falls
     /// back to API discovery for CRDs (see <see cref="ResolveResourceScopeAsync"/>).
@@ -1114,6 +1114,18 @@ public class HelmClient : IHelmClient
     {
         var separator = identity.ApiVersion.IndexOf('/');
         var apiGroup = separator < 0 ? string.Empty : identity.ApiVersion[..separator];
+        if (apiGroup == "extensions")
+        {
+            // These built-ins moved groups without changing stored object identity. Keep the
+            // aliases limited to known kinds so custom resources cannot be mistaken as existing.
+            apiGroup = identity.Kind switch
+            {
+                "Deployment" or "DaemonSet" or "ReplicaSet" => "apps",
+                "Ingress" or "NetworkPolicy" => "networking.k8s.io",
+                _ => apiGroup
+            };
+        }
+
         return $"{apiGroup}/{identity.Kind}";
     }
 
