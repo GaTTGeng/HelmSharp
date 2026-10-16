@@ -114,6 +114,11 @@ public sealed class KubernetesManifestApplier
             {
                 applyError = new KubernetesResourceOperationException(identity, ex);
             }
+            catch (OperationCanceledException ex) when (_lastApplyMayHaveCommitted)
+            {
+                // Preserve confirmed write progress before propagating in-flight cancellation.
+                applyError = ex;
+            }
 
             if (applyError is not null)
             {
