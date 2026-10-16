@@ -51,11 +51,16 @@ internal static class KubernetesManifestSchemaConverter
             ("coordination.k8s.io/v1beta1", "coordination.k8s.io/v1", "Lease") or
             ("node.k8s.io/v1beta1", "node.k8s.io/v1", "RuntimeClass") or
             ("apiregistration.k8s.io/v1beta1", "apiregistration.k8s.io/v1", "APIService") or
-            ("networking.k8s.io/v1beta1", "networking.k8s.io/v1", "IngressClass");
+            ("networking.k8s.io/v1beta1", "networking.k8s.io/v1", "IngressClass") or
+            ("flowcontrol.apiserver.k8s.io/v1beta3", "flowcontrol.apiserver.k8s.io/v1", "FlowSchema") or
+            ("flowcontrol.apiserver.k8s.io/v1beta3", "flowcontrol.apiserver.k8s.io/v1", "PriorityLevelConfiguration");
+        var flowControlMigration = (identity.Kind is "FlowSchema" or "PriorityLevelConfiguration") &&
+                                   (identity.ApiVersion is "flowcontrol.apiserver.k8s.io/v1beta1" or "flowcontrol.apiserver.k8s.io/v1beta2") &&
+                                   targetApiVersion == "flowcontrol.apiserver.k8s.io/v1";
         if (!ingressMigration && !legacyWorkloadMigration && !networkPolicyMigration &&
             !podSecurityPolicyMigration && !legacyIngressBetaMigration && !horizontalPodAutoscalerMigration &&
             !cronJobMigration && !podDisruptionBudgetMigration && !rbacMigration && !storageMigration &&
-            !apiVersionOnlyMigration)
+            !apiVersionOnlyMigration && !flowControlMigration)
         {
             convertedDocument = document;
             return false;
@@ -76,10 +81,30 @@ internal static class KubernetesManifestSchemaConverter
         {
             ConvertPodDisruptionBudgetSelector(converted);
         }
+        else if (flowControlMigration && !ConvertFlowControlConcurrencyShares(converted))
+        {
+            convertedDocument = document;
+            return false;
+        }
 
         converted["apiVersion"] = targetApiVersion;
         convertedDocument = HelmYaml.Serialize(converted);
         return true;
+    }
+
+    private static bool ConvertFlowControlConcurrencyShares(Dictionary<string, object?> document)
+    {
+        if (!string.Equals(HelmYaml.GetString(document, "kind"), "PriorityLevelConfiguration", StringComparison.Ordinal))
+            return true;
+
+        if (!document.TryGetValue("spec", out var specValue) || specValue is not Dictionary<string, object?> spec ||
+            !spec.TryGetValue("limited", out var limitedValue) || limitedValue is not Dictionary<string, object?> limited ||
+            !limited.Remove("assuredConcurrencyShares", out var assuredConcurrencyShares))
+        {
+            return true;
+        }
+
+        return limited.TryAdd("nominalConcurrencyShares", assuredConcurrencyShares);
     }
 
     private static void ConvertPodDisruptionBudgetSelector(Dictionary<string, object?> document)

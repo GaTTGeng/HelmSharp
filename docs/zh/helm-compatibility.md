@@ -36,7 +36,7 @@ CLI 颜色、进度文案、终端格式和插件执行不是目标，除非它�
 
 ### 升级时的资源字段归属
 
-对于上一已部署 release 清单中已有的资源，`HelmClient` 升级会比较该 revision 保存的清单、新渲染的 Chart 清单和 Kubernetes 当前对象。只存在于 live 对象中的字段、live 侧的删除，以及 Chart 未修改字段的 live 改动会保留。Chart 的变更会生效；若 Chart 删除某字段且 live 值仍等于上一 Chart 值，该字段也会删除；若 live 已修改该字段，则保留 live 值。`resourceVersion`、`uid` 和 `status` 等 Kubernetes 管理字段仍以集群为准。列表按整体值合并，不使用 Kubernetes strategic merge 语义。没有先前清单条目的资源、卸载后重新安装，以及直接调用 `KubernetesManifestApplier.ApplyAsync` 时，替换会使用期望清单，不执行三方归属合并。该行为由实际 install/upgrade 生命周期路径覆盖；详见合并和生命周期专项测试。
+对于上一已部署 release 清单中已有的资源，`HelmClient` 升级会比较该 revision 保存的清单、新渲染的 Chart 清单和 Kubernetes 当前对象。只存在于 live 对象中的字段、live 侧的删除，以及 Chart 未修改字段的 live 改动会保留。Chart 删除的字段会保持缺省，即使 live 对象曾修改该字段也会删除。已知 Kubernetes list-map 路径和 CRD schema 声明的 list-map 键会逐项合并；其他列表视为原子值并遵循 Chart。`resourceVersion`、`uid` 和 `status` 等 Kubernetes 管理字段仍以集群为准。没有先前清单条目的资源、卸载后重新安装，以及直接调用 `KubernetesManifestApplier.ApplyAsync` 时，替换会使用期望清单，不执行三方归属合并。该行为由实际 install/upgrade 生命周期路径覆盖；详见合并和生命周期专项测试。
 
 ## 已知边界
 

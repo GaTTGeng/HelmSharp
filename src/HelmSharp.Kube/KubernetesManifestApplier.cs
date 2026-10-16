@@ -304,7 +304,9 @@ public sealed class KubernetesManifestApplier
             ("node.k8s.io/v1", "RuntimeClass") => false,
             ("node.k8s.io/v1beta1", "RuntimeClass") => false,
             ("discovery.k8s.io/v1", "EndpointSlice") => true,
-            ("flowcontrol.apiserver.k8s.io/v1", "FlowSchema" or "PriorityLevelConfiguration") => false,
+            ("flowcontrol.apiserver.k8s.io/v1" or "flowcontrol.apiserver.k8s.io/v1beta1" or
+                "flowcontrol.apiserver.k8s.io/v1beta2" or "flowcontrol.apiserver.k8s.io/v1beta3",
+                "FlowSchema" or "PriorityLevelConfiguration") => false,
             _ => null
         };
         namespaced = scope ?? false;
@@ -1895,15 +1897,7 @@ public sealed class KubernetesManifestApplier
             if (item.ValueKind != JsonValueKind.Object)
                 return false;
 
-            var values = new List<string>(keyFields.Count);
-            foreach (var keyField in keyFields)
-            {
-                if (!item.TryGetProperty(keyField, out var value))
-                    return false;
-                values.Add(value.GetRawText());
-            }
-
-            if (!identities.Add(string.Join("\u001f", values)))
+            if (!TryGetArrayIdentity(item, keyFields, out var identity) || !identities.Add(identity))
                 return false;
         }
 
@@ -1914,13 +1908,38 @@ public sealed class KubernetesManifestApplier
     {
         if (keyFields is not null && left.ValueKind == JsonValueKind.Object && right.ValueKind == JsonValueKind.Object)
         {
-            return keyFields.All(key =>
-                left.TryGetProperty(key, out var leftValue) &&
-                right.TryGetProperty(key, out var rightValue) &&
-                JsonValuesEqual(leftValue, rightValue));
+            return TryGetArrayIdentity(left, keyFields, out var leftIdentity) &&
+                   TryGetArrayIdentity(right, keyFields, out var rightIdentity) &&
+                   string.Equals(leftIdentity, rightIdentity, StringComparison.Ordinal);
         }
 
         return JsonValuesEqual(left, right);
+    }
+
+    private static bool TryGetArrayIdentity(JsonElement item, IReadOnlyList<string> keyFields, out string identity)
+    {
+        var values = new List<string>(keyFields.Count);
+        foreach (var keyField in keyFields)
+        {
+            if (item.TryGetProperty(keyField, out var value) && value.ValueKind != JsonValueKind.Null)
+            {
+                values.Add(value.GetRawText());
+            }
+            else if (keyField == "protocol" &&
+                     (keyFields.Contains("containerPort") || keyFields.Contains("port")))
+            {
+                // Kubernetes defaults an omitted Service/container port protocol to TCP.
+                values.Add("\"TCP\"");
+            }
+            else
+            {
+                identity = string.Empty;
+                return false;
+            }
+        }
+
+        identity = string.Join("\u001f", values);
+        return true;
     }
 
     private static string AppendJsonPath(string path, string property)
