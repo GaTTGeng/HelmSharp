@@ -307,7 +307,14 @@ public sealed class KubernetesManifestApplier
             Func<Task<T>> read,
             Func<Task<T>> create,
             Func<T, Task<T>> replace)
-            => UpsertNamespacedAsync(read, create, replace, identity, yaml);
+            => UpsertNamespacedAsync(
+                read,
+                create,
+                replace,
+                identity,
+                yaml,
+                () => ct.ThrowIfCancellationRequested(),
+                () => ct = CancellationToken.None);
 
         // Typed-client dispatch: known built-in kinds deserialize to strongly typed
         // models and use read/replace/create upserts, preserving fields the typed
@@ -1035,7 +1042,7 @@ public sealed class KubernetesManifestApplier
                     SetNamespace(item, identity.Namespace);
                     SetResourceVersion(item, existing);
                     return _client.CustomObjects.ReplaceNamespacedCustomObjectAsync(item, resource.Group, resource.Version, identity.Namespace, resource.Plural, identity.Name, null, _fieldManager, null, ct);
-                }, identity, yaml);
+                }, identity, yaml, () => ct.ThrowIfCancellationRequested(), () => ct = CancellationToken.None);
             return identity;
         }
 
@@ -1052,7 +1059,7 @@ public sealed class KubernetesManifestApplier
                 SetNamespace(item, namespaceName: null);
                 SetResourceVersion(item, existing);
                 return _client.CustomObjects.ReplaceClusterCustomObjectAsync(item, resource.Group, resource.Version, resource.Plural, identity.Name, null, _fieldManager, null, ct);
-            }, identity, yaml);
+            }, identity, yaml, () => ct.ThrowIfCancellationRequested(), () => ct = CancellationToken.None);
         return identity;
     }
 
@@ -1436,7 +1443,9 @@ public sealed class KubernetesManifestApplier
         Func<Task<T>> create,
         Func<T, Task<T>> replace,
         ManifestIdentity identity,
-        string desiredYaml)
+        string desiredYaml,
+        Action throwIfCancellationRequested,
+        Action disableCancellationForRecovery)
     {
         // 404 from the read means "not created yet" — the create path. Replace is
         // preferred over patch so the applied manifest fully defines the object,
@@ -1444,24 +1453,34 @@ public sealed class KubernetesManifestApplier
         try
         {
             var existing = await read();
+            // Keep cancellation before the write outside ambiguous-write recovery.
+            throwIfCancellationRequested();
             try
             {
                 await replace(existing);
             }
             catch (Exception ex) when (IsAmbiguousWriteFailure(ex))
             {
+                if (ex is OperationCanceledException)
+                    // The request was invoked, so finish read-back without the canceled operation token.
+                    disableCancellationForRecovery();
                 _lastApplyMayHaveCommitted |= await ReplaceMayHaveCommittedAsync(read, existing, identity, desiredYaml);
                 throw;
             }
         }
         catch (HttpOperationException ex) when ((int)ex.Response.StatusCode == 404)
         {
+            // Do not dispatch a create that was already canceled after the initial read.
+            throwIfCancellationRequested();
             try
             {
                 await create();
             }
             catch (Exception writeError) when (IsAmbiguousWriteFailure(writeError))
             {
+                if (writeError is OperationCanceledException)
+                    // The create may have committed before cancellation interrupted its response.
+                    disableCancellationForRecovery();
                 _lastApplyMayHaveCommitted |= await CreateMayHaveCommittedAsync(read, identity, desiredYaml);
                 throw;
             }
@@ -1473,8 +1492,10 @@ public sealed class KubernetesManifestApplier
         Func<Task<T>> create,
         Func<T, Task<T>> replace,
         ManifestIdentity identity,
-        string desiredYaml)
-        => UpsertNamespacedAsync(read, create, replace, identity, desiredYaml);
+        string desiredYaml,
+        Action throwIfCancellationRequested,
+        Action disableCancellationForRecovery)
+        => UpsertNamespacedAsync(read, create, replace, identity, desiredYaml, throwIfCancellationRequested, disableCancellationForRecovery);
 
     private static async Task<bool> CreateMayHaveCommittedAsync<T>(
         Func<Task<T>> read,
@@ -1486,7 +1507,10 @@ public sealed class KubernetesManifestApplier
             var after = await read();
             // A different actor may have created this identity after our initial 404.
             // Only count the ambiguous create as applied when the read-back matches our payload.
-            return ContainsExpectedManifest(NormalizeSecretStringData(identity, desiredYaml), after!);
+            return ContainsExpectedManifest(
+                NormalizeSecretStringData(identity, desiredYaml),
+                after!,
+                TryGetTypedResourceScope(identity, out _));
         }
         catch
         {
@@ -1496,9 +1520,6 @@ public sealed class KubernetesManifestApplier
 
     private static bool IsAmbiguousWriteFailure(Exception exception)
     {
-        if (exception is OperationCanceledException)
-            return false;
-
         if (exception is not HttpOperationException http)
             return true;
 
@@ -1526,7 +1547,7 @@ public sealed class KubernetesManifestApplier
             // A controller can advance resourceVersion independently of this replace.
             // Only record progress if the read-back also reflects the chart-owned payload.
             var expectedYaml = MergeWithLiveResource(identity, desiredYaml, before!);
-            return ContainsExpectedManifest(expectedYaml, after!);
+            return ContainsExpectedManifest(expectedYaml, after!, TryGetTypedResourceScope(identity, out _));
         }
         catch
         {
@@ -1534,15 +1555,15 @@ public sealed class KubernetesManifestApplier
         }
     }
 
-    private static bool ContainsExpectedManifest<T>(string expectedYaml, T actualResource)
+    private static bool ContainsExpectedManifest<T>(string expectedYaml, T actualResource, bool allowCaseInsensitiveProperties)
     {
         using var expected = JsonDocument.Parse(JsonSerializer.Serialize(
             HelmYaml.DeserializeDictionary(expectedYaml, StringComparer.Ordinal)));
         using var actual = JsonDocument.Parse(JsonSerializer.Serialize(actualResource));
-        return ContainsExpectedValue(expected.RootElement, actual.RootElement, parentName: null);
+        return ContainsExpectedValue(expected.RootElement, actual.RootElement, parentName: null, allowCaseInsensitiveProperties);
     }
 
-    private static bool ContainsExpectedValue(JsonElement expected, JsonElement actual, string? parentName)
+    private static bool ContainsExpectedValue(JsonElement expected, JsonElement actual, string? parentName, bool allowCaseInsensitiveProperties)
     {
         if (expected.ValueKind == JsonValueKind.Object)
         {
@@ -1554,8 +1575,8 @@ public sealed class KubernetesManifestApplier
                 if (IsServerManagedField(parentName, property.Name))
                     continue;
 
-                if (!TryGetPropertyExactThenIgnoreCase(actual, property.Name, out var actualValue) ||
-                    !ContainsExpectedValue(property.Value, actualValue, property.Name))
+                if (!TryGetPropertyExactThenIgnoreCase(actual, property.Name, allowCaseInsensitiveProperties, out var actualValue) ||
+                    !ContainsExpectedValue(property.Value, actualValue, property.Name, allowCaseInsensitiveProperties))
                 {
                     return false;
                 }
@@ -1571,9 +1592,23 @@ public sealed class KubernetesManifestApplier
 
             var expectedItems = expected.EnumerateArray().ToArray();
             var actualItems = actual.EnumerateArray().ToArray();
-            return expectedItems.Length == actualItems.Length &&
-                   expectedItems.Zip(actualItems).All(pair =>
-                       ContainsExpectedValue(pair.First, pair.Second, parentName));
+            // Preserve submitted order while allowing admission webhooks to insert extra entries.
+            var actualIndex = 0;
+            foreach (var expectedItem in expectedItems)
+            {
+                while (actualIndex < actualItems.Length &&
+                       !ContainsExpectedValue(expectedItem, actualItems[actualIndex], parentName, allowCaseInsensitiveProperties))
+                {
+                    actualIndex++;
+                }
+
+                if (actualIndex == actualItems.Length)
+                    return false;
+
+                actualIndex++;
+            }
+
+            return true;
         }
 
         if (expected.ValueKind == JsonValueKind.Number && actual.ValueKind == JsonValueKind.Number)
@@ -1588,12 +1623,16 @@ public sealed class KubernetesManifestApplier
            string.Equals(parentName, "metadata", StringComparison.OrdinalIgnoreCase) &&
            propertyName is "resourceVersion" or "uid" or "generation" or "creationTimestamp" or "managedFields" or "selfLink";
 
-    private static bool TryGetPropertyExactThenIgnoreCase(JsonElement element, string name, out JsonElement value)
+    private static bool TryGetPropertyExactThenIgnoreCase(JsonElement element, string name, bool allowCaseInsensitiveProperties, out JsonElement value)
     {
         if (element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out value))
             return true;
 
-        return TryGetPropertyIgnoreCase(element, name, out value);
+        if (allowCaseInsensitiveProperties && TryGetPropertyIgnoreCase(element, name, out value))
+            return true;
+
+        value = default;
+        return false;
     }
 
     private static string? GetResourceVersion<T>(T resource)
