@@ -339,6 +339,32 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
     }
 
     [Fact]
+    public void ConvertRestorationApiVersions_MatchesClusterScopedBetaResourcesWithoutNamespace()
+    {
+        const string previousManifest = """
+            apiVersion: rbac.authorization.k8s.io/v1beta1
+            kind: ClusterRole
+            metadata:
+              name: reader
+            rules: []
+            """;
+        const string attemptedManifest = """
+            apiVersion: rbac.authorization.k8s.io/v1
+            kind: ClusterRole
+            metadata:
+              name: reader
+            rules: []
+            """;
+
+        var restored = HelmYaml.DeserializeDictionary(HelmClient.ConvertRestorationApiVersions(
+            previousManifest,
+            attemptedManifest,
+            "test-ns"));
+
+        Assert.Equal("rbac.authorization.k8s.io/v1", HelmYaml.GetString(restored, "apiVersion"));
+    }
+
+    [Fact]
     public void ConvertRestorationApiVersions_AddsRequiredSelectorForLegacyDeployment()
     {
         const string previousManifest = """
