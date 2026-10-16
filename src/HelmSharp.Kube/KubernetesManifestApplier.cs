@@ -913,7 +913,11 @@ public sealed class KubernetesManifestApplier
         return identity;
     }
 
-    private string MergeWithLiveResource(ManifestIdentity identity, string desiredManifest, object liveResource)
+    private string MergeWithLiveResource(
+        ManifestIdentity identity,
+        string desiredManifest,
+        object liveResource,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys = null)
     {
         if (!TryGetPreviousManifest(identity, out var previousManifest))
             return desiredManifest;
@@ -937,7 +941,8 @@ public sealed class KubernetesManifestApplier
         return ThreeWayMerge.MergeResource(
             NormalizeSecretStringData(identity, previousManifest),
             NormalizeSecretStringData(identity, desiredManifest),
-            liveManifest);
+            liveManifest,
+            customListMapKeys);
     }
 
     private static string NormalizeSecretStringData(ManifestIdentity identity, string manifest)
@@ -1036,6 +1041,9 @@ public sealed class KubernetesManifestApplier
     {
         // Retry discovery: the CR may be applied in the same pass that created its CRD.
         var resource = await DiscoverResourceAsync(identity, retryRegistration: true, ct);
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys = null;
+        if (TryGetPreviousManifest(identity, out _))
+            customListMapKeys = await ReadCustomListMapKeysAsync(resource, ct);
         var item = HelmYaml.DeserializeDictionary(yaml);
 
         if (resource.Namespaced)
@@ -1044,14 +1052,14 @@ public sealed class KubernetesManifestApplier
             await UpsertNamespacedAsync(
                 () => _client.CustomObjects.GetNamespacedCustomObjectAsync(resource.Group, resource.Version, identity.Namespace, resource.Plural, identity.Name, ct),
                 () => _client.CustomObjects.CreateNamespacedCustomObjectAsync(item, resource.Group, resource.Version, identity.Namespace, resource.Plural, null, _fieldManager, null, null, ct),
-                existing =>
+                async existing =>
                 {
                     item = HelmYaml.DeserializeDictionary(
-                        MergeWithLiveResource(identity, yaml, existing),
+                        MergeWithLiveResource(identity, yaml, existing, customListMapKeys),
                         StringComparer.Ordinal);
                     SetNamespace(item, identity.Namespace);
                     SetResourceVersion(item, existing);
-                    return _client.CustomObjects.ReplaceNamespacedCustomObjectAsync(item, resource.Group, resource.Version, identity.Namespace, resource.Plural, identity.Name, null, _fieldManager, null, ct);
+                    return await _client.CustomObjects.ReplaceNamespacedCustomObjectAsync(item, resource.Group, resource.Version, identity.Namespace, resource.Plural, identity.Name, null, _fieldManager, null, ct);
                 }, identity, yaml, () => ct.ThrowIfCancellationRequested(), () => ct = CancellationToken.None);
             return identity;
         }
@@ -1061,17 +1069,87 @@ public sealed class KubernetesManifestApplier
         await UpsertClusterAsync(
             () => _client.CustomObjects.GetClusterCustomObjectAsync(resource.Group, resource.Version, resource.Plural, identity.Name, ct),
             () => _client.CustomObjects.CreateClusterCustomObjectAsync(item, resource.Group, resource.Version, resource.Plural, null, _fieldManager, null, null, ct),
-            existing =>
+            async existing =>
             {
                 item = HelmYaml.DeserializeDictionary(
-                    MergeWithLiveResource(identity, yaml, existing),
+                    MergeWithLiveResource(identity, yaml, existing, customListMapKeys),
                     StringComparer.Ordinal);
                 SetNamespace(item, namespaceName: null);
                 SetResourceVersion(item, existing);
-                return _client.CustomObjects.ReplaceClusterCustomObjectAsync(item, resource.Group, resource.Version, resource.Plural, identity.Name, null, _fieldManager, null, ct);
+                return await _client.CustomObjects.ReplaceClusterCustomObjectAsync(item, resource.Group, resource.Version, resource.Plural, identity.Name, null, _fieldManager, null, ct);
             }, identity, yaml, () => ct.ThrowIfCancellationRequested(), () => ct = CancellationToken.None);
         return identity;
     }
+
+    private async Task<IReadOnlyDictionary<string, IReadOnlyList<string>>> ReadCustomListMapKeysAsync(
+        DiscoveredResource resource,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var crd = await _client.ApiextensionsV1.ReadCustomResourceDefinitionAsync(
+                $"{resource.Plural}.{resource.Group}",
+                cancellationToken: cancellationToken);
+            using var document = JsonDocument.Parse(JsonSerializer.Serialize(crd));
+            var versions = document.RootElement.GetProperty("spec").GetProperty("versions");
+            var version = versions.EnumerateArray().FirstOrDefault(candidate =>
+                candidate.GetProperty("name").GetString() == resource.Version &&
+                (!candidate.TryGetProperty("served", out var served) || served.GetBoolean()));
+            if (version.ValueKind == JsonValueKind.Undefined ||
+                !version.TryGetProperty("schema", out var schema) ||
+                !schema.TryGetProperty("openAPIV3Schema", out var rootSchema))
+                return new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+
+            var result = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+            CollectCustomListMapKeys(rootSchema, string.Empty, result);
+            return result;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Without schema access, treating CRD lists atomically is safer than
+            // inferring Kubernetes merge keys from coincidental property names.
+            return new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+        }
+    }
+
+    private static void CollectCustomListMapKeys(
+        JsonElement schema,
+        string path,
+        IDictionary<string, IReadOnlyList<string>> result)
+    {
+        if (schema.TryGetProperty("x-kubernetes-list-type", out var listType) &&
+            listType.GetString() == "map" &&
+            schema.TryGetProperty("x-kubernetes-list-map-keys", out var mapKeys) &&
+            mapKeys.ValueKind == JsonValueKind.Array)
+        {
+            var keys = mapKeys.EnumerateArray()
+                .Where(key => key.ValueKind == JsonValueKind.String)
+                .Select(key => key.GetString()!)
+                .ToArray();
+            if (keys.Length > 0)
+                result[path] = keys;
+        }
+
+        if (schema.TryGetProperty("properties", out var properties) && properties.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in properties.EnumerateObject())
+                CollectCustomListMapKeys(property.Value, AppendSchemaPath(path, property.Name), result);
+        }
+
+        if (schema.TryGetProperty("items", out var items))
+        {
+            if (items.ValueKind == JsonValueKind.Object)
+                CollectCustomListMapKeys(items, path + "[]", result);
+            else if (items.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var itemSchema in items.EnumerateArray())
+                    CollectCustomListMapKeys(itemSchema, path + "[]", result);
+            }
+        }
+    }
+
+    private static string AppendSchemaPath(string path, string property)
+        => path.Length == 0 ? property : path + "." + property;
 
     private async Task<DiscoveredResource> DiscoverResourceAsync(
         ManifestIdentity identity,
@@ -1557,7 +1635,9 @@ public sealed class KubernetesManifestApplier
             // A controller can advance resourceVersion independently of this replace.
             // Only record progress if the read-back also reflects the chart-owned payload.
             var expectedYaml = MergeWithLiveResource(identity, desiredYaml, before!);
-            return ContainsExpectedManifest(expectedYaml, after!, TryGetTypedResourceScope(identity, out _));
+            var typedResource = TryGetTypedResourceScope(identity, out _);
+            return ContainsExpectedManifest(expectedYaml, after!, typedResource) &&
+                   RemovedValuesAreAbsent(expectedYaml, before!, after!, typedResource);
         }
         catch
         {
@@ -1570,10 +1650,40 @@ public sealed class KubernetesManifestApplier
         using var expected = JsonDocument.Parse(JsonSerializer.Serialize(
             HelmYaml.DeserializeDictionary(expectedYaml, StringComparer.Ordinal)));
         using var actual = JsonDocument.Parse(JsonSerializer.Serialize(actualResource));
-        return ContainsExpectedValue(expected.RootElement, actual.RootElement, parentName: null, allowCaseInsensitiveProperties);
+        return ContainsExpectedValue(
+            expected.RootElement,
+            actual.RootElement,
+            parentName: null,
+            allowCaseInsensitiveProperties,
+            isTypedResource: allowCaseInsensitiveProperties,
+            inQuantityMap: false);
     }
 
-    private static bool ContainsExpectedValue(JsonElement expected, JsonElement actual, string? parentName, bool allowCaseInsensitiveProperties)
+    private static bool RemovedValuesAreAbsent<T>(
+        string expectedYaml,
+        T beforeResource,
+        T actualResource,
+        bool allowCaseInsensitiveProperties)
+    {
+        using var expected = JsonDocument.Parse(JsonSerializer.Serialize(
+            HelmYaml.DeserializeDictionary(expectedYaml, StringComparer.Ordinal)));
+        using var before = JsonDocument.Parse(JsonSerializer.Serialize(beforeResource));
+        using var actual = JsonDocument.Parse(JsonSerializer.Serialize(actualResource));
+        return RemovedValuesAreAbsent(
+            expected.RootElement,
+            before.RootElement,
+            actual.RootElement,
+            parentName: null,
+            allowCaseInsensitiveProperties);
+    }
+
+    private static bool ContainsExpectedValue(
+        JsonElement expected,
+        JsonElement actual,
+        string? parentName,
+        bool allowCaseInsensitiveProperties,
+        bool isTypedResource,
+        bool inQuantityMap)
     {
         if (expected.ValueKind == JsonValueKind.Object)
         {
@@ -1586,7 +1696,13 @@ public sealed class KubernetesManifestApplier
                     continue;
 
                 if (!TryGetPropertyExactThenIgnoreCase(actual, property.Name, allowCaseInsensitiveProperties, out var actualValue) ||
-                    !ContainsExpectedValue(property.Value, actualValue, property.Name, allowCaseInsensitiveProperties))
+                    !ContainsExpectedValue(
+                        property.Value,
+                        actualValue,
+                        property.Name,
+                        allowCaseInsensitiveProperties,
+                        isTypedResource,
+                        inQuantityMap || IsQuantityMap(property.Name)))
                 {
                     return false;
                 }
@@ -1607,7 +1723,7 @@ public sealed class KubernetesManifestApplier
             foreach (var expectedItem in expectedItems)
             {
                 while (actualIndex < actualItems.Length &&
-                       !ContainsExpectedValue(expectedItem, actualItems[actualIndex], parentName, allowCaseInsensitiveProperties))
+                       !ContainsExpectedValue(expectedItem, actualItems[actualIndex], parentName, allowCaseInsensitiveProperties, isTypedResource, inQuantityMap))
                 {
                     actualIndex++;
                 }
@@ -1624,9 +1740,117 @@ public sealed class KubernetesManifestApplier
         if (expected.ValueKind == JsonValueKind.Number && actual.ValueKind == JsonValueKind.Number)
             return expected.GetDecimal() == actual.GetDecimal();
 
+        if (isTypedResource && inQuantityMap &&
+            expected.ValueKind == JsonValueKind.String && actual.ValueKind == JsonValueKind.String)
+        {
+            try
+            {
+                // Quantity strings can differ while representing the same fixed-point value.
+                var expectedQuantity = new ResourceQuantity(expected.GetString()!).ToString();
+                var actualQuantity = new ResourceQuantity(actual.GetString()!).ToString();
+                return string.Equals(expectedQuantity, actualQuantity, StringComparison.Ordinal);
+            }
+            catch (FormatException)
+            {
+                // Invalid quantity text falls back to exact comparison below.
+            }
+        }
+
         return expected.ValueKind == actual.ValueKind &&
                string.Equals(expected.ToString(), actual.ToString(), StringComparison.Ordinal);
     }
+
+    private static bool RemovedValuesAreAbsent(
+        JsonElement expected,
+        JsonElement before,
+        JsonElement actual,
+        string? parentName,
+        bool allowCaseInsensitiveProperties)
+    {
+        if (before.ValueKind == JsonValueKind.Object && expected.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var beforeProperty in before.EnumerateObject())
+            {
+                if (IsServerManagedField(parentName, beforeProperty.Name) || beforeProperty.Value.ValueKind == JsonValueKind.Null)
+                    continue;
+
+                if (!expected.TryGetProperty(beforeProperty.Name, out var expectedValue))
+                {
+                    if (TryGetPropertyExactThenIgnoreCase(actual, beforeProperty.Name, allowCaseInsensitiveProperties, out _))
+                        return false;
+                    continue;
+                }
+
+                if (TryGetPropertyExactThenIgnoreCase(actual, beforeProperty.Name, allowCaseInsensitiveProperties, out var actualValue) &&
+                    beforeProperty.Value.ValueKind == JsonValueKind.Object && expectedValue.ValueKind == JsonValueKind.Object &&
+                    !RemovedValuesAreAbsent(expectedValue, beforeProperty.Value, actualValue, beforeProperty.Name, allowCaseInsensitiveProperties))
+                {
+                    return false;
+                }
+
+                if (TryGetPropertyExactThenIgnoreCase(actual, beforeProperty.Name, allowCaseInsensitiveProperties, out actualValue) &&
+                    beforeProperty.Value.ValueKind == JsonValueKind.Array && expectedValue.ValueKind == JsonValueKind.Array &&
+                    !RemovedArrayValuesAreAbsent(expectedValue, beforeProperty.Value, actualValue))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        if (before.ValueKind == JsonValueKind.Array && expected.ValueKind == JsonValueKind.Array)
+            return RemovedArrayValuesAreAbsent(expected, before, actual);
+
+        return true;
+    }
+
+    private static bool RemovedArrayValuesAreAbsent(JsonElement expected, JsonElement before, JsonElement actual)
+    {
+        if (actual.ValueKind != JsonValueKind.Array)
+            return false;
+
+        var expectedItems = expected.EnumerateArray().ToArray();
+        foreach (var beforeItem in before.EnumerateArray())
+        {
+            if (expectedItems.Any(expectedItem => JsonValuesEqual(expectedItem, beforeItem)))
+                continue;
+
+            if (actual.EnumerateArray().Any(actualItem => JsonValuesEqual(actualItem, beforeItem)))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool JsonValuesEqual(JsonElement left, JsonElement right)
+    {
+        if (left.ValueKind != right.ValueKind)
+            return left.ValueKind == JsonValueKind.Number && right.ValueKind == JsonValueKind.Number &&
+                   left.GetDecimal() == right.GetDecimal();
+
+        if (left.ValueKind == JsonValueKind.Object)
+        {
+            var leftProperties = left.EnumerateObject().ToArray();
+            var rightProperties = right.EnumerateObject().ToDictionary(property => property.Name, property => property.Value, StringComparer.Ordinal);
+            return leftProperties.Length == rightProperties.Count &&
+                   leftProperties.All(property => rightProperties.TryGetValue(property.Name, out var value) && JsonValuesEqual(property.Value, value));
+        }
+
+        if (left.ValueKind == JsonValueKind.Array)
+        {
+            var leftItems = left.EnumerateArray().ToArray();
+            var rightItems = right.EnumerateArray().ToArray();
+            return leftItems.Length == rightItems.Length && leftItems.Zip(rightItems).All(pair => JsonValuesEqual(pair.First, pair.Second));
+        }
+
+        return left.ValueKind == JsonValueKind.Number
+            ? left.GetDecimal() == right.GetDecimal()
+            : string.Equals(left.ToString(), right.ToString(), StringComparison.Ordinal);
+    }
+
+    private static bool IsQuantityMap(string? parentName)
+        => parentName is "requests" or "limits" or "capacity" or "allocatable";
 
     private static bool IsServerManagedField(string? parentName, string propertyName)
         => parentName is null && string.Equals(propertyName, "status", StringComparison.OrdinalIgnoreCase) ||

@@ -1162,6 +1162,163 @@ public sealed class KubernetesManifestApplierTests
     }
 
     [Fact]
+    public async Task ApplyUpgradeAsync_DoesNotConfirmAmbiguousReplaceWhenRemovedFieldRemains()
+    {
+        const string previousManifest = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: settings
+            data:
+              retired: obsolete
+            """;
+        const string upgradedManifest = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: settings
+            data: {}
+            """;
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/configmaps/settings", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "ConfigMap",
+                  "metadata": { "name": "settings", "namespace": "release-ns", "resourceVersion": "42" },
+                  "data": { "retired": "obsolete" }
+                }
+                """)
+            .Respond(HttpMethod.Put, "/api/v1/namespaces/release-ns/configmaps/settings", HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/configmaps/settings", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "ConfigMap",
+                  "metadata": { "name": "settings", "namespace": "release-ns", "resourceVersion": "43" },
+                  "data": { "retired": "obsolete" }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        var progress = new List<string>();
+
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(async () =>
+        {
+            await foreach (var resource in applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"))
+                progress.Add(resource);
+        });
+
+        Assert.Empty(progress);
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_DoesNotConfirmAmbiguousReplaceWhenRemovedListItemRemains()
+    {
+        const string previousManifest = """
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: removed-container
+            spec:
+              containers:
+                - name: app
+                  image: example/app:v1
+            """;
+        const string upgradedManifest = """
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: removed-container
+            spec:
+              containers: []
+            """;
+        var path = "/api/v1/namespaces/release-ns/pods/removed-container";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Pod",
+                  "metadata": { "name": "removed-container", "namespace": "release-ns", "resourceVersion": "42" },
+                  "spec": { "containers": [{ "name": "app", "image": "example/app:v1" }] }
+                }
+                """)
+            .Respond(HttpMethod.Put, path, HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Pod",
+                  "metadata": { "name": "removed-container", "namespace": "release-ns", "resourceVersion": "43" },
+                  "spec": { "containers": [{ "name": "app", "image": "example/app:v1" }] }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        var progress = new List<string>();
+
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(async () =>
+        {
+            await foreach (var resource in applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"))
+                progress.Add(resource);
+        });
+
+        Assert.Empty(progress);
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_ConfirmsAmbiguousReplaceWithEquivalentQuantity()
+    {
+        const string previousManifest = """
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: quantity
+            spec:
+              containers:
+                - name: app
+                  image: example/app:v1
+                  resources:
+                    requests:
+                      cpu: "1"
+            """;
+        const string upgradedManifest = """
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: quantity
+            spec:
+              containers:
+                - name: app
+                  image: example/app:v1
+                  resources:
+                    requests:
+                      cpu: "1.5"
+            """;
+        var path = "/api/v1/namespaces/release-ns/pods/quantity";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Pod",
+                  "metadata": { "name": "quantity", "namespace": "release-ns", "resourceVersion": "42" },
+                  "spec": { "containers": [{ "name": "app", "image": "example/app:v1", "resources": { "requests": { "cpu": "1" } } }] }
+                }
+                """)
+            .Respond(HttpMethod.Put, path, HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Pod",
+                  "metadata": { "name": "quantity", "namespace": "release-ns", "resourceVersion": "43" },
+                  "spec": { "containers": [{ "name": "app", "image": "example/app:v1", "resources": { "requests": { "cpu": "1500m" } } }] }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await using var applied = applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns").GetAsyncEnumerator();
+
+        Assert.True(await applied.MoveNextAsync());
+        Assert.Equal("Pod/release-ns/quantity", applied.Current);
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(() => applied.MoveNextAsync().AsTask());
+    }
+
+    [Fact]
     public async Task ApplyAsync_ReadsBackAfterWriteCancellationWithUncanceledToken()
     {
         const string manifest = """
@@ -1219,17 +1376,45 @@ public sealed class KubernetesManifestApplierTests
                   "resources": [{ "name": "widgets", "kind": "Widget", "namespaced": {{namespaced.ToString().ToLowerInvariant()}} }]
                 }
                 """)
+            .Respond(HttpMethod.Get, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/widgets.example.com", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "apiextensions.k8s.io/v1",
+                  "kind": "CustomResourceDefinition",
+                  "metadata": { "name": "widgets.example.com" },
+                  "spec": {
+                    "versions": [{
+                      "name": "v1",
+                      "served": true,
+                      "schema": { "openAPIV3Schema": {
+                        "type": "object",
+                        "properties": { "spec": { "type": "object", "properties": {
+                          "config": { "type": "object" },
+                          "entries": {
+                            "type": "array",
+                            "x-kubernetes-list-type": "map",
+                            "x-kubernetes-list-map-keys": ["name"],
+                            "items": { "type": "object", "properties": { "name": { "type": "string" }, "value": { "type": "string" } } }
+                          }
+                        } } }
+                      } }
+                    }]
+                  }
+                }
+                """)
             .Respond(HttpMethod.Get, resourcePath, HttpStatusCode.OK, """
                 {
                   "apiVersion": "example.com/v1",
                   "kind": "Widget",
                   "metadata": { "name": "sample", "resourceVersion": "42" },
-                  "spec": { "config": { "FOO": "chart", "foo": "operator" } }
+                  "spec": {
+                    "config": { "FOO": "chart", "foo": "operator" },
+                    "entries": [{ "name": "chart", "value": "before" }, { "name": "operator", "value": "retained" }]
+                  }
                 }
                 """)
             .Respond(HttpMethod.Put, replacePath, HttpStatusCode.OK);
         var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
-        const string manifest = """
+        const string previousManifest = """
             apiVersion: example.com/v1
             kind: Widget
             metadata:
@@ -1237,15 +1422,34 @@ public sealed class KubernetesManifestApplierTests
             spec:
               config:
                 FOO: chart
+              entries:
+                - name: chart
+                  value: before
+            """;
+        const string upgradedManifest = """
+            apiVersion: example.com/v1
+            kind: Widget
+            metadata:
+              name: sample
+            spec:
+              config:
+                FOO: chart
+              entries:
+                - name: chart
+                  value: after
             """;
 
-        await AsyncEnumerableTestExtensions.DrainAsync(applier.ApplyUpgradeAsync(manifest, manifest, "release-ns"));
+        await AsyncEnumerableTestExtensions.DrainAsync(applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"));
 
         var replace = Assert.Single(handler.Requests, request => request.Method == HttpMethod.Put);
         using var json = JsonDocument.Parse(replace.Content!);
         var config = json.RootElement.GetProperty("spec").GetProperty("config");
         Assert.Equal("chart", config.GetProperty("FOO").GetString());
         Assert.Equal("operator", config.GetProperty("foo").GetString());
+        var entries = json.RootElement.GetProperty("spec").GetProperty("entries");
+        Assert.Equal(2, entries.GetArrayLength());
+        Assert.Equal("after", entries[0].GetProperty("value").GetString());
+        Assert.Equal("operator", entries[1].GetProperty("name").GetString());
     }
 
     [Fact]

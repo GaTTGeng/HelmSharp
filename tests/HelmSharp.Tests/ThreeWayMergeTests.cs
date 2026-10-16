@@ -287,4 +287,40 @@ public sealed class ThreeWayMergeTests
         Assert.Equal("upper", data["FOO"]);
         Assert.Equal("lower", data["foo"]);
     }
+
+    [Fact]
+    public void MergeResource_UsesDeclaredCustomListMapKeys()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "spec:\n  entries:\n  - name: chart\n    value: before\n",
+            "spec:\n  entries:\n  - name: chart\n    value: after\n",
+            "spec:\n  entries:\n  - name: chart\n    value: before\n  - name: operator\n    value: retained\n",
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+            {
+                ["spec.entries"] = ["name"]
+            });
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var entries = (IList<object?>)spec["entries"]!;
+        Assert.Equal(2, entries.Count);
+        Assert.Equal("after", ((IDictionary<string, object?>)entries[0]!)["value"]);
+        Assert.Equal("operator", ((IDictionary<string, object?>)entries[1]!)["name"]);
+    }
+
+    [Fact]
+    public void MergeResource_TreatsUnmappedCustomListsAsAtomic()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "spec:\n  entries:\n  - name: chart\n    value: before\n",
+            "spec:\n  entries:\n  - name: chart\n    value: after\n",
+            "spec:\n  entries:\n  - name: chart\n    value: before\n  - name: operator\n    value: retained\n",
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal));
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var entries = (IList<object?>)spec["entries"]!;
+        Assert.Single(entries);
+        Assert.Equal("after", ((IDictionary<string, object?>)entries[0]!)["value"]);
+    }
 }
