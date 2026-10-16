@@ -1125,16 +1125,23 @@ public sealed class KubernetesManifestApplier
         IDictionary<string, IReadOnlyList<string>> result)
     {
         if (schema.TryGetProperty("x-kubernetes-list-type", out var listType) &&
-            listType.GetString() == "map" &&
-            schema.TryGetProperty("x-kubernetes-list-map-keys", out var mapKeys) &&
-            mapKeys.ValueKind == JsonValueKind.Array)
+            listType.ValueKind == JsonValueKind.String &&
+            listType.GetString() is "map" or "set")
         {
-            var keys = mapKeys.EnumerateArray()
-                .Where(key => key.ValueKind == JsonValueKind.String)
-                .Select(key => key.GetString()!)
-                .ToArray();
-            if (keys.Length > 0)
-                result[path] = keys;
+            if (listType.GetString() == "set")
+            {
+                result[path] = Array.Empty<string>();
+            }
+            else if (schema.TryGetProperty("x-kubernetes-list-map-keys", out var mapKeys) &&
+                     mapKeys.ValueKind == JsonValueKind.Array)
+            {
+                var keys = mapKeys.EnumerateArray()
+                    .Where(key => key.ValueKind == JsonValueKind.String)
+                    .Select(key => key.GetString()!)
+                    .ToArray();
+                if (keys.Length > 0)
+                    result[path] = keys;
+            }
         }
 
         if (schema.TryGetProperty("properties", out var properties) && properties.ValueKind == JsonValueKind.Object)
@@ -1153,6 +1160,11 @@ public sealed class KubernetesManifestApplier
                     CollectCustomListMapKeys(itemSchema, path + "[]", result);
             }
         }
+
+        // Dynamic map keys need a wildcard path so nested CRD list semantics still match.
+        if (schema.TryGetProperty("additionalProperties", out var additionalProperties) &&
+            additionalProperties.ValueKind == JsonValueKind.Object)
+            CollectCustomListMapKeys(additionalProperties, AppendSchemaPath(path, "*"), result);
     }
 
     private static string AppendSchemaPath(string path, string property)
@@ -1711,12 +1723,13 @@ public sealed class KubernetesManifestApplier
                 if (IsServerManagedField(parentName, property.Name))
                     continue;
 
-                if (!TryGetPropertyExactThenIgnoreCase(actual, property.Name, allowCaseInsensitiveProperties, out var actualValue) ||
+                var matchModelAliases = allowCaseInsensitiveProperties && !IsArbitraryMap(parentName) && !inQuantityMap;
+                if (!TryGetPropertyExactThenIgnoreCase(actual, property.Name, matchModelAliases, out var actualValue) ||
                     !ContainsExpectedValue(
                         property.Value,
                         actualValue,
                         property.Name,
-                        allowCaseInsensitiveProperties,
+                        allowCaseInsensitiveProperties && !IsArbitraryMap(property.Name),
                         isTypedResource,
                         inQuantityMap || IsQuantityMap(property.Name, parentName, resourceKind) ||
                         resourceKind == "HorizontalPodAutoscaler" && parentName == "target" &&
@@ -1790,6 +1803,7 @@ public sealed class KubernetesManifestApplier
     {
         if (before.ValueKind == JsonValueKind.Object && expected.ValueKind == JsonValueKind.Object)
         {
+            var matchModelAliases = allowCaseInsensitiveProperties && !IsArbitraryMap(parentName);
             foreach (var beforeProperty in before.EnumerateObject())
             {
                 if (IsServerManagedField(parentName, beforeProperty.Name) || beforeProperty.Value.ValueKind == JsonValueKind.Null)
@@ -1797,19 +1811,19 @@ public sealed class KubernetesManifestApplier
 
                 if (!expected.TryGetProperty(beforeProperty.Name, out var expectedValue))
                 {
-                    if (TryGetPropertyExactThenIgnoreCase(actual, beforeProperty.Name, allowCaseInsensitiveProperties, out _))
+                    if (TryGetPropertyExactThenIgnoreCase(actual, beforeProperty.Name, matchModelAliases, out _))
                         return false;
                     continue;
                 }
 
-                if (TryGetPropertyExactThenIgnoreCase(actual, beforeProperty.Name, allowCaseInsensitiveProperties, out var actualValue) &&
+                if (TryGetPropertyExactThenIgnoreCase(actual, beforeProperty.Name, matchModelAliases, out var actualValue) &&
                     beforeProperty.Value.ValueKind == JsonValueKind.Object && expectedValue.ValueKind == JsonValueKind.Object &&
-                    !RemovedValuesAreAbsent(expectedValue, beforeProperty.Value, actualValue, beforeProperty.Name, allowCaseInsensitiveProperties, AppendJsonPath(path, beforeProperty.Name), customListMapKeys))
+                    !RemovedValuesAreAbsent(expectedValue, beforeProperty.Value, actualValue, beforeProperty.Name, allowCaseInsensitiveProperties && !IsArbitraryMap(beforeProperty.Name), AppendJsonPath(path, beforeProperty.Name), customListMapKeys))
                 {
                     return false;
                 }
 
-                if (TryGetPropertyExactThenIgnoreCase(actual, beforeProperty.Name, allowCaseInsensitiveProperties, out actualValue) &&
+                if (TryGetPropertyExactThenIgnoreCase(actual, beforeProperty.Name, matchModelAliases, out actualValue) &&
                     beforeProperty.Value.ValueKind == JsonValueKind.Array && expectedValue.ValueKind == JsonValueKind.Array &&
                     !RemovedArrayValuesAreAbsent(expectedValue, beforeProperty.Value, actualValue, AppendJsonPath(path, beforeProperty.Name), customListMapKeys))
                 {
@@ -1974,6 +1988,11 @@ public sealed class KubernetesManifestApplier
     private static bool IsQuantityMap(string? propertyName, string? parentName, string resourceKind)
         => propertyName is "requests" or "limits" or "capacity" or "allocatable" ||
            resourceKind == "ResourceQuota" && parentName == "spec" && propertyName is "hard" or "used";
+
+    private static bool IsArbitraryMap(string? propertyName)
+        => propertyName is "data" or "binaryData" or "stringData" or "labels" or "annotations" or
+            "matchLabels" or "nodeSelector" or "requests" or "limits" or "capacity" or "allocatable" or
+            "hard" or "used";
 
     private static bool IsServerManagedField(string? parentName, string propertyName)
         => parentName is null && string.Equals(propertyName, "status", StringComparison.OrdinalIgnoreCase) ||

@@ -782,6 +782,7 @@ public class HelmClient : IHelmClient
                 .MaxBy(record => record.Revision);
             if (previous is not null)
             {
+                var cleanedResources = new List<string>();
                 try
                 {
                     var attemptedOnlyManifest = await GetAttemptedOnlyManifestAsync(
@@ -793,12 +794,29 @@ public class HelmClient : IHelmClient
                     if (!string.IsNullOrWhiteSpace(attemptedOnlyManifest))
                     {
                         await foreach (var resource in applier.DeleteAsync(attemptedOnlyManifest, ns, cancellationToken: CancellationToken.None))
+                        {
                             output.Add($"Removed failed-upgrade resource {resource}");
+                            cleanedResources.Add(resource);
+                        }
                     }
                 }
                 catch
                 {
                     output.Add("Unable to fully clean up resources from the failed upgrade.");
+                }
+
+                failedRecord = failedRecord with
+                {
+                    AppliedManifest = RemoveCleanedDocuments(failedRecord.AppliedManifest ?? string.Empty, cleanedResources, ns),
+                    UpdatedAt = DateTimeOffset.UtcNow
+                };
+                try
+                {
+                    await store.SaveAsync(failedRecord, CancellationToken.None);
+                }
+                catch
+                {
+                    // Preserve the original apply failure if recovery metadata cannot be saved.
                 }
 
                 // Restoration is independent of failed-upgrade cleanup. In particular,
@@ -868,14 +886,31 @@ public class HelmClient : IHelmClient
             {
                 // A retry after a failed initial install has a revision history but no
                 // deployed predecessor. Its resources belong solely to failed attempts.
+                var cleanedResources = new List<string>();
                 try
                 {
                     await foreach (var resource in applier.DeleteAsync(mainManifest, ns, cancellationToken: CancellationToken.None))
+                    {
                         output.Add($"Cleaned up {resource}");
+                        cleanedResources.Add(resource);
+                    }
                 }
                 catch
                 {
                     output.Add("Unable to fully clean up resources from the failed installation.");
+                }
+                failedRecord = failedRecord with
+                {
+                    AppliedManifest = RemoveCleanedDocuments(failedRecord.AppliedManifest ?? string.Empty, cleanedResources, ns),
+                    UpdatedAt = DateTimeOffset.UtcNow
+                };
+                try
+                {
+                    await store.SaveAsync(failedRecord, CancellationToken.None);
+                }
+                catch
+                {
+                    // Preserve the original apply failure if recovery metadata cannot be saved.
                 }
             }
             return output;
@@ -885,14 +920,31 @@ public class HelmClient : IHelmClient
         // it could remove resources owned by the previously deployed revision.
         if (!isUpgrade && (request.Atomic || request.CleanupOnFail))
         {
+            var cleanedResources = new List<string>();
             try
             {
                 await foreach (var resource in applier.DeleteAsync(mainManifest, ns, cancellationToken: CancellationToken.None))
+                {
                     output.Add($"Cleaned up {resource}");
+                    cleanedResources.Add(resource);
+                }
             }
             catch
             {
                 output.Add("Unable to fully clean up resources from the failed installation.");
+            }
+            failedRecord = failedRecord with
+            {
+                AppliedManifest = RemoveCleanedDocuments(failedRecord.AppliedManifest ?? string.Empty, cleanedResources, ns),
+                UpdatedAt = DateTimeOffset.UtcNow
+            };
+            try
+            {
+                await store.SaveAsync(failedRecord, CancellationToken.None);
+            }
+            catch
+            {
+                // Preserve the original apply failure if recovery metadata cannot be saved.
             }
         }
 
@@ -1126,6 +1178,23 @@ public class HelmClient : IHelmClient
         return string.Join(Environment.NewLine + "---" + Environment.NewLine, documentsByIdentity.Values);
     }
 
+    internal static string RemoveCleanedDocuments(string manifest, IReadOnlyCollection<string> cleanedResources, string defaultNamespace)
+    {
+        if (cleanedResources.Count == 0)
+            return manifest;
+
+        // Recovery metadata must no longer claim ownership of resources already deleted during cleanup.
+        var cleanedNames = cleanedResources.ToHashSet(StringComparer.Ordinal);
+        return string.Join(Environment.NewLine + "---" + Environment.NewLine,
+            KubernetesManifestApplier.SplitDocumentsPublic(manifest).Where(document =>
+            {
+                var identity = ManifestIdentity.Parse(document, defaultNamespace);
+                return identity is null ||
+                       !cleanedNames.Contains(identity.DisplayName) &&
+                       !cleanedNames.Contains($"{identity.Kind}/{identity.Name}");
+            }));
+    }
+
     internal static string ConvertRestorationApiVersions(
         string previousManifest,
         string attemptedManifest,
@@ -1143,9 +1212,15 @@ public class HelmClient : IHelmClient
         foreach (var document in KubernetesManifestApplier.SplitDocumentsPublic(previousManifest))
         {
             var identity = ManifestIdentity.Parse(document, defaultNamespace);
-            if (identity is null ||
-                !attemptedVersionsByIdentity.TryGetValue(ManifestIdentityKey(identity), out var apiVersion) ||
-                string.Equals(identity.ApiVersion, apiVersion, StringComparison.Ordinal))
+            if (identity is null)
+            {
+                restorationDocuments.Add(document);
+                continue;
+            }
+
+            attemptedVersionsByIdentity.TryGetValue(ManifestIdentityKey(identity), out var apiVersion);
+            apiVersion ??= KubernetesManifestSchemaConverter.GetCanonicalApiVersion(identity);
+            if (apiVersion is null || string.Equals(identity.ApiVersion, apiVersion, StringComparison.Ordinal))
             {
                 restorationDocuments.Add(document);
                 continue;

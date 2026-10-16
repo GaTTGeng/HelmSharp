@@ -5,6 +5,31 @@ namespace HelmSharp.Kube;
 /// <summary>Converts known Kubernetes manifest schemas between served API versions.</summary>
 internal static class KubernetesManifestSchemaConverter
 {
+    /// <summary>Returns the current API version for a recognized legacy built-in schema.</summary>
+    internal static string? GetCanonicalApiVersion(ManifestIdentity identity)
+        => identity.Kind switch
+        {
+            "Deployment" or "DaemonSet" or "ReplicaSet" or "StatefulSet"
+                when identity.ApiVersion is "extensions/v1beta1" or "apps/v1beta1" or "apps/v1beta2" => "apps/v1",
+            "Ingress" when identity.ApiVersion is "extensions/v1beta1" or "networking.k8s.io/v1beta1" => "networking.k8s.io/v1",
+            "NetworkPolicy" when identity.ApiVersion == "extensions/v1beta1" => "networking.k8s.io/v1",
+            "HorizontalPodAutoscaler" when identity.ApiVersion is "autoscaling/v1" or "autoscaling/v2beta1" or "autoscaling/v2beta2" => "autoscaling/v2",
+            "CronJob" when identity.ApiVersion == "batch/v1beta1" => "batch/v1",
+            "PodDisruptionBudget" when identity.ApiVersion == "policy/v1beta1" => "policy/v1",
+            "Role" or "RoleBinding" or "ClusterRole" or "ClusterRoleBinding"
+                when identity.ApiVersion == "rbac.authorization.k8s.io/v1beta1" => "rbac.authorization.k8s.io/v1",
+            "StorageClass" or "CSIDriver" or "CSINode" or "VolumeAttachment" or "CSIStorageCapacity"
+                when identity.ApiVersion == "storage.k8s.io/v1beta1" => "storage.k8s.io/v1",
+            "PriorityClass" when identity.ApiVersion == "scheduling.k8s.io/v1beta1" => "scheduling.k8s.io/v1",
+            "Lease" when identity.ApiVersion == "coordination.k8s.io/v1beta1" => "coordination.k8s.io/v1",
+            "RuntimeClass" when identity.ApiVersion == "node.k8s.io/v1beta1" => "node.k8s.io/v1",
+            "APIService" when identity.ApiVersion == "apiregistration.k8s.io/v1beta1" => "apiregistration.k8s.io/v1",
+            "IngressClass" when identity.ApiVersion == "networking.k8s.io/v1beta1" => "networking.k8s.io/v1",
+            "FlowSchema" or "PriorityLevelConfiguration"
+                when identity.ApiVersion is "flowcontrol.apiserver.k8s.io/v1beta1" or "flowcontrol.apiserver.k8s.io/v1beta2" or "flowcontrol.apiserver.k8s.io/v1beta3" => "flowcontrol.apiserver.k8s.io/v1",
+            _ => null
+        };
+
     /// <summary>Converts a manifest to a compatible target API version when its schema is known.</summary>
     internal static bool TryConvertToApiVersion(
         string document,
