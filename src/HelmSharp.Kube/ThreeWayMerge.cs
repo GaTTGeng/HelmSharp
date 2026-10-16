@@ -114,18 +114,23 @@ internal static class ThreeWayMerge
                 lastVal is IDictionary<string, object?> removedLastMap &&
                 liveVal is IDictionary<string, object?> removedLiveMap)
             {
-                var remaining = new Dictionary<string, object?>(StringComparer.Ordinal);
-                DeepThreeWayMerge(
-                    removedLastMap,
-                    new Dictionary<string, object?>(StringComparer.Ordinal),
-                    removedLiveMap,
-                    remaining,
-                    isRoot: false,
-                    isMetadata: isRoot && key == "metadata");
+                var remaining = PreserveLiveOnlyFields(removedLastMap, removedLiveMap);
                 if (remaining.Count == 0)
                     merged.Remove(key);
                 else
                     merged[key] = remaining;
+                continue;
+            }
+
+            // Kubernetes list-map fields such as pod containers are owned per named item;
+            // a chart edit to one item must not discard admission-added live items.
+            if (hasLast && hasNew && hasLive &&
+                lastVal is IList<object?> lastList &&
+                newVal is IList<object?> newList &&
+                liveVal is IList<object?> liveList &&
+                TryMergeNamedLists(lastList, newList, liveList, out var mergedList))
+            {
+                merged[key] = mergedList;
                 continue;
             }
 
@@ -166,6 +171,85 @@ internal static class ThreeWayMerge
             }
             // All other cases: keep the merged (new) value
         }
+    }
+
+    private static Dictionary<string, object?> PreserveLiveOnlyFields(
+        IDictionary<string, object?> last,
+        IDictionary<string, object?> live)
+    {
+        var result = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var (key, liveValue) in live)
+        {
+            if (!last.TryGetValue(key, out var lastValue))
+            {
+                result[key] = DeepCopyValue(liveValue);
+            }
+            else if (lastValue is IDictionary<string, object?> lastChild &&
+                     liveValue is IDictionary<string, object?> liveChild)
+            {
+                var liveOnlyChildren = PreserveLiveOnlyFields(lastChild, liveChild);
+                if (liveOnlyChildren.Count > 0)
+                    result[key] = liveOnlyChildren;
+            }
+        }
+
+        return result;
+    }
+
+    private static bool TryMergeNamedLists(
+        IList<object?> last,
+        IList<object?> newValues,
+        IList<object?> live,
+        out List<object?> merged)
+    {
+        merged = [];
+        if (!TryIndexNamedItems(last, out var lastItems) ||
+            !TryIndexNamedItems(newValues, out var newItems) ||
+            !TryIndexNamedItems(live, out var liveItems))
+            return false;
+
+        foreach (var item in newValues)
+        {
+            var newItem = (IDictionary<string, object?>)item!;
+            var name = (string)newItem["name"]!;
+            var hasLast = lastItems.TryGetValue(name, out var lastItem);
+            var hasLive = liveItems.TryGetValue(name, out var liveItem);
+            if (hasLast && !hasLive && DeepEquals(lastItem, newItem))
+                continue;
+
+            var mergedItem = DeepCopyDict((Dictionary<string, object?>)newItem);
+            if (hasLast && hasLive)
+                DeepThreeWayMerge(lastItem!, newItem, liveItem!, mergedItem, isRoot: false, isMetadata: false);
+            merged.Add(mergedItem);
+        }
+
+        foreach (var item in live)
+        {
+            var liveItem = (IDictionary<string, object?>)item!;
+            var name = (string)liveItem["name"]!;
+            if (!lastItems.ContainsKey(name) && !newItems.ContainsKey(name))
+                merged.Add(DeepCopyDict((Dictionary<string, object?>)liveItem));
+        }
+
+        return true;
+    }
+
+    private static bool TryIndexNamedItems(
+        IList<object?> values,
+        out Dictionary<string, Dictionary<string, object?>> items)
+    {
+        items = new Dictionary<string, Dictionary<string, object?>>(StringComparer.Ordinal);
+        foreach (var value in values)
+        {
+            if (value is not Dictionary<string, object?> item ||
+                !item.TryGetValue("name", out var nameValue) ||
+                nameValue is not string name ||
+                string.IsNullOrEmpty(name) ||
+                !items.TryAdd(name, item))
+                return false;
+        }
+
+        return values.Count > 0;
     }
 
     /// <summary>
