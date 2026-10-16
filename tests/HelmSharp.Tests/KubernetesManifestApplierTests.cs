@@ -1083,6 +1083,116 @@ public sealed class KubernetesManifestApplierTests
         await Assert.ThrowsAsync<KubernetesResourceOperationException>(() => applied.MoveNextAsync().AsTask());
     }
 
+    [Fact]
+    public async Task ApplyAsync_RecognizesAmbiguousPodCreateWhenAdmissionAddsContainer()
+    {
+        const string manifest = """
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: admitted
+            spec:
+              containers:
+                - name: app
+                  image: example/app:v1
+            """;
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/pods/admitted", HttpStatusCode.NotFound)
+            .Respond(HttpMethod.Post, "/api/v1/namespaces/release-ns/pods", HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/pods/admitted", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Pod",
+                  "metadata": { "name": "admitted", "namespace": "release-ns" },
+                  "spec": { "containers": [
+                    { "name": "app", "image": "example/app:v1" },
+                    { "name": "mesh-proxy", "image": "example/proxy:v2" }
+                  ] }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        await using var applied = applier.ApplyAsync(manifest, "release-ns").GetAsyncEnumerator();
+
+        Assert.True(await applied.MoveNextAsync());
+        Assert.Equal("Pod/release-ns/admitted", applied.Current);
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(() => applied.MoveNextAsync().AsTask());
+    }
+
+    [Fact]
+    public async Task ApplyAsync_DoesNotMatchCaseChangedCustomResourceKeyAfterAmbiguousCreate()
+    {
+        const string manifest = """
+            apiVersion: example.com/v1
+            kind: Widget
+            metadata:
+              name: sample
+            spec:
+              foo: requested
+            """;
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/example.com/v1", HttpStatusCode.OK, """
+                {
+                  "kind": "APIResourceList",
+                  "apiVersion": "v1",
+                  "groupVersion": "example.com/v1",
+                  "resources": [{ "name": "widgets", "kind": "Widget", "namespaced": true }]
+                }
+                """)
+            .Respond(HttpMethod.Get, "/apis/example.com/v1/namespaces/release-ns/widgets/sample", HttpStatusCode.NotFound)
+            .Respond(HttpMethod.Post, "/apis/example.com/v1/namespaces/release-ns/widgets", HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, "/apis/example.com/v1/namespaces/release-ns/widgets/sample", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "example.com/v1",
+                  "kind": "Widget",
+                  "metadata": { "name": "sample", "namespace": "release-ns" },
+                  "spec": { "Foo": "requested" }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        var progress = new List<string>();
+
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(async () =>
+        {
+            await foreach (var resource in applier.ApplyAsync(manifest, "release-ns"))
+                progress.Add(resource);
+        });
+
+        Assert.Empty(progress);
+    }
+
+    [Fact]
+    public async Task ApplyAsync_ReadsBackAfterWriteCancellationWithUncanceledToken()
+    {
+        const string manifest = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: canceled-write
+            data:
+              value: committed
+            """;
+        using var cancellation = new CancellationTokenSource();
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/configmaps/canceled-write", HttpStatusCode.NotFound)
+            .Respond(HttpMethod.Post, "/api/v1/namespaces/release-ns/configmaps", HttpStatusCode.Created)
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/configmaps/canceled-write", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "ConfigMap",
+                  "metadata": { "name": "canceled-write", "namespace": "release-ns" },
+                  "data": { "value": "committed" }
+                }
+                """);
+        handler.CancelAfterRequestMethod = HttpMethod.Post;
+        handler.CancellationToTrigger = cancellation;
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await AsyncEnumerableTestExtensions.DrainAsync(applier.ApplyAsync(manifest, "release-ns", cancellation.Token)));
+
+        Assert.Equal(2, handler.Requests.Count(request => request.Method == HttpMethod.Get));
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

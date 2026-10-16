@@ -31,6 +31,10 @@ internal sealed class KubernetesApiHandler : DelegatingHandler
 
     public IReadOnlyList<RecordedKubernetesRequest> Requests => _requests;
 
+    public HttpMethod? CancelAfterRequestMethod { get; set; }
+
+    public CancellationTokenSource? CancellationToTrigger { get; set; }
+
     public KubernetesApiHandler Respond(
         HttpMethod method,
         string path,
@@ -65,6 +69,8 @@ internal sealed class KubernetesApiHandler : DelegatingHandler
             ? null
             : await request.Content.ReadAsStringAsync(cancellationToken);
         _requests.Add(new RecordedKubernetesRequest(request.Method, pathAndQuery, content));
+        if (request.Method == CancelAfterRequestMethod && CancellationToTrigger is { } cancellation)
+            await cancellation.CancelAsync();
 
         var pathOnlyKey = (request.Method.Method, request.RequestUri?.AbsolutePath ?? string.Empty);
         KubernetesResponse? response = null;
@@ -77,6 +83,7 @@ internal sealed class KubernetesApiHandler : DelegatingHandler
         if (response is null && !_persistentResponses.TryGetValue(key, out response))
             _persistentResponses.TryGetValue(pathOnlyKey, out response);
 
+        cancellationToken.ThrowIfCancellationRequested();
         response ??= new KubernetesResponse(HttpStatusCode.NotFound, """
             { "kind": "Status", "apiVersion": "v1", "status": "Failure", "code": 404 }
             """);
