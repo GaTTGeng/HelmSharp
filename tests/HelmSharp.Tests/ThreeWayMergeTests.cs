@@ -114,6 +114,41 @@ public sealed class ThreeWayMergeTests
     }
 
     [Fact]
+    public void MergeResource_RemovesEditedChildrenWhenChartRemovesTheirParentMapping()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "data:\n  setting: old\n  nested:\n    owned: before\n",
+            "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: settings\n",
+            "data:\n  setting: custom\n  nested:\n    owned: changed\n    operatorAdded: retain\n  operatorAdded: retain\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var data = (IDictionary<string, object?>)document["data"]!;
+        Assert.Equal("retain", data["operatorAdded"]);
+        Assert.False(data.ContainsKey("setting"));
+        var nested = (IDictionary<string, object?>)data["nested"]!;
+        Assert.False(nested.ContainsKey("owned"));
+        Assert.Equal("retain", nested["operatorAdded"]);
+    }
+
+    [Fact]
+    public void MergeResource_PreservesLiveOnlyNamedListItemsWhenChartChangesAnItem()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        image: app:v1\n",
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        image: app:v2\n",
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        image: app:v1\n      - name: injected\n        image: sidecar:v1\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var template = (IDictionary<string, object?>)spec["template"]!;
+        var podSpec = (IDictionary<string, object?>)template["spec"]!;
+        var containers = (IList<object?>)podSpec["containers"]!;
+        Assert.Equal(2, containers.Count);
+        Assert.Equal("app:v2", ((IDictionary<string, object?>)containers[0]!)["image"]);
+        Assert.Equal("injected", ((IDictionary<string, object?>)containers[1]!)["name"]);
+    }
+
+    [Fact]
     public void MergeResource_ScopesKubernetesManagedFieldExclusionsToTheirSchemaPaths()
     {
         var merged = ThreeWayMerge.MergeResource(
