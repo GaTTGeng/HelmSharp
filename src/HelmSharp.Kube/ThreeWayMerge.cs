@@ -134,10 +134,20 @@ internal static class ThreeWayMerge
                 lastVal is IList<object?> lastList &&
                 newVal is IList<object?> newList &&
                 liveVal is IList<object?> liveList &&
+                TryMergeSetList(lastList, newList, liveList, AppendPath(path, key), customListMapKeys, out var mergedSet))
+            {
+                merged[key] = mergedSet;
+                continue;
+            }
+
+            if (hasLast && hasNew && hasLive &&
+                lastVal is IList<object?> lastKeyedList &&
+                newVal is IList<object?> newKeyedList &&
+                liveVal is IList<object?> liveKeyedList &&
                 TryMergeKeyedLists(
-                    lastList,
-                    newList,
-                    liveList,
+                    lastKeyedList,
+                    newKeyedList,
+                    liveKeyedList,
                     AppendPath(path, key),
                     customListMapKeys,
                     out var mergedList))
@@ -253,12 +263,61 @@ internal static class ThreeWayMerge
             merged.Add(mergedItem);
         }
 
-        foreach (var item in live)
+        // Preserve chart ordering while placing injected entries before their next live anchor.
+        var liveKeys = live.Select(item => GetItemKey((IDictionary<string, object?>)item!, selectedKeySet)).ToArray();
+        var ordered = new List<object?>();
+        var inserted = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var newItem in merged)
         {
-            var liveItem = (IDictionary<string, object?>)item!;
-            var key = GetItemKey(liveItem, selectedKeySet);
-            if (!lastItems.ContainsKey(key) && !newItems.ContainsKey(key))
-                merged.Add(DeepCopyDictionary(liveItem));
+            var newKey = GetItemKey((IDictionary<string, object?>)newItem!, selectedKeySet);
+            var anchorIndex = Array.IndexOf(liveKeys, newKey);
+            if (anchorIndex >= 0)
+            {
+                for (var index = 0; index < anchorIndex; index++)
+                {
+                    var injectedKey = liveKeys[index];
+                    if (!lastItems.ContainsKey(injectedKey) && !newItems.ContainsKey(injectedKey) && inserted.Add(injectedKey))
+                        ordered.Add(DeepCopyDictionary((IDictionary<string, object?>)live[index]!));
+                }
+            }
+
+            ordered.Add(newItem);
+        }
+
+        for (var index = 0; index < live.Count; index++)
+        {
+            var key = liveKeys[index];
+            if (!lastItems.ContainsKey(key) && !newItems.ContainsKey(key) && inserted.Add(key))
+                ordered.Add(DeepCopyDictionary((IDictionary<string, object?>)live[index]!));
+        }
+        merged = ordered;
+
+        return true;
+    }
+
+    private static bool TryMergeSetList(
+        IList<object?> last,
+        IList<object?> newValues,
+        IList<object?> live,
+        string path,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys,
+        out List<object?> merged)
+    {
+        merged = [];
+        // Set lists are value keyed, so a live-only value survives unless the chart now owns that value.
+        var customSet = customListMapKeys is not null &&
+                        customListMapKeys.Any(entry => entry.Value.Count == 0 && SchemaPathMatches(entry.Key, path));
+        if (!customSet && path != "metadata.finalizers")
+            return false;
+
+        foreach (var value in newValues)
+            merged.Add(DeepCopyValue(value));
+
+        foreach (var value in live)
+        {
+            if (!last.Any(previous => DeepEquals(previous, value)) &&
+                !merged.Any(current => DeepEquals(current, value)))
+                merged.Add(DeepCopyValue(value));
         }
 
         return true;
@@ -269,9 +328,14 @@ internal static class ThreeWayMerge
         IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys)
     {
         if (customListMapKeys is not null)
-            return customListMapKeys.TryGetValue(path, out var customKeys) ? [customKeys.ToArray()] : [];
+        {
+            var match = customListMapKeys.FirstOrDefault(entry => SchemaPathMatches(entry.Key, path));
+            return match.Key is not null && match.Value.Count > 0 ? [match.Value.ToArray()] : [];
+        }
 
         // Built-in keys follow Kubernetes list-map paths; other lists, including Ingress rules, are atomic.
+        if (path == "spec.versions")
+            return [["name"]];
         if (path.EndsWith(".volumeMounts", StringComparison.Ordinal))
             return [["mountPath"]];
         if (path.EndsWith(".volumeDevices", StringComparison.Ordinal))
@@ -297,6 +361,15 @@ internal static class ThreeWayMerge
             return [["name"]];
 
         return [];
+    }
+
+    private static bool SchemaPathMatches(string schemaPath, string resourcePath)
+    {
+        var schemaParts = schemaPath.Split('.');
+        var resourceParts = resourcePath.Split('.');
+        return schemaParts.Length == resourceParts.Length &&
+               schemaParts.Zip(resourceParts).All(pair => pair.First == "*" ||
+                   string.Equals(pair.First, pair.Second, StringComparison.Ordinal));
     }
 
     private static string AppendPath(string path, string key)

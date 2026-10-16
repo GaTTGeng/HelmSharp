@@ -1290,6 +1290,42 @@ public sealed class KubernetesManifestApplierTests
     }
 
     [Fact]
+    public async Task ApplyUpgradeAsync_UsesCaseSensitiveKeysInsideTypedConfigMapData()
+    {
+        const string previousManifest = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: settings\ndata:\n  Foo: chart\n";
+        const string upgradedManifest = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: settings\ndata:\n  foo: chart\n";
+        const string path = "/api/v1/namespaces/release-ns/configmaps/settings";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "ConfigMap",
+                  "metadata": { "name": "settings", "namespace": "release-ns", "resourceVersion": "42" },
+                  "data": { "Foo": "chart" }
+                }
+                """)
+            .Respond(HttpMethod.Put, path, HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "ConfigMap",
+                  "metadata": { "name": "settings", "namespace": "release-ns", "resourceVersion": "43" },
+                  "data": { "Foo": "chart" }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        var progress = new List<string>();
+
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(async () =>
+        {
+            await foreach (var resource in applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"))
+                progress.Add(resource);
+        });
+
+        Assert.Empty(progress);
+    }
+
+    [Fact]
     public async Task ApplyUpgradeAsync_DoesNotConfirmAmbiguousReplaceWhenRemovedListItemRemains()
     {
         const string previousManifest = """
@@ -1754,6 +1790,17 @@ public sealed class KubernetesManifestApplierTests
                             "x-kubernetes-list-type": "map",
                             "x-kubernetes-list-map-keys": ["name"],
                             "items": { "type": "object", "properties": { "name": { "type": "string" }, "value": { "type": "string" } } }
+                          },
+                          "groups": {
+                            "type": "object",
+                            "additionalProperties": { "type": "object", "properties": {
+                              "entries": {
+                                "type": "array",
+                                "x-kubernetes-list-type": "map",
+                                "x-kubernetes-list-map-keys": ["name"],
+                                "items": { "type": "object", "properties": { "name": { "type": "string" }, "value": { "type": "string" } } }
+                              }
+                            } }
                           }
                         } } }
                       } }
@@ -1768,7 +1815,8 @@ public sealed class KubernetesManifestApplierTests
                   "metadata": { "name": "sample", "resourceVersion": "42" },
                   "spec": {
                     "config": { "FOO": "chart", "foo": "operator" },
-                    "entries": [{ "name": "chart", "value": "before" }, { "name": "operator", "value": "retained" }]
+                    "entries": [{ "name": "chart", "value": "before" }, { "name": "operator", "value": "retained" }],
+                    "groups": { "one": { "entries": [{ "name": "chart", "value": "before" }, { "name": "operator", "value": "retained" }] } }
                   }
                 }
                 """)
@@ -1785,6 +1833,11 @@ public sealed class KubernetesManifestApplierTests
               entries:
                 - name: chart
                   value: before
+              groups:
+                one:
+                  entries:
+                    - name: chart
+                      value: before
             """;
         const string upgradedManifest = """
             apiVersion: example.com/v1
@@ -1797,6 +1850,11 @@ public sealed class KubernetesManifestApplierTests
               entries:
                 - name: chart
                   value: after
+              groups:
+                one:
+                  entries:
+                    - name: chart
+                      value: after
             """;
 
         await AsyncEnumerableTestExtensions.DrainAsync(applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"));
@@ -1810,6 +1868,9 @@ public sealed class KubernetesManifestApplierTests
         Assert.Equal(2, entries.GetArrayLength());
         Assert.Equal("after", entries[0].GetProperty("value").GetString());
         Assert.Equal("operator", entries[1].GetProperty("name").GetString());
+        var nestedEntries = json.RootElement.GetProperty("spec").GetProperty("groups").GetProperty("one").GetProperty("entries");
+        Assert.Equal(2, nestedEntries.GetArrayLength());
+        Assert.Equal("operator", nestedEntries[1].GetProperty("name").GetString());
     }
 
     [Fact]
