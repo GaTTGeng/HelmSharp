@@ -1186,10 +1186,15 @@ public sealed class KubernetesManifestApplierTests
         handler.CancelAfterRequestMethod = HttpMethod.Post;
         handler.CancellationToTrigger = cancellation;
         var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        var progress = new List<string>();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
-            await AsyncEnumerableTestExtensions.DrainAsync(applier.ApplyAsync(manifest, "release-ns", cancellation.Token)));
+        {
+            await foreach (var resource in applier.ApplyAsync(manifest, "release-ns", cancellation.Token))
+                progress.Add(resource);
+        });
 
+        Assert.Equal(["ConfigMap/release-ns/canceled-write"], progress);
         Assert.Equal(2, handler.Requests.Count(request => request.Method == HttpMethod.Get));
     }
 
