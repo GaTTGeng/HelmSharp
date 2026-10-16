@@ -12,6 +12,31 @@ namespace HelmSharp.Tests;
 /// </summary>
 public sealed class KubernetesManifestApplierTests
 {
+    [Theory]
+    [InlineData("scheduling.k8s.io/v1beta1", "scheduling.k8s.io/v1", "PriorityClass", false)]
+    [InlineData("coordination.k8s.io/v1beta1", "coordination.k8s.io/v1", "Lease", true)]
+    [InlineData("node.k8s.io/v1beta1", "node.k8s.io/v1", "RuntimeClass", false)]
+    [InlineData("apiregistration.k8s.io/v1beta1", "apiregistration.k8s.io/v1", "APIService", false)]
+    [InlineData("networking.k8s.io/v1beta1", "networking.k8s.io/v1", "IngressClass", false)]
+    public void SchemaConverter_MigratesSchemaCompatibleBuiltIns(
+        string sourceApiVersion,
+        string targetApiVersion,
+        string kind,
+        bool namespaced)
+    {
+        var identity = new ManifestIdentity(sourceApiVersion, kind, "sample", "release-ns");
+        var manifest = $"apiVersion: {sourceApiVersion}\nkind: {kind}\nmetadata:\n  name: sample\nspec:\n  marker: retained\n";
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            manifest, identity, targetApiVersion, out var converted));
+        var document = HelmYaml.DeserializeDictionary(converted, StringComparer.Ordinal);
+
+        Assert.Equal(targetApiVersion, document["apiVersion"]);
+        Assert.True(KubernetesManifestApplier.TryGetTypedResourceScope(identity, out var actualNamespaced));
+        Assert.Equal(namespaced, actualNamespaced);
+        Assert.Contains("marker: retained", converted, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void ManifestIdentity_ParseUsesDefaultAndExplicitNamespaces()
     {
@@ -1345,6 +1370,118 @@ public sealed class KubernetesManifestApplierTests
 
         Assert.True(await applied.MoveNextAsync());
         Assert.Equal("Pod/release-ns/quantity", applied.Current);
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(() => applied.MoveNextAsync().AsTask());
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_ConfirmsAmbiguousHpaReplaceWithEquivalentQuantity()
+    {
+        const string previousManifest = """
+            apiVersion: autoscaling/v2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 3
+              metrics:
+                - type: Resource
+                  resource:
+                    name: cpu
+                    target:
+                      type: AverageValue
+                      averageValue: "1"
+            """;
+        const string upgradedManifest = """
+            apiVersion: autoscaling/v2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 3
+              metrics:
+                - type: Resource
+                  resource:
+                    name: cpu
+                    target:
+                      type: AverageValue
+                      averageValue: "1.5"
+            """;
+        const string path = "/apis/autoscaling/v2/namespaces/release-ns/horizontalpodautoscalers/scaler";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "autoscaling/v2",
+                  "kind": "HorizontalPodAutoscaler",
+                  "metadata": { "name": "scaler", "namespace": "release-ns", "resourceVersion": "42" },
+                  "spec": { "minReplicas": 1, "maxReplicas": 3, "metrics": [{ "type": "Resource", "resource": { "name": "cpu", "target": { "type": "AverageValue", "averageValue": "1" } } }] }
+                }
+                """)
+            .Respond(HttpMethod.Put, path, HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "autoscaling/v2",
+                  "kind": "HorizontalPodAutoscaler",
+                  "metadata": { "name": "scaler", "namespace": "release-ns", "resourceVersion": "43" },
+                  "spec": { "minReplicas": 1, "maxReplicas": 3, "metrics": [{ "type": "Resource", "resource": { "name": "cpu", "target": { "type": "AverageValue", "averageValue": "1500m" } } }] }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await using var applied = applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns").GetAsyncEnumerator();
+
+        Assert.True(await applied.MoveNextAsync());
+        Assert.Equal("HorizontalPodAutoscaler/release-ns/scaler", applied.Current);
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(() => applied.MoveNextAsync().AsTask());
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_ConfirmsAmbiguousResourceQuotaReplaceWithEquivalentQuantity()
+    {
+        const string previousManifest = """
+            apiVersion: v1
+            kind: ResourceQuota
+            metadata:
+              name: limits
+            spec:
+              hard:
+                requests.cpu: "1"
+            """;
+        const string upgradedManifest = """
+            apiVersion: v1
+            kind: ResourceQuota
+            metadata:
+              name: limits
+            spec:
+              hard:
+                requests.cpu: "1.5"
+            """;
+        const string path = "/api/v1/namespaces/release-ns/resourcequotas/limits";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "ResourceQuota",
+                  "metadata": { "name": "limits", "namespace": "release-ns", "resourceVersion": "42" },
+                  "spec": { "hard": { "requests.cpu": "1" } }
+                }
+                """)
+            .Respond(HttpMethod.Put, path, HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "ResourceQuota",
+                  "metadata": { "name": "limits", "namespace": "release-ns", "resourceVersion": "43" },
+                  "spec": { "hard": { "requests.cpu": "1500m" } }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await using var applied = applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns").GetAsyncEnumerator();
+
+        Assert.True(await applied.MoveNextAsync());
+        Assert.Equal("ResourceQuota/release-ns/limits", applied.Current);
         await Assert.ThrowsAsync<KubernetesResourceOperationException>(() => applied.MoveNextAsync().AsTask());
     }
 

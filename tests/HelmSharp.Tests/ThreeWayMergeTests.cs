@@ -185,6 +185,27 @@ public sealed class ThreeWayMergeTests
     }
 
     [Fact]
+    public void MergeResource_PreservesLiveVolumeMountFieldsWhenVolumeNameChanges()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        volumeMounts:\n        - name: old-volume\n          mountPath: /data\n          readOnly: false\n",
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        volumeMounts:\n        - name: new-volume\n          mountPath: /data\n          readOnly: false\n",
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        volumeMounts:\n        - name: old-volume\n          mountPath: /data\n          readOnly: true\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var template = (IDictionary<string, object?>)spec["template"]!;
+        var podSpec = (IDictionary<string, object?>)template["spec"]!;
+        var containers = (IList<object?>)podSpec["containers"]!;
+        var container = (IDictionary<string, object?>)containers[0]!;
+        var volumeMounts = (IList<object?>)container["volumeMounts"]!;
+        var volumeMount = (IDictionary<string, object?>)volumeMounts[0]!;
+
+        Assert.Equal("new-volume", volumeMount["name"]);
+        Assert.Equal(true, volumeMount["readOnly"]);
+    }
+
+    [Fact]
     public void MergeResource_ScopesKubernetesManagedFieldExclusionsToTheirSchemaPaths()
     {
         var merged = ThreeWayMerge.MergeResource(
