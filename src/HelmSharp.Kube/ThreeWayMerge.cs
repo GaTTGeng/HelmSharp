@@ -171,16 +171,6 @@ internal static class ThreeWayMerge
                 if (DeepEquals(lastVal, newVal))
                     merged.Remove(key);
             }
-            else if (hasLive && hasLast && !hasNew)
-            {
-                // Key was in last and live, but removed in new
-                if (!DeepEquals(lastVal, liveVal))
-                {
-                    // User modified it before chart removed it -> preserve
-                    merged[key] = liveVal;
-                }
-                // Otherwise let it be removed (chart intentionally removed it)
-            }
             // All other cases: keep the merged (new) value
         }
     }
@@ -218,24 +208,7 @@ internal static class ThreeWayMerge
     {
         merged = [];
         // A CRD schema is authoritative: paths absent from its map-key table are atomic lists.
-        string[][] keySets = customListMapKeys is not null
-            ? customListMapKeys.TryGetValue(path, out var customKeys)
-                ? [customKeys.ToArray()]
-                : []
-            : path.EndsWith(".volumeMounts", StringComparison.Ordinal)
-                ? [["mountPath"]]
-            :
-            [
-                ["containerPort", "protocol"],
-                ["port", "protocol"],
-                ["name"],
-                ["mountPath"],
-                ["devicePath"],
-                ["ip"],
-                ["path"],
-                ["host"],
-                ["topologyKey", "whenUnsatisfiable"]
-            ];
+        var keySets = GetListMapKeySets(path, customListMapKeys);
         Dictionary<string, IDictionary<string, object?>> lastItems = [];
         Dictionary<string, IDictionary<string, object?>> newItems = [];
         Dictionary<string, IDictionary<string, object?>> liveItems = [];
@@ -290,6 +263,28 @@ internal static class ThreeWayMerge
 
         return true;
     }
+
+    internal static string[][] GetListMapKeySets(
+        string path,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys)
+        => customListMapKeys is not null
+            ? customListMapKeys.TryGetValue(path, out var customKeys)
+                ? [customKeys.ToArray()]
+                : []
+            : path.EndsWith(".volumeMounts", StringComparison.Ordinal)
+                ? [["mountPath"]]
+            :
+            [
+                ["containerPort", "protocol"],
+                ["port", "protocol"],
+                ["name"],
+                ["mountPath"],
+                ["devicePath"],
+                ["ip"],
+                ["path"],
+                ["host"],
+                ["topologyKey", "whenUnsatisfiable"]
+            ];
 
     private static string AppendPath(string path, string key)
         => path.Length == 0 ? key : path + "." + key;

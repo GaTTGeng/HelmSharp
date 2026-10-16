@@ -85,6 +85,38 @@ public sealed class ThreeWayMergeTests
     }
 
     [Fact]
+    public void MergeResource_RemovesScalarWhenChartRemovesLiveEditedValue()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "data:\n  setting: before\n",
+            "data: {}\n",
+            "data:\n  setting: operator-edit\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var data = (IDictionary<string, object?>)document["data"]!;
+        Assert.False(data.ContainsKey("setting"));
+    }
+
+    [Fact]
+    public void MergeResource_RemovesEditedScalarFromKeyedListItemWhenChartRemovesIt()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        env:\n        - name: MODE\n          value: before\n",
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        env:\n        - name: MODE\n          valueFrom:\n            fieldRef:\n              fieldPath: metadata.name\n",
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        env:\n        - name: MODE\n          value: operator-edit\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var template = (IDictionary<string, object?>)spec["template"]!;
+        var podSpec = (IDictionary<string, object?>)template["spec"]!;
+        var container = (IDictionary<string, object?>)((IList<object?>)podSpec["containers"]!)[0]!;
+        var env = (IDictionary<string, object?>)((IList<object?>)container["env"]!)[0]!;
+        Assert.Equal("MODE", env["name"]);
+        Assert.False(env.ContainsKey("value"));
+        Assert.Contains("valueFrom", env.Keys);
+    }
+
+    [Fact]
     public void MergeResource_ReconcilesChildrenWhenChartRemovesAMapping()
     {
         var merged = ThreeWayMerge.MergeResource(
