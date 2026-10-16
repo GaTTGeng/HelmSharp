@@ -1842,8 +1842,26 @@ public sealed class KubernetesManifestApplier
             ThreeWayMerge.GetListMapKeySets(path, customListMapKeys));
         foreach (var beforeItem in before.EnumerateArray())
         {
-            if (expectedItems.Any(expectedItem => SameArrayItem(expectedItem, beforeItem, keyFields)))
+            var expectedItem = expectedItems.FirstOrDefault(candidate => SameArrayItem(candidate, beforeItem, keyFields));
+            if (expectedItem.ValueKind != JsonValueKind.Undefined)
+            {
+                if (keyFields is not null)
+                {
+                    var actualItem = actual.EnumerateArray().FirstOrDefault(candidate => SameArrayItem(candidate, beforeItem, keyFields));
+                    if (actualItem.ValueKind != JsonValueKind.Undefined &&
+                        !RemovedValuesAreAbsent(
+                            expectedItem,
+                            beforeItem,
+                            actualItem,
+                            parentName: null,
+                            allowCaseInsensitiveProperties: false,
+                            path + "[]",
+                            customListMapKeys))
+                        return false;
+                }
+
                 continue;
+            }
 
             if (actual.EnumerateArray().Any(actualItem => SameArrayItem(actualItem, beforeItem, keyFields)))
                 return false;

@@ -1369,6 +1369,61 @@ public sealed class KubernetesManifestApplierTests
     }
 
     [Fact]
+    public async Task ApplyUpgradeAsync_DoesNotConfirmAmbiguousReplaceWhenRemovedFieldInsideRetainedListItemRemains()
+    {
+        const string previousManifest = """
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: retained-container-field
+            spec:
+              containers:
+                - name: app
+                  image: example/app:v1
+                  command: ["run"]
+            """;
+        const string upgradedManifest = """
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: retained-container-field
+            spec:
+              containers:
+                - name: app
+                  image: example/app:v1
+            """;
+        const string path = "/api/v1/namespaces/release-ns/pods/retained-container-field";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Pod",
+                  "metadata": { "name": "retained-container-field", "namespace": "release-ns", "resourceVersion": "42" },
+                  "spec": { "containers": [{ "name": "app", "image": "example/app:v1", "command": ["run"] }] }
+                }
+                """)
+            .Respond(HttpMethod.Put, path, HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Pod",
+                  "metadata": { "name": "retained-container-field", "namespace": "release-ns", "resourceVersion": "43" },
+                  "spec": { "containers": [{ "name": "app", "image": "example/app:v1", "command": ["run"] }] }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        var progress = new List<string>();
+
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(async () =>
+        {
+            await foreach (var resource in applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"))
+                progress.Add(resource);
+        });
+
+        Assert.Empty(progress);
+    }
+
+    [Fact]
     public async Task ApplyUpgradeAsync_ConfirmsAmbiguousReplaceWithEquivalentQuantity()
     {
         const string previousManifest = """

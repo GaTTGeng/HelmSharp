@@ -267,24 +267,31 @@ internal static class ThreeWayMerge
     internal static string[][] GetListMapKeySets(
         string path,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys)
-        => customListMapKeys is not null
-            ? customListMapKeys.TryGetValue(path, out var customKeys)
-                ? [customKeys.ToArray()]
-                : []
-            : path.EndsWith(".volumeMounts", StringComparison.Ordinal)
-                ? [["mountPath"]]
-            :
-            [
-                ["containerPort", "protocol"],
-                ["port", "protocol"],
-                ["name"],
-                ["mountPath"],
-                ["devicePath"],
-                ["ip"],
-                ["path"],
-                ["host"],
-                ["topologyKey", "whenUnsatisfiable"]
-            ];
+    {
+        if (customListMapKeys is not null)
+            return customListMapKeys.TryGetValue(path, out var customKeys) ? [customKeys.ToArray()] : [];
+
+        // Built-in keys follow Kubernetes list-map paths; other lists, including Ingress rules, are atomic.
+        if (path.EndsWith(".volumeMounts", StringComparison.Ordinal))
+            return [["mountPath"]];
+        if (path.EndsWith(".volumeDevices", StringComparison.Ordinal))
+            return [["devicePath"]];
+        if (path.EndsWith(".ports", StringComparison.Ordinal))
+            return [["containerPort", "protocol"], ["port", "protocol"]];
+        if (path.EndsWith(".hostAliases", StringComparison.Ordinal))
+            return [["ip"]];
+        if (path.EndsWith(".topologySpreadConstraints", StringComparison.Ordinal))
+            return [["topologyKey", "whenUnsatisfiable"]];
+        if (path.EndsWith(".containers", StringComparison.Ordinal) ||
+            path.EndsWith(".initContainers", StringComparison.Ordinal) ||
+            path.EndsWith(".ephemeralContainers", StringComparison.Ordinal) ||
+            path.EndsWith(".env", StringComparison.Ordinal) ||
+            path.EndsWith(".volumes", StringComparison.Ordinal) ||
+            path.EndsWith(".imagePullSecrets", StringComparison.Ordinal))
+            return [["name"]];
+
+        return [];
+    }
 
     private static string AppendPath(string path, string key)
         => path.Length == 0 ? key : path + "." + key;
