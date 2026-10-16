@@ -617,6 +617,20 @@ public class HelmClient : IHelmClient
         return string.Join(Environment.NewLine + "---" + Environment.NewLine, appliedDocuments);
     }
 
+    internal static string GetSuccessfullyDeletedManifest(
+        string manifest,
+        IReadOnlyList<string> deletedResources,
+        string defaultNamespace)
+    {
+        var reverseManifest = string.Join(
+            Environment.NewLine + "---" + Environment.NewLine,
+            KubernetesManifestApplier.SplitDocumentsPublic(manifest).Reverse());
+        return GetSuccessfullyAppliedManifest(
+            reverseManifest,
+            deletedResources.Select(resource => $"Applied {resource}").ToList(),
+            defaultNamespace);
+    }
+
     // Guards the single-active-operation invariant: a pending-* record means another
     // lifecycle is mid-flight and must not be interleaved with a new one.
     private static bool HasActivePendingOperation(IReadOnlyCollection<HelmReleaseRecord> history)
@@ -783,9 +797,10 @@ public class HelmClient : IHelmClient
             if (previous is not null)
             {
                 var cleanedResources = new List<string>();
+                var attemptedOnlyManifest = string.Empty;
                 try
                 {
-                    var attemptedOnlyManifest = await GetAttemptedOnlyManifestAsync(
+                    attemptedOnlyManifest = await GetAttemptedOnlyManifestAsync(
                         applier,
                         previous.Manifest,
                         mainManifest,
@@ -807,7 +822,10 @@ public class HelmClient : IHelmClient
 
                 failedRecord = failedRecord with
                 {
-                    AppliedManifest = RemoveCleanedDocuments(failedRecord.AppliedManifest ?? string.Empty, cleanedResources, ns),
+                    AppliedManifest = RemoveCleanedDocuments(
+                        failedRecord.AppliedManifest ?? string.Empty,
+                        GetSuccessfullyDeletedManifest(attemptedOnlyManifest, cleanedResources, ns),
+                        ns),
                     UpdatedAt = DateTimeOffset.UtcNow
                 };
                 try
@@ -1192,6 +1210,24 @@ public class HelmClient : IHelmClient
                 return identity is null ||
                        !cleanedNames.Contains(identity.DisplayName) &&
                        !cleanedNames.Contains($"{identity.Kind}/{identity.Name}");
+            }));
+    }
+
+    internal static string RemoveCleanedDocuments(string manifest, string cleanedManifest, string defaultNamespace)
+    {
+        if (string.IsNullOrWhiteSpace(cleanedManifest))
+            return manifest;
+
+        var cleanedIdentities = KubernetesManifestApplier.SplitDocumentsPublic(cleanedManifest)
+            .Select(document => ManifestIdentity.Parse(document, defaultNamespace))
+            .Where(identity => identity is not null)
+            .Select(identity => ManifestIdentityKey(identity!))
+            .ToHashSet(StringComparer.Ordinal);
+        return string.Join(Environment.NewLine + "---" + Environment.NewLine,
+            KubernetesManifestApplier.SplitDocumentsPublic(manifest).Where(document =>
+            {
+                var identity = ManifestIdentity.Parse(document, defaultNamespace);
+                return identity is null || !cleanedIdentities.Contains(ManifestIdentityKey(identity));
             }));
     }
 
@@ -1617,6 +1653,7 @@ public class HelmClient : IHelmClient
             return Fail($"release revision {newRevision} already exists for {request.ReleaseName}");
 
         var output = new StringBuilder();
+        var appliedRollbackResources = new List<string>();
 
         try
         {
@@ -1645,6 +1682,7 @@ public class HelmClient : IHelmClient
             await foreach (var resource in applier.ApplyAsync(mainManifest, ns, operationToken))
             {
                 output.AppendLine($"Rolled back {resource}");
+                appliedRollbackResources.Add($"Applied {resource}");
             }
 
             foreach (var keptResource in rollbackDeletion.KeptResources)
@@ -1679,7 +1717,14 @@ public class HelmClient : IHelmClient
         catch (Exception ex)
         {
             // Any failure above marks the pending-rollback record failed before rethrowing.
-            await PersistFailedRollbackAsync(store, WithHookExecution(rollbackRecord, hooks), operationId, ex);
+            await PersistFailedRollbackAsync(
+                store,
+                WithHookExecution(rollbackRecord with
+                {
+                    AppliedManifest = GetSuccessfullyAppliedManifest(mainManifest, appliedRollbackResources, ns)
+                }, hooks),
+                operationId,
+                ex);
             throw;
         }
 

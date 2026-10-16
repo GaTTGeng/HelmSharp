@@ -1131,6 +1131,8 @@ public class ChartOperationsTests : IDisposable
         Assert.Equal((2, "deployed"), (records[1].Revision, records[1].Status));
         Assert.Equal((3, "failed"), (records[2].Revision, records[2].Status));
         Assert.StartsWith("Rollback failed:", records[2].Description);
+        Assert.Contains("kind: Deployment", records[2].AppliedManifest, StringComparison.Ordinal);
+        Assert.Contains("name: rollback-wait-failure", records[2].AppliedManifest, StringComparison.Ordinal);
     }
 
     [Fact]

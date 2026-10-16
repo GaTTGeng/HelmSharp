@@ -74,6 +74,36 @@ public sealed class ThreeWayMergeReviewTests
     }
 
     [Fact]
+    public void MergeResource_PreservesLiveDeletionFromUnchangedCustomSet()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "spec:\n  values:\n  - keep\n  - removed\n",
+            "spec:\n  values:\n  - keep\n  - removed\n",
+            "spec:\n  values:\n  - keep\n",
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+            {
+                ["spec.values"] = Array.Empty<string>()
+            });
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        Assert.Equal(["keep"], (IList<object?>)spec["values"]!);
+    }
+
+    [Fact]
+    public void MergeResource_PreservesSmallLiveNumericDrift()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "spec:\n  threshold: 0\n",
+            "spec:\n  threshold: 0\n",
+            "spec:\n  threshold: 0.00000000005\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        Assert.Equal(0.00000000005d, Assert.IsType<double>(spec["threshold"]));
+    }
+
+    [Fact]
     public void MergeResource_MergesCrdVersionsByName()
     {
         var merged = ThreeWayMerge.MergeResource(
