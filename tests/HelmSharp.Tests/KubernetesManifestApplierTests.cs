@@ -381,6 +381,7 @@ public sealed class KubernetesManifestApplierTests
                     selector:
                       matchLabels:
                         ingress: gateway
+                    targetValue: 999
                     averageValue: 100
                 - type: ContainerResource
                   containerResource:
