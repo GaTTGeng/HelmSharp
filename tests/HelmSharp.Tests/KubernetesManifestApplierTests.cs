@@ -18,6 +18,8 @@ public sealed class KubernetesManifestApplierTests
     [InlineData("node.k8s.io/v1beta1", "node.k8s.io/v1", "RuntimeClass", false)]
     [InlineData("apiregistration.k8s.io/v1beta1", "apiregistration.k8s.io/v1", "APIService", false)]
     [InlineData("networking.k8s.io/v1beta1", "networking.k8s.io/v1", "IngressClass", false)]
+    [InlineData("flowcontrol.apiserver.k8s.io/v1beta3", "flowcontrol.apiserver.k8s.io/v1", "FlowSchema", false)]
+    [InlineData("flowcontrol.apiserver.k8s.io/v1beta3", "flowcontrol.apiserver.k8s.io/v1", "PriorityLevelConfiguration", false)]
     public void SchemaConverter_MigratesSchemaCompatibleBuiltIns(
         string sourceApiVersion,
         string targetApiVersion,
@@ -35,6 +37,28 @@ public sealed class KubernetesManifestApplierTests
         Assert.True(KubernetesManifestApplier.TryGetTypedResourceScope(identity, out var actualNamespaced));
         Assert.Equal(namespaced, actualNamespaced);
         Assert.Contains("marker: retained", converted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SchemaConverter_RenamesFlowControlConcurrencySharesFromBeta2()
+    {
+        const string manifest = """
+            apiVersion: flowcontrol.apiserver.k8s.io/v1beta2
+            kind: PriorityLevelConfiguration
+            metadata:
+              name: limited
+            spec:
+              type: Limited
+              limited:
+                assuredConcurrencyShares: 12
+            """;
+        var identity = new ManifestIdentity(
+            "flowcontrol.apiserver.k8s.io/v1beta2", "PriorityLevelConfiguration", "limited", "ignored");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            manifest, identity, "flowcontrol.apiserver.k8s.io/v1", out var converted));
+        Assert.Contains("nominalConcurrencyShares: 12", converted, StringComparison.Ordinal);
+        Assert.DoesNotContain("assuredConcurrencyShares", converted, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1354,6 +1378,67 @@ public sealed class KubernetesManifestApplierTests
                   "kind": "Pod",
                   "metadata": { "name": "removed-container-edited", "namespace": "release-ns", "resourceVersion": "43" },
                   "spec": { "containers": [{ "name": "app", "image": "example/app:v2" }] }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        var progress = new List<string>();
+
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(async () =>
+        {
+            await foreach (var resource in applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"))
+                progress.Add(resource);
+        });
+
+        Assert.Empty(progress);
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_DoesNotConfirmRemovedServicePortWhenDefaultProtocolIsOmitted()
+    {
+        const string previousManifest = """
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: web
+            spec:
+              ports:
+                - name: retired
+                  port: 80
+                  targetPort: 8080
+            """;
+        const string upgradedManifest = """
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: web
+            spec:
+              ports:
+                - name: https
+                  port: 443
+                  targetPort: 8443
+            """;
+        const string path = "/api/v1/namespaces/release-ns/services/web";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Service",
+                  "metadata": { "name": "web", "namespace": "release-ns", "resourceVersion": "42" },
+                  "spec": { "ports": [
+                    { "name": "retired", "port": 80, "targetPort": 8080, "protocol": "TCP", "nodePort": 30080 }
+                  ] }
+                }
+                """)
+            .Respond(HttpMethod.Put, path, HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Service",
+                  "metadata": { "name": "web", "namespace": "release-ns", "resourceVersion": "43" },
+                  "spec": { "ports": [
+                    { "name": "retired", "port": 80, "targetPort": 8080, "protocol": "TCP", "nodePort": 31080 },
+                    { "name": "https", "port": 443, "targetPort": 8443, "protocol": "TCP" }
+                  ] }
                 }
                 """);
         var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
