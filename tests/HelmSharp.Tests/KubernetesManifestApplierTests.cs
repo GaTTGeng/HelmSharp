@@ -1317,6 +1317,58 @@ public sealed class KubernetesManifestApplierTests
     }
 
     [Fact]
+    public async Task ApplyUpgradeAsync_DoesNotConfirmAmbiguousReplaceWhenRemovedListItemIdentityRemainsWithChangedFields()
+    {
+        const string previousManifest = """
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: removed-container-edited
+            spec:
+              containers:
+                - name: app
+                  image: example/app:v1
+            """;
+        const string upgradedManifest = """
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: removed-container-edited
+            spec:
+              containers: []
+            """;
+        var path = "/api/v1/namespaces/release-ns/pods/removed-container-edited";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Pod",
+                  "metadata": { "name": "removed-container-edited", "namespace": "release-ns", "resourceVersion": "42" },
+                  "spec": { "containers": [{ "name": "app", "image": "example/app:v1" }] }
+                }
+                """)
+            .Respond(HttpMethod.Put, path, HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Pod",
+                  "metadata": { "name": "removed-container-edited", "namespace": "release-ns", "resourceVersion": "43" },
+                  "spec": { "containers": [{ "name": "app", "image": "example/app:v2" }] }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        var progress = new List<string>();
+
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(async () =>
+        {
+            await foreach (var resource in applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"))
+                progress.Add(resource);
+        });
+
+        Assert.Empty(progress);
+    }
+
+    [Fact]
     public async Task ApplyUpgradeAsync_ConfirmsAmbiguousReplaceWithEquivalentQuantity()
     {
         const string previousManifest = """

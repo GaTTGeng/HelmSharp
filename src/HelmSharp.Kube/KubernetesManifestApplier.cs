@@ -1065,7 +1065,7 @@ public sealed class KubernetesManifestApplier
                     SetNamespace(item, identity.Namespace);
                     SetResourceVersion(item, existing);
                     return await _client.CustomObjects.ReplaceNamespacedCustomObjectAsync(item, resource.Group, resource.Version, identity.Namespace, resource.Plural, identity.Name, null, _fieldManager, null, ct);
-                }, identity, yaml, () => ct.ThrowIfCancellationRequested(), () => ct = CancellationToken.None);
+                }, identity, yaml, () => ct.ThrowIfCancellationRequested(), () => ct = CancellationToken.None, customListMapKeys);
             return identity;
         }
 
@@ -1082,7 +1082,7 @@ public sealed class KubernetesManifestApplier
                 SetNamespace(item, namespaceName: null);
                 SetResourceVersion(item, existing);
                 return await _client.CustomObjects.ReplaceClusterCustomObjectAsync(item, resource.Group, resource.Version, resource.Plural, identity.Name, null, _fieldManager, null, ct);
-            }, identity, yaml, () => ct.ThrowIfCancellationRequested(), () => ct = CancellationToken.None);
+            }, identity, yaml, () => ct.ThrowIfCancellationRequested(), () => ct = CancellationToken.None, customListMapKeys);
         return identity;
     }
 
@@ -1538,7 +1538,8 @@ public sealed class KubernetesManifestApplier
         ManifestIdentity identity,
         string desiredYaml,
         Action throwIfCancellationRequested,
-        Action disableCancellationForRecovery)
+        Action disableCancellationForRecovery,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys = null)
     {
         // 404 from the read means "not created yet" — the create path. Replace is
         // preferred over patch so the applied manifest fully defines the object,
@@ -1557,7 +1558,7 @@ public sealed class KubernetesManifestApplier
                 if (ex is OperationCanceledException)
                     // The request was invoked, so finish read-back without the canceled operation token.
                     disableCancellationForRecovery();
-                _lastApplyMayHaveCommitted |= await ReplaceMayHaveCommittedAsync(read, existing, identity, desiredYaml);
+                _lastApplyMayHaveCommitted |= await ReplaceMayHaveCommittedAsync(read, existing, identity, desiredYaml, customListMapKeys);
                 throw;
             }
         }
@@ -1587,8 +1588,9 @@ public sealed class KubernetesManifestApplier
         ManifestIdentity identity,
         string desiredYaml,
         Action throwIfCancellationRequested,
-        Action disableCancellationForRecovery)
-        => UpsertNamespacedAsync(read, create, replace, identity, desiredYaml, throwIfCancellationRequested, disableCancellationForRecovery);
+        Action disableCancellationForRecovery,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys = null)
+        => UpsertNamespacedAsync(read, create, replace, identity, desiredYaml, throwIfCancellationRequested, disableCancellationForRecovery, customListMapKeys);
 
     private static async Task<bool> CreateMayHaveCommittedAsync<T>(
         Func<Task<T>> read,
@@ -1625,7 +1627,8 @@ public sealed class KubernetesManifestApplier
         Func<Task<T>> read,
         T before,
         ManifestIdentity identity,
-        string desiredYaml)
+        string desiredYaml,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys)
     {
         try
         {
@@ -1643,7 +1646,7 @@ public sealed class KubernetesManifestApplier
             var expectedYaml = MergeWithLiveResource(identity, desiredYaml, before!);
             var typedResource = TryGetTypedResourceScope(identity, out _);
             return ContainsExpectedManifest(expectedYaml, after!, typedResource, identity.Kind) &&
-                   RemovedValuesAreAbsent(expectedYaml, before!, after!, typedResource);
+                   RemovedValuesAreAbsent(expectedYaml, before!, after!, typedResource, customListMapKeys);
         }
         catch
         {
@@ -1670,7 +1673,8 @@ public sealed class KubernetesManifestApplier
         string expectedYaml,
         T beforeResource,
         T actualResource,
-        bool allowCaseInsensitiveProperties)
+        bool allowCaseInsensitiveProperties,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys)
     {
         using var expected = JsonDocument.Parse(JsonSerializer.Serialize(
             HelmYaml.DeserializeDictionary(expectedYaml, StringComparer.Ordinal)));
@@ -1681,7 +1685,9 @@ public sealed class KubernetesManifestApplier
             before.RootElement,
             actual.RootElement,
             parentName: null,
-            allowCaseInsensitiveProperties);
+            allowCaseInsensitiveProperties,
+            path: string.Empty,
+            customListMapKeys);
     }
 
     private static bool ContainsExpectedValue(
@@ -1776,7 +1782,9 @@ public sealed class KubernetesManifestApplier
         JsonElement before,
         JsonElement actual,
         string? parentName,
-        bool allowCaseInsensitiveProperties)
+        bool allowCaseInsensitiveProperties,
+        string path,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys)
     {
         if (before.ValueKind == JsonValueKind.Object && expected.ValueKind == JsonValueKind.Object)
         {
@@ -1794,14 +1802,14 @@ public sealed class KubernetesManifestApplier
 
                 if (TryGetPropertyExactThenIgnoreCase(actual, beforeProperty.Name, allowCaseInsensitiveProperties, out var actualValue) &&
                     beforeProperty.Value.ValueKind == JsonValueKind.Object && expectedValue.ValueKind == JsonValueKind.Object &&
-                    !RemovedValuesAreAbsent(expectedValue, beforeProperty.Value, actualValue, beforeProperty.Name, allowCaseInsensitiveProperties))
+                    !RemovedValuesAreAbsent(expectedValue, beforeProperty.Value, actualValue, beforeProperty.Name, allowCaseInsensitiveProperties, AppendJsonPath(path, beforeProperty.Name), customListMapKeys))
                 {
                     return false;
                 }
 
                 if (TryGetPropertyExactThenIgnoreCase(actual, beforeProperty.Name, allowCaseInsensitiveProperties, out actualValue) &&
                     beforeProperty.Value.ValueKind == JsonValueKind.Array && expectedValue.ValueKind == JsonValueKind.Array &&
-                    !RemovedArrayValuesAreAbsent(expectedValue, beforeProperty.Value, actualValue))
+                    !RemovedArrayValuesAreAbsent(expectedValue, beforeProperty.Value, actualValue, AppendJsonPath(path, beforeProperty.Name), customListMapKeys))
                 {
                     return false;
                 }
@@ -1811,28 +1819,94 @@ public sealed class KubernetesManifestApplier
         }
 
         if (before.ValueKind == JsonValueKind.Array && expected.ValueKind == JsonValueKind.Array)
-            return RemovedArrayValuesAreAbsent(expected, before, actual);
+            return RemovedArrayValuesAreAbsent(expected, before, actual, path, customListMapKeys);
 
         return true;
     }
 
-    private static bool RemovedArrayValuesAreAbsent(JsonElement expected, JsonElement before, JsonElement actual)
+    private static bool RemovedArrayValuesAreAbsent(
+        JsonElement expected,
+        JsonElement before,
+        JsonElement actual,
+        string path,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys)
     {
         if (actual.ValueKind != JsonValueKind.Array)
             return false;
 
         var expectedItems = expected.EnumerateArray().ToArray();
+        var keyFields = SelectArrayIdentityKeys(
+            expectedItems,
+            before.EnumerateArray().ToArray(),
+            actual.EnumerateArray().ToArray(),
+            ThreeWayMerge.GetListMapKeySets(path, customListMapKeys));
         foreach (var beforeItem in before.EnumerateArray())
         {
-            if (expectedItems.Any(expectedItem => JsonValuesEqual(expectedItem, beforeItem)))
+            if (expectedItems.Any(expectedItem => SameArrayItem(expectedItem, beforeItem, keyFields)))
                 continue;
 
-            if (actual.EnumerateArray().Any(actualItem => JsonValuesEqual(actualItem, beforeItem)))
+            if (actual.EnumerateArray().Any(actualItem => SameArrayItem(actualItem, beforeItem, keyFields)))
                 return false;
         }
 
         return true;
     }
+
+    private static string[]? SelectArrayIdentityKeys(
+        IReadOnlyList<JsonElement> expected,
+        IReadOnlyList<JsonElement> before,
+        IReadOnlyList<JsonElement> actual,
+        IReadOnlyList<string[]> keySets)
+    {
+        foreach (var keySet in keySets)
+        {
+            if (HasUniqueArrayIdentity(expected, keySet) &&
+                HasUniqueArrayIdentity(before, keySet) &&
+                HasUniqueArrayIdentity(actual, keySet))
+                return keySet;
+        }
+
+        return null;
+    }
+
+    private static bool HasUniqueArrayIdentity(IReadOnlyList<JsonElement> items, IReadOnlyList<string> keyFields)
+    {
+        var identities = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in items)
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                return false;
+
+            var values = new List<string>(keyFields.Count);
+            foreach (var keyField in keyFields)
+            {
+                if (!item.TryGetProperty(keyField, out var value))
+                    return false;
+                values.Add(value.GetRawText());
+            }
+
+            if (!identities.Add(string.Join("\u001f", values)))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool SameArrayItem(JsonElement left, JsonElement right, IReadOnlyList<string>? keyFields)
+    {
+        if (keyFields is not null && left.ValueKind == JsonValueKind.Object && right.ValueKind == JsonValueKind.Object)
+        {
+            return keyFields.All(key =>
+                left.TryGetProperty(key, out var leftValue) &&
+                right.TryGetProperty(key, out var rightValue) &&
+                JsonValuesEqual(leftValue, rightValue));
+        }
+
+        return JsonValuesEqual(left, right);
+    }
+
+    private static string AppendJsonPath(string path, string property)
+        => path.Length == 0 ? property : path + "." + property;
 
     private static bool JsonValuesEqual(JsonElement left, JsonElement right)
     {
