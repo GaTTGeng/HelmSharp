@@ -45,7 +45,7 @@ internal static class KubernetesManifestSchemaConverter
                             identity.Kind is "Role" or "RoleBinding" or "ClusterRole" or "ClusterRoleBinding";
         var storageMigration = identity.ApiVersion == "storage.k8s.io/v1beta1" &&
                                targetApiVersion == "storage.k8s.io/v1" &&
-                               identity.Kind is "StorageClass" or "CSIDriver" or "CSINode" or "VolumeAttachment";
+                               identity.Kind is "StorageClass" or "CSIDriver" or "CSINode" or "VolumeAttachment" or "CSIStorageCapacity";
         if (!ingressMigration && !legacyWorkloadMigration && !networkPolicyMigration &&
             !podSecurityPolicyMigration && !legacyIngressBetaMigration && !horizontalPodAutoscalerMigration &&
             !cronJobMigration && !podDisruptionBudgetMigration && !rbacMigration && !storageMigration)

@@ -604,6 +604,7 @@ public sealed class KubernetesManifestApplierTests
     [InlineData("CSIDriver")]
     [InlineData("CSINode")]
     [InlineData("VolumeAttachment")]
+    [InlineData("CSIStorageCapacity")]
     public void SchemaConverter_PreservesLiveFieldsWhenStorageResourceMovesToV1(string kind)
     {
         var previousManifest = $$"""

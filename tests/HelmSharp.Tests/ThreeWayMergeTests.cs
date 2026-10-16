@@ -149,6 +149,42 @@ public sealed class ThreeWayMergeTests
     }
 
     [Fact]
+    public void MergeResource_PreservesLiveOnlyContainerPortsUsingKubernetesCompositeKeys()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "spec:\n  ports:\n  - containerPort: 8080\n    protocol: TCP\n",
+            "spec:\n  ports:\n  - containerPort: 8080\n    protocol: UDP\n",
+            "spec:\n  ports:\n  - containerPort: 8080\n    protocol: TCP\n  - containerPort: 9090\n    protocol: TCP\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var ports = (IList<object?>)spec["ports"]!;
+
+        Assert.Equal(2, ports.Count);
+        Assert.Equal(8080L, ((IDictionary<string, object?>)ports[0]!)["containerPort"]);
+        Assert.Equal("UDP", ((IDictionary<string, object?>)ports[0]!)["protocol"]);
+        Assert.Equal(9090L, ((IDictionary<string, object?>)ports[1]!)["containerPort"]);
+    }
+
+    [Fact]
+    public void MergeResource_UsesCompositePortKeysWhenItemsAlsoHaveNames()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "spec:\n  ports:\n  - name: web\n    port: 80\n    protocol: TCP\n",
+            "spec:\n  ports:\n  - name: http\n    port: 80\n    protocol: TCP\n",
+            "spec:\n  ports:\n  - name: web\n    port: 80\n    protocol: TCP\n    nodePort: 30080\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var ports = (IList<object?>)spec["ports"]!;
+        var port = (IDictionary<string, object?>)ports[0]!;
+
+        Assert.Single(ports);
+        Assert.Equal("http", port["name"]);
+        Assert.Equal(30080L, port["nodePort"]);
+    }
+
+    [Fact]
     public void MergeResource_ScopesKubernetesManagedFieldExclusionsToTheirSchemaPaths()
     {
         var merged = ThreeWayMerge.MergeResource(

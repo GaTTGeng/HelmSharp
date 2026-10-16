@@ -128,7 +128,7 @@ internal static class ThreeWayMerge
                 lastVal is IList<object?> lastList &&
                 newVal is IList<object?> newList &&
                 liveVal is IList<object?> liveList &&
-                TryMergeNamedLists(lastList, newList, liveList, out var mergedList))
+                TryMergeKeyedLists(lastList, newList, liveList, out var mergedList))
             {
                 merged[key] = mergedList;
                 continue;
@@ -196,28 +196,56 @@ internal static class ThreeWayMerge
         return result;
     }
 
-    private static bool TryMergeNamedLists(
+    private static bool TryMergeKeyedLists(
         IList<object?> last,
         IList<object?> newValues,
         IList<object?> live,
         out List<object?> merged)
     {
         merged = [];
-        if (!TryIndexNamedItems(last, out var lastItems) ||
-            !TryIndexNamedItems(newValues, out var newItems) ||
-            !TryIndexNamedItems(live, out var liveItems))
+        string[][] keySets =
+        [
+            ["containerPort", "protocol"],
+            ["port", "protocol"],
+            ["name"],
+            ["mountPath"],
+            ["devicePath"],
+            ["ip"],
+            ["path"],
+            ["host"],
+            ["topologyKey", "whenUnsatisfiable"]
+        ];
+        Dictionary<string, IDictionary<string, object?>> lastItems = [];
+        Dictionary<string, IDictionary<string, object?>> newItems = [];
+        Dictionary<string, IDictionary<string, object?>> liveItems = [];
+        string[]? selectedKeySet = null;
+        foreach (var keySet in keySets)
+        {
+            if (!TryIndexItems(last, keySet, out var candidateLast) ||
+                !TryIndexItems(newValues, keySet, out var candidateNew) ||
+                !TryIndexItems(live, keySet, out var candidateLive))
+                continue;
+
+            selectedKeySet = keySet;
+            lastItems = candidateLast;
+            newItems = candidateNew;
+            liveItems = candidateLive;
+            break;
+        }
+
+        if (selectedKeySet is null)
             return false;
 
         foreach (var item in newValues)
         {
             var newItem = (IDictionary<string, object?>)item!;
-            var name = (string)newItem["name"]!;
-            var hasLast = lastItems.TryGetValue(name, out var lastItem);
-            var hasLive = liveItems.TryGetValue(name, out var liveItem);
+            var key = GetItemKey(newItem, selectedKeySet);
+            var hasLast = lastItems.TryGetValue(key, out var lastItem);
+            var hasLive = liveItems.TryGetValue(key, out var liveItem);
             if (hasLast && !hasLive && DeepEquals(lastItem, newItem))
                 continue;
 
-            var mergedItem = DeepCopyDict((Dictionary<string, object?>)newItem);
+            var mergedItem = DeepCopyDictionary(newItem);
             if (hasLast && hasLive)
                 DeepThreeWayMerge(lastItem!, newItem, liveItem!, mergedItem, isRoot: false, isMetadata: false);
             merged.Add(mergedItem);
@@ -226,30 +254,72 @@ internal static class ThreeWayMerge
         foreach (var item in live)
         {
             var liveItem = (IDictionary<string, object?>)item!;
-            var name = (string)liveItem["name"]!;
-            if (!lastItems.ContainsKey(name) && !newItems.ContainsKey(name))
-                merged.Add(DeepCopyDict((Dictionary<string, object?>)liveItem));
+            var key = GetItemKey(liveItem, selectedKeySet);
+            if (!lastItems.ContainsKey(key) && !newItems.ContainsKey(key))
+                merged.Add(DeepCopyDictionary(liveItem));
         }
 
         return true;
     }
 
-    private static bool TryIndexNamedItems(
+    private static bool TryIndexItems(
         IList<object?> values,
-        out Dictionary<string, Dictionary<string, object?>> items)
+        IReadOnlyList<string> keyFields,
+        out Dictionary<string, IDictionary<string, object?>> items)
     {
-        items = new Dictionary<string, Dictionary<string, object?>>(StringComparer.Ordinal);
+        items = new Dictionary<string, IDictionary<string, object?>>(StringComparer.Ordinal);
         foreach (var value in values)
         {
-            if (value is not Dictionary<string, object?> item ||
-                !item.TryGetValue("name", out var nameValue) ||
-                nameValue is not string name ||
-                string.IsNullOrEmpty(name) ||
-                !items.TryAdd(name, item))
+            if (value is not IDictionary<string, object?> item ||
+                !TryGetItemKey(item, keyFields, out var key) ||
+                !items.TryAdd(key, item))
                 return false;
         }
 
         return values.Count > 0;
+    }
+
+    private static bool TryGetItemKey(
+        IDictionary<string, object?> item,
+        IReadOnlyList<string> keyFields,
+        out string key)
+    {
+        var values = new string[keyFields.Count];
+        for (var index = 0; index < keyFields.Count; index++)
+        {
+            var field = keyFields[index];
+            if (item.TryGetValue(field, out var value) && value is not null)
+            {
+                values[index] = System.Text.Json.JsonSerializer.Serialize(value);
+            }
+            else if (field == "protocol" &&
+                     (keyFields.Contains("containerPort") || keyFields.Contains("port")))
+            {
+                values[index] = "\"TCP\"";
+            }
+            else if (value is null)
+            {
+                key = string.Empty;
+                return false;
+            }
+        }
+
+        key = string.Join("\u001f", values);
+        return true;
+    }
+
+    private static string GetItemKey(IDictionary<string, object?> item, IReadOnlyList<string> keyFields)
+    {
+        _ = TryGetItemKey(item, keyFields, out var key);
+        return key;
+    }
+
+    private static Dictionary<string, object?> DeepCopyDictionary(IDictionary<string, object?> value)
+    {
+        var copy = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var (key, item) in value)
+            copy[key] = DeepCopyValue(item);
+        return copy;
     }
 
     /// <summary>
