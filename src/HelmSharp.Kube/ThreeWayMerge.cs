@@ -13,6 +13,7 @@ internal static class ThreeWayMerge
     /// <param name="lastManifest">Manifest as of the previously deployed revision (the common ancestor).</param>
     /// <param name="newManifest">Desired manifest produced by the new chart render.</param>
     /// <param name="liveManifest">Current live resource as returned by the cluster, or null when it does not exist.</param>
+    /// <param name="customListMapKeys">Declared list-map keys for custom resource paths, or null to use built-in Kubernetes defaults.</param>
     /// <returns>
     /// The desired manifest when there is no live resource; otherwise the merged manifest that
     /// keeps user-side drift which does not conflict with chart changes.
@@ -20,7 +21,8 @@ internal static class ThreeWayMerge
     public static string MergeResource(
         string lastManifest,
         string newManifest,
-        string? liveManifest)
+        string? liveManifest,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys = null)
     {
         var lastDoc = HelmYaml.DeserializeDictionary(lastManifest, StringComparer.Ordinal);
         var newDoc = HelmYaml.DeserializeDictionary(newManifest, StringComparer.Ordinal);
@@ -35,7 +37,7 @@ internal static class ThreeWayMerge
         var merged = DeepCopyDict(newDoc);
 
         // Deep merge at every level
-        DeepThreeWayMerge(lastDoc, newDoc, liveDoc, merged, isRoot: true, isMetadata: false);
+        DeepThreeWayMerge(lastDoc, newDoc, liveDoc, merged, isRoot: true, isMetadata: false, path: "", customListMapKeys: customListMapKeys);
 
         return HelmYaml.Serialize(merged);
     }
@@ -49,7 +51,9 @@ internal static class ThreeWayMerge
         IDictionary<string, object?> live,
         IDictionary<string, object?> merged,
         bool isRoot,
-        bool isMetadata)
+        bool isMetadata,
+        string path,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys)
     {
         // Collect all keys from all three sources
         var allKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -104,7 +108,9 @@ internal static class ThreeWayMerge
                     liveDict,
                     mergedChildDict,
                     isRoot: false,
-                    isMetadata: isRoot && key == "metadata");
+                    isMetadata: isRoot && key == "metadata",
+                    path: AppendPath(path, key),
+                    customListMapKeys: customListMapKeys);
                 continue;
             }
 
@@ -128,7 +134,13 @@ internal static class ThreeWayMerge
                 lastVal is IList<object?> lastList &&
                 newVal is IList<object?> newList &&
                 liveVal is IList<object?> liveList &&
-                TryMergeKeyedLists(lastList, newList, liveList, out var mergedList))
+                TryMergeKeyedLists(
+                    lastList,
+                    newList,
+                    liveList,
+                    AppendPath(path, key),
+                    customListMapKeys,
+                    out var mergedList))
             {
                 merged[key] = mergedList;
                 continue;
@@ -200,21 +212,28 @@ internal static class ThreeWayMerge
         IList<object?> last,
         IList<object?> newValues,
         IList<object?> live,
+        string path,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys,
         out List<object?> merged)
     {
         merged = [];
-        string[][] keySets =
-        [
-            ["containerPort", "protocol"],
-            ["port", "protocol"],
-            ["name"],
-            ["mountPath"],
-            ["devicePath"],
-            ["ip"],
-            ["path"],
-            ["host"],
-            ["topologyKey", "whenUnsatisfiable"]
-        ];
+        // A CRD schema is authoritative: paths absent from its map-key table are atomic lists.
+        string[][] keySets = customListMapKeys is not null
+            ? customListMapKeys.TryGetValue(path, out var customKeys)
+                ? [customKeys.ToArray()]
+                : []
+            :
+            [
+                ["containerPort", "protocol"],
+                ["port", "protocol"],
+                ["name"],
+                ["mountPath"],
+                ["devicePath"],
+                ["ip"],
+                ["path"],
+                ["host"],
+                ["topologyKey", "whenUnsatisfiable"]
+            ];
         Dictionary<string, IDictionary<string, object?>> lastItems = [];
         Dictionary<string, IDictionary<string, object?>> newItems = [];
         Dictionary<string, IDictionary<string, object?>> liveItems = [];
@@ -247,7 +266,15 @@ internal static class ThreeWayMerge
 
             var mergedItem = DeepCopyDictionary(newItem);
             if (hasLast && hasLive)
-                DeepThreeWayMerge(lastItem!, newItem, liveItem!, mergedItem, isRoot: false, isMetadata: false);
+                DeepThreeWayMerge(
+                    lastItem!,
+                    newItem,
+                    liveItem!,
+                    mergedItem,
+                    isRoot: false,
+                    isMetadata: false,
+                    path: path + "[]",
+                    customListMapKeys: customListMapKeys);
             merged.Add(mergedItem);
         }
 
@@ -261,6 +288,9 @@ internal static class ThreeWayMerge
 
         return true;
     }
+
+    private static string AppendPath(string path, string key)
+        => path.Length == 0 ? key : path + "." + key;
 
     private static bool TryIndexItems(
         IList<object?> values,
