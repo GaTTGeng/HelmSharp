@@ -222,6 +222,8 @@ internal static class ThreeWayMerge
             ? customListMapKeys.TryGetValue(path, out var customKeys)
                 ? [customKeys.ToArray()]
                 : []
+            : path.EndsWith(".volumeMounts", StringComparison.Ordinal)
+                ? [["mountPath"]]
             :
             [
                 ["containerPort", "protocol"],

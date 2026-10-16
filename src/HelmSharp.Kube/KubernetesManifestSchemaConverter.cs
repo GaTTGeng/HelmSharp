@@ -46,9 +46,16 @@ internal static class KubernetesManifestSchemaConverter
         var storageMigration = identity.ApiVersion == "storage.k8s.io/v1beta1" &&
                                targetApiVersion == "storage.k8s.io/v1" &&
                                identity.Kind is "StorageClass" or "CSIDriver" or "CSINode" or "VolumeAttachment" or "CSIStorageCapacity";
+        var apiVersionOnlyMigration = (identity.ApiVersion, targetApiVersion, identity.Kind) is
+            ("scheduling.k8s.io/v1beta1", "scheduling.k8s.io/v1", "PriorityClass") or
+            ("coordination.k8s.io/v1beta1", "coordination.k8s.io/v1", "Lease") or
+            ("node.k8s.io/v1beta1", "node.k8s.io/v1", "RuntimeClass") or
+            ("apiregistration.k8s.io/v1beta1", "apiregistration.k8s.io/v1", "APIService") or
+            ("networking.k8s.io/v1beta1", "networking.k8s.io/v1", "IngressClass");
         if (!ingressMigration && !legacyWorkloadMigration && !networkPolicyMigration &&
             !podSecurityPolicyMigration && !legacyIngressBetaMigration && !horizontalPodAutoscalerMigration &&
-            !cronJobMigration && !podDisruptionBudgetMigration && !rbacMigration && !storageMigration)
+            !cronJobMigration && !podDisruptionBudgetMigration && !rbacMigration && !storageMigration &&
+            !apiVersionOnlyMigration)
         {
             convertedDocument = document;
             return false;

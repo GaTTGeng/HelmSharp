@@ -282,6 +282,7 @@ public sealed class KubernetesManifestApplier
             ("batch/v1", "Job" or "CronJob") => true,
             ("networking.k8s.io/v1", "Ingress" or "NetworkPolicy") => true,
             ("networking.k8s.io/v1", "IngressClass") => false,
+            ("networking.k8s.io/v1beta1", "IngressClass") => false,
             ("rbac.authorization.k8s.io/v1", "Role" or "RoleBinding") => true,
             ("rbac.authorization.k8s.io/v1", "ClusterRole" or "ClusterRoleBinding") => false,
             ("rbac.authorization.k8s.io/v1beta1", "Role" or "RoleBinding") => true,
@@ -293,11 +294,15 @@ public sealed class KubernetesManifestApplier
             ("storage.k8s.io/v1beta1", "CSIStorageCapacity") => true,
             ("storage.k8s.io/v1beta1", "StorageClass" or "CSIDriver" or "CSINode" or "VolumeAttachment") => false,
             ("scheduling.k8s.io/v1", "PriorityClass") => false,
+            ("scheduling.k8s.io/v1beta1", "PriorityClass") => false,
             ("apiextensions.k8s.io/v1" or "apiextensions.k8s.io/v1beta1", "CustomResourceDefinition") => false,
             ("admissionregistration.k8s.io/v1", "MutatingWebhookConfiguration" or "ValidatingWebhookConfiguration") => false,
             ("apiregistration.k8s.io/v1", "APIService") => false,
+            ("apiregistration.k8s.io/v1beta1", "APIService") => false,
             ("coordination.k8s.io/v1", "Lease") => true,
+            ("coordination.k8s.io/v1beta1", "Lease") => true,
             ("node.k8s.io/v1", "RuntimeClass") => false,
+            ("node.k8s.io/v1beta1", "RuntimeClass") => false,
             ("discovery.k8s.io/v1", "EndpointSlice") => true,
             ("flowcontrol.apiserver.k8s.io/v1", "FlowSchema" or "PriorityLevelConfiguration") => false,
             _ => null
@@ -1598,7 +1603,8 @@ public sealed class KubernetesManifestApplier
             return ContainsExpectedManifest(
                 NormalizeSecretStringData(identity, desiredYaml),
                 after!,
-                TryGetTypedResourceScope(identity, out _));
+                TryGetTypedResourceScope(identity, out _),
+                identity.Kind);
         }
         catch
         {
@@ -1636,7 +1642,7 @@ public sealed class KubernetesManifestApplier
             // Only record progress if the read-back also reflects the chart-owned payload.
             var expectedYaml = MergeWithLiveResource(identity, desiredYaml, before!);
             var typedResource = TryGetTypedResourceScope(identity, out _);
-            return ContainsExpectedManifest(expectedYaml, after!, typedResource) &&
+            return ContainsExpectedManifest(expectedYaml, after!, typedResource, identity.Kind) &&
                    RemovedValuesAreAbsent(expectedYaml, before!, after!, typedResource);
         }
         catch
@@ -1645,7 +1651,7 @@ public sealed class KubernetesManifestApplier
         }
     }
 
-    private static bool ContainsExpectedManifest<T>(string expectedYaml, T actualResource, bool allowCaseInsensitiveProperties)
+    private static bool ContainsExpectedManifest<T>(string expectedYaml, T actualResource, bool allowCaseInsensitiveProperties, string resourceKind)
     {
         using var expected = JsonDocument.Parse(JsonSerializer.Serialize(
             HelmYaml.DeserializeDictionary(expectedYaml, StringComparer.Ordinal)));
@@ -1656,7 +1662,8 @@ public sealed class KubernetesManifestApplier
             parentName: null,
             allowCaseInsensitiveProperties,
             isTypedResource: allowCaseInsensitiveProperties,
-            inQuantityMap: false);
+            inQuantityMap: false,
+            resourceKind);
     }
 
     private static bool RemovedValuesAreAbsent<T>(
@@ -1683,7 +1690,8 @@ public sealed class KubernetesManifestApplier
         string? parentName,
         bool allowCaseInsensitiveProperties,
         bool isTypedResource,
-        bool inQuantityMap)
+        bool inQuantityMap,
+        string resourceKind)
     {
         if (expected.ValueKind == JsonValueKind.Object)
         {
@@ -1702,7 +1710,10 @@ public sealed class KubernetesManifestApplier
                         property.Name,
                         allowCaseInsensitiveProperties,
                         isTypedResource,
-                        inQuantityMap || IsQuantityMap(property.Name)))
+                        inQuantityMap || IsQuantityMap(property.Name, parentName, resourceKind) ||
+                        resourceKind == "HorizontalPodAutoscaler" && parentName == "target" &&
+                        property.Name is "averageValue" or "value",
+                        resourceKind))
                 {
                     return false;
                 }
@@ -1723,7 +1734,7 @@ public sealed class KubernetesManifestApplier
             foreach (var expectedItem in expectedItems)
             {
                 while (actualIndex < actualItems.Length &&
-                       !ContainsExpectedValue(expectedItem, actualItems[actualIndex], parentName, allowCaseInsensitiveProperties, isTypedResource, inQuantityMap))
+                       !ContainsExpectedValue(expectedItem, actualItems[actualIndex], parentName, allowCaseInsensitiveProperties, isTypedResource, inQuantityMap, resourceKind))
                 {
                     actualIndex++;
                 }
@@ -1849,8 +1860,9 @@ public sealed class KubernetesManifestApplier
             : string.Equals(left.ToString(), right.ToString(), StringComparison.Ordinal);
     }
 
-    private static bool IsQuantityMap(string? parentName)
-        => parentName is "requests" or "limits" or "capacity" or "allocatable";
+    private static bool IsQuantityMap(string? propertyName, string? parentName, string resourceKind)
+        => propertyName is "requests" or "limits" or "capacity" or "allocatable" ||
+           resourceKind == "ResourceQuota" && parentName == "spec" && propertyName is "hard" or "used";
 
     private static bool IsServerManagedField(string? parentName, string propertyName)
         => parentName is null && string.Equals(propertyName, "status", StringComparison.OrdinalIgnoreCase) ||
