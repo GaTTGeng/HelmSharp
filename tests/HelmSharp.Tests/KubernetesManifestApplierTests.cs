@@ -853,6 +853,36 @@ public sealed class KubernetesManifestApplierTests
         Assert.Null(spec["selector"]);
     }
 
+    [Fact]
+    public void SchemaConverter_AddsRequiredSelectorWhenLegacyWorkloadSelectorIsNull()
+    {
+        const string previousManifest = """
+            apiVersion: apps/v1beta1
+            kind: Deployment
+            metadata:
+              name: portal
+            spec:
+              selector: null
+              template:
+                metadata:
+                  labels:
+                    app: portal
+                spec:
+                  containers: []
+            """;
+        var identity = new ManifestIdentity("apps/v1beta1", "Deployment", "portal", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            previousManifest, identity, "apps/v1", out var convertedPrevious));
+        var converted = HelmYaml.DeserializeDictionary(convertedPrevious);
+        var spec = Assert.IsType<Dictionary<string, object?>>(converted["spec"]);
+        var selector = Assert.IsType<Dictionary<string, object?>>(spec["selector"]);
+        var matchLabels = Assert.IsType<Dictionary<string, object?>>(selector["matchLabels"]);
+
+        Assert.Equal("portal", matchLabels["app"]);
+        Assert.Equal("apps/v1", converted["apiVersion"]);
+    }
+
     [Theory]
     [InlineData("apps/v1beta1")]
     [InlineData("apps/v1beta2")]

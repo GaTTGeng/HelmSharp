@@ -289,6 +289,40 @@ public sealed class ThreeWayMergeTests
     }
 
     [Fact]
+    public void MergeResource_MergesDeclaredKeyedListWhenBaselineIsEmpty()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            """
+            spec:
+              entries: []
+            """,
+            """
+            spec:
+              entries:
+                - name: chart
+                  value: desired
+            """,
+            """
+            spec:
+              entries:
+                - name: operator
+                  value: retained
+            """,
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+            {
+                ["spec.entries"] = ["name"]
+            });
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var entries = (IList<object?>)spec["entries"]!;
+
+        Assert.Equal(2, entries.Count);
+        Assert.Equal("chart", ((IDictionary<string, object?>)entries[0]!)["name"]);
+        Assert.Equal("operator", ((IDictionary<string, object?>)entries[1]!)["name"]);
+    }
+
+    [Fact]
     public void MergeResource_UsesDeclaredCustomListMapKeys()
     {
         var merged = ThreeWayMerge.MergeResource(

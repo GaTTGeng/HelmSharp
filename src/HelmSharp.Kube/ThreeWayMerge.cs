@@ -306,7 +306,7 @@ internal static class ThreeWayMerge
                 return false;
         }
 
-        return values.Count > 0;
+        return true;
     }
 
     private static bool TryGetItemKey(

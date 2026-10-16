@@ -266,7 +266,7 @@ internal static class KubernetesManifestSchemaConverter
     private static void ConvertLegacyWorkloadSelector(Dictionary<string, object?> document)
     {
         if (!document.TryGetValue("spec", out var specValue) || specValue is not Dictionary<string, object?> spec ||
-            spec.ContainsKey("selector") ||
+            (spec.TryGetValue("selector", out var selectorValue) && selectorValue is not null) ||
             !spec.TryGetValue("template", out var templateValue) || templateValue is not Dictionary<string, object?> template ||
             !template.TryGetValue("metadata", out var metadataValue) || metadataValue is not Dictionary<string, object?> metadata ||
             !metadata.TryGetValue("labels", out var labelsValue) || labelsValue is not Dictionary<string, object?> labels)
