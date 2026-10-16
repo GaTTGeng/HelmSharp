@@ -1987,7 +1987,9 @@ public sealed class KubernetesManifestApplier
 
     private static bool IsQuantityMap(string? propertyName, string? parentName, string resourceKind)
         => propertyName is "requests" or "limits" or "capacity" or "allocatable" ||
-           resourceKind == "ResourceQuota" && parentName == "spec" && propertyName is "hard" or "used";
+           resourceKind == "ResourceQuota" && parentName == "spec" && propertyName is "hard" or "used" ||
+           resourceKind == "LimitRange" && parentName == "spec" &&
+           propertyName is "default" or "defaultRequest" or "min" or "max" or "maxLimitRequestRatio";
 
     private static bool IsArbitraryMap(string? propertyName)
         => propertyName is "data" or "binaryData" or "stringData" or "labels" or "annotations" or

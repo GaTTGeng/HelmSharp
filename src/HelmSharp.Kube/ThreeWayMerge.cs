@@ -311,7 +311,13 @@ internal static class ThreeWayMerge
             return false;
 
         foreach (var value in newValues)
-            merged.Add(DeepCopyValue(value));
+        {
+            // An unchanged chart value removed live is an operator deletion; only
+            // reintroduce it when the chart itself changed the set membership.
+            if (!last.Any(previous => DeepEquals(previous, value)) ||
+                live.Any(current => DeepEquals(current, value)))
+                merged.Add(DeepCopyValue(value));
+        }
 
         foreach (var value in live)
         {
@@ -436,9 +442,8 @@ internal static class ThreeWayMerge
     }
 
     /// <summary>
-    /// Structural equality for deserialized YAML values. Numeric types are compared across
-    /// long/int/double with a small epsilon for doubles so YAML type inference differences
-    /// (e.g. an int in one document, a double in another) do not count as drift.
+    /// Structural equality for deserialized YAML values, including numeric values parsed
+    /// into different CLR numeric types.
     /// </summary>
     private static bool DeepEquals(object? a, object? b)
     {
@@ -453,11 +458,13 @@ internal static class ThreeWayMerge
         // Numeric comparisons
         if (a is long la && b is long lb) return la == lb;
         if (a is int ia && b is int ib) return ia == ib;
-        if (a is double da && b is double db) return Math.Abs(da - db) < 1e-10;
+        if (a is double da && b is double db) return da.Equals(db);
         if (a is long l1 && b is int i1) return l1 == i1;
         if (a is int i2 && b is long l2) return i2 == l2;
-        if (a is long l3 && b is double d1) return Math.Abs(l3 - d1) < 1e-10;
-        if (a is double d2 && b is long l4) return Math.Abs(d2 - l4) < 1e-10;
+        if (a is int i3 && b is double d3) return NumericEquals(i3, d3);
+        if (a is double d4 && b is int i4) return NumericEquals(i4, d4);
+        if (a is long l3 && b is double d1) return NumericEquals(l3, d1);
+        if (a is double d2 && b is long l4) return NumericEquals(l4, d2);
 
         // Dictionary comparison
         if (a is IDictionary<string, object?> dictA && b is IDictionary<string, object?> dictB)
@@ -481,6 +488,15 @@ internal static class ThreeWayMerge
         }
 
         return a.Equals(b);
+    }
+
+    private static bool NumericEquals(long integer, double floating)
+    {
+        if (!double.IsFinite(floating) || floating < long.MinValue || floating >= 9223372036854775808d ||
+            !Math.Truncate(floating).Equals(floating))
+            return false;
+
+        return integer == (long)floating;
     }
 
     // Ordinal deep copy so case-sensitive Kubernetes map keys remain distinct.

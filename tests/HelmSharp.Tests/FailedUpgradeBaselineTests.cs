@@ -285,6 +285,49 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
     }
 
     [Fact]
+    public void RemoveCleanedDocuments_MatchesFullApiGroupIdentity()
+    {
+        const string manifest = """
+            apiVersion: first.example/v1
+            kind: Widget
+            metadata:
+              name: shared
+              namespace: test-ns
+            spec:
+              value: first
+            ---
+            apiVersion: second.example/v1
+            kind: Widget
+            metadata:
+              name: shared
+              namespace: test-ns
+            spec:
+              value: second
+            """;
+        const string firstDeleted = """
+            apiVersion: first.example/v1
+            kind: Widget
+            metadata:
+              name: shared
+              namespace: test-ns
+            spec:
+              value: first
+            """;
+
+        var deletedDuringReverseTraversal = HelmClient.GetSuccessfullyDeletedManifest(
+            manifest,
+            ["Widget/test-ns/shared"],
+            "test-ns");
+        Assert.Contains("second.example/v1", deletedDuringReverseTraversal, StringComparison.Ordinal);
+
+        var remaining = HelmClient.RemoveCleanedDocuments(manifest, firstDeleted, "test-ns");
+
+        Assert.DoesNotContain("first.example/v1", remaining, StringComparison.Ordinal);
+        Assert.Contains("second.example/v1", remaining, StringComparison.Ordinal);
+        Assert.Contains("value: second", remaining, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ConvertRestorationApiVersions_UsesAttemptedVersionAndPreviousDesiredFields()
     {
         const string previousManifest = """

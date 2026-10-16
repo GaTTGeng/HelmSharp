@@ -1715,6 +1715,59 @@ public sealed class KubernetesManifestApplierTests
     }
 
     [Fact]
+    public async Task ApplyUpgradeAsync_ConfirmsAmbiguousLimitRangeReplaceWithEquivalentQuantity()
+    {
+        const string previousManifest = """
+            apiVersion: v1
+            kind: LimitRange
+            metadata:
+              name: limits
+            spec:
+              limits:
+                - type: Container
+                  default:
+                    cpu: "1"
+            """;
+        const string upgradedManifest = """
+            apiVersion: v1
+            kind: LimitRange
+            metadata:
+              name: limits
+            spec:
+              limits:
+                - type: Container
+                  default:
+                    cpu: "1.5"
+            """;
+        const string path = "/api/v1/namespaces/release-ns/limitranges/limits";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "LimitRange",
+                  "metadata": { "name": "limits", "namespace": "release-ns", "resourceVersion": "42" },
+                  "spec": { "limits": [{ "type": "Container", "default": { "cpu": "1" } }] }
+                }
+                """)
+            .Respond(HttpMethod.Put, path, HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "LimitRange",
+                  "metadata": { "name": "limits", "namespace": "release-ns", "resourceVersion": "43" },
+                  "spec": { "limits": [{ "type": "Container", "default": { "cpu": "1500m" } }] }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await using var applied = applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns").GetAsyncEnumerator();
+
+        Assert.True(await applied.MoveNextAsync());
+        Assert.Equal("LimitRange/release-ns/limits", applied.Current);
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(() => applied.MoveNextAsync().AsTask());
+    }
+
+    [Fact]
     public async Task ApplyAsync_ReadsBackAfterWriteCancellationWithUncanceledToken()
     {
         const string manifest = """
