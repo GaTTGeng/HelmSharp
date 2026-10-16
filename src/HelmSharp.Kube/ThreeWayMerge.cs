@@ -276,8 +276,12 @@ internal static class ThreeWayMerge
             return [["mountPath"]];
         if (path.EndsWith(".volumeDevices", StringComparison.Ordinal))
             return [["devicePath"]];
-        if (path.EndsWith(".ports", StringComparison.Ordinal))
-            return [["containerPort", "protocol"], ["port", "protocol"]];
+        if (path.EndsWith(".containers[].ports", StringComparison.Ordinal) ||
+            path.EndsWith(".initContainers[].ports", StringComparison.Ordinal) ||
+            path.EndsWith(".ephemeralContainers[].ports", StringComparison.Ordinal))
+            return [["containerPort", "protocol"]];
+        if (path == "spec.ports")
+            return [["port", "protocol"]];
         if (path.EndsWith(".hostAliases", StringComparison.Ordinal))
             return [["ip"]];
         if (path.EndsWith(".topologySpreadConstraints", StringComparison.Ordinal))
@@ -287,7 +291,9 @@ internal static class ThreeWayMerge
             path.EndsWith(".ephemeralContainers", StringComparison.Ordinal) ||
             path.EndsWith(".env", StringComparison.Ordinal) ||
             path.EndsWith(".volumes", StringComparison.Ordinal) ||
-            path.EndsWith(".imagePullSecrets", StringComparison.Ordinal))
+            path.EndsWith(".imagePullSecrets", StringComparison.Ordinal) ||
+            path.EndsWith(".schedulingGates", StringComparison.Ordinal) ||
+            path.EndsWith(".resourceClaims", StringComparison.Ordinal))
             return [["name"]];
 
         return [];

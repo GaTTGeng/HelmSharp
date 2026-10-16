@@ -234,10 +234,7 @@ internal static class KubernetesManifestSchemaConverter
                 // v2beta1 object metrics keep the referenced object and selector beside the metric name.
                 if (!source.Remove("target", out var describedObject) ||
                     describedObject is not Dictionary<string, object?> ||
-                    !TryConvertBeta1MetricTarget(
-                        source,
-                        "averageValue", "AverageValue", "averageValue",
-                        "targetValue", "Value", "value"))
+                    !TryConvertBeta1ObjectMetricTarget(source))
                 {
                     return false;
                 }
@@ -262,6 +259,28 @@ internal static class KubernetesManifestSchemaConverter
             source["metric"] = metricIdentifier;
         }
 
+        return true;
+    }
+
+    private static bool TryConvertBeta1ObjectMetricTarget(Dictionary<string, object?> metric)
+    {
+        var hasTargetValue = metric.Remove("targetValue", out var targetValue);
+        var hasAverageValue = metric.Remove("averageValue", out var averageValue);
+        if (!hasTargetValue)
+            return false;
+
+        // Kubernetes prefers the optional average target when both object metric values are present.
+        metric["target"] = hasAverageValue
+            ? new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["type"] = "AverageValue",
+                ["averageValue"] = averageValue
+            }
+            : new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["type"] = "Value",
+                ["value"] = targetValue
+            };
         return true;
     }
 

@@ -184,18 +184,68 @@ public sealed class ThreeWayMergeTests
     public void MergeResource_PreservesLiveOnlyContainerPortsUsingKubernetesCompositeKeys()
     {
         var merged = ThreeWayMerge.MergeResource(
-            "spec:\n  ports:\n  - containerPort: 8080\n    protocol: TCP\n",
-            "spec:\n  ports:\n  - containerPort: 8080\n    protocol: UDP\n",
-            "spec:\n  ports:\n  - containerPort: 8080\n    protocol: TCP\n  - containerPort: 9090\n    protocol: TCP\n");
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        ports:\n        - containerPort: 8080\n          protocol: TCP\n",
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        ports:\n        - containerPort: 8080\n          protocol: UDP\n",
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        ports:\n        - containerPort: 8080\n          protocol: TCP\n        - containerPort: 9090\n          protocol: TCP\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var template = (IDictionary<string, object?>)spec["template"]!;
+        var podSpec = (IDictionary<string, object?>)template["spec"]!;
+        var container = (IDictionary<string, object?>)((IList<object?>)podSpec["containers"]!)[0]!;
+        var ports = (IList<object?>)container["ports"]!;
+
+        Assert.Equal(2, ports.Count);
+        Assert.Equal(8080L, ((IDictionary<string, object?>)ports[0]!)["containerPort"]);
+        Assert.Equal("UDP", ((IDictionary<string, object?>)ports[0]!)["protocol"]);
+        Assert.Equal(9090L, ((IDictionary<string, object?>)ports[1]!)["containerPort"]);
+    }
+
+    [Fact]
+    public void MergeResource_PreservesServicePortsByPortAndProtocol()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: v1\nkind: Service\nspec:\n  ports:\n  - port: 80\n    protocol: TCP\n",
+            "apiVersion: v1\nkind: Service\nspec:\n  ports:\n  - port: 80\n    protocol: TCP\n",
+            "apiVersion: v1\nkind: Service\nspec:\n  ports:\n  - port: 80\n    protocol: TCP\n  - port: 443\n    protocol: TCP\n");
 
         var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
         var spec = (IDictionary<string, object?>)document["spec"]!;
         var ports = (IList<object?>)spec["ports"]!;
 
         Assert.Equal(2, ports.Count);
-        Assert.Equal(8080L, ((IDictionary<string, object?>)ports[0]!)["containerPort"]);
-        Assert.Equal("UDP", ((IDictionary<string, object?>)ports[0]!)["protocol"]);
-        Assert.Equal(9090L, ((IDictionary<string, object?>)ports[1]!)["containerPort"]);
+        Assert.Equal(443L, ((IDictionary<string, object?>)ports[1]!)["port"]);
+    }
+
+    [Fact]
+    public void MergeResource_TreatsEndpointSlicePortsAsAtomic()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: discovery.k8s.io/v1\nkind: EndpointSlice\nports:\n- port: 80\n  protocol: TCP\n",
+            "apiVersion: discovery.k8s.io/v1\nkind: EndpointSlice\nports:\n- port: 8080\n  protocol: TCP\n",
+            "apiVersion: discovery.k8s.io/v1\nkind: EndpointSlice\nports:\n- port: 80\n  protocol: TCP\n- port: 443\n  protocol: TCP\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var ports = (IList<object?>)document["ports"]!;
+
+        Assert.Single(ports);
+        Assert.Equal(8080L, ((IDictionary<string, object?>)ports[0]!)["port"]);
+    }
+
+    [Fact]
+    public void MergeResource_PreservesLiveOnlySchedulingGates()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "spec:\n  schedulingGates:\n  - name: chart.example/ready\n",
+            "spec:\n  schedulingGates:\n  - name: chart.example/ready\n",
+            "spec:\n  schedulingGates:\n  - name: chart.example/ready\n  - name: operator.example/hold\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var gates = (IList<object?>)spec["schedulingGates"]!;
+
+        Assert.Equal(2, gates.Count);
+        Assert.Equal("operator.example/hold", ((IDictionary<string, object?>)gates[1]!)["name"]);
     }
 
     [Fact]
