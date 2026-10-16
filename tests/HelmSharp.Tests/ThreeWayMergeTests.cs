@@ -238,6 +238,19 @@ public sealed class ThreeWayMergeTests
     }
 
     [Fact]
+    public void MergeResource_ReplacesIngressRulesAsAnAtomicList()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: routes\nspec:\n  rules:\n  - host: old.example\n",
+            "apiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: routes\nspec:\n  rules: []\n",
+            "apiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: routes\nspec:\n  rules:\n  - host: old.example\n  - host: operator.example\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        Assert.Empty((IList<object?>)spec["rules"]!);
+    }
+
+    [Fact]
     public void MergeResource_ScopesKubernetesManagedFieldExclusionsToTheirSchemaPaths()
     {
         var merged = ThreeWayMerge.MergeResource(
