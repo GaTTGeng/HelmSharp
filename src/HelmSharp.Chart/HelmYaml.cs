@@ -22,13 +22,28 @@ public static class HelmYaml
     /// Returns an empty map for null, empty, or non-mapping documents.
     /// </summary>
     public static Dictionary<string, object?> DeserializeDictionary(string? yaml)
-    {
-        if (string.IsNullOrWhiteSpace(yaml))
-            return new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        => DeserializeDictionary(yaml, StringComparer.OrdinalIgnoreCase);
 
-        var obj = DeserializeYamlNode(yaml);
-        return Normalize(obj) as Dictionary<string, object?>
-               ?? new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// Deserializes a YAML mapping using the supplied key comparer for every mapping level.
+    /// </summary>
+    /// <param name="yaml">YAML document to parse.</param>
+    /// <param name="keyComparer">Comparer used to identify mapping keys.</param>
+    /// <returns>An empty map for null, empty, or non-mapping documents.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="keyComparer"/> is null.</exception>
+    public static Dictionary<string, object?> DeserializeDictionary(string? yaml, StringComparer keyComparer)
+    {
+        ArgumentNullException.ThrowIfNull(keyComparer);
+        if (string.IsNullOrWhiteSpace(yaml))
+            return new Dictionary<string, object?>(keyComparer);
+
+        var stream = new YamlStream();
+        stream.Load(new StringReader(yaml));
+        if (stream.Documents.Count == 0)
+            return new Dictionary<string, object?>(keyComparer);
+
+        return ConvertYamlNode(stream.Documents[0].RootNode, keyComparer) as Dictionary<string, object?>
+               ?? new Dictionary<string, object?>(keyComparer);
     }
 
     /// <summary>
@@ -55,19 +70,22 @@ public static class HelmYaml
     }
 
     private static object? ConvertYamlNode(YamlNode node)
+        => ConvertYamlNode(node, StringComparer.OrdinalIgnoreCase);
+
+    private static object? ConvertYamlNode(YamlNode node, StringComparer keyComparer)
     {
         return node switch
         {
             YamlScalarNode scalar => ConvertScalarNode(scalar),
-            YamlSequenceNode sequence => sequence.Children.Select(ConvertYamlNode).ToList(),
-            YamlMappingNode mapping => ConvertMappingNode(mapping),
+            YamlSequenceNode sequence => sequence.Children.Select(child => ConvertYamlNode(child, keyComparer)).ToList(),
+            YamlMappingNode mapping => ConvertMappingNode(mapping, keyComparer),
             _ => null
         };
     }
 
-    private static Dictionary<string, object?> ConvertMappingNode(YamlMappingNode mapping)
+    private static Dictionary<string, object?> ConvertMappingNode(YamlMappingNode mapping, StringComparer keyComparer)
     {
-        var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        var result = new Dictionary<string, object?>(keyComparer);
 
         // Collect merge keys first — they contribute entries that explicit keys override
         var merges = new List<Dictionary<string, object?>>();
@@ -77,13 +95,13 @@ public static class HelmYaml
             {
                 // YAML merge key: << : *anchor  or  << : [ *a, *b ]
                 if (valueNode is YamlMappingNode mergeMapping)
-                    merges.Add(ConvertMappingNode(mergeMapping));
+                    merges.Add(ConvertMappingNode(mergeMapping, keyComparer));
                 else if (valueNode is YamlSequenceNode mergeSeq)
                 {
                     foreach (var item in mergeSeq.Children)
                     {
                         if (item is YamlMappingNode itemMapping)
-                            merges.Add(ConvertMappingNode(itemMapping));
+                            merges.Add(ConvertMappingNode(itemMapping, keyComparer));
                     }
                 }
             }
@@ -106,8 +124,8 @@ public static class HelmYaml
 
             var key = keyNode is YamlScalarNode sk
                 ? sk.Value ?? string.Empty
-                : Convert.ToString(ConvertYamlNode(keyNode)) ?? string.Empty;
-            result[key] = ConvertYamlNode(valueNode);
+                : Convert.ToString(ConvertYamlNode(keyNode, keyComparer)) ?? string.Empty;
+            result[key] = ConvertYamlNode(valueNode, keyComparer);
         }
 
         return result;

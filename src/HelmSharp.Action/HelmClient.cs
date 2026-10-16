@@ -354,12 +354,18 @@ public class HelmClient : IHelmClient
 
         // --- 9. Apply the main manifest ---
         var applier = new KubernetesManifestApplier(client, options.FieldManager);
+        var previousManifest = isUpgrade
+            ? ResolvePreviousManifestForUpgrade(existingHistory, ns)
+            : null;
+        var applyOperation = previousManifest is null
+            ? applier.ApplyAsync(mainManifest, ns, operationToken)
+            : applier.ApplyUpgradeAsync(mainManifest, previousManifest, ns, operationToken);
         var applied = 0;
         var appliedResources = new List<string>();
         Exception? applyError = null;
         try
         {
-            await foreach (var resource in applier.ApplyAsync(mainManifest, ns, operationToken))
+            await foreach (var resource in applyOperation.WithCancellation(operationToken))
             {
                 applied++;
                 appliedResources.Add($"Applied {resource}");
@@ -378,7 +384,17 @@ public class HelmClient : IHelmClient
         {
             // Failure-recovery branch: persist the failed record, run atomic/cleanup-on-fail
             // recovery, stream its lines, then rethrow the original apply error.
-            var recovery = await PersistFailedLifecycleAsync(store, WithHookExecution(releaseRecord, hooks), applyError, applier, mainManifest, existingHistory, isUpgrade, request, ns);
+            var recovery = await PersistFailedLifecycleAsync(
+                store,
+                WithHookExecution(releaseRecord, hooks),
+                applyError,
+                applier,
+                mainManifest,
+                existingHistory,
+                isUpgrade,
+                request,
+                ns,
+                GetSuccessfullyAppliedManifest(mainManifest, appliedResources, ns));
             foreach (var line in recovery)
                 yield return line;
             throw applyError;
@@ -392,7 +408,7 @@ public class HelmClient : IHelmClient
             await foreach (var hookLine in StreamWithFailureHandlingAsync(
                                hookExecutor.ExecuteHooksWithFailureHandlingAsync(hooks, postEvent, ns, operationToken),
                                // ReSharper disable once AccessToModifiedClosure // Recovery runs before the outer iterator advances or changes this operation state.
-                               error => PersistFailedLifecycleAsync(store, WithHookExecution(releaseRecord, hooks), error, applier, mainManifest, existingHistory, isUpgrade, request, ns))
+                               error => PersistFailedLifecycleAsync(store, WithHookExecution(releaseRecord, hooks), error, applier, mainManifest, existingHistory, isUpgrade, request, ns, mainManifest))
                                .WithCancellation(operationToken))
             {
                 yield return hookLine;
@@ -431,7 +447,7 @@ public class HelmClient : IHelmClient
                 {
                     // Failure-recovery branch, same as apply: atomic restores the previous
                     // revision, cleanup-on-fail deletes what this attempt introduced.
-                    var recovery = await PersistFailedLifecycleAsync(store, WithHookExecution(releaseRecord, hooks), waitError, applier, mainManifest, existingHistory, isUpgrade, request, ns);
+                    var recovery = await PersistFailedLifecycleAsync(store, WithHookExecution(releaseRecord, hooks), waitError, applier, mainManifest, existingHistory, isUpgrade, request, ns, mainManifest);
                     foreach (var line in recovery)
                         yield return line;
                     throw waitError;
@@ -459,7 +475,7 @@ public class HelmClient : IHelmClient
         {
             // Resources are already live even though the record could not be stored.
             // Recovery still runs so atomic/cleanup-on-fail semantics hold here too.
-            saveRecovery = await PersistFailedLifecycleAsync(store, WithHookExecution(releaseRecord, hooks), ex, applier, mainManifest, existingHistory, isUpgrade, request, ns);
+            saveRecovery = await PersistFailedLifecycleAsync(store, WithHookExecution(releaseRecord, hooks), ex, applier, mainManifest, existingHistory, isUpgrade, request, ns, mainManifest);
             saveError = ex;
         }
         if (saveRecovery is not null)
@@ -528,6 +544,91 @@ public class HelmClient : IHelmClient
         var isUpgrade = !string.Equals(latest.Status, "uninstalled", StringComparison.OrdinalIgnoreCase);
         var revision = latest.Revision + 1;
         return (isUpgrade, revision);
+    }
+
+    private static string? ResolvePreviousManifestForUpgrade(
+        IReadOnlyCollection<HelmReleaseRecord> history,
+        string defaultNamespace)
+    {
+        var previousRecord = history
+            .Where(record => string.Equals(record.Status, "deployed", StringComparison.OrdinalIgnoreCase))
+            .MaxBy(record => record.Revision);
+
+        var failedRevisions = history
+            .Where(record => (previousRecord is null || record.Revision > previousRecord.Revision) &&
+                             string.Equals(record.Status, "failed", StringComparison.OrdinalIgnoreCase) &&
+                             record.AppliedManifest is not null)
+            .OrderBy(record => record.Revision)
+            .ToList();
+        if (failedRevisions.Count == 0)
+            return previousRecord?.Manifest;
+
+        // Failed lifecycle attempts may each apply a different prefix of resources before failing.
+        // Overlay their known successes in revision order; later attempts win per identity,
+        // while resources never reached by any attempt retain the deployed baseline, if present.
+        var documentsByIdentity = KubernetesManifestApplier.SplitDocumentsPublic(previousRecord?.Manifest ?? string.Empty)
+            .Select(document => (Document: document, Identity: ManifestIdentity.Parse(document, defaultNamespace)))
+            .Where(item => item.Identity is not null)
+            .GroupBy(item => ManifestIdentityKey(item.Identity!), StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First().Document, StringComparer.Ordinal);
+        foreach (var failedRevision in failedRevisions)
+        {
+            foreach (var document in KubernetesManifestApplier.SplitDocumentsPublic(failedRevision.AppliedManifest!))
+            {
+                var identity = ManifestIdentity.Parse(document, defaultNamespace);
+                if (identity is not null)
+                    documentsByIdentity[ManifestIdentityKey(identity)] = document;
+            }
+        }
+
+        return string.Join(Environment.NewLine + "---" + Environment.NewLine, documentsByIdentity.Values);
+    }
+
+    internal static string GetSuccessfullyAppliedManifest(
+        string manifest,
+        IReadOnlyList<string> appliedResources,
+        string defaultNamespace)
+    {
+        if (appliedResources.Count == 0)
+            return string.Empty;
+
+        var appliedDocuments = new List<string>(appliedResources.Count);
+        var appliedIndex = 0;
+        foreach (var document in KubernetesManifestApplier.SplitDocumentsPublic(manifest))
+        {
+            var identity = ManifestIdentity.Parse(document, defaultNamespace);
+            if (identity is null)
+                continue;
+
+            // Applier progress names are yielded in manifest order, one for each successful
+            // resource, so matching them identifies the exact successful documents before a failure.
+            var namespacedDisplayName = identity.DisplayName;
+            var clusterScopedDisplayName = $"{identity.Kind}/{identity.Name}";
+            if (!string.Equals(appliedResources[appliedIndex], $"Applied {namespacedDisplayName}", StringComparison.Ordinal) &&
+                !string.Equals(appliedResources[appliedIndex], $"Applied {clusterScopedDisplayName}", StringComparison.Ordinal))
+                continue;
+
+            appliedDocuments.Add(document);
+            appliedIndex++;
+            if (appliedIndex == appliedResources.Count)
+                break;
+        }
+
+        return string.Join(Environment.NewLine + "---" + Environment.NewLine, appliedDocuments);
+    }
+
+    internal static string GetSuccessfullyDeletedManifest(
+        string manifest,
+        IReadOnlyList<string> deletedResources,
+        string defaultNamespace)
+    {
+        var reverseManifest = string.Join(
+            Environment.NewLine + "---" + Environment.NewLine,
+            KubernetesManifestApplier.SplitDocumentsPublic(manifest).Reverse());
+        return GetSuccessfullyAppliedManifest(
+            reverseManifest,
+            deletedResources.Select(resource => $"Applied {resource}").ToList(),
+            defaultNamespace);
     }
 
     // Guards the single-active-operation invariant: a pending-* record means another
@@ -655,14 +756,16 @@ public class HelmClient : IHelmClient
         IReadOnlyCollection<HelmReleaseRecord> history,
         bool isUpgrade,
         HelmUpgradeInstallRequest request,
-        string ns)
+        string ns,
+        string? appliedManifest = null)
     {
         var output = new List<string>();
         var failedRecord = attemptedRecord with
         {
             Status = "failed",
             UpdatedAt = DateTimeOffset.UtcNow,
-            Description = $"{(isUpgrade ? "Upgrade" : "Install")} failed: {error.Message}"
+            Description = $"{(isUpgrade ? "Upgrade" : "Install")} failed: {error.Message}",
+            AppliedManifest = appliedManifest ?? string.Empty
         };
 
         try
@@ -693,9 +796,11 @@ public class HelmClient : IHelmClient
                 .MaxBy(record => record.Revision);
             if (previous is not null)
             {
+                var cleanedResources = new List<string>();
+                var attemptedOnlyManifest = string.Empty;
                 try
                 {
-                    var attemptedOnlyManifest = await GetAttemptedOnlyManifestAsync(
+                    attemptedOnlyManifest = await GetAttemptedOnlyManifestAsync(
                         applier,
                         previous.Manifest,
                         mainManifest,
@@ -704,7 +809,10 @@ public class HelmClient : IHelmClient
                     if (!string.IsNullOrWhiteSpace(attemptedOnlyManifest))
                     {
                         await foreach (var resource in applier.DeleteAsync(attemptedOnlyManifest, ns, cancellationToken: CancellationToken.None))
+                        {
                             output.Add($"Removed failed-upgrade resource {resource}");
+                            cleanedResources.Add(resource);
+                        }
                     }
                 }
                 catch
@@ -712,19 +820,83 @@ public class HelmClient : IHelmClient
                     output.Add("Unable to fully clean up resources from the failed upgrade.");
                 }
 
+                failedRecord = failedRecord with
+                {
+                    AppliedManifest = RemoveCleanedDocuments(
+                        failedRecord.AppliedManifest ?? string.Empty,
+                        GetSuccessfullyDeletedManifest(attemptedOnlyManifest, cleanedResources, ns),
+                        ns),
+                    UpdatedAt = DateTimeOffset.UtcNow
+                };
+                try
+                {
+                    await store.SaveAsync(failedRecord, CancellationToken.None);
+                }
+                catch
+                {
+                    // Preserve the original apply failure if recovery metadata cannot be saved.
+                }
+
                 // Restoration is independent of failed-upgrade cleanup. In particular,
                 // discovery for an API version removed by the attempted revision may
                 // fail before re-applying the previous CRD can make that API available.
                 if (request.Atomic)
                 {
+                    var restoredResources = new List<string>();
+                    var restorationManifest = ConvertRestorationApiVersions(
+                        previous.Manifest,
+                        mainManifest,
+                        ns);
+                    var restorationBaseline = MergeAppliedManifests(
+                        restorationManifest,
+                        failedRecord.AppliedManifest ?? string.Empty,
+                        ns);
                     try
                     {
-                        await foreach (var resource in applier.ApplyAsync(previous.Manifest, ns, CancellationToken.None))
+                        // Only documents confirmed applied by the failed revision belong on
+                        // the old side of the rollback merge; untouched resources use their
+                        // deployed document as both baseline and desired state.
+                        await foreach (var resource in applier.ApplyUpgradeAsync(
+                                           restorationManifest,
+                                           restorationBaseline,
+                                           ns,
+                                           CancellationToken.None))
+                        {
                             output.Add($"Restored {resource}");
+                            restoredResources.Add($"Applied {resource}");
+                        }
                     }
                     catch
                     {
                         output.Add("Unable to fully restore the previous deployed revision.");
+                    }
+
+                    // Record any confirmed restoration so a later retry overlays the actual
+                    // recovered subset after earlier failed revisions in its merge baseline.
+                    failedRecord = failedRecord with
+                    {
+                        AppliedManifest = MergeAppliedManifests(
+                            failedRecord.AppliedManifest ?? string.Empty,
+                            GetSuccessfullyAppliedManifest(previous.Manifest, restoredResources, ns),
+                            ns),
+                        UpdatedAt = DateTimeOffset.UtcNow
+                    };
+                    try
+                    {
+                        await store.SaveAsync(failedRecord, CancellationToken.None);
+                    }
+                    catch
+                    {
+                        // A transient write failure must not leave the earlier failed-attempt
+                        // baseline durable after restoration has already changed live resources.
+                        try
+                        {
+                            await store.SaveAsync(failedRecord, CancellationToken.None);
+                        }
+                        catch
+                        {
+                            // Keep the original operation failure if recovery metadata remains unavailable.
+                        }
                     }
                 }
             }
@@ -732,14 +904,31 @@ public class HelmClient : IHelmClient
             {
                 // A retry after a failed initial install has a revision history but no
                 // deployed predecessor. Its resources belong solely to failed attempts.
+                var cleanedResources = new List<string>();
                 try
                 {
                     await foreach (var resource in applier.DeleteAsync(mainManifest, ns, cancellationToken: CancellationToken.None))
+                    {
                         output.Add($"Cleaned up {resource}");
+                        cleanedResources.Add(resource);
+                    }
                 }
                 catch
                 {
                     output.Add("Unable to fully clean up resources from the failed installation.");
+                }
+                failedRecord = failedRecord with
+                {
+                    AppliedManifest = RemoveCleanedDocuments(failedRecord.AppliedManifest ?? string.Empty, cleanedResources, ns),
+                    UpdatedAt = DateTimeOffset.UtcNow
+                };
+                try
+                {
+                    await store.SaveAsync(failedRecord, CancellationToken.None);
+                }
+                catch
+                {
+                    // Preserve the original apply failure if recovery metadata cannot be saved.
                 }
             }
             return output;
@@ -749,14 +938,31 @@ public class HelmClient : IHelmClient
         // it could remove resources owned by the previously deployed revision.
         if (!isUpgrade && (request.Atomic || request.CleanupOnFail))
         {
+            var cleanedResources = new List<string>();
             try
             {
                 await foreach (var resource in applier.DeleteAsync(mainManifest, ns, cancellationToken: CancellationToken.None))
+                {
                     output.Add($"Cleaned up {resource}");
+                    cleanedResources.Add(resource);
+                }
             }
             catch
             {
                 output.Add("Unable to fully clean up resources from the failed installation.");
+            }
+            failedRecord = failedRecord with
+            {
+                AppliedManifest = RemoveCleanedDocuments(failedRecord.AppliedManifest ?? string.Empty, cleanedResources, ns),
+                UpdatedAt = DateTimeOffset.UtcNow
+            };
+            try
+            {
+                await store.SaveAsync(failedRecord, CancellationToken.None);
+            }
+            catch
+            {
+                // Preserve the original apply failure if recovery metadata cannot be saved.
             }
         }
 
@@ -825,7 +1031,7 @@ public class HelmClient : IHelmClient
 
     /// <summary>
     /// Scope-aware variant of <see cref="GetAttemptedOnlyManifest"/>. A document counts as
-    /// attempted-only when the previous revision has no resource with the same group/kind/name;
+    /// attempted-only when the previous revision has no resource with the same canonical group/kind/name;
     /// when names collide across namespaces, cluster-scoped resources are treated as the same
     /// object while namespaced ones in a different namespace are kept. Scope resolution falls
     /// back to API discovery for CRDs (see <see cref="ResolveResourceScopeAsync"/>).
@@ -976,6 +1182,103 @@ public class HelmClient : IHelmClient
         return $"{ManifestResourceTypeKey(identity)}/{identity.Namespace}/{identity.Name}";
     }
 
+    private static string MergeAppliedManifests(string existingManifest, string replacementManifest, string defaultNamespace)
+    {
+        var documentsByIdentity = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var document in KubernetesManifestApplier.SplitDocumentsPublic(existingManifest)
+                     .Concat(KubernetesManifestApplier.SplitDocumentsPublic(replacementManifest)))
+        {
+            var identity = ManifestIdentity.Parse(document, defaultNamespace);
+            if (identity is not null)
+                documentsByIdentity[ManifestIdentityKey(identity)] = document;
+        }
+
+        return string.Join(Environment.NewLine + "---" + Environment.NewLine, documentsByIdentity.Values);
+    }
+
+    internal static string RemoveCleanedDocuments(string manifest, IReadOnlyCollection<string> cleanedResources, string defaultNamespace)
+    {
+        if (cleanedResources.Count == 0)
+            return manifest;
+
+        // Recovery metadata must no longer claim ownership of resources already deleted during cleanup.
+        var cleanedNames = cleanedResources.ToHashSet(StringComparer.Ordinal);
+        return string.Join(Environment.NewLine + "---" + Environment.NewLine,
+            KubernetesManifestApplier.SplitDocumentsPublic(manifest).Where(document =>
+            {
+                var identity = ManifestIdentity.Parse(document, defaultNamespace);
+                return identity is null ||
+                       !cleanedNames.Contains(identity.DisplayName) &&
+                       !cleanedNames.Contains($"{identity.Kind}/{identity.Name}");
+            }));
+    }
+
+    internal static string RemoveCleanedDocuments(string manifest, string cleanedManifest, string defaultNamespace)
+    {
+        if (string.IsNullOrWhiteSpace(cleanedManifest))
+            return manifest;
+
+        var cleanedIdentities = KubernetesManifestApplier.SplitDocumentsPublic(cleanedManifest)
+            .Select(document => ManifestIdentity.Parse(document, defaultNamespace))
+            .Where(identity => identity is not null)
+            .Select(identity => ManifestIdentityKey(identity!))
+            .ToHashSet(StringComparer.Ordinal);
+        return string.Join(Environment.NewLine + "---" + Environment.NewLine,
+            KubernetesManifestApplier.SplitDocumentsPublic(manifest).Where(document =>
+            {
+                var identity = ManifestIdentity.Parse(document, defaultNamespace);
+                return identity is null || !cleanedIdentities.Contains(ManifestIdentityKey(identity));
+            }));
+    }
+
+    internal static string ConvertRestorationApiVersions(
+        string previousManifest,
+        string attemptedManifest,
+        string defaultNamespace)
+    {
+        var attemptedVersionsByIdentity = KubernetesManifestApplier.SplitDocumentsPublic(attemptedManifest)
+            .Select(document => (Document: document, Identity: ManifestIdentity.Parse(document, defaultNamespace)))
+            .Where(item => item.Identity is not null)
+            .ToDictionary(
+                item => ManifestIdentityKey(item.Identity!),
+                item => item.Identity!.ApiVersion,
+                StringComparer.Ordinal);
+
+        var restorationDocuments = new List<string>();
+        foreach (var document in KubernetesManifestApplier.SplitDocumentsPublic(previousManifest))
+        {
+            var identity = ManifestIdentity.Parse(document, defaultNamespace);
+            if (identity is null)
+            {
+                restorationDocuments.Add(document);
+                continue;
+            }
+
+            attemptedVersionsByIdentity.TryGetValue(ManifestIdentityKey(identity), out var apiVersion);
+            apiVersion ??= KubernetesManifestSchemaConverter.GetCanonicalApiVersion(identity);
+            if (apiVersion is null || string.Equals(identity.ApiVersion, apiVersion, StringComparison.Ordinal))
+            {
+                restorationDocuments.Add(document);
+                continue;
+            }
+
+            // Keep the previous chart's desired fields while routing only known schema
+            // migrations through a served API version. Unknown conversions keep their
+            // original document rather than submitting it under a potentially invalid schema.
+            restorationDocuments.Add(KubernetesManifestSchemaConverter.TryConvertToApiVersion(document, identity, apiVersion, out var convertedDocument)
+                ? convertedDocument
+                : document);
+        }
+
+        return string.Join(Environment.NewLine + "---" + Environment.NewLine, restorationDocuments);
+    }
+
+    internal static string ComposeAtomicRestorationBaseline(
+        string restorationManifest,
+        string appliedManifest,
+        string defaultNamespace)
+        => MergeAppliedManifests(restorationManifest, appliedManifest, defaultNamespace);
+
     // Type + name without namespace — used to find candidates before scope disambiguation.
     private static string ManifestResourceKey(ManifestIdentity identity)
         => $"{ManifestResourceTypeKey(identity)}/{identity.Name}";
@@ -986,6 +1289,19 @@ public class HelmClient : IHelmClient
     {
         var separator = identity.ApiVersion.IndexOf('/');
         var apiGroup = separator < 0 ? string.Empty : identity.ApiVersion[..separator];
+        if (apiGroup == "extensions")
+        {
+            // These built-ins moved groups without changing stored object identity. Keep the
+            // aliases limited to known kinds so custom resources cannot be mistaken as existing.
+            apiGroup = identity.Kind switch
+            {
+                "Deployment" or "DaemonSet" or "ReplicaSet" => "apps",
+                "Ingress" or "NetworkPolicy" => "networking.k8s.io",
+                "PodSecurityPolicy" => "policy",
+                _ => apiGroup
+            };
+        }
+
         return $"{apiGroup}/{identity.Kind}";
     }
 
@@ -1337,6 +1653,7 @@ public class HelmClient : IHelmClient
             return Fail($"release revision {newRevision} already exists for {request.ReleaseName}");
 
         var output = new StringBuilder();
+        var appliedRollbackResources = new List<string>();
 
         try
         {
@@ -1365,6 +1682,7 @@ public class HelmClient : IHelmClient
             await foreach (var resource in applier.ApplyAsync(mainManifest, ns, operationToken))
             {
                 output.AppendLine($"Rolled back {resource}");
+                appliedRollbackResources.Add($"Applied {resource}");
             }
 
             foreach (var keptResource in rollbackDeletion.KeptResources)
@@ -1399,7 +1717,14 @@ public class HelmClient : IHelmClient
         catch (Exception ex)
         {
             // Any failure above marks the pending-rollback record failed before rethrowing.
-            await PersistFailedRollbackAsync(store, WithHookExecution(rollbackRecord, hooks), operationId, ex);
+            await PersistFailedRollbackAsync(
+                store,
+                WithHookExecution(rollbackRecord with
+                {
+                    AppliedManifest = GetSuccessfullyAppliedManifest(mainManifest, appliedRollbackResources, ns)
+                }, hooks),
+                operationId,
+                ex);
             throw;
         }
 

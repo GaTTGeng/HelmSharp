@@ -63,4 +63,29 @@ public class HelmClientReleaseTests
 
         Assert.Equal("Installed successfully.\n", HelmClient.GetStoredNotes(record));
     }
+
+    [Fact]
+    public void ConvertRestorationApiVersions_ConvertsOmittedLegacyWorkload()
+    {
+        const string previous = "apiVersion: extensions/v1beta1\nkind: Deployment\nmetadata:\n  name: app\nspec:\n  template: {}\n";
+
+        var converted = HelmClient.ConvertRestorationApiVersions(previous, string.Empty, "default");
+
+        Assert.Contains("apiVersion: apps/v1", converted);
+        Assert.Contains("kind: Deployment", converted);
+    }
+
+    [Fact]
+    public void RemoveCleanedDocuments_DropsOnlySuccessfullyDeletedResources()
+    {
+        const string manifest = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: removed\n---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: retained\n";
+
+        var remaining = HelmClient.RemoveCleanedDocuments(
+            manifest,
+            ["ConfigMap/release-ns/removed"],
+            "release-ns");
+
+        Assert.DoesNotContain("name: removed", remaining);
+        Assert.Contains("name: retained", remaining);
+    }
 }

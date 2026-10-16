@@ -1,4 +1,6 @@
 using System.Net;
+using System.Text.Json;
+using HelmSharp.Chart;
 using HelmSharp.Kube;
 using k8s.Autorest;
 
@@ -10,6 +12,55 @@ namespace HelmSharp.Tests;
 /// </summary>
 public sealed class KubernetesManifestApplierTests
 {
+    [Theory]
+    [InlineData("scheduling.k8s.io/v1beta1", "scheduling.k8s.io/v1", "PriorityClass", false)]
+    [InlineData("coordination.k8s.io/v1beta1", "coordination.k8s.io/v1", "Lease", true)]
+    [InlineData("node.k8s.io/v1beta1", "node.k8s.io/v1", "RuntimeClass", false)]
+    [InlineData("apiregistration.k8s.io/v1beta1", "apiregistration.k8s.io/v1", "APIService", false)]
+    [InlineData("networking.k8s.io/v1beta1", "networking.k8s.io/v1", "IngressClass", false)]
+    [InlineData("flowcontrol.apiserver.k8s.io/v1beta3", "flowcontrol.apiserver.k8s.io/v1", "FlowSchema", false)]
+    [InlineData("flowcontrol.apiserver.k8s.io/v1beta3", "flowcontrol.apiserver.k8s.io/v1", "PriorityLevelConfiguration", false)]
+    public void SchemaConverter_MigratesSchemaCompatibleBuiltIns(
+        string sourceApiVersion,
+        string targetApiVersion,
+        string kind,
+        bool namespaced)
+    {
+        var identity = new ManifestIdentity(sourceApiVersion, kind, "sample", "release-ns");
+        var manifest = $"apiVersion: {sourceApiVersion}\nkind: {kind}\nmetadata:\n  name: sample\nspec:\n  marker: retained\n";
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            manifest, identity, targetApiVersion, out var converted));
+        var document = HelmYaml.DeserializeDictionary(converted, StringComparer.Ordinal);
+
+        Assert.Equal(targetApiVersion, document["apiVersion"]);
+        Assert.True(KubernetesManifestApplier.TryGetTypedResourceScope(identity, out var actualNamespaced));
+        Assert.Equal(namespaced, actualNamespaced);
+        Assert.Contains("marker: retained", converted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SchemaConverter_RenamesFlowControlConcurrencySharesFromBeta2()
+    {
+        const string manifest = """
+            apiVersion: flowcontrol.apiserver.k8s.io/v1beta2
+            kind: PriorityLevelConfiguration
+            metadata:
+              name: limited
+            spec:
+              type: Limited
+              limited:
+                assuredConcurrencyShares: 12
+            """;
+        var identity = new ManifestIdentity(
+            "flowcontrol.apiserver.k8s.io/v1beta2", "PriorityLevelConfiguration", "limited", "ignored");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            manifest, identity, "flowcontrol.apiserver.k8s.io/v1", out var converted));
+        Assert.Contains("nominalConcurrencyShares: 12", converted, StringComparison.Ordinal);
+        Assert.DoesNotContain("assuredConcurrencyShares", converted, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void ManifestIdentity_ParseUsesDefaultAndExplicitNamespaces()
     {
@@ -145,6 +196,1734 @@ public sealed class KubernetesManifestApplierTests
             (requests[1].Method, requests[1].PathAndQuery));
         Assert.Contains("\"resourceVersion\":\"42\"", requests[1].Content);
         Assert.Contains("\"namespace\":\"chart-ns\"", requests[1].Content);
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_ClearsMergeBaselineBeforeApplyingAtomicRestore()
+    {
+        const string previousManifest = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: settings
+            data:
+              mode: previous
+            """;
+        const string upgradedManifest = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: settings
+            data:
+              mode: failed-upgrade
+            """;
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/configmaps/settings", HttpStatusCode.OK, """
+                { "apiVersion": "v1", "kind": "ConfigMap", "metadata": { "name": "settings", "resourceVersion": "42" }, "data": { "mode": "previous" } }
+                """)
+            .Respond(HttpMethod.Put, "/api/v1/namespaces/release-ns/configmaps/settings", HttpStatusCode.OK)
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/configmaps/settings", HttpStatusCode.OK, """
+                { "apiVersion": "v1", "kind": "ConfigMap", "metadata": { "name": "settings", "resourceVersion": "43" }, "data": { "mode": "failed-upgrade" } }
+                """)
+            .Respond(HttpMethod.Put, "/api/v1/namespaces/release-ns/configmaps/settings", HttpStatusCode.OK);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await AsyncEnumerableTestExtensions.DrainAsync(
+            applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"));
+        await AsyncEnumerableTestExtensions.DrainAsync(applier.ApplyAsync(previousManifest, "release-ns"));
+
+        var replaceRequests = handler.Requests.Where(request => request.Method == HttpMethod.Put).ToArray();
+        Assert.Equal(2, replaceRequests.Length);
+        Assert.Contains("\"mode\":\"failed-upgrade\"", replaceRequests[0].Content);
+        Assert.Contains("\"mode\":\"previous\"", replaceRequests[1].Content);
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_PreservesLiveFieldsWhenApiVersionChangesWithinGroup()
+    {
+        const string previousManifest = """
+            apiVersion: autoscaling/v1
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 3
+              targetCPUUtilizationPercentage: 70
+            """;
+        const string upgradedManifest = """
+            apiVersion: autoscaling/v2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 5
+              metrics:
+                - type: Resource
+                  resource:
+                    name: cpu
+                    target:
+                      type: Utilization
+                      averageUtilization: 70
+            """;
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/autoscaling/v2/namespaces/release-ns/horizontalpodautoscalers/scaler", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "autoscaling/v2",
+                  "kind": "HorizontalPodAutoscaler",
+                  "metadata": { "name": "scaler", "resourceVersion": "42", "annotations": { "operator.example/live": "keep" } },
+                  "spec": { "minReplicas": 1, "maxReplicas": 3, "metrics": [] }
+                }
+                """)
+            .Respond(HttpMethod.Put, "/apis/autoscaling/v2/namespaces/release-ns/horizontalpodautoscalers/scaler", HttpStatusCode.OK);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await AsyncEnumerableTestExtensions.DrainAsync(
+            applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"));
+
+        var replacement = Assert.Single(handler.Requests, request => request.Method == HttpMethod.Put);
+        Assert.Contains("\"apiVersion\":\"autoscaling/v2\"", replacement.Content);
+        Assert.Contains("\"operator.example/live\":\"keep\"", replacement.Content);
+    }
+
+    [Fact]
+    public void SchemaConverter_ConvertsHpaV1CpuTargetBeforeMerge()
+    {
+        const string previousManifest = """
+            apiVersion: autoscaling/v1
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 3
+              targetCPUUtilizationPercentage: 70
+            """;
+        const string upgradedManifest = """
+            apiVersion: autoscaling/v2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 5
+              metrics:
+                - type: Resource
+                  resource:
+                    name: cpu
+                    target:
+                      type: Utilization
+                      averageUtilization: 70
+            """;
+        const string liveManifest = """
+            apiVersion: autoscaling/v2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 3
+              metrics:
+                - type: Resource
+                  resource:
+                    name: cpu
+                    target:
+                      type: Utilization
+                      averageUtilization: 80
+            """;
+        var identity = new ManifestIdentity("autoscaling/v1", "HorizontalPodAutoscaler", "scaler", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            previousManifest, identity, "autoscaling/v2", out var convertedPrevious));
+        var merged = HelmYaml.DeserializeDictionary(ThreeWayMerge.MergeResource(
+            convertedPrevious, upgradedManifest, liveManifest));
+        var spec = Assert.IsType<Dictionary<string, object?>>(merged["spec"]);
+        var metrics = Assert.IsType<List<object?>>(spec["metrics"]);
+        var metric = Assert.IsType<Dictionary<string, object?>>(Assert.Single(metrics));
+        var resource = Assert.IsType<Dictionary<string, object?>>(metric["resource"]);
+        var target = Assert.IsType<Dictionary<string, object?>>(resource["target"]);
+
+        Assert.Equal(80L, target["averageUtilization"]);
+        Assert.Equal(5L, spec["maxReplicas"]);
+    }
+
+    [Fact]
+    public void SchemaConverter_ConvertsHpaV2Beta1MetricsBeforeMerge()
+    {
+        const string previousManifest = """
+            apiVersion: autoscaling/v2beta1
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 3
+              metrics:
+                - type: Resource
+                  resource:
+                    name: cpu
+                    targetAverageUtilization: 70
+                - type: External
+                  external:
+                    metricName: queue_depth
+                    metricSelector:
+                      matchLabels:
+                        queue: jobs
+                    targetValue: 20
+                - type: Object
+                  object:
+                    target:
+                      apiVersion: networking.k8s.io/v1
+                      kind: Ingress
+                      name: gateway
+                    metricName: requests_per_second
+                    selector:
+                      matchLabels:
+                        ingress: gateway
+                    targetValue: 999
+                    averageValue: 100
+                - type: ContainerResource
+                  containerResource:
+                    name: memory
+                    container: web
+                    targetAverageUtilization: 75
+            """;
+        const string upgradedManifest = """
+            apiVersion: autoscaling/v2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 5
+              metrics:
+                - type: Resource
+                  resource:
+                    name: cpu
+                    target:
+                      type: Utilization
+                      averageUtilization: 70
+                - type: External
+                  external:
+                    metric:
+                      name: queue_depth
+                      selector:
+                        matchLabels:
+                          queue: jobs
+                    target:
+                      type: Value
+                      value: 20
+                - type: Object
+                  object:
+                    describedObject:
+                      apiVersion: networking.k8s.io/v1
+                      kind: Ingress
+                      name: gateway
+                    metric:
+                      name: requests_per_second
+                      selector:
+                        matchLabels:
+                          ingress: gateway
+                    target:
+                      type: AverageValue
+                      averageValue: 100
+                - type: ContainerResource
+                  containerResource:
+                    name: memory
+                    container: web
+                    target:
+                      type: Utilization
+                      averageUtilization: 75
+            """;
+        const string liveManifest = """
+            apiVersion: autoscaling/v2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 3
+              metrics:
+                - type: Resource
+                  resource:
+                    name: cpu
+                    target:
+                      type: Utilization
+                      averageUtilization: 85
+                - type: External
+                  external:
+                    metric:
+                      name: queue_depth
+                      selector:
+                        matchLabels:
+                          queue: jobs
+                    target:
+                      type: Value
+                      value: 35
+                - type: Object
+                  object:
+                    describedObject:
+                      apiVersion: networking.k8s.io/v1
+                      kind: Ingress
+                      name: gateway
+                    metric:
+                      name: requests_per_second
+                      selector:
+                        matchLabels:
+                          ingress: gateway
+                    target:
+                      type: AverageValue
+                      averageValue: 125
+              behavior:
+                scaleDown:
+                  stabilizationWindowSeconds: 60
+            """;
+        var identity = new ManifestIdentity("autoscaling/v2beta1", "HorizontalPodAutoscaler", "scaler", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            previousManifest, identity, "autoscaling/v2", out var convertedPrevious));
+        var convertedSpec = Assert.IsType<Dictionary<string, object?>>(HelmYaml.DeserializeDictionary(convertedPrevious)["spec"]);
+        var convertedMetrics = Assert.IsType<List<object?>>(convertedSpec["metrics"]);
+        var convertedContainerMetric = Assert.IsType<Dictionary<string, object?>>(convertedMetrics[3]);
+        var convertedContainerResource = Assert.IsType<Dictionary<string, object?>>(convertedContainerMetric["containerResource"]);
+        var convertedContainerTarget = Assert.IsType<Dictionary<string, object?>>(convertedContainerResource["target"]);
+        var merged = HelmYaml.DeserializeDictionary(ThreeWayMerge.MergeResource(
+            convertedPrevious, upgradedManifest, liveManifest));
+        var spec = Assert.IsType<Dictionary<string, object?>>(merged["spec"]);
+        var metrics = Assert.IsType<List<object?>>(spec["metrics"]);
+        var resourceMetric = Assert.IsType<Dictionary<string, object?>>(metrics[0]);
+        var resource = Assert.IsType<Dictionary<string, object?>>(resourceMetric["resource"]);
+        var resourceTarget = Assert.IsType<Dictionary<string, object?>>(resource["target"]);
+        var externalMetric = Assert.IsType<Dictionary<string, object?>>(metrics[1]);
+        var external = Assert.IsType<Dictionary<string, object?>>(externalMetric["external"]);
+        var externalTarget = Assert.IsType<Dictionary<string, object?>>(external["target"]);
+        var objectMetric = Assert.IsType<Dictionary<string, object?>>(metrics[2]);
+        var objectSource = Assert.IsType<Dictionary<string, object?>>(objectMetric["object"]);
+        var describedObject = Assert.IsType<Dictionary<string, object?>>(objectSource["describedObject"]);
+        var objectIdentifier = Assert.IsType<Dictionary<string, object?>>(objectSource["metric"]);
+        var objectTarget = Assert.IsType<Dictionary<string, object?>>(objectSource["target"]);
+
+        Assert.Equal(85L, resourceTarget["averageUtilization"]);
+        Assert.Equal(35L, externalTarget["value"]);
+        Assert.Equal("gateway", describedObject["name"]);
+        Assert.Equal("requests_per_second", objectIdentifier["name"]);
+        Assert.Equal("AverageValue", objectTarget["type"]);
+        Assert.Equal(125L, objectTarget["averageValue"]);
+        Assert.Equal("web", convertedContainerResource["container"]);
+        Assert.Equal(75L, convertedContainerTarget["averageUtilization"]);
+        Assert.True(spec.ContainsKey("behavior"));
+        Assert.Equal(5L, spec["maxReplicas"]);
+    }
+
+    [Fact]
+    public void SchemaConverter_ConvertsHpaV2Beta1PodsSelector()
+    {
+        const string previousManifest = """
+            apiVersion: autoscaling/v2beta1
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              metrics:
+                - type: Pods
+                  pods:
+                    metricName: active_sessions
+                    selector:
+                      matchLabels:
+                        app: web
+                    targetAverageValue: 4
+            """;
+        var identity = new ManifestIdentity("autoscaling/v2beta1", "HorizontalPodAutoscaler", "scaler", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            previousManifest, identity, "autoscaling/v2", out var converted));
+        var document = HelmYaml.DeserializeDictionary(converted);
+        var spec = Assert.IsType<Dictionary<string, object?>>(document["spec"]);
+        var metrics = Assert.IsType<List<object?>>(spec["metrics"]);
+        var metric = Assert.IsType<Dictionary<string, object?>>(Assert.Single(metrics));
+        var pods = Assert.IsType<Dictionary<string, object?>>(metric["pods"]);
+        var identifier = Assert.IsType<Dictionary<string, object?>>(pods["metric"]);
+        var selector = Assert.IsType<Dictionary<string, object?>>(identifier["selector"]);
+        var matchLabels = Assert.IsType<Dictionary<string, object?>>(selector["matchLabels"]);
+
+        Assert.Equal("active_sessions", identifier["name"]);
+        Assert.Equal("web", matchLabels["app"]);
+        Assert.False(pods.ContainsKey("selector"));
+    }
+
+    [Fact]
+    public void SchemaConverter_PreservesHpaV2Beta2MetricsWhenMovingToV2()
+    {
+        const string previousManifest = """
+            apiVersion: autoscaling/v2beta2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              metrics:
+                - type: Pods
+                  pods:
+                    metric:
+                      name: requests_per_second
+                    target:
+                      type: AverageValue
+                      averageValue: 10
+              behavior:
+                scaleDown:
+                  stabilizationWindowSeconds: 60
+            """;
+        var identity = new ManifestIdentity("autoscaling/v2beta2", "HorizontalPodAutoscaler", "scaler", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            previousManifest, identity, "autoscaling/v2", out var converted));
+        var document = HelmYaml.DeserializeDictionary(converted);
+        var spec = Assert.IsType<Dictionary<string, object?>>(document["spec"]);
+
+        Assert.Equal("autoscaling/v2", HelmYaml.GetString(document, "apiVersion"));
+        Assert.True(spec.ContainsKey("metrics"));
+        Assert.True(spec.ContainsKey("behavior"));
+    }
+
+    [Fact]
+    public void SchemaConverter_LeavesHpaWithUnsupportedMetricsUnconverted()
+    {
+        const string previousManifest = """
+            apiVersion: autoscaling/v2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              metrics:
+                - type: Resource
+                  resource:
+                    name: memory
+                    target:
+                      type: AverageValue
+                      averageValue: 1Gi
+            """;
+        var identity = new ManifestIdentity("autoscaling/v2", "HorizontalPodAutoscaler", "scaler", "release-ns");
+
+        Assert.False(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            previousManifest, identity, "autoscaling/v1", out var converted));
+        Assert.Equal(previousManifest, converted);
+    }
+
+    [Theory]
+    [InlineData("Role")]
+    [InlineData("RoleBinding")]
+    [InlineData("ClusterRole")]
+    [InlineData("ClusterRoleBinding")]
+    public void SchemaConverter_PreservesLiveFieldsWhenRbacMovesToV1(string kind)
+    {
+        var previousManifest = $$"""
+            apiVersion: rbac.authorization.k8s.io/v1beta1
+            kind: {{kind}}
+            metadata:
+              name: reader
+            """;
+        var upgradedManifest = $$"""
+            apiVersion: rbac.authorization.k8s.io/v1
+            kind: {{kind}}
+            metadata:
+              name: reader
+            """;
+        var liveManifest = $$"""
+            apiVersion: rbac.authorization.k8s.io/v1
+            kind: {{kind}}
+            metadata:
+              name: reader
+              annotations:
+                operator.example/live: keep
+            """;
+        var identity = new ManifestIdentity("rbac.authorization.k8s.io/v1beta1", kind, "reader", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            previousManifest, identity, "rbac.authorization.k8s.io/v1", out var convertedPrevious));
+        var merged = HelmYaml.DeserializeDictionary(ThreeWayMerge.MergeResource(
+            convertedPrevious, upgradedManifest, liveManifest));
+        var metadata = Assert.IsType<Dictionary<string, object?>>(merged["metadata"]);
+        var annotations = Assert.IsType<Dictionary<string, object?>>(metadata["annotations"]);
+
+        Assert.Equal("keep", annotations["operator.example/live"]);
+        Assert.Equal("rbac.authorization.k8s.io/v1", merged["apiVersion"]);
+    }
+
+    [Theory]
+    [InlineData("StorageClass")]
+    [InlineData("CSIDriver")]
+    [InlineData("CSINode")]
+    [InlineData("VolumeAttachment")]
+    [InlineData("CSIStorageCapacity")]
+    public void SchemaConverter_PreservesLiveFieldsWhenStorageResourceMovesToV1(string kind)
+    {
+        var previousManifest = $$"""
+            apiVersion: storage.k8s.io/v1beta1
+            kind: {{kind}}
+            metadata:
+              name: sample
+            """;
+        var upgradedManifest = $$"""
+            apiVersion: storage.k8s.io/v1
+            kind: {{kind}}
+            metadata:
+              name: sample
+            """;
+        var liveManifest = $$"""
+            apiVersion: storage.k8s.io/v1
+            kind: {{kind}}
+            metadata:
+              name: sample
+              annotations:
+                operator.example/live: keep
+            """;
+        var identity = new ManifestIdentity("storage.k8s.io/v1beta1", kind, "sample", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            previousManifest, identity, "storage.k8s.io/v1", out var convertedPrevious));
+        var merged = HelmYaml.DeserializeDictionary(ThreeWayMerge.MergeResource(
+            convertedPrevious, upgradedManifest, liveManifest));
+        var metadata = Assert.IsType<Dictionary<string, object?>>(merged["metadata"]);
+        var annotations = Assert.IsType<Dictionary<string, object?>>(metadata["annotations"]);
+
+        Assert.Equal("keep", annotations["operator.example/live"]);
+        Assert.Equal("storage.k8s.io/v1", merged["apiVersion"]);
+    }
+
+    [Theory]
+    [InlineData("apps/v1beta1")]
+    [InlineData("apps/v1beta2")]
+    public void SchemaConverter_PreservesLiveFieldsWhenStatefulSetMovesToAppsV1(string previousApiVersion)
+    {
+        var previousManifest = $$"""
+            apiVersion: {{previousApiVersion}}
+            kind: StatefulSet
+            metadata:
+              name: database
+            spec:
+              serviceName: database
+              template:
+                metadata:
+                  labels:
+                    app: database
+                spec:
+                  containers:
+                    - name: database
+                      image: example/database:old
+            """;
+        const string upgradedManifest = """
+            apiVersion: apps/v1
+            kind: StatefulSet
+            metadata:
+              name: database
+            spec:
+              serviceName: database
+              selector:
+                matchLabels:
+                  app: database
+              template:
+                metadata:
+                  labels:
+                    app: database
+                spec:
+                  containers:
+                    - name: database
+                      image: example/database:new
+            """;
+        const string liveManifest = """
+            apiVersion: apps/v1
+            kind: StatefulSet
+            metadata:
+              name: database
+              annotations:
+                operator.example/live: keep
+            spec:
+              serviceName: database
+              selector:
+                matchLabels:
+                  app: database
+              template:
+                metadata:
+                  labels:
+                    app: database
+                spec:
+                  containers:
+                    - name: database
+                      image: example/database:old
+            """;
+        var identity = new ManifestIdentity(previousApiVersion, "StatefulSet", "database", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            previousManifest, identity, "apps/v1", out var convertedPrevious));
+        var merged = HelmYaml.DeserializeDictionary(ThreeWayMerge.MergeResource(
+            convertedPrevious, upgradedManifest, liveManifest));
+        var metadata = Assert.IsType<Dictionary<string, object?>>(merged["metadata"]);
+        var annotations = Assert.IsType<Dictionary<string, object?>>(metadata["annotations"]);
+
+        Assert.Equal("keep", annotations["operator.example/live"]);
+        Assert.Equal("apps/v1", merged["apiVersion"]);
+    }
+
+    [Fact]
+    public void SchemaConverter_PreservesLiveFieldsWhenCronJobMovesToBatchV1()
+    {
+        const string previousManifest = """
+            apiVersion: batch/v1beta1
+            kind: CronJob
+            metadata:
+              name: cleanup
+            spec:
+              schedule: "0 * * * *"
+              jobTemplate:
+                spec:
+                  template:
+                    spec:
+                      restartPolicy: Never
+                      containers:
+                        - name: cleanup
+                          image: example/cleanup:old
+            """;
+        const string upgradedManifest = """
+            apiVersion: batch/v1
+            kind: CronJob
+            metadata:
+              name: cleanup
+            spec:
+              schedule: "0 * * * *"
+              jobTemplate:
+                spec:
+                  template:
+                    spec:
+                      restartPolicy: Never
+                      containers:
+                        - name: cleanup
+                          image: example/cleanup:new
+            """;
+        const string liveManifest = """
+            apiVersion: batch/v1
+            kind: CronJob
+            metadata:
+              name: cleanup
+              annotations:
+                operator.example/live: keep
+            spec:
+              schedule: "0 * * * *"
+              jobTemplate:
+                spec:
+                  template:
+                    spec:
+                      restartPolicy: Never
+                      containers:
+                        - name: cleanup
+                          image: example/cleanup:old
+            """;
+        var identity = new ManifestIdentity("batch/v1beta1", "CronJob", "cleanup", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            previousManifest, identity, "batch/v1", out var convertedPrevious));
+        var merged = HelmYaml.DeserializeDictionary(ThreeWayMerge.MergeResource(
+            convertedPrevious, upgradedManifest, liveManifest));
+        var metadata = Assert.IsType<Dictionary<string, object?>>(merged["metadata"]);
+        var annotations = Assert.IsType<Dictionary<string, object?>>(metadata["annotations"]);
+
+        Assert.Equal("keep", annotations["operator.example/live"]);
+        Assert.Equal("batch/v1", merged["apiVersion"]);
+    }
+
+    [Fact]
+    public void SchemaConverter_PreservesLiveFieldsWhenPodDisruptionBudgetMovesToPolicyV1()
+    {
+        const string previousManifest = """
+            apiVersion: policy/v1beta1
+            kind: PodDisruptionBudget
+            metadata:
+              name: web
+            spec:
+              minAvailable: 1
+              selector:
+                matchLabels:
+                  app: web
+            """;
+        const string upgradedManifest = """
+            apiVersion: policy/v1
+            kind: PodDisruptionBudget
+            metadata:
+              name: web
+            spec:
+              minAvailable: 1
+              selector:
+                matchLabels:
+                  app: web
+            """;
+        const string liveManifest = """
+            apiVersion: policy/v1
+            kind: PodDisruptionBudget
+            metadata:
+              name: web
+              annotations:
+                operator.example/live: keep
+            spec:
+              minAvailable: 1
+              selector:
+                matchLabels:
+                  app: web
+            """;
+        var identity = new ManifestIdentity("policy/v1beta1", "PodDisruptionBudget", "web", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            previousManifest, identity, "policy/v1", out var convertedPrevious));
+        var merged = HelmYaml.DeserializeDictionary(ThreeWayMerge.MergeResource(
+            convertedPrevious, upgradedManifest, liveManifest));
+        var metadata = Assert.IsType<Dictionary<string, object?>>(merged["metadata"]);
+        var annotations = Assert.IsType<Dictionary<string, object?>>(metadata["annotations"]);
+
+        Assert.Equal("keep", annotations["operator.example/live"]);
+        Assert.Equal("policy/v1", merged["apiVersion"]);
+    }
+
+    [Fact]
+    public void SchemaConverter_PreservesEmptyPodDisruptionBudgetSelectorSemantics()
+    {
+        const string previousManifest = """
+            apiVersion: policy/v1beta1
+            kind: PodDisruptionBudget
+            metadata:
+              name: web
+            spec:
+              minAvailable: 1
+              selector: {}
+            """;
+        var identity = new ManifestIdentity("policy/v1beta1", "PodDisruptionBudget", "web", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            previousManifest, identity, "policy/v1", out var convertedPrevious));
+        var converted = HelmYaml.DeserializeDictionary(convertedPrevious);
+        var spec = Assert.IsType<Dictionary<string, object?>>(converted["spec"]);
+
+        Assert.Null(spec["selector"]);
+    }
+
+    [Fact]
+    public void SchemaConverter_AddsRequiredSelectorWhenLegacyWorkloadSelectorIsNull()
+    {
+        const string previousManifest = """
+            apiVersion: apps/v1beta1
+            kind: Deployment
+            metadata:
+              name: portal
+            spec:
+              selector: null
+              template:
+                metadata:
+                  labels:
+                    app: portal
+                spec:
+                  containers: []
+            """;
+        var identity = new ManifestIdentity("apps/v1beta1", "Deployment", "portal", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            previousManifest, identity, "apps/v1", out var convertedPrevious));
+        var converted = HelmYaml.DeserializeDictionary(convertedPrevious);
+        var spec = Assert.IsType<Dictionary<string, object?>>(converted["spec"]);
+        var selector = Assert.IsType<Dictionary<string, object?>>(spec["selector"]);
+        var matchLabels = Assert.IsType<Dictionary<string, object?>>(selector["matchLabels"]);
+
+        Assert.Equal("portal", matchLabels["app"]);
+        Assert.Equal("apps/v1", converted["apiVersion"]);
+    }
+
+    [Theory]
+    [InlineData("apps/v1beta1")]
+    [InlineData("apps/v1beta2")]
+    public async Task ApplyUpgradeAsync_PreservesLiveFieldsWhenWorkloadMovesToAppsV1(string previousApiVersion)
+    {
+        var previousManifest = $$"""
+            apiVersion: {{previousApiVersion}}
+            kind: Deployment
+            metadata:
+              name: portal
+            spec:
+              template:
+                metadata:
+                  labels:
+                    app: portal
+                spec:
+                  containers:
+                    - name: portal
+                      image: example/portal:old
+            """;
+        const string upgradedManifest = """
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: portal
+            spec:
+              selector:
+                matchLabels:
+                  app: portal
+              template:
+                metadata:
+                  labels:
+                    app: portal
+                spec:
+                  containers:
+                    - name: portal
+                      image: example/portal:new
+            """;
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/apps/v1/namespaces/release-ns/deployments/portal", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "apps/v1",
+                  "kind": "Deployment",
+                  "metadata": { "name": "portal", "resourceVersion": "42", "annotations": { "operator.example/live": "keep" } },
+                  "spec": { "selector": { "matchLabels": { "app": "portal" } }, "template": { "metadata": { "labels": { "app": "portal" } }, "spec": { "containers": [{ "name": "portal", "image": "example/portal:old" }] } } }
+                }
+                """)
+            .Respond(HttpMethod.Put, "/apis/apps/v1/namespaces/release-ns/deployments/portal", HttpStatusCode.OK);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await AsyncEnumerableTestExtensions.DrainAsync(
+            applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"));
+
+        var replacement = Assert.Single(handler.Requests, request => request.Method == HttpMethod.Put);
+        Assert.Contains("\"operator.example/live\":\"keep\"", replacement.Content);
+        Assert.Contains("\"selector\":{\"matchLabels\":{\"app\":\"portal\"}}", replacement.Content);
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_PreservesLiveFieldsWhenIngressMovesOutOfExtensionsGroup()
+    {
+        const string previousManifest = """
+            apiVersion: extensions/v1beta1
+            kind: Ingress
+            metadata:
+              name: portal
+            spec:
+              backend:
+                serviceName: portal
+                servicePort: 80
+            """;
+        const string upgradedManifest = """
+            apiVersion: networking.k8s.io/v1
+            kind: Ingress
+            metadata:
+              name: portal
+            spec:
+              defaultBackend:
+                service:
+                  name: portal
+                  port:
+                    number: 80
+            """;
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/networking.k8s.io/v1/namespaces/release-ns/ingresses/portal", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "networking.k8s.io/v1",
+                  "kind": "Ingress",
+                  "metadata": { "name": "portal", "resourceVersion": "42", "annotations": { "operator.example/live": "keep" } },
+                  "spec": { "defaultBackend": { "service": { "name": "operator-portal", "port": { "number": 8080 } } }, "rules": [] }
+                }
+                """)
+            .Respond(HttpMethod.Put, "/apis/networking.k8s.io/v1/namespaces/release-ns/ingresses/portal", HttpStatusCode.OK);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await AsyncEnumerableTestExtensions.DrainAsync(
+            applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"));
+
+        var replacement = Assert.Single(handler.Requests, request => request.Method == HttpMethod.Put);
+        Assert.Contains("\"apiVersion\":\"networking.k8s.io/v1\"", replacement.Content);
+        Assert.Contains("\"operator.example/live\":\"keep\"", replacement.Content);
+        Assert.Contains("\"name\":\"operator-portal\"", replacement.Content);
+        Assert.Contains("\"number\":8080", replacement.Content);
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_PreservesLiveFieldsWhenPodSecurityPolicyMovesOutOfExtensionsGroup()
+    {
+        const string previousManifest = """
+            apiVersion: extensions/v1beta1
+            kind: PodSecurityPolicy
+            metadata:
+              name: restricted
+            spec:
+              privileged: false
+            """;
+        const string upgradedManifest = """
+            apiVersion: policy/v1beta1
+            kind: PodSecurityPolicy
+            metadata:
+              name: restricted
+            spec:
+              privileged: false
+            """;
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/policy/v1beta1", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "APIResourceList",
+                  "groupVersion": "policy/v1beta1",
+                  "resources": [{ "name": "podsecuritypolicies", "kind": "PodSecurityPolicy", "namespaced": false }]
+                }
+                """)
+            .Respond(HttpMethod.Get, "/apis/policy/v1beta1/podsecuritypolicies/restricted", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "policy/v1beta1",
+                  "kind": "PodSecurityPolicy",
+                  "metadata": { "name": "restricted", "resourceVersion": "42", "annotations": { "operator.example/live": "keep" } },
+                  "spec": { "privileged": false }
+                }
+                """)
+            .Respond(HttpMethod.Put, "/apis/policy/v1beta1/podsecuritypolicies/restricted", HttpStatusCode.OK);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await AsyncEnumerableTestExtensions.DrainAsync(
+            applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"));
+
+        var replacement = Assert.Single(handler.Requests, request => request.Method == HttpMethod.Put);
+        Assert.Contains("\"apiVersion\":\"policy/v1beta1\"", replacement.Content);
+        Assert.Contains("\"operator.example/live\":\"keep\"", replacement.Content);
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_RemovesDeletedSecretStringDataAndKeepsLiveOnlyData()
+    {
+        const string previousManifest = """
+            apiVersion: v1
+            kind: Secret
+            metadata:
+              name: credentials
+            stringData:
+              retired: removed
+              retained: retained
+            """;
+        const string upgradedManifest = """
+            apiVersion: v1
+            kind: Secret
+            metadata:
+              name: credentials
+            stringData:
+              retained: retained
+            """;
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/secrets/credentials", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Secret",
+                  "metadata": { "name": "credentials", "resourceVersion": "42" },
+                  "data": {
+                    "retired": "cmVtb3ZlZA==",
+                    "retained": "cmV0YWluZWQ=",
+                    "live-only": "b3BlcmF0b3Itb25seQ=="
+                  }
+                }
+                """)
+            .Respond(HttpMethod.Put, "/api/v1/namespaces/release-ns/secrets/credentials", HttpStatusCode.OK);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await AsyncEnumerableTestExtensions.DrainAsync(
+            applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"));
+
+        var replace = Assert.Single(handler.Requests, request => request.Method == HttpMethod.Put);
+        using var json = JsonDocument.Parse(replace.Content!);
+        var data = json.RootElement.GetProperty("data");
+        Assert.False(data.TryGetProperty("retired", out _));
+        Assert.Equal("cmV0YWluZWQ=", data.GetProperty("retained").GetString());
+        Assert.Equal("b3BlcmF0b3Itb25seQ==", data.GetProperty("live-only").GetString());
+    }
+
+    [Fact]
+    public async Task ApplyAsync_RecognizesAmbiguousSecretCreateWithStringData()
+    {
+        const string manifest = """
+            apiVersion: v1
+            kind: Secret
+            metadata:
+              name: credentials
+            stringData:
+              password: secret-value
+            """;
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/secrets/credentials", HttpStatusCode.NotFound)
+            .Respond(HttpMethod.Post, "/api/v1/namespaces/release-ns/secrets", HttpStatusCode.InternalServerError, """
+                { "kind": "Status", "apiVersion": "v1", "status": "Failure", "code": 500 }
+                """)
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/secrets/credentials", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Secret",
+                  "metadata": { "name": "credentials" },
+                  "data": { "password": "c2VjcmV0LXZhbHVl" }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        await using var applied = applier.ApplyAsync(manifest, "release-ns").GetAsyncEnumerator();
+
+        Assert.True(await applied.MoveNextAsync());
+        Assert.Equal("Secret/release-ns/credentials", applied.Current);
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(() => applied.MoveNextAsync().AsTask());
+    }
+
+    [Fact]
+    public async Task ApplyAsync_RecognizesAmbiguousPodCreateWhenAdmissionAddsContainer()
+    {
+        const string manifest = """
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: admitted
+            spec:
+              containers:
+                - name: app
+                  image: example/app:v1
+            """;
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/pods/admitted", HttpStatusCode.NotFound)
+            .Respond(HttpMethod.Post, "/api/v1/namespaces/release-ns/pods", HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/pods/admitted", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Pod",
+                  "metadata": { "name": "admitted", "namespace": "release-ns" },
+                  "spec": { "containers": [
+                    { "name": "app", "image": "example/app:v1" },
+                    { "name": "mesh-proxy", "image": "example/proxy:v2" }
+                  ] }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        await using var applied = applier.ApplyAsync(manifest, "release-ns").GetAsyncEnumerator();
+
+        Assert.True(await applied.MoveNextAsync());
+        Assert.Equal("Pod/release-ns/admitted", applied.Current);
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(() => applied.MoveNextAsync().AsTask());
+    }
+
+    [Fact]
+    public async Task ApplyAsync_DoesNotMatchCaseChangedCustomResourceKeyAfterAmbiguousCreate()
+    {
+        const string manifest = """
+            apiVersion: example.com/v1
+            kind: Widget
+            metadata:
+              name: sample
+            spec:
+              foo: requested
+            """;
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/example.com/v1", HttpStatusCode.OK, """
+                {
+                  "kind": "APIResourceList",
+                  "apiVersion": "v1",
+                  "groupVersion": "example.com/v1",
+                  "resources": [{ "name": "widgets", "kind": "Widget", "namespaced": true }]
+                }
+                """)
+            .Respond(HttpMethod.Get, "/apis/example.com/v1/namespaces/release-ns/widgets/sample", HttpStatusCode.NotFound)
+            .Respond(HttpMethod.Post, "/apis/example.com/v1/namespaces/release-ns/widgets", HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, "/apis/example.com/v1/namespaces/release-ns/widgets/sample", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "example.com/v1",
+                  "kind": "Widget",
+                  "metadata": { "name": "sample", "namespace": "release-ns" },
+                  "spec": { "Foo": "requested" }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        var progress = new List<string>();
+
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(async () =>
+        {
+            await foreach (var resource in applier.ApplyAsync(manifest, "release-ns"))
+                progress.Add(resource);
+        });
+
+        Assert.Empty(progress);
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_DoesNotConfirmAmbiguousReplaceWhenRemovedFieldRemains()
+    {
+        const string previousManifest = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: settings
+            data:
+              retired: obsolete
+            """;
+        const string upgradedManifest = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: settings
+            data: {}
+            """;
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/configmaps/settings", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "ConfigMap",
+                  "metadata": { "name": "settings", "namespace": "release-ns", "resourceVersion": "42" },
+                  "data": { "retired": "obsolete" }
+                }
+                """)
+            .Respond(HttpMethod.Put, "/api/v1/namespaces/release-ns/configmaps/settings", HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/configmaps/settings", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "ConfigMap",
+                  "metadata": { "name": "settings", "namespace": "release-ns", "resourceVersion": "43" },
+                  "data": { "retired": "obsolete" }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        var progress = new List<string>();
+
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(async () =>
+        {
+            await foreach (var resource in applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"))
+                progress.Add(resource);
+        });
+
+        Assert.Empty(progress);
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_UsesCaseSensitiveKeysInsideTypedConfigMapData()
+    {
+        const string previousManifest = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: settings\ndata:\n  Foo: chart\n";
+        const string upgradedManifest = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: settings\ndata:\n  foo: chart\n";
+        const string path = "/api/v1/namespaces/release-ns/configmaps/settings";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "ConfigMap",
+                  "metadata": { "name": "settings", "namespace": "release-ns", "resourceVersion": "42" },
+                  "data": { "Foo": "chart" }
+                }
+                """)
+            .Respond(HttpMethod.Put, path, HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "ConfigMap",
+                  "metadata": { "name": "settings", "namespace": "release-ns", "resourceVersion": "43" },
+                  "data": { "Foo": "chart" }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        var progress = new List<string>();
+
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(async () =>
+        {
+            await foreach (var resource in applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"))
+                progress.Add(resource);
+        });
+
+        Assert.Empty(progress);
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_DoesNotConfirmAmbiguousReplaceWhenRemovedListItemRemains()
+    {
+        const string previousManifest = """
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: removed-container
+            spec:
+              containers:
+                - name: app
+                  image: example/app:v1
+            """;
+        const string upgradedManifest = """
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: removed-container
+            spec:
+              containers: []
+            """;
+        var path = "/api/v1/namespaces/release-ns/pods/removed-container";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Pod",
+                  "metadata": { "name": "removed-container", "namespace": "release-ns", "resourceVersion": "42" },
+                  "spec": { "containers": [{ "name": "app", "image": "example/app:v1" }] }
+                }
+                """)
+            .Respond(HttpMethod.Put, path, HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Pod",
+                  "metadata": { "name": "removed-container", "namespace": "release-ns", "resourceVersion": "43" },
+                  "spec": { "containers": [{ "name": "app", "image": "example/app:v1" }] }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        var progress = new List<string>();
+
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(async () =>
+        {
+            await foreach (var resource in applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"))
+                progress.Add(resource);
+        });
+
+        Assert.Empty(progress);
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_DoesNotConfirmAmbiguousReplaceWhenRemovedListItemIdentityRemainsWithChangedFields()
+    {
+        const string previousManifest = """
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: removed-container-edited
+            spec:
+              containers:
+                - name: app
+                  image: example/app:v1
+            """;
+        const string upgradedManifest = """
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: removed-container-edited
+            spec:
+              containers: []
+            """;
+        var path = "/api/v1/namespaces/release-ns/pods/removed-container-edited";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Pod",
+                  "metadata": { "name": "removed-container-edited", "namespace": "release-ns", "resourceVersion": "42" },
+                  "spec": { "containers": [{ "name": "app", "image": "example/app:v1" }] }
+                }
+                """)
+            .Respond(HttpMethod.Put, path, HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Pod",
+                  "metadata": { "name": "removed-container-edited", "namespace": "release-ns", "resourceVersion": "43" },
+                  "spec": { "containers": [{ "name": "app", "image": "example/app:v2" }] }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        var progress = new List<string>();
+
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(async () =>
+        {
+            await foreach (var resource in applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"))
+                progress.Add(resource);
+        });
+
+        Assert.Empty(progress);
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_DoesNotConfirmRemovedServicePortWhenDefaultProtocolIsOmitted()
+    {
+        const string previousManifest = """
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: web
+            spec:
+              ports:
+                - name: retired
+                  port: 80
+                  targetPort: 8080
+            """;
+        const string upgradedManifest = """
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: web
+            spec:
+              ports:
+                - name: https
+                  port: 443
+                  targetPort: 8443
+            """;
+        const string path = "/api/v1/namespaces/release-ns/services/web";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Service",
+                  "metadata": { "name": "web", "namespace": "release-ns", "resourceVersion": "42" },
+                  "spec": { "ports": [
+                    { "name": "retired", "port": 80, "targetPort": 8080, "protocol": "TCP", "nodePort": 30080 }
+                  ] }
+                }
+                """)
+            .Respond(HttpMethod.Put, path, HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Service",
+                  "metadata": { "name": "web", "namespace": "release-ns", "resourceVersion": "43" },
+                  "spec": { "ports": [
+                    { "name": "retired", "port": 80, "targetPort": 8080, "protocol": "TCP", "nodePort": 31080 },
+                    { "name": "https", "port": 443, "targetPort": 8443, "protocol": "TCP" }
+                  ] }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        var progress = new List<string>();
+
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(async () =>
+        {
+            await foreach (var resource in applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"))
+                progress.Add(resource);
+        });
+
+        Assert.Empty(progress);
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_DoesNotConfirmAmbiguousReplaceWhenRemovedFieldInsideRetainedListItemRemains()
+    {
+        const string previousManifest = """
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: retained-container-field
+            spec:
+              containers:
+                - name: app
+                  image: example/app:v1
+                  command: ["run"]
+            """;
+        const string upgradedManifest = """
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: retained-container-field
+            spec:
+              containers:
+                - name: app
+                  image: example/app:v1
+            """;
+        const string path = "/api/v1/namespaces/release-ns/pods/retained-container-field";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Pod",
+                  "metadata": { "name": "retained-container-field", "namespace": "release-ns", "resourceVersion": "42" },
+                  "spec": { "containers": [{ "name": "app", "image": "example/app:v1", "command": ["run"] }] }
+                }
+                """)
+            .Respond(HttpMethod.Put, path, HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Pod",
+                  "metadata": { "name": "retained-container-field", "namespace": "release-ns", "resourceVersion": "43" },
+                  "spec": { "containers": [{ "name": "app", "image": "example/app:v1", "command": ["run"] }] }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        var progress = new List<string>();
+
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(async () =>
+        {
+            await foreach (var resource in applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"))
+                progress.Add(resource);
+        });
+
+        Assert.Empty(progress);
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_ConfirmsAmbiguousReplaceWithEquivalentQuantity()
+    {
+        const string previousManifest = """
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: quantity
+            spec:
+              containers:
+                - name: app
+                  image: example/app:v1
+                  resources:
+                    requests:
+                      cpu: "1"
+            """;
+        const string upgradedManifest = """
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: quantity
+            spec:
+              containers:
+                - name: app
+                  image: example/app:v1
+                  resources:
+                    requests:
+                      cpu: "1.5"
+            """;
+        var path = "/api/v1/namespaces/release-ns/pods/quantity";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Pod",
+                  "metadata": { "name": "quantity", "namespace": "release-ns", "resourceVersion": "42" },
+                  "spec": { "containers": [{ "name": "app", "image": "example/app:v1", "resources": { "requests": { "cpu": "1" } } }] }
+                }
+                """)
+            .Respond(HttpMethod.Put, path, HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Pod",
+                  "metadata": { "name": "quantity", "namespace": "release-ns", "resourceVersion": "43" },
+                  "spec": { "containers": [{ "name": "app", "image": "example/app:v1", "resources": { "requests": { "cpu": "1500m" } } }] }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await using var applied = applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns").GetAsyncEnumerator();
+
+        Assert.True(await applied.MoveNextAsync());
+        Assert.Equal("Pod/release-ns/quantity", applied.Current);
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(() => applied.MoveNextAsync().AsTask());
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_ConfirmsAmbiguousHpaReplaceWithEquivalentQuantity()
+    {
+        const string previousManifest = """
+            apiVersion: autoscaling/v2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 3
+              metrics:
+                - type: Resource
+                  resource:
+                    name: cpu
+                    target:
+                      type: AverageValue
+                      averageValue: "1"
+            """;
+        const string upgradedManifest = """
+            apiVersion: autoscaling/v2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 3
+              metrics:
+                - type: Resource
+                  resource:
+                    name: cpu
+                    target:
+                      type: AverageValue
+                      averageValue: "1.5"
+            """;
+        const string path = "/apis/autoscaling/v2/namespaces/release-ns/horizontalpodautoscalers/scaler";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "autoscaling/v2",
+                  "kind": "HorizontalPodAutoscaler",
+                  "metadata": { "name": "scaler", "namespace": "release-ns", "resourceVersion": "42" },
+                  "spec": { "minReplicas": 1, "maxReplicas": 3, "metrics": [{ "type": "Resource", "resource": { "name": "cpu", "target": { "type": "AverageValue", "averageValue": "1" } } }] }
+                }
+                """)
+            .Respond(HttpMethod.Put, path, HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "autoscaling/v2",
+                  "kind": "HorizontalPodAutoscaler",
+                  "metadata": { "name": "scaler", "namespace": "release-ns", "resourceVersion": "43" },
+                  "spec": { "minReplicas": 1, "maxReplicas": 3, "metrics": [{ "type": "Resource", "resource": { "name": "cpu", "target": { "type": "AverageValue", "averageValue": "1500m" } } }] }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await using var applied = applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns").GetAsyncEnumerator();
+
+        Assert.True(await applied.MoveNextAsync());
+        Assert.Equal("HorizontalPodAutoscaler/release-ns/scaler", applied.Current);
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(() => applied.MoveNextAsync().AsTask());
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_ConfirmsAmbiguousResourceQuotaReplaceWithEquivalentQuantity()
+    {
+        const string previousManifest = """
+            apiVersion: v1
+            kind: ResourceQuota
+            metadata:
+              name: limits
+            spec:
+              hard:
+                requests.cpu: "1"
+            """;
+        const string upgradedManifest = """
+            apiVersion: v1
+            kind: ResourceQuota
+            metadata:
+              name: limits
+            spec:
+              hard:
+                requests.cpu: "1.5"
+            """;
+        const string path = "/api/v1/namespaces/release-ns/resourcequotas/limits";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "ResourceQuota",
+                  "metadata": { "name": "limits", "namespace": "release-ns", "resourceVersion": "42" },
+                  "spec": { "hard": { "requests.cpu": "1" } }
+                }
+                """)
+            .Respond(HttpMethod.Put, path, HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "ResourceQuota",
+                  "metadata": { "name": "limits", "namespace": "release-ns", "resourceVersion": "43" },
+                  "spec": { "hard": { "requests.cpu": "1500m" } }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await using var applied = applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns").GetAsyncEnumerator();
+
+        Assert.True(await applied.MoveNextAsync());
+        Assert.Equal("ResourceQuota/release-ns/limits", applied.Current);
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(() => applied.MoveNextAsync().AsTask());
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_ConfirmsAmbiguousLimitRangeReplaceWithEquivalentQuantity()
+    {
+        const string previousManifest = """
+            apiVersion: v1
+            kind: LimitRange
+            metadata:
+              name: limits
+            spec:
+              limits:
+                - type: Container
+                  default:
+                    cpu: "1"
+            """;
+        const string upgradedManifest = """
+            apiVersion: v1
+            kind: LimitRange
+            metadata:
+              name: limits
+            spec:
+              limits:
+                - type: Container
+                  default:
+                    cpu: "1.5"
+            """;
+        const string path = "/api/v1/namespaces/release-ns/limitranges/limits";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "LimitRange",
+                  "metadata": { "name": "limits", "namespace": "release-ns", "resourceVersion": "42" },
+                  "spec": { "limits": [{ "type": "Container", "default": { "cpu": "1" } }] }
+                }
+                """)
+            .Respond(HttpMethod.Put, path, HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "LimitRange",
+                  "metadata": { "name": "limits", "namespace": "release-ns", "resourceVersion": "43" },
+                  "spec": { "limits": [{ "type": "Container", "default": { "cpu": "1500m" } }] }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await using var applied = applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns").GetAsyncEnumerator();
+
+        Assert.True(await applied.MoveNextAsync());
+        Assert.Equal("LimitRange/release-ns/limits", applied.Current);
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(() => applied.MoveNextAsync().AsTask());
+    }
+
+    [Fact]
+    public async Task ApplyAsync_ReadsBackAfterWriteCancellationWithUncanceledToken()
+    {
+        const string manifest = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: canceled-write
+            data:
+              value: committed
+            """;
+        using var cancellation = new CancellationTokenSource();
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/configmaps/canceled-write", HttpStatusCode.NotFound)
+            .Respond(HttpMethod.Post, "/api/v1/namespaces/release-ns/configmaps", HttpStatusCode.Created)
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/configmaps/canceled-write", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "ConfigMap",
+                  "metadata": { "name": "canceled-write", "namespace": "release-ns" },
+                  "data": { "value": "committed" }
+                }
+                """);
+        handler.CancelAfterRequestMethod = HttpMethod.Post;
+        handler.CancellationToTrigger = cancellation;
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        var progress = new List<string>();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var resource in applier.ApplyAsync(manifest, "release-ns", cancellation.Token))
+                progress.Add(resource);
+        });
+
+        Assert.Equal(["ConfigMap/release-ns/canceled-write"], progress);
+        Assert.Equal(2, handler.Requests.Count(request => request.Method == HttpMethod.Get));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ApplyUpgradeAsync_PreservesCaseSensitiveCustomResourceFields(bool namespaced)
+    {
+        var resourcePath = namespaced
+            ? "/apis/example.com/v1/namespaces/release-ns/widgets/sample"
+            : "/apis/example.com/v1/widgets/sample";
+        var replacePath = namespaced
+            ? "/apis/example.com/v1/namespaces/release-ns/widgets/sample"
+            : "/apis/example.com/v1/widgets/sample";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/example.com/v1", HttpStatusCode.OK, $$"""
+                {
+                  "kind": "APIResourceList",
+                  "apiVersion": "v1",
+                  "groupVersion": "example.com/v1",
+                  "resources": [{ "name": "widgets", "kind": "Widget", "namespaced": {{namespaced.ToString().ToLowerInvariant()}} }]
+                }
+                """)
+            .Respond(HttpMethod.Get, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/widgets.example.com", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "apiextensions.k8s.io/v1",
+                  "kind": "CustomResourceDefinition",
+                  "metadata": { "name": "widgets.example.com" },
+                  "spec": {
+                    "versions": [{
+                      "name": "v1",
+                      "served": true,
+                      "schema": { "openAPIV3Schema": {
+                        "type": "object",
+                        "properties": { "spec": { "type": "object", "properties": {
+                          "config": { "type": "object" },
+                          "entries": {
+                            "type": "array",
+                            "x-kubernetes-list-type": "map",
+                            "x-kubernetes-list-map-keys": ["name"],
+                            "items": { "type": "object", "properties": { "name": { "type": "string" }, "value": { "type": "string" } } }
+                          },
+                          "groups": {
+                            "type": "object",
+                            "additionalProperties": { "type": "object", "properties": {
+                              "entries": {
+                                "type": "array",
+                                "x-kubernetes-list-type": "map",
+                                "x-kubernetes-list-map-keys": ["name"],
+                                "items": { "type": "object", "properties": { "name": { "type": "string" }, "value": { "type": "string" } } }
+                              }
+                            } }
+                          }
+                        } } }
+                      } }
+                    }]
+                  }
+                }
+                """)
+            .Respond(HttpMethod.Get, resourcePath, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "example.com/v1",
+                  "kind": "Widget",
+                  "metadata": { "name": "sample", "resourceVersion": "42" },
+                  "spec": {
+                    "config": { "FOO": "chart", "foo": "operator" },
+                    "entries": [{ "name": "chart", "value": "before" }, { "name": "operator", "value": "retained" }],
+                    "groups": { "one": { "entries": [{ "name": "chart", "value": "before" }, { "name": "operator", "value": "retained" }] } }
+                  }
+                }
+                """)
+            .Respond(HttpMethod.Put, replacePath, HttpStatusCode.OK);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        const string previousManifest = """
+            apiVersion: example.com/v1
+            kind: Widget
+            metadata:
+              name: sample
+            spec:
+              config:
+                FOO: chart
+              entries:
+                - name: chart
+                  value: before
+              groups:
+                one:
+                  entries:
+                    - name: chart
+                      value: before
+            """;
+        const string upgradedManifest = """
+            apiVersion: example.com/v1
+            kind: Widget
+            metadata:
+              name: sample
+            spec:
+              config:
+                FOO: chart
+              entries:
+                - name: chart
+                  value: after
+              groups:
+                one:
+                  entries:
+                    - name: chart
+                      value: after
+            """;
+
+        await AsyncEnumerableTestExtensions.DrainAsync(applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"));
+
+        var replace = Assert.Single(handler.Requests, request => request.Method == HttpMethod.Put);
+        using var json = JsonDocument.Parse(replace.Content!);
+        var config = json.RootElement.GetProperty("spec").GetProperty("config");
+        Assert.Equal("chart", config.GetProperty("FOO").GetString());
+        Assert.Equal("operator", config.GetProperty("foo").GetString());
+        var entries = json.RootElement.GetProperty("spec").GetProperty("entries");
+        Assert.Equal(2, entries.GetArrayLength());
+        Assert.Equal("after", entries[0].GetProperty("value").GetString());
+        Assert.Equal("operator", entries[1].GetProperty("name").GetString());
+        var nestedEntries = json.RootElement.GetProperty("spec").GetProperty("groups").GetProperty("one").GetProperty("entries");
+        Assert.Equal(2, nestedEntries.GetArrayLength());
+        Assert.Equal("operator", nestedEntries[1].GetProperty("name").GetString());
     }
 
     [Fact]

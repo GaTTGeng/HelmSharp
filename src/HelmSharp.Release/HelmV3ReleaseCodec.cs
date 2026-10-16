@@ -58,6 +58,10 @@ internal static class HelmV3ReleaseCodec
             // Extension field: the coalesced values tree after dependency processing.
             // Plain Helm ignores unknown keys (see Decode for the full rationale).
             release["helmsharp_computed_values"] = JsonSerializer.SerializeToNode(HelmYaml.DeserializeDictionary(record.ComputedValuesYaml));
+        if (record.AppliedManifest is not null)
+            // Extension field: a failed upgrade's successfully applied resource documents.
+            // Helm ignores this unknown key, while HelmSharp uses it as a per-resource retry baseline.
+            release["helmsharp_applied_manifest"] = record.AppliedManifest;
 
         // Stage 2: serialize to UTF-8 JSON, gzip it, then Base64 — byte-for-byte the
         // payload Helm writes under the Secret's "release" data key.
@@ -160,6 +164,7 @@ internal static class HelmV3ReleaseCodec
                 ChartValuesYaml = HelmYaml.Serialize(chartValues),
                 RawChartJson = chart?.GetRawText(),
                 Manifest = GetString(root, "manifest") ?? string.Empty,
+                AppliedManifest = GetString(root, "helmsharp_applied_manifest"),
                 ValuesYaml = HelmYaml.Serialize(values),
                 ComputedValuesYaml = computedValuesYaml,
                 FirstDeployedAt = firstDeployed,
