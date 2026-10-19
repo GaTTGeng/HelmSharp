@@ -28,8 +28,6 @@ internal static class KubernetesManifestSchemaConverter
             "EndpointSlice" when identity.ApiVersion == "discovery.k8s.io/v1beta1" => "discovery.k8s.io/v1",
             "MutatingWebhookConfiguration" or "ValidatingWebhookConfiguration"
                 when identity.ApiVersion == "admissionregistration.k8s.io/v1beta1" => "admissionregistration.k8s.io/v1",
-            "FlowSchema" or "PriorityLevelConfiguration"
-                when identity.ApiVersion is "flowcontrol.apiserver.k8s.io/v1beta1" or "flowcontrol.apiserver.k8s.io/v1beta2" or "flowcontrol.apiserver.k8s.io/v1beta3" => "flowcontrol.apiserver.k8s.io/v1",
             _ => null
         };
 

@@ -47,6 +47,45 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
         Assert.DoesNotContain("created-by-failed-chart", resolved, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ResolvePreviousManifestForUpgrade_KeepsLastDeployedDuplicateDocument()
+    {
+        const string baseline = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: duplicated
+            data:
+              value: first
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: duplicated
+            data:
+              value: last
+            """;
+        const string failedApplied = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: recovered-resource
+            data:
+              value: recovered
+            """;
+        var history = new[]
+        {
+            new HelmReleaseRecord { Revision = 1, Status = "deployed", Manifest = baseline },
+            new HelmReleaseRecord { Revision = 2, Status = "failed", AppliedManifest = failedApplied }
+        };
+
+        var resolved = HelmClient.ResolvePreviousManifestForUpgrade(history, "test-ns");
+
+        Assert.Contains("value: last", resolved, StringComparison.Ordinal);
+        Assert.Contains("name: recovered-resource", resolved, StringComparison.Ordinal);
+        Assert.DoesNotContain("value: first", resolved, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, true)]

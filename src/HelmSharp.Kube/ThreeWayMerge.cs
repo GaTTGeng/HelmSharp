@@ -371,7 +371,8 @@ internal static class ThreeWayMerge
         if (customListMapKeys is not null)
         {
             var match = customListMapKeys.FirstOrDefault(entry => SchemaPathMatches(entry.Key, path));
-            return match.Key is not null && match.Value.Count > 0 ? [match.Value.ToArray()] : [];
+            if (match.Key is not null)
+                return match.Value.Count > 0 ? [match.Value.ToArray()] : [];
         }
 
         // Built-in keys follow Kubernetes list-map paths; other lists, including Ingress rules, are atomic.
@@ -382,6 +383,8 @@ internal static class ThreeWayMerge
         if (path == "secrets")
             return [["name"]];
         if (path == "webhooks[].matchConditions")
+            return [["name"]];
+        if (path == "spec.matchConditions")
             return [["name"]];
         if (path.EndsWith(".volumeMounts", StringComparison.Ordinal))
             return [["mountPath"]];

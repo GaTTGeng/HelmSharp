@@ -39,6 +39,17 @@ public sealed class KubernetesManifestApplierTests
         Assert.Contains("marker: retained", converted, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("flowcontrol.apiserver.k8s.io/v1beta1")]
+    [InlineData("flowcontrol.apiserver.k8s.io/v1beta2")]
+    [InlineData("flowcontrol.apiserver.k8s.io/v1beta3")]
+    public void SchemaConverter_DoesNotForceFlowControlBetaToStableVersion(string apiVersion)
+    {
+        var identity = new ManifestIdentity(apiVersion, "FlowSchema", "sample", "ignored");
+
+        Assert.Null(KubernetesManifestSchemaConverter.GetCanonicalApiVersion(identity));
+    }
+
     [Fact]
     public void SchemaConverter_RenamesFlowControlConcurrencySharesFromBeta2()
     {
@@ -1459,6 +1470,112 @@ public sealed class KubernetesManifestApplierTests
         await Assert.ThrowsAsync<KubernetesResourceOperationException>(async () =>
         {
             await foreach (var resource in applier.ApplyAsync(manifest, "release-ns"))
+                progress.Add(resource);
+        });
+
+        Assert.Empty(progress);
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_ConfirmsAmbiguousReplaceWhenDeploymentReplicasDefaultBackToOne()
+    {
+        const string previousManifest = """
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: app
+            spec:
+              replicas: 2
+              selector:
+                matchLabels:
+                  app: app
+              template:
+                metadata:
+                  labels:
+                    app: app
+                spec:
+                  containers:
+                    - name: app
+                      image: example/app:v1
+            """;
+        const string upgradedManifest = """
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: app
+            spec:
+              selector:
+                matchLabels:
+                  app: app
+              template:
+                metadata:
+                  labels:
+                    app: app
+                spec:
+                  containers:
+                    - name: app
+                      image: example/app:v1
+            """;
+        const string path = "/apis/apps/v1/namespaces/release-ns/deployments/app";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "apps/v1",
+                  "kind": "Deployment",
+                  "metadata": { "name": "app", "namespace": "release-ns", "resourceVersion": "42" },
+                  "spec": { "replicas": 2, "selector": { "matchLabels": { "app": "app" } }, "template": { "metadata": { "labels": { "app": "app" } }, "spec": { "containers": [{ "name": "app", "image": "example/app:v1" }] } } }
+                }
+                """)
+            .Respond(HttpMethod.Put, path, HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "apps/v1",
+                  "kind": "Deployment",
+                  "metadata": { "name": "app", "namespace": "release-ns", "resourceVersion": "43" },
+                  "spec": { "replicas": 1, "selector": { "matchLabels": { "app": "app" } }, "template": { "metadata": { "labels": { "app": "app" } }, "spec": { "containers": [{ "name": "app", "image": "example/app:v1" }] } } }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await using var applied = applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns").GetAsyncEnumerator();
+
+        Assert.True(await applied.MoveNextAsync());
+        Assert.Equal("Deployment/release-ns/app", applied.Current);
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(() => applied.MoveNextAsync().AsTask());
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_DoesNotConfirmAmbiguousReplaceWhenStorageClassParameterKeyCaseChanges()
+    {
+        const string previousManifest = "apiVersion: storage.k8s.io/v1\nkind: StorageClass\nmetadata:\n  name: custom\nparameters:\n  Foo: chart\n";
+        const string upgradedManifest = "apiVersion: storage.k8s.io/v1\nkind: StorageClass\nmetadata:\n  name: custom\nparameters:\n  foo: chart\n";
+        const string path = "/apis/storage.k8s.io/v1/storageclasses/custom";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "storage.k8s.io/v1",
+                  "kind": "StorageClass",
+                  "metadata": { "name": "custom", "resourceVersion": "42" },
+                  "provisioner": "example.csi",
+                  "parameters": { "Foo": "chart" }
+                }
+                """)
+            .Respond(HttpMethod.Put, path, HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "storage.k8s.io/v1",
+                  "kind": "StorageClass",
+                  "metadata": { "name": "custom", "resourceVersion": "43" },
+                  "provisioner": "example.csi",
+                  "parameters": { "Foo": "chart" }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        var progress = new List<string>();
+
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(async () =>
+        {
+            await foreach (var resource in applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"))
                 progress.Add(resource);
         });
 
