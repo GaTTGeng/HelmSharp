@@ -89,6 +89,32 @@ internal static class ThreeWayMerge
             var hasNew = newVals.TryGetValue(key, out var newVal);
             var hasLive = live.TryGetValue(key, out var liveVal);
 
+            // An omitted map/set list is an empty desired list: reconcile ownership per item
+            // so admission- or controller-added entries survive chart removal.
+            if (hasLast && !hasNew && hasLive &&
+                lastVal is IList<object?> removedLastList && liveVal is IList<object?> removedLiveList)
+            {
+                IList<object?> emptyList = Array.Empty<object?>();
+                var listPath = AppendPath(path, key);
+                if (TryMergeSetList(removedLastList, emptyList, removedLiveList, listPath, customListMapKeys, out var remainingSet))
+                {
+                    if (remainingSet.Count == 0)
+                        merged.Remove(key);
+                    else
+                        merged[key] = remainingSet;
+                    continue;
+                }
+
+                if (TryMergeKeyedLists(removedLastList, emptyList, removedLiveList, listPath, customListMapKeys, out var remainingList))
+                {
+                    if (remainingList.Count == 0)
+                        merged.Remove(key);
+                    else
+                        merged[key] = remainingList;
+                    continue;
+                }
+            }
+
             // If both last and new have nested dicts, recurse
             if (hasLast && hasNew && hasLive &&
                 lastVal is IDictionary<string, object?> lastDict &&
@@ -341,6 +367,8 @@ internal static class ThreeWayMerge
 
         // Built-in keys follow Kubernetes list-map paths; other lists, including Ingress rules, are atomic.
         if (path == "spec.versions")
+            return [["name"]];
+        if (path == "webhooks")
             return [["name"]];
         if (path.EndsWith(".volumeMounts", StringComparison.Ordinal))
             return [["mountPath"]];

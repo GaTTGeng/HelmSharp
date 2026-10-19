@@ -16,6 +16,37 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
     private readonly string _tempDirectory = Path.Combine(
         Path.GetTempPath(), "helmsharp-failed-upgrade-tests", Guid.NewGuid().ToString("N"));
 
+    [Fact]
+    public void ResolvePreviousManifestForUpgrade_AppliesDeletionTombstonesFromLaterFailedRevision()
+    {
+        const string baseline = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: created-by-failed-chart
+            data:
+              value: deployed
+            """;
+        const string failedApplied = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: created-by-failed-chart
+            data:
+              value: failed
+            """;
+        var history = new[]
+        {
+            new HelmReleaseRecord { Revision = 1, Status = "deployed", Manifest = baseline },
+            new HelmReleaseRecord { Revision = 2, Status = "failed", AppliedManifest = failedApplied },
+            new HelmReleaseRecord { Revision = 3, Status = "failed", AppliedManifest = string.Empty, DeletedManifest = failedApplied }
+        };
+
+        var resolved = HelmClient.ResolvePreviousManifestForUpgrade(history, "test-ns");
+
+        Assert.DoesNotContain("created-by-failed-chart", resolved, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, true)]
@@ -379,6 +410,57 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
         var port = Assert.IsType<Dictionary<string, object?>>(service["port"]);
         Assert.Equal(8080L, port["number"]);
         Assert.False(spec.ContainsKey("defaultBackend"));
+    }
+
+    [Fact]
+    public void ConvertRestorationApiVersions_UsesFinalDuplicateAttemptedIdentity()
+    {
+        const string previousManifest = """
+            apiVersion: autoscaling/v2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 3
+              metrics:
+                - type: Resource
+                  resource:
+                    name: cpu
+                    target:
+                      type: Utilization
+                      averageUtilization: 70
+            """;
+        const string attemptedManifest = """
+            apiVersion: autoscaling/v1
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 3
+              targetCPUUtilizationPercentage: 60
+            ---
+            apiVersion: autoscaling/v2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 3
+              metrics:
+                - type: Resource
+                  resource:
+                    name: cpu
+                    target:
+                      type: Utilization
+                      averageUtilization: 50
+            """;
+
+        var restoration = HelmClient.ConvertRestorationApiVersions(previousManifest, attemptedManifest, "test-ns");
+
+        Assert.Contains("apiVersion: autoscaling/v2", restoration, StringComparison.Ordinal);
+        Assert.DoesNotContain("targetCPUUtilizationPercentage", restoration, StringComparison.Ordinal);
     }
 
     [Fact]

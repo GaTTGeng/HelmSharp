@@ -62,6 +62,50 @@ public sealed class KubernetesManifestApplierTests
     }
 
     [Fact]
+    public void SchemaConverter_ConvertsBeta3DefaultedZeroConcurrencySharesToEffectiveValue()
+    {
+        const string manifest = """
+            apiVersion: flowcontrol.apiserver.k8s.io/v1beta3
+            kind: PriorityLevelConfiguration
+            metadata:
+              name: limited
+            spec:
+              type: Limited
+              limited:
+                nominalConcurrencyShares: 0
+            """;
+        var identity = new ManifestIdentity(
+            "flowcontrol.apiserver.k8s.io/v1beta3", "PriorityLevelConfiguration", "limited", "ignored");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            manifest, identity, "flowcontrol.apiserver.k8s.io/v1", out var converted));
+
+        Assert.Contains("nominalConcurrencyShares: 30", converted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SchemaConverter_TreatsNullV1HpaCpuTargetAsOmitted()
+    {
+        const string manifest = """
+            apiVersion: autoscaling/v1
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: scaler
+            spec:
+              minReplicas: 1
+              maxReplicas: 3
+              targetCPUUtilizationPercentage: null
+            """;
+        var identity = new ManifestIdentity("autoscaling/v1", "HorizontalPodAutoscaler", "scaler", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            manifest, identity, "autoscaling/v2", out var converted));
+
+        Assert.DoesNotContain("targetCPUUtilizationPercentage", converted, StringComparison.Ordinal);
+        Assert.DoesNotContain("metrics:", converted, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ManifestIdentity_ParseUsesDefaultAndExplicitNamespaces()
     {
         var defaultNamespaceIdentity = ManifestIdentity.Parse("""
@@ -1764,6 +1808,51 @@ public sealed class KubernetesManifestApplierTests
 
         Assert.True(await applied.MoveNextAsync());
         Assert.Equal("LimitRange/release-ns/limits", applied.Current);
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(() => applied.MoveNextAsync().AsTask());
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_ConfirmsAmbiguousReplaceWithEquivalentScalarQuantity()
+    {
+        const string manifest = """
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: scalar-quantity
+            spec:
+              containers:
+                - name: app
+                  image: example/app:v1
+              volumes:
+                - name: scratch
+                  emptyDir:
+                    sizeLimit: "1.5"
+            """;
+        const string path = "/api/v1/namespaces/release-ns/pods/scalar-quantity";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Pod",
+                  "metadata": { "name": "scalar-quantity", "namespace": "release-ns", "resourceVersion": "42" },
+                  "spec": { "containers": [{ "name": "app", "image": "example/app:v1" }], "volumes": [{ "name": "scratch", "emptyDir": { "sizeLimit": "1" } }] }
+                }
+                """)
+            .Respond(HttpMethod.Put, path, HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Pod",
+                  "metadata": { "name": "scalar-quantity", "namespace": "release-ns", "resourceVersion": "43" },
+                  "spec": { "containers": [{ "name": "app", "image": "example/app:v1" }], "volumes": [{ "name": "scratch", "emptyDir": { "sizeLimit": "1500m" } }] }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await using var applied = applier.ApplyUpgradeAsync(manifest, manifest.Replace("1.5", "1", StringComparison.Ordinal), "release-ns").GetAsyncEnumerator();
+
+        Assert.True(await applied.MoveNextAsync());
+        Assert.Equal("Pod/release-ns/scalar-quantity", applied.Current);
         await Assert.ThrowsAsync<KubernetesResourceOperationException>(() => applied.MoveNextAsync().AsTask());
     }
 

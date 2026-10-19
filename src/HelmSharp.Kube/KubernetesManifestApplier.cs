@@ -1731,7 +1731,7 @@ public sealed class KubernetesManifestApplier
                         property.Name,
                         allowCaseInsensitiveProperties && !IsArbitraryMap(property.Name),
                         isTypedResource,
-                        inQuantityMap || IsQuantityMap(property.Name, parentName, resourceKind) ||
+                        inQuantityMap || IsQuantityField(property.Name, parentName, resourceKind) ||
                         resourceKind == "HorizontalPodAutoscaler" && parentName == "target" &&
                         property.Name is "averageValue" or "value",
                         resourceKind))
@@ -1985,8 +1985,8 @@ public sealed class KubernetesManifestApplier
             : string.Equals(left.ToString(), right.ToString(), StringComparison.Ordinal);
     }
 
-    private static bool IsQuantityMap(string? propertyName, string? parentName, string resourceKind)
-        => propertyName is "requests" or "limits" or "capacity" or "allocatable" ||
+    private static bool IsQuantityField(string? propertyName, string? parentName, string resourceKind)
+        => propertyName is "requests" or "limits" or "capacity" or "allocatable" or "sizeLimit" or "divisor" ||
            resourceKind == "ResourceQuota" && parentName == "spec" && propertyName is "hard" or "used" ||
            resourceKind == "LimitRange" && parentName == "spec" &&
            propertyName is "default" or "defaultRequest" or "min" or "max" or "maxLimitRequestRatio";
