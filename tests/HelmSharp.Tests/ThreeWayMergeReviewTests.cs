@@ -36,6 +36,49 @@ public sealed class ThreeWayMergeReviewTests
     }
 
     [Fact]
+    public void MergeResource_PreservesControllerFinalizerWhenChartOmitsList()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "metadata:\n  finalizers:\n  - chart.example/owned\n",
+            "metadata:\n  labels:\n    app: chart\n",
+            "metadata:\n  finalizers:\n  - chart.example/owned\n  - controller.example/guard\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var metadata = (IDictionary<string, object?>)document["metadata"]!;
+        Assert.Equal(["controller.example/guard"], (IList<object?>)metadata["finalizers"]!);
+    }
+
+    [Fact]
+    public void MergeResource_PreservesAdmissionAddedInitContainerWhenChartOmitsList()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "spec:\n  initContainers:\n  - name: chart\n    image: chart:v1\n",
+            "spec:\n  containers:\n  - name: app\n    image: app:v1\n",
+            "spec:\n  initContainers:\n  - name: chart\n    image: chart:v1\n  - name: injected\n    image: webhook:v1\n  containers:\n  - name: app\n    image: app:v1\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var initContainers = (IList<object?>)spec["initContainers"]!;
+        Assert.Single(initContainers);
+        Assert.Equal("injected", ((IDictionary<string, object?>)initContainers[0]!)["name"]);
+    }
+
+    [Fact]
+    public void MergeResource_PreservesInjectedWebhookCaBundleWhenAnotherWebhookFieldChanges()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: admissionregistration.k8s.io/v1\nkind: MutatingWebhookConfiguration\nwebhooks:\n- name: mutate.example\n  failurePolicy: Ignore\n  clientConfig:\n    service:\n      name: hook\n",
+            "apiVersion: admissionregistration.k8s.io/v1\nkind: MutatingWebhookConfiguration\nwebhooks:\n- name: mutate.example\n  failurePolicy: Fail\n  clientConfig:\n    service:\n      name: hook\n",
+            "apiVersion: admissionregistration.k8s.io/v1\nkind: MutatingWebhookConfiguration\nwebhooks:\n- name: mutate.example\n  failurePolicy: Ignore\n  clientConfig:\n    service:\n      name: hook\n    caBundle: injected\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var webhook = (IDictionary<string, object?>)((IList<object?>)document["webhooks"]!)[0]!;
+        var clientConfig = (IDictionary<string, object?>)webhook["clientConfig"]!;
+        Assert.Equal("Fail", webhook["failurePolicy"]);
+        Assert.Equal("injected", clientConfig["caBundle"]);
+    }
+
+    [Fact]
     public void MergeResource_PreservesLiveOnlyCustomListItemUnderMap()
     {
         var merged = ThreeWayMerge.MergeResource(

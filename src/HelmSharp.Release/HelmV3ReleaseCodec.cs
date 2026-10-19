@@ -62,6 +62,9 @@ internal static class HelmV3ReleaseCodec
             // Extension field: a failed upgrade's successfully applied resource documents.
             // Helm ignores this unknown key, while HelmSharp uses it as a per-resource retry baseline.
             release["helmsharp_applied_manifest"] = record.AppliedManifest;
+        if (record.DeletedManifest is not null)
+            // Extension field: resources deleted while recovering a failed revision shadow older retry baselines.
+            release["helmsharp_deleted_manifest"] = record.DeletedManifest;
 
         // Stage 2: serialize to UTF-8 JSON, gzip it, then Base64 — byte-for-byte the
         // payload Helm writes under the Secret's "release" data key.
@@ -165,6 +168,7 @@ internal static class HelmV3ReleaseCodec
                 RawChartJson = chart?.GetRawText(),
                 Manifest = GetString(root, "manifest") ?? string.Empty,
                 AppliedManifest = GetString(root, "helmsharp_applied_manifest"),
+                DeletedManifest = GetString(root, "helmsharp_deleted_manifest"),
                 ValuesYaml = HelmYaml.Serialize(values),
                 ComputedValuesYaml = computedValuesYaml,
                 FirstDeployedAt = firstDeployed,

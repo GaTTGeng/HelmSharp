@@ -56,6 +56,9 @@ public sealed record HelmReleaseRecord
     /// </summary>
     public string? AppliedManifest { get; init; }
 
+    /// <summary>Manifest identities successfully deleted while recovering this failed revision.</summary>
+    public string? DeletedManifest { get; init; }
+
     /// <summary>User-supplied values (<c>config</c>) for this revision, as YAML.</summary>
     public string ValuesYaml { get; init; } = string.Empty;
 

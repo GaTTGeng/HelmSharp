@@ -546,7 +546,7 @@ public class HelmClient : IHelmClient
         return (isUpgrade, revision);
     }
 
-    private static string? ResolvePreviousManifestForUpgrade(
+    internal static string? ResolvePreviousManifestForUpgrade(
         IReadOnlyCollection<HelmReleaseRecord> history,
         string defaultNamespace)
     {
@@ -557,7 +557,7 @@ public class HelmClient : IHelmClient
         var failedRevisions = history
             .Where(record => (previousRecord is null || record.Revision > previousRecord.Revision) &&
                              string.Equals(record.Status, "failed", StringComparison.OrdinalIgnoreCase) &&
-                             record.AppliedManifest is not null)
+                             (record.AppliedManifest is not null || record.DeletedManifest is not null))
             .OrderBy(record => record.Revision)
             .ToList();
         if (failedRevisions.Count == 0)
@@ -573,7 +573,14 @@ public class HelmClient : IHelmClient
             .ToDictionary(group => group.Key, group => group.First().Document, StringComparer.Ordinal);
         foreach (var failedRevision in failedRevisions)
         {
-            foreach (var document in KubernetesManifestApplier.SplitDocumentsPublic(failedRevision.AppliedManifest!))
+            foreach (var document in KubernetesManifestApplier.SplitDocumentsPublic(failedRevision.DeletedManifest ?? string.Empty))
+            {
+                var identity = ManifestIdentity.Parse(document, defaultNamespace);
+                if (identity is not null)
+                    documentsByIdentity.Remove(ManifestIdentityKey(identity));
+            }
+
+            foreach (var document in KubernetesManifestApplier.SplitDocumentsPublic(failedRevision.AppliedManifest ?? string.Empty))
             {
                 var identity = ManifestIdentity.Parse(document, defaultNamespace);
                 if (identity is not null)
@@ -826,6 +833,10 @@ public class HelmClient : IHelmClient
                         failedRecord.AppliedManifest ?? string.Empty,
                         GetSuccessfullyDeletedManifest(attemptedOnlyManifest, cleanedResources, ns),
                         ns),
+                    DeletedManifest = MergeAppliedManifests(
+                        failedRecord.DeletedManifest ?? string.Empty,
+                        GetSuccessfullyDeletedManifest(attemptedOnlyManifest, cleanedResources, ns),
+                        ns),
                     UpdatedAt = DateTimeOffset.UtcNow
                 };
                 try
@@ -877,6 +888,10 @@ public class HelmClient : IHelmClient
                     {
                         AppliedManifest = MergeAppliedManifests(
                             failedRecord.AppliedManifest ?? string.Empty,
+                            GetSuccessfullyAppliedManifest(previous.Manifest, restoredResources, ns),
+                            ns),
+                        DeletedManifest = RemoveCleanedDocuments(
+                            failedRecord.DeletedManifest ?? string.Empty,
                             GetSuccessfullyAppliedManifest(previous.Manifest, restoredResources, ns),
                             ns),
                         UpdatedAt = DateTimeOffset.UtcNow
@@ -1239,10 +1254,8 @@ public class HelmClient : IHelmClient
         var attemptedVersionsByIdentity = KubernetesManifestApplier.SplitDocumentsPublic(attemptedManifest)
             .Select(document => (Document: document, Identity: ManifestIdentity.Parse(document, defaultNamespace)))
             .Where(item => item.Identity is not null)
-            .ToDictionary(
-                item => ManifestIdentityKey(item.Identity!),
-                item => item.Identity!.ApiVersion,
-                StringComparer.Ordinal);
+            .GroupBy(item => ManifestIdentityKey(item.Identity!), StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Last().Identity!.ApiVersion, StringComparer.Ordinal);
 
         var restorationDocuments = new List<string>();
         foreach (var document in KubernetesManifestApplier.SplitDocumentsPublic(previousManifest))

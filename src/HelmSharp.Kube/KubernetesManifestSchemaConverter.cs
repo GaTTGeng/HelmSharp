@@ -77,10 +77,9 @@ internal static class KubernetesManifestSchemaConverter
             ("node.k8s.io/v1beta1", "node.k8s.io/v1", "RuntimeClass") or
             ("apiregistration.k8s.io/v1beta1", "apiregistration.k8s.io/v1", "APIService") or
             ("networking.k8s.io/v1beta1", "networking.k8s.io/v1", "IngressClass") or
-            ("flowcontrol.apiserver.k8s.io/v1beta3", "flowcontrol.apiserver.k8s.io/v1", "FlowSchema") or
-            ("flowcontrol.apiserver.k8s.io/v1beta3", "flowcontrol.apiserver.k8s.io/v1", "PriorityLevelConfiguration");
+            ("flowcontrol.apiserver.k8s.io/v1beta3", "flowcontrol.apiserver.k8s.io/v1", "FlowSchema");
         var flowControlMigration = (identity.Kind is "FlowSchema" or "PriorityLevelConfiguration") &&
-                                   (identity.ApiVersion is "flowcontrol.apiserver.k8s.io/v1beta1" or "flowcontrol.apiserver.k8s.io/v1beta2") &&
+                                   (identity.ApiVersion is "flowcontrol.apiserver.k8s.io/v1beta1" or "flowcontrol.apiserver.k8s.io/v1beta2" or "flowcontrol.apiserver.k8s.io/v1beta3") &&
                                    targetApiVersion == "flowcontrol.apiserver.k8s.io/v1";
         if (!ingressMigration && !legacyWorkloadMigration && !networkPolicyMigration &&
             !podSecurityPolicyMigration && !legacyIngressBetaMigration && !horizontalPodAutoscalerMigration &&
@@ -123,13 +122,22 @@ internal static class KubernetesManifestSchemaConverter
             return true;
 
         if (!document.TryGetValue("spec", out var specValue) || specValue is not Dictionary<string, object?> spec ||
-            !spec.TryGetValue("limited", out var limitedValue) || limitedValue is not Dictionary<string, object?> limited ||
-            !limited.Remove("assuredConcurrencyShares", out var assuredConcurrencyShares))
+            !spec.TryGetValue("limited", out var limitedValue) || limitedValue is not Dictionary<string, object?> limited)
         {
             return true;
         }
 
-        return limited.TryAdd("nominalConcurrencyShares", assuredConcurrencyShares);
+        if (limited.Remove("assuredConcurrencyShares", out var assuredConcurrencyShares))
+            return limited.TryAdd("nominalConcurrencyShares", assuredConcurrencyShares);
+
+        if (HelmYaml.GetString(document, "apiVersion") == "flowcontrol.apiserver.k8s.io/v1beta3" &&
+            limited.TryGetValue("nominalConcurrencyShares", out var nominalConcurrencyShares) &&
+            nominalConcurrencyShares is int or long && Convert.ToInt64(nominalConcurrencyShares) == 0)
+        {
+            limited["nominalConcurrencyShares"] = 30;
+        }
+
+        return true;
     }
 
     private static void ConvertPodDisruptionBudgetSelector(Dictionary<string, object?> document)
@@ -165,6 +173,9 @@ internal static class KubernetesManifestSchemaConverter
         if (sourceApiVersion == "autoscaling/v1" && targetApiVersion == "autoscaling/v2")
         {
             if (!spec.Remove("targetCPUUtilizationPercentage", out var targetCpuUtilization))
+                return !spec.ContainsKey("metrics");
+
+            if (targetCpuUtilization is null)
                 return !spec.ContainsKey("metrics");
 
             if (spec.ContainsKey("metrics"))
