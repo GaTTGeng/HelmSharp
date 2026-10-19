@@ -79,6 +79,40 @@ public sealed class ThreeWayMergeReviewTests
     }
 
     [Fact]
+    public void MergeResource_PreservesControllerAddedOwnerReferenceWhenAnotherOwnerChanges()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "metadata:\n  ownerReferences:\n  - uid: chart-owner\n    name: chart\n    controller: true\n",
+            "metadata:\n  ownerReferences:\n  - uid: chart-owner\n    name: chart-v2\n    controller: true\n",
+            "metadata:\n  ownerReferences:\n  - uid: chart-owner\n    name: chart\n    controller: true\n  - uid: operator-owner\n    name: operator\n    controller: false\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var metadata = (IDictionary<string, object?>)document["metadata"]!;
+        var owners = (IList<object?>)metadata["ownerReferences"]!;
+
+        Assert.Equal(2, owners.Count);
+        Assert.Equal("chart-v2", ((IDictionary<string, object?>)owners[0]!)["name"]);
+        Assert.Equal("operator-owner", ((IDictionary<string, object?>)owners[1]!)["uid"]);
+    }
+
+    [Fact]
+    public void MergeResource_PreservesControllerAddedWebhookMatchConditionWhenAnotherFieldChanges()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingWebhookConfiguration\nwebhooks:\n- name: validate.example\n  failurePolicy: Ignore\n  matchConditions:\n  - name: chart-condition\n    expression: request.userInfo.username != ''\n",
+            "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingWebhookConfiguration\nwebhooks:\n- name: validate.example\n  failurePolicy: Fail\n  matchConditions:\n  - name: chart-condition\n    expression: request.userInfo.username != ''\n",
+            "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingWebhookConfiguration\nwebhooks:\n- name: validate.example\n  failurePolicy: Ignore\n  matchConditions:\n  - name: chart-condition\n    expression: request.userInfo.username != ''\n  - name: controller-condition\n    expression: request.operation == 'CREATE'\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var webhook = (IDictionary<string, object?>)((IList<object?>)document["webhooks"]!)[0]!;
+        var conditions = (IList<object?>)webhook["matchConditions"]!;
+
+        Assert.Equal("Fail", webhook["failurePolicy"]);
+        Assert.Equal(2, conditions.Count);
+        Assert.Equal("controller-condition", ((IDictionary<string, object?>)conditions[1]!)["name"]);
+    }
+
+    [Fact]
     public void MergeResource_PreservesLiveOnlyCustomListItemUnderMap()
     {
         var merged = ThreeWayMerge.MergeResource(

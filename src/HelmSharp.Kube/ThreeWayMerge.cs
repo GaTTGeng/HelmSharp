@@ -370,6 +370,10 @@ internal static class ThreeWayMerge
             return [["name"]];
         if (path == "webhooks")
             return [["name"]];
+        if (path == "metadata.ownerReferences")
+            return [["uid"]];
+        if (path == "webhooks[].matchConditions")
+            return [["name"]];
         if (path.EndsWith(".volumeMounts", StringComparison.Ordinal))
             return [["mountPath"]];
         if (path.EndsWith(".volumeDevices", StringComparison.Ordinal))

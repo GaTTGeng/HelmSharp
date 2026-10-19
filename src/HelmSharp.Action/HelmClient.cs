@@ -932,9 +932,17 @@ public class HelmClient : IHelmClient
                 {
                     output.Add("Unable to fully clean up resources from the failed installation.");
                 }
+                var cleanedManifest = GetSuccessfullyDeletedManifest(mainManifest, cleanedResources, ns);
                 failedRecord = failedRecord with
                 {
-                    AppliedManifest = RemoveCleanedDocuments(failedRecord.AppliedManifest ?? string.Empty, cleanedResources, ns),
+                    AppliedManifest = RemoveCleanedDocuments(
+                        failedRecord.AppliedManifest ?? string.Empty,
+                        cleanedManifest,
+                        ns),
+                    DeletedManifest = MergeAppliedManifests(
+                        failedRecord.DeletedManifest ?? string.Empty,
+                        cleanedManifest,
+                        ns),
                     UpdatedAt = DateTimeOffset.UtcNow
                 };
                 try
