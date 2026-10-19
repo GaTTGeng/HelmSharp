@@ -1764,7 +1764,14 @@ public class HelmClient : IHelmClient
         }
         catch (Exception ex)
         {
-            await PersistFailedRollbackAsync(store, WithHookExecution(rollbackRecord, hooks), operationId, ex);
+            await PersistFailedRollbackAsync(
+                store,
+                WithHookExecution(rollbackRecord with
+                {
+                    AppliedManifest = GetSuccessfullyAppliedManifest(mainManifest, appliedRollbackResources, ns)
+                }, hooks),
+                operationId,
+                ex);
             throw;
         }
         // --- 10. Supersede prior revisions and prune history ---
