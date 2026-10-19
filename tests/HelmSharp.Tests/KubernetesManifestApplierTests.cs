@@ -116,6 +116,30 @@ public sealed class KubernetesManifestApplierTests
         Assert.Equal("discovery.k8s.io/v1", document["apiVersion"]);
     }
 
+    [Fact]
+    public void SchemaConverter_MovesEndpointSliceHostnameTopologyToNodeName()
+    {
+        const string manifest = """
+            apiVersion: discovery.k8s.io/v1beta1
+            kind: EndpointSlice
+            metadata:
+              name: endpoints
+            endpoints:
+              - addresses: [10.0.0.1]
+                topology:
+                  kubernetes.io/hostname: node-a
+            """;
+        var identity = new ManifestIdentity("discovery.k8s.io/v1beta1", "EndpointSlice", "endpoints", "ignored");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            manifest, identity, "discovery.k8s.io/v1", out var converted));
+        var document = HelmYaml.DeserializeDictionary(converted, StringComparer.Ordinal);
+        var endpoint = (IDictionary<string, object?>)((IList<object?>)document["endpoints"]!)[0]!;
+
+        Assert.Equal("node-a", endpoint["nodeName"]);
+        Assert.False(endpoint.ContainsKey("deprecatedTopology"));
+    }
+
     [Theory]
     [InlineData("MutatingWebhookConfiguration")]
     [InlineData("ValidatingWebhookConfiguration")]
@@ -211,6 +235,14 @@ public sealed class KubernetesManifestApplierTests
 
         Assert.DoesNotContain("targetCPUUtilizationPercentage", converted, StringComparison.Ordinal);
         Assert.DoesNotContain("metrics:", converted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SchemaConverter_DoesNotForceCanonicalVersionForAutoscalingV1Hpa()
+    {
+        var identity = new ManifestIdentity("autoscaling/v1", "HorizontalPodAutoscaler", "scaler", "release-ns");
+
+        Assert.Null(KubernetesManifestSchemaConverter.GetCanonicalApiVersion(identity));
     }
 
     [Fact]
@@ -1518,6 +1550,42 @@ public sealed class KubernetesManifestApplierTests
     }
 
     [Fact]
+    public async Task ApplyUpgradeAsync_DoesNotConfirmAmbiguousReplaceWithCaseInsensitiveServiceSelector()
+    {
+        const string previousManifest = "apiVersion: v1\nkind: Service\nmetadata:\n  name: app\nspec:\n  selector:\n    Foo: chart\n";
+        const string upgradedManifest = "apiVersion: v1\nkind: Service\nmetadata:\n  name: app\nspec:\n  selector:\n    foo: chart\n";
+        const string path = "/api/v1/namespaces/release-ns/services/app";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Service",
+                  "metadata": { "name": "app", "namespace": "release-ns", "resourceVersion": "42" },
+                  "spec": { "selector": { "Foo": "chart" } }
+                }
+                """)
+            .Respond(HttpMethod.Put, path, HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Service",
+                  "metadata": { "name": "app", "namespace": "release-ns", "resourceVersion": "43" },
+                  "spec": { "selector": { "Foo": "chart" } }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        var progress = new List<string>();
+
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(async () =>
+        {
+            await foreach (var resource in applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"))
+                progress.Add(resource);
+        });
+
+        Assert.Empty(progress);
+    }
+
+    [Fact]
     public async Task ApplyUpgradeAsync_DoesNotConfirmAmbiguousReplaceWhenRemovedListItemRemains()
     {
         const string previousManifest = """
@@ -2103,6 +2171,7 @@ public sealed class KubernetesManifestApplierTests
                   "apiVersion": "example.com/v1",
                   "kind": "Widget",
                   "metadata": { "name": "sample", "resourceVersion": "42" },
+                  "status": { "phase": "previous" },
                   "spec": {
                     "config": { "FOO": "chart", "foo": "operator" },
                     "entries": [{ "name": "chart", "value": "before" }, { "name": "operator", "value": "retained" }],
@@ -2128,6 +2197,8 @@ public sealed class KubernetesManifestApplierTests
                   entries:
                     - name: chart
                       value: before
+            status:
+              phase: previous
             """;
         const string upgradedManifest = """
             apiVersion: example.com/v1
@@ -2145,6 +2216,8 @@ public sealed class KubernetesManifestApplierTests
                   entries:
                     - name: chart
                       value: after
+            status:
+              phase: chart
             """;
 
         await AsyncEnumerableTestExtensions.DrainAsync(applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"));
@@ -2153,6 +2226,8 @@ public sealed class KubernetesManifestApplierTests
         using var json = JsonDocument.Parse(replace.Content!);
         var config = json.RootElement.GetProperty("spec").GetProperty("config");
         Assert.Equal("chart", config.GetProperty("FOO").GetString());
+        Assert.True(json.RootElement.TryGetProperty("status", out var status), replace.Content);
+        Assert.Equal("chart", status.GetProperty("phase").GetString());
         Assert.Equal("operator", config.GetProperty("foo").GetString());
         var entries = json.RootElement.GetProperty("spec").GetProperty("entries");
         Assert.Equal(2, entries.GetArrayLength());
