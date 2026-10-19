@@ -391,6 +391,46 @@ public sealed class KubernetesManifestApplierTests
     }
 
     [Fact]
+    public async Task ApplyUpgradeAsync_UsesLastDuplicatePreviousDocumentAsMergeBaseline()
+    {
+        const string previousManifest = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: settings
+            data:
+              value: one
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: settings
+            data:
+              value: two
+            """;
+        const string upgradedManifest = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: settings
+            data:
+              value: two
+            """;
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/api/v1/namespaces/release-ns/configmaps/settings", HttpStatusCode.OK, """
+                { "apiVersion": "v1", "kind": "ConfigMap", "metadata": { "name": "settings", "resourceVersion": "42" }, "data": { "value": "three" } }
+                """)
+            .Respond(HttpMethod.Put, "/api/v1/namespaces/release-ns/configmaps/settings", HttpStatusCode.OK);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await AsyncEnumerableTestExtensions.DrainAsync(
+            applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns"));
+
+        var replacement = Assert.Single(handler.Requests, request => request.Method == HttpMethod.Put);
+        Assert.Contains("\"value\":\"three\"", replacement.Content);
+    }
+
+    [Fact]
     public async Task ApplyUpgradeAsync_PreservesLiveFieldsWhenApiVersionChangesWithinGroup()
     {
         const string previousManifest = """

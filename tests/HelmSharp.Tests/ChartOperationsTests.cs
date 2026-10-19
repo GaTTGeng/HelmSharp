@@ -1136,6 +1136,48 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task ReleaseLifecycle_RollbackFinalSaveFailurePersistsAppliedManifest()
+    {
+        var chartDir = await CreateMinimalChartAsync("rollback-final-save-failure-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: rollback-final-save-failure
+            data:
+              value: {{ .Values.marker | quote }}
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-final-save-failure",
+            Chart = chartDir,
+            ValuesContent = "marker: previous\n"
+        }));
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-final-save-failure",
+            Chart = chartDir,
+            ValuesContent = "marker: current\n"
+        }));
+        releaseState.FailNextSecretUpdate = true;
+
+        await Assert.ThrowsAsync<HttpOperationException>(() => client.RollbackAsync(new HelmRollbackRequest
+        {
+            ReleaseName = "rollback-final-save-failure",
+            Namespace = "test-ns",
+            Revision = 1,
+            Wait = false
+        }));
+
+        var failedRollback = Assert.Single(releaseState.Records("rollback-final-save-failure"), record => record.Revision == 3);
+        Assert.Equal("failed", failedRollback.Status);
+        Assert.Contains("value: \"previous\"", failedRollback.AppliedManifest, StringComparison.Ordinal);
+        Assert.Contains("\"value\":\"previous\"", releaseState.ConfigMaps.Values.Single(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ReleaseLifecycle_RollbackFinalSaveCompletesAfterOperationCancellation()
     {
         var chartDir = await CreateMinimalChartAsync("rollback-final-save-chart");
@@ -2478,6 +2520,11 @@ public class ChartOperationsTests : IDisposable
                     releaseState.FailNextSecretCreate = false;
                     return JsonResponse(request, HttpStatusCode.InternalServerError, "{ \"code\": 500 }");
                 }
+                if (request.Method == HttpMethod.Put && releaseState.FailNextSecretUpdate)
+                {
+                    releaseState.FailNextSecretUpdate = false;
+                    return JsonResponse(request, HttpStatusCode.InternalServerError, "{ \"code\": 500 }");
+                }
                 if (request.Method == HttpMethod.Post && releaseState.CreateNextSecretThenReturnConflict)
                 {
                     releaseState.CreateNextSecretThenReturnConflict = false;
@@ -2651,6 +2698,7 @@ public class ChartOperationsTests : IDisposable
         internal List<(HttpMethod Method, string Path, string Content)> ConfigMapWrites { get; } = [];
         internal Dictionary<string, string> ConfigMaps { get; } = new(StringComparer.Ordinal);
         public bool FailNextSecretCreate { get; set; }
+        public bool FailNextSecretUpdate { get; set; }
         public bool CreateNextSecretThenReturnConflict { get; set; }
         internal CancellationTokenSource? CancelOnNextReleaseSecretRead { get; set; }
         internal CancellationTokenSource? CancelAfterNextSecretCreate { get; set; }

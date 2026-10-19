@@ -181,6 +181,41 @@ public sealed class ThreeWayMergeReviewTests
     }
 
     [Fact]
+    public void MergeResource_MergesServiceAccountSecretsByName()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: v1\nkind: ServiceAccount\nsecrets:\n- name: chart-old\n",
+            "apiVersion: v1\nkind: ServiceAccount\nsecrets:\n- name: chart-new\n",
+            "apiVersion: v1\nkind: ServiceAccount\nsecrets:\n- name: chart-old\n- name: controller-token\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var secrets = (IList<object?>)document["secrets"]!;
+        Assert.Equal(2, secrets.Count);
+        Assert.Equal("chart-new", ((IDictionary<string, object?>)secrets[0]!)["name"]);
+        Assert.Equal("controller-token", ((IDictionary<string, object?>)secrets[1]!)["name"]);
+    }
+
+    [Fact]
+    public void MergeResource_PreservesControllerOwnerReferenceForCustomResource()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: example.com/v1\nkind: Widget\nmetadata:\n  ownerReferences:\n  - uid: chart-owner\n    name: chart\nspec:\n  values:\n  - old\n",
+            "apiVersion: example.com/v1\nkind: Widget\nmetadata:\n  ownerReferences:\n  - uid: chart-owner\n    name: chart-v2\nspec:\n  values:\n  - new\n",
+            "apiVersion: example.com/v1\nkind: Widget\nmetadata:\n  ownerReferences:\n  - uid: chart-owner\n    name: chart\n  - uid: controller-owner\n    name: controller\nspec:\n  values:\n  - old\n",
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+            {
+                ["spec.values"] = Array.Empty<string>()
+            });
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var metadata = (IDictionary<string, object?>)document["metadata"]!;
+        var owners = (IList<object?>)metadata["ownerReferences"]!;
+        Assert.Equal(2, owners.Count);
+        Assert.Equal("chart-v2", ((IDictionary<string, object?>)owners[0]!)["name"]);
+        Assert.Equal("controller-owner", ((IDictionary<string, object?>)owners[1]!)["uid"]);
+    }
+
+    [Fact]
     public void MergeResource_MergesCrdVersionsByName()
     {
         var merged = ThreeWayMerge.MergeResource(

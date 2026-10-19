@@ -153,7 +153,7 @@ public sealed class KubernetesManifestApplier
             .Select(document => (Document: document, Identity: ManifestIdentity.Parse(document, defaultNamespace)))
             .Where(item => item.Identity is not null)
             .GroupBy(item => item.Identity!)
-            .ToDictionary(group => group.Key, group => group.First().Document);
+            .ToDictionary(group => group.Key, group => group.Last().Document);
 
         try
         {

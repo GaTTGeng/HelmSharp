@@ -359,6 +359,10 @@ internal static class ThreeWayMerge
         string path,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys)
     {
+        // ObjectMeta keeps Kubernetes list-map semantics even when a CRD supplies its own schema paths.
+        if (path == "metadata.ownerReferences")
+            return [["uid"]];
+
         if (customListMapKeys is not null)
         {
             var match = customListMapKeys.FirstOrDefault(entry => SchemaPathMatches(entry.Key, path));
@@ -370,8 +374,8 @@ internal static class ThreeWayMerge
             return [["name"]];
         if (path == "webhooks")
             return [["name"]];
-        if (path == "metadata.ownerReferences")
-            return [["uid"]];
+        if (path == "secrets")
+            return [["name"]];
         if (path == "webhooks[].matchConditions")
             return [["name"]];
         if (path.EndsWith(".volumeMounts", StringComparison.Ordinal))
