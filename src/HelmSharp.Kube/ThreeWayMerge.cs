@@ -14,6 +14,7 @@ internal static class ThreeWayMerge
     /// <param name="newManifest">Desired manifest produced by the new chart render.</param>
     /// <param name="liveManifest">Current live resource as returned by the cluster, or null when it does not exist.</param>
     /// <param name="customListMapKeys">Declared list-map keys for custom resource paths, or null to use built-in Kubernetes defaults.</param>
+    /// <param name="preserveRootStatus">Whether root status is managed through a Kubernetes status subresource.</param>
     /// <returns>
     /// The desired manifest when there is no live resource; otherwise the merged manifest that
     /// keeps user-side drift which does not conflict with chart changes.
@@ -22,7 +23,8 @@ internal static class ThreeWayMerge
         string lastManifest,
         string newManifest,
         string? liveManifest,
-        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys = null)
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys = null,
+        bool preserveRootStatus = true)
     {
         var lastDoc = HelmYaml.DeserializeDictionary(lastManifest, StringComparer.Ordinal);
         var newDoc = HelmYaml.DeserializeDictionary(newManifest, StringComparer.Ordinal);
@@ -37,7 +39,7 @@ internal static class ThreeWayMerge
         var merged = DeepCopyDict(newDoc);
 
         // Deep merge at every level
-        DeepThreeWayMerge(lastDoc, newDoc, liveDoc, merged, isRoot: true, isMetadata: false, path: "", customListMapKeys: customListMapKeys);
+        DeepThreeWayMerge(lastDoc, newDoc, liveDoc, merged, isRoot: true, isMetadata: false, path: "", customListMapKeys: customListMapKeys, preserveRootStatus: preserveRootStatus);
 
         return HelmYaml.Serialize(merged);
     }
@@ -53,7 +55,8 @@ internal static class ThreeWayMerge
         bool isRoot,
         bool isMetadata,
         string path,
-        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys)
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys,
+        bool preserveRootStatus)
     {
         // Collect all keys from all three sources
         var allKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -65,7 +68,7 @@ internal static class ThreeWayMerge
         {
             // Status is cluster-owned at the resource root; identity bookkeeping is cluster-owned
             // only beneath metadata. Nested user fields with the same names remain chart data.
-            if (isRoot && key == "status")
+            if (isRoot && key == "status" && preserveRootStatus)
             {
                 // A chart cannot own status, but replacing a CRD without a status subresource
                 // can persist it. Keep the controller's value when the chart omits status.
@@ -136,7 +139,8 @@ internal static class ThreeWayMerge
                     isRoot: false,
                     isMetadata: isRoot && key == "metadata",
                     path: AppendPath(path, key),
-                    customListMapKeys: customListMapKeys);
+                    customListMapKeys: customListMapKeys,
+                    preserveRootStatus: preserveRootStatus);
                 continue;
             }
 
@@ -285,7 +289,8 @@ internal static class ThreeWayMerge
                     isRoot: false,
                     isMetadata: false,
                     path: path + "[]",
-                    customListMapKeys: customListMapKeys);
+                    customListMapKeys: customListMapKeys,
+                    preserveRootStatus: true);
             merged.Add(mergedItem);
         }
 
@@ -392,6 +397,8 @@ internal static class ThreeWayMerge
             return [["ip"]];
         if (path.EndsWith(".topologySpreadConstraints", StringComparison.Ordinal))
             return [["topologyKey", "whenUnsatisfiable"]];
+        if (path.EndsWith(".readinessGates", StringComparison.Ordinal))
+            return [["conditionType"]];
         if (path.EndsWith(".containers", StringComparison.Ordinal) ||
             path.EndsWith(".initContainers", StringComparison.Ordinal) ||
             path.EndsWith(".ephemeralContainers", StringComparison.Ordinal) ||

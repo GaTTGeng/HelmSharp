@@ -13,7 +13,7 @@ internal static class KubernetesManifestSchemaConverter
                 when identity.ApiVersion is "extensions/v1beta1" or "apps/v1beta1" or "apps/v1beta2" => "apps/v1",
             "Ingress" when identity.ApiVersion is "extensions/v1beta1" or "networking.k8s.io/v1beta1" => "networking.k8s.io/v1",
             "NetworkPolicy" when identity.ApiVersion == "extensions/v1beta1" => "networking.k8s.io/v1",
-            "HorizontalPodAutoscaler" when identity.ApiVersion is "autoscaling/v1" or "autoscaling/v2beta1" or "autoscaling/v2beta2" => "autoscaling/v2",
+            "HorizontalPodAutoscaler" when identity.ApiVersion is "autoscaling/v2beta1" or "autoscaling/v2beta2" => "autoscaling/v2",
             "CronJob" when identity.ApiVersion == "batch/v1beta1" => "batch/v1",
             "PodDisruptionBudget" when identity.ApiVersion == "policy/v1beta1" => "policy/v1",
             "Role" or "RoleBinding" or "ClusterRole" or "ClusterRoleBinding"
@@ -183,10 +183,9 @@ internal static class KubernetesManifestSchemaConverter
                 deprecatedTopology.Remove("topology.kubernetes.io/zone");
             }
 
-            if (topology.TryGetValue("kubernetes.io/hostname", out var hostname) &&
-                endpoint.TryGetValue("nodeName", out var nodeName) &&
-                Equals(hostname, nodeName))
+            if (topology.Remove("kubernetes.io/hostname", out var hostname))
             {
+                endpoint.TryAdd("nodeName", hostname);
                 deprecatedTopology.Remove("kubernetes.io/hostname");
             }
 

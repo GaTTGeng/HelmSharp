@@ -181,6 +181,54 @@ public sealed class ThreeWayMergeReviewTests
     }
 
     [Fact]
+    public void MergeResource_PreservesControllerAddedReadinessGate()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "spec:\n  template:\n    spec:\n      readinessGates:\n      - conditionType: chart.example/Ready\n",
+            "spec:\n  template:\n    spec:\n      readinessGates:\n      - conditionType: chart.example/Ready\n",
+            "spec:\n  template:\n    spec:\n      readinessGates:\n      - conditionType: chart.example/Ready\n      - conditionType: controller.example/Ready\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var template = (IDictionary<string, object?>)spec["template"]!;
+        var podSpec = (IDictionary<string, object?>)template["spec"]!;
+        var gates = (IList<object?>)podSpec["readinessGates"]!;
+
+        Assert.Equal(2, gates.Count);
+        Assert.Equal("controller.example/Ready", ((IDictionary<string, object?>)gates[1]!)["conditionType"]);
+    }
+
+    [Fact]
+    public void MergeResource_PreservesLiveRootStatusWhenChartOmitsStatusSubresourceField()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "status:\n  phase: previous\n",
+            "spec:\n  replicas: 1\n",
+            "status:\n  phase: live\n",
+            preserveRootStatus: true);
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var status = (IDictionary<string, object?>)document["status"]!;
+
+        Assert.Equal("live", status["phase"]);
+    }
+
+    [Fact]
+    public void MergeResource_AllowsChartToUpdateRootStatusWithoutStatusSubresource()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "status:\n  phase: previous\n",
+            "status:\n  phase: chart\n",
+            "status:\n  phase: live\n",
+            preserveRootStatus: false);
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var status = (IDictionary<string, object?>)document["status"]!;
+
+        Assert.Equal("chart", status["phase"]);
+    }
+
+    [Fact]
     public void MergeResource_MergesServiceAccountSecretsByName()
     {
         var merged = ThreeWayMerge.MergeResource(
