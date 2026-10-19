@@ -25,6 +25,9 @@ internal static class KubernetesManifestSchemaConverter
             "RuntimeClass" when identity.ApiVersion == "node.k8s.io/v1beta1" => "node.k8s.io/v1",
             "APIService" when identity.ApiVersion == "apiregistration.k8s.io/v1beta1" => "apiregistration.k8s.io/v1",
             "IngressClass" when identity.ApiVersion == "networking.k8s.io/v1beta1" => "networking.k8s.io/v1",
+            "EndpointSlice" when identity.ApiVersion == "discovery.k8s.io/v1beta1" => "discovery.k8s.io/v1",
+            "MutatingWebhookConfiguration" or "ValidatingWebhookConfiguration"
+                when identity.ApiVersion == "admissionregistration.k8s.io/v1beta1" => "admissionregistration.k8s.io/v1",
             "FlowSchema" or "PriorityLevelConfiguration"
                 when identity.ApiVersion is "flowcontrol.apiserver.k8s.io/v1beta1" or "flowcontrol.apiserver.k8s.io/v1beta2" or "flowcontrol.apiserver.k8s.io/v1beta3" => "flowcontrol.apiserver.k8s.io/v1",
             _ => null
@@ -81,9 +84,15 @@ internal static class KubernetesManifestSchemaConverter
         var flowControlMigration = (identity.Kind is "FlowSchema" or "PriorityLevelConfiguration") &&
                                    (identity.ApiVersion is "flowcontrol.apiserver.k8s.io/v1beta1" or "flowcontrol.apiserver.k8s.io/v1beta2" or "flowcontrol.apiserver.k8s.io/v1beta3") &&
                                    targetApiVersion == "flowcontrol.apiserver.k8s.io/v1";
+        var endpointSliceMigration = identity is { Kind: "EndpointSlice", ApiVersion: "discovery.k8s.io/v1beta1" } &&
+                                     targetApiVersion == "discovery.k8s.io/v1";
+        var webhookConfigurationMigration = identity.ApiVersion == "admissionregistration.k8s.io/v1beta1" &&
+                                            targetApiVersion == "admissionregistration.k8s.io/v1" &&
+                                            identity.Kind is "MutatingWebhookConfiguration" or "ValidatingWebhookConfiguration";
         if (!ingressMigration && !legacyWorkloadMigration && !networkPolicyMigration &&
             !podSecurityPolicyMigration && !legacyIngressBetaMigration && !horizontalPodAutoscalerMigration &&
             !cronJobMigration && !podDisruptionBudgetMigration && !rbacMigration && !storageMigration &&
+            !endpointSliceMigration && !webhookConfigurationMigration &&
             !apiVersionOnlyMigration && !flowControlMigration)
         {
             convertedDocument = document;
@@ -110,6 +119,15 @@ internal static class KubernetesManifestSchemaConverter
             convertedDocument = document;
             return false;
         }
+        else if (endpointSliceMigration)
+        {
+            ConvertEndpointSliceTopology(converted);
+        }
+        else if (webhookConfigurationMigration && !TryConvertWebhookConfiguration(converted))
+        {
+            convertedDocument = document;
+            return false;
+        }
 
         converted["apiVersion"] = targetApiVersion;
         convertedDocument = HelmYaml.Serialize(converted);
@@ -128,13 +146,74 @@ internal static class KubernetesManifestSchemaConverter
         }
 
         if (limited.Remove("assuredConcurrencyShares", out var assuredConcurrencyShares))
-            return limited.TryAdd("nominalConcurrencyShares", assuredConcurrencyShares);
+        {
+            if (!limited.TryAdd("nominalConcurrencyShares", assuredConcurrencyShares))
+                return false;
+
+            // The beta APIs defaulted an omitted or zero assured share count to 30.
+            if (assuredConcurrencyShares is int or long && Convert.ToInt64(assuredConcurrencyShares) == 0)
+                limited["nominalConcurrencyShares"] = 30;
+            return true;
+        }
 
         if (HelmYaml.GetString(document, "apiVersion") == "flowcontrol.apiserver.k8s.io/v1beta3" &&
             limited.TryGetValue("nominalConcurrencyShares", out var nominalConcurrencyShares) &&
             nominalConcurrencyShares is int or long && Convert.ToInt64(nominalConcurrencyShares) == 0)
         {
             limited["nominalConcurrencyShares"] = 30;
+        }
+
+        return true;
+    }
+
+    private static void ConvertEndpointSliceTopology(Dictionary<string, object?> document)
+    {
+        if (!document.TryGetValue("endpoints", out var endpointsValue) || endpointsValue is not List<object?> endpoints)
+            return;
+
+        foreach (var endpoint in endpoints.OfType<Dictionary<string, object?>>())
+        {
+            if (!endpoint.TryGetValue("topology", out var topologyValue) || topologyValue is not Dictionary<string, object?> topology)
+                continue;
+
+            var deprecatedTopology = new Dictionary<string, object?>(topology, StringComparer.Ordinal);
+            if (topology.Remove("topology.kubernetes.io/zone", out var zone))
+            {
+                endpoint["zone"] = zone;
+                deprecatedTopology.Remove("topology.kubernetes.io/zone");
+            }
+
+            if (topology.TryGetValue("kubernetes.io/hostname", out var hostname) &&
+                endpoint.TryGetValue("nodeName", out var nodeName) &&
+                Equals(hostname, nodeName))
+            {
+                deprecatedTopology.Remove("kubernetes.io/hostname");
+            }
+
+            if (deprecatedTopology.Count == 0)
+                endpoint.Remove("deprecatedTopology");
+            else
+                endpoint["deprecatedTopology"] = deprecatedTopology;
+            endpoint.Remove("topology");
+        }
+    }
+
+    private static bool TryConvertWebhookConfiguration(Dictionary<string, object?> document)
+    {
+        if (!document.TryGetValue("webhooks", out var webhooksValue) || webhooksValue is not List<object?> webhooks)
+            return true;
+
+        foreach (var webhook in webhooks.OfType<Dictionary<string, object?>>())
+        {
+            webhook.TryAdd("failurePolicy", "Ignore");
+            webhook.TryAdd("matchPolicy", "Exact");
+            webhook.TryAdd("timeoutSeconds", 30);
+            webhook.TryAdd("admissionReviewVersions", new List<object?> { "v1beta1" });
+
+            // v1 rejects beta side-effect values that it cannot represent without changing behavior.
+            if (!webhook.TryGetValue("sideEffects", out var sideEffects) ||
+                sideEffects is not string value || value is not ("None" or "NoneOnDryRun"))
+                return false;
         }
 
         return true;

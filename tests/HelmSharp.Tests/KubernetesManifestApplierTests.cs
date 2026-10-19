@@ -61,6 +61,114 @@ public sealed class KubernetesManifestApplierTests
         Assert.DoesNotContain("assuredConcurrencyShares", converted, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("flowcontrol.apiserver.k8s.io/v1beta1")]
+    [InlineData("flowcontrol.apiserver.k8s.io/v1beta2")]
+    public void SchemaConverter_ConvertsBetaDefaultedZeroConcurrencyShares(string apiVersion)
+    {
+        var manifest = $$"""
+            apiVersion: {{apiVersion}}
+            kind: PriorityLevelConfiguration
+            metadata:
+              name: limited
+            spec:
+              type: Limited
+              limited:
+                assuredConcurrencyShares: 0
+            """;
+        var identity = new ManifestIdentity(apiVersion, "PriorityLevelConfiguration", "limited", "ignored");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            manifest, identity, "flowcontrol.apiserver.k8s.io/v1", out var converted));
+
+        Assert.Contains("nominalConcurrencyShares: 30", converted, StringComparison.Ordinal);
+        Assert.DoesNotContain("assuredConcurrencyShares", converted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SchemaConverter_MovesEndpointSliceBetaTopologyToV1Fields()
+    {
+        const string manifest = """
+            apiVersion: discovery.k8s.io/v1beta1
+            kind: EndpointSlice
+            metadata:
+              name: endpoints
+            endpoints:
+              - addresses: [10.0.0.1]
+                nodeName: node-a
+                topology:
+                  kubernetes.io/hostname: node-a
+                  topology.kubernetes.io/zone: zone-a
+                  example.com/rack: rack-a
+            """;
+        var identity = new ManifestIdentity("discovery.k8s.io/v1beta1", "EndpointSlice", "endpoints", "ignored");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            manifest, identity, "discovery.k8s.io/v1", out var converted));
+        var document = HelmYaml.DeserializeDictionary(converted, StringComparer.Ordinal);
+        var endpoint = (IDictionary<string, object?>)((IList<object?>)document["endpoints"]!)[0]!;
+        var deprecatedTopology = (IDictionary<string, object?>)endpoint["deprecatedTopology"]!;
+
+        Assert.Equal("zone-a", endpoint["zone"]);
+        Assert.Equal("rack-a", deprecatedTopology["example.com/rack"]);
+        Assert.DoesNotContain("topology.kubernetes.io/zone", deprecatedTopology.Keys);
+        Assert.DoesNotContain("kubernetes.io/hostname", deprecatedTopology.Keys);
+        Assert.Equal("discovery.k8s.io/v1", document["apiVersion"]);
+    }
+
+    [Theory]
+    [InlineData("MutatingWebhookConfiguration")]
+    [InlineData("ValidatingWebhookConfiguration")]
+    public void SchemaConverter_ConvertsBetaWebhookDefaults(string kind)
+    {
+        var manifest = $$"""
+            apiVersion: admissionregistration.k8s.io/v1beta1
+            kind: {{kind}}
+            metadata:
+              name: sample
+            webhooks:
+              - name: hook.example.com
+                sideEffects: None
+                clientConfig:
+                  service:
+                    name: hook
+                    namespace: default
+                rules: []
+            """;
+        var identity = new ManifestIdentity("admissionregistration.k8s.io/v1beta1", kind, "sample", "ignored");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            manifest, identity, "admissionregistration.k8s.io/v1", out var converted));
+        var document = HelmYaml.DeserializeDictionary(converted, StringComparer.Ordinal);
+        var webhook = (IDictionary<string, object?>)((IList<object?>)document["webhooks"]!)[0]!;
+
+        Assert.Equal("Ignore", webhook["failurePolicy"]);
+        Assert.Equal("Exact", webhook["matchPolicy"]);
+        Assert.Equal(30L, Convert.ToInt64(webhook["timeoutSeconds"]));
+        Assert.Equal(["v1beta1"], (IList<object?>)webhook["admissionReviewVersions"]!);
+        Assert.Equal("None", webhook["sideEffects"]);
+    }
+
+    [Fact]
+    public void SchemaConverter_RejectsWebhookSideEffectsThatV1CannotRepresent()
+    {
+        const string manifest = """
+            apiVersion: admissionregistration.k8s.io/v1beta1
+            kind: MutatingWebhookConfiguration
+            metadata:
+              name: sample
+            webhooks:
+              - name: hook.example.com
+                sideEffects: Some
+            """;
+        var identity = new ManifestIdentity(
+            "admissionregistration.k8s.io/v1beta1", "MutatingWebhookConfiguration", "sample", "ignored");
+
+        Assert.False(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            manifest, identity, "admissionregistration.k8s.io/v1", out var converted));
+        Assert.Equal(manifest, converted);
+    }
+
     [Fact]
     public void SchemaConverter_ConvertsBeta3DefaultedZeroConcurrencySharesToEffectiveValue()
     {
