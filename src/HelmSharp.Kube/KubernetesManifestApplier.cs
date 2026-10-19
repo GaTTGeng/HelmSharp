@@ -1681,7 +1681,7 @@ public sealed class KubernetesManifestApplier
             var expectedYaml = MergeWithLiveResource(identity, desiredYaml, before!, customListMapKeys, preserveRootStatus);
             var typedResource = TryGetTypedResourceScope(identity, out _);
             return ContainsExpectedManifest(expectedYaml, after!, typedResource, identity.Kind, preserveRootStatus) &&
-                   RemovedValuesAreAbsent(expectedYaml, before!, after!, typedResource, customListMapKeys, preserveRootStatus);
+                   RemovedValuesAreAbsent(expectedYaml, before!, after!, identity, typedResource, customListMapKeys, preserveRootStatus);
         }
         catch
         {
@@ -1709,6 +1709,7 @@ public sealed class KubernetesManifestApplier
         string expectedYaml,
         T beforeResource,
         T actualResource,
+        ManifestIdentity identity,
         bool allowCaseInsensitiveProperties,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys,
         bool preserveRootStatus)
@@ -1721,6 +1722,7 @@ public sealed class KubernetesManifestApplier
             expected.RootElement,
             before.RootElement,
             actual.RootElement,
+            identity,
             parentName: null,
             allowCaseInsensitiveProperties,
             path: string.Empty,
@@ -1822,6 +1824,7 @@ public sealed class KubernetesManifestApplier
         JsonElement expected,
         JsonElement before,
         JsonElement actual,
+        ManifestIdentity identity,
         string? parentName,
         bool allowCaseInsensitiveProperties,
         string path,
@@ -1838,21 +1841,22 @@ public sealed class KubernetesManifestApplier
 
                 if (!expected.TryGetProperty(beforeProperty.Name, out var expectedValue))
                 {
-                    if (TryGetPropertyExactThenIgnoreCase(actual, beforeProperty.Name, matchModelAliases, out _))
+                    if (TryGetPropertyExactThenIgnoreCase(actual, beforeProperty.Name, matchModelAliases, out var retainedValue) &&
+                        !IsDefaultedField(identity, AppendJsonPath(path, beforeProperty.Name), retainedValue))
                         return false;
                     continue;
                 }
 
                 if (TryGetPropertyExactThenIgnoreCase(actual, beforeProperty.Name, matchModelAliases, out var actualValue) &&
                     beforeProperty.Value.ValueKind == JsonValueKind.Object && expectedValue.ValueKind == JsonValueKind.Object &&
-                    !RemovedValuesAreAbsent(expectedValue, beforeProperty.Value, actualValue, beforeProperty.Name, allowCaseInsensitiveProperties && !IsArbitraryMap(beforeProperty.Name), AppendJsonPath(path, beforeProperty.Name), customListMapKeys, preserveRootStatus))
+                    !RemovedValuesAreAbsent(expectedValue, beforeProperty.Value, actualValue, identity, beforeProperty.Name, allowCaseInsensitiveProperties && !IsArbitraryMap(beforeProperty.Name), AppendJsonPath(path, beforeProperty.Name), customListMapKeys, preserveRootStatus))
                 {
                     return false;
                 }
 
                 if (TryGetPropertyExactThenIgnoreCase(actual, beforeProperty.Name, matchModelAliases, out actualValue) &&
                     beforeProperty.Value.ValueKind == JsonValueKind.Array && expectedValue.ValueKind == JsonValueKind.Array &&
-                    !RemovedArrayValuesAreAbsent(expectedValue, beforeProperty.Value, actualValue, AppendJsonPath(path, beforeProperty.Name), customListMapKeys, preserveRootStatus))
+                    !RemovedArrayValuesAreAbsent(expectedValue, beforeProperty.Value, actualValue, identity, AppendJsonPath(path, beforeProperty.Name), customListMapKeys, preserveRootStatus))
                 {
                     return false;
                 }
@@ -1862,7 +1866,7 @@ public sealed class KubernetesManifestApplier
         }
 
         if (before.ValueKind == JsonValueKind.Array && expected.ValueKind == JsonValueKind.Array)
-            return RemovedArrayValuesAreAbsent(expected, before, actual, path, customListMapKeys, preserveRootStatus);
+            return RemovedArrayValuesAreAbsent(expected, before, actual, identity, path, customListMapKeys, preserveRootStatus);
 
         return true;
     }
@@ -1871,6 +1875,7 @@ public sealed class KubernetesManifestApplier
         JsonElement expected,
         JsonElement before,
         JsonElement actual,
+        ManifestIdentity identity,
         string path,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys,
         bool preserveRootStatus)
@@ -1897,6 +1902,7 @@ public sealed class KubernetesManifestApplier
                             expectedItem,
                             beforeItem,
                             actualItem,
+                            identity,
                             parentName: null,
                             allowCaseInsensitiveProperties: false,
                             path + "[]",
@@ -1913,6 +1919,13 @@ public sealed class KubernetesManifestApplier
         }
 
         return true;
+    }
+
+    private static bool IsDefaultedField(ManifestIdentity identity, string path, JsonElement value)
+    {
+        // The API server restores Deployment replicas to 1 when the field is omitted.
+        return identity.Kind == "Deployment" && path == "spec.replicas" &&
+               value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var replicas) && replicas == 1;
     }
 
     private static string[]? SelectArrayIdentityKeys(
@@ -2023,7 +2036,7 @@ public sealed class KubernetesManifestApplier
     private static bool IsArbitraryMap(string? propertyName)
         => propertyName is "data" or "binaryData" or "stringData" or "labels" or "annotations" or
             "matchLabels" or "selector" or "nodeSelector" or "requests" or "limits" or "capacity" or "allocatable" or
-            "hard" or "used";
+            "hard" or "used" or "parameters";
 
     private static bool IsServerManagedField(string? parentName, string propertyName, bool preserveRootStatus)
         => preserveRootStatus && parentName is null && string.Equals(propertyName, "status", StringComparison.OrdinalIgnoreCase) ||

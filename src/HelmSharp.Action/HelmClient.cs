@@ -570,7 +570,7 @@ public class HelmClient : IHelmClient
             .Select(document => (Document: document, Identity: ManifestIdentity.Parse(document, defaultNamespace)))
             .Where(item => item.Identity is not null)
             .GroupBy(item => ManifestIdentityKey(item.Identity!), StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.First().Document, StringComparer.Ordinal);
+            .ToDictionary(group => group.Key, group => group.Last().Document, StringComparer.Ordinal);
         foreach (var failedRevision in failedRevisions)
         {
             foreach (var document in KubernetesManifestApplier.SplitDocumentsPublic(failedRevision.DeletedManifest ?? string.Empty))
@@ -974,9 +974,10 @@ public class HelmClient : IHelmClient
             {
                 output.Add("Unable to fully clean up resources from the failed installation.");
             }
+            var cleanedManifest = GetSuccessfullyDeletedManifest(mainManifest, cleanedResources, ns);
             failedRecord = failedRecord with
             {
-                AppliedManifest = RemoveCleanedDocuments(failedRecord.AppliedManifest ?? string.Empty, cleanedResources, ns),
+                AppliedManifest = RemoveCleanedDocuments(failedRecord.AppliedManifest ?? string.Empty, cleanedManifest, ns),
                 UpdatedAt = DateTimeOffset.UtcNow
             };
             try
