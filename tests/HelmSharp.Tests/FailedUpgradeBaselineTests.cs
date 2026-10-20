@@ -432,7 +432,7 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
             previousManifest,
             attemptedManifest,
             "test-ns");
-        var baselineManifest = HelmClient.ComposeAtomicRestorationBaseline(restorationManifest, string.Empty, "test-ns");
+        var baselineManifest = HelmClient.ComposeAtomicRestorationBaseline(restorationManifest, string.Empty, string.Empty, "test-ns");
         var restored = HelmYaml.DeserializeDictionary(baselineManifest);
 
         Assert.Equal("networking.k8s.io/v1", HelmYaml.GetString(restored, "apiVersion"));
@@ -449,6 +449,37 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
         var port = Assert.IsType<Dictionary<string, object?>>(service["port"]);
         Assert.Equal(8080L, port["number"]);
         Assert.False(spec.ContainsKey("defaultBackend"));
+    }
+
+    [Fact]
+    public void ComposeAtomicRestorationBaseline_IncludesWritesFromEarlierFailedRevisions()
+    {
+        const string restorationManifest = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: retry-state
+            data:
+              value: deployed
+            """;
+        const string priorAppliedManifest = """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: retry-state
+            data:
+              value: failed
+            """;
+
+        var baselineManifest = HelmClient.ComposeAtomicRestorationBaseline(
+            restorationManifest,
+            priorAppliedManifest,
+            string.Empty,
+            "test-ns");
+        var baseline = HelmYaml.DeserializeDictionary(baselineManifest, StringComparer.Ordinal);
+
+        var data = Assert.IsType<Dictionary<string, object?>>(baseline["data"]);
+        Assert.Equal("failed", data["value"]);
     }
 
     [Fact]

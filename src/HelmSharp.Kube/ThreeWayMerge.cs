@@ -7,6 +7,9 @@ namespace HelmSharp.Kube;
 /// </summary>
 internal static class ThreeWayMerge
 {
+    // Mark schema-declared atomic lists so built-in list-map defaults cannot apply.
+    internal const string AtomicListSentinel = "\0";
+
     /// <summary>
     /// Performs a three-way merge on a single resource and returns the merged YAML to apply.
     /// </summary>
@@ -40,8 +43,31 @@ internal static class ThreeWayMerge
 
         // Deep merge at every level
         DeepThreeWayMerge(lastDoc, newDoc, liveDoc, merged, isRoot: true, isMetadata: false, path: "", customListMapKeys: customListMapKeys, preserveRootStatus: preserveRootStatus);
+        RemoveServiceFieldsDisallowedByType(merged);
 
         return HelmYaml.Serialize(merged);
+    }
+
+    private static void RemoveServiceFieldsDisallowedByType(IDictionary<string, object?> document)
+    {
+        if (!string.Equals(HelmYaml.GetString(document, "kind"), "Service", StringComparison.Ordinal) ||
+            !document.TryGetValue("spec", out var specValue) || specValue is not IDictionary<string, object?> spec)
+            return;
+
+        var serviceType = HelmYaml.GetString(spec, "type") ?? "ClusterIP";
+        if (serviceType == "ExternalName")
+        {
+            spec.Remove("clusterIP");
+            spec.Remove("clusterIPs");
+            spec.Remove("ports");
+        }
+
+        if ((serviceType is "ClusterIP" or "ExternalName") &&
+            spec.TryGetValue("ports", out var portsValue) && portsValue is IList<object?> ports)
+        {
+            foreach (var port in ports.OfType<IDictionary<string, object?>>())
+                port.Remove("nodePort");
+        }
     }
 
     // Recursive three-way merge. Invariant: `merged` starts as a copy of `newVals` and is
@@ -372,7 +398,12 @@ internal static class ThreeWayMerge
         {
             var match = customListMapKeys.FirstOrDefault(entry => SchemaPathMatches(entry.Key, path));
             if (match.Key is not null)
-                return match.Value.Count > 0 ? [match.Value.ToArray()] : [];
+            {
+                if (match.Value is [] or [AtomicListSentinel])
+                    return [];
+
+                return [match.Value.ToArray()];
+            }
         }
 
         // Built-in keys follow Kubernetes list-map paths; other lists, including Ingress rules, are atomic.

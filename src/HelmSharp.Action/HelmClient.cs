@@ -858,8 +858,13 @@ public class HelmClient : IHelmClient
                         previous.Manifest,
                         mainManifest,
                         ns);
-                    var restorationBaseline = MergeAppliedManifests(
+                    var priorEffectiveManifest = ConvertRestorationApiVersions(
+                        ResolvePreviousManifestForUpgrade(history, ns) ?? string.Empty,
+                        mainManifest,
+                        ns);
+                    var restorationBaseline = ComposeAtomicRestorationBaseline(
                         restorationManifest,
+                        priorEffectiveManifest,
                         failedRecord.AppliedManifest ?? string.Empty,
                         ns);
                     try
@@ -1297,9 +1302,13 @@ public class HelmClient : IHelmClient
 
     internal static string ComposeAtomicRestorationBaseline(
         string restorationManifest,
+        string priorEffectiveManifest,
         string appliedManifest,
         string defaultNamespace)
-        => MergeAppliedManifests(restorationManifest, appliedManifest, defaultNamespace);
+        => MergeAppliedManifests(
+            string.IsNullOrWhiteSpace(priorEffectiveManifest) ? restorationManifest : priorEffectiveManifest,
+            appliedManifest,
+            defaultNamespace);
 
     // Type + name without namespace — used to find candidates before scope disambiguation.
     private static string ManifestResourceKey(ManifestIdentity identity)
