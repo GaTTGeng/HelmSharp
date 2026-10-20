@@ -1142,14 +1142,18 @@ public sealed class KubernetesManifestApplier
         IDictionary<string, IReadOnlyList<string>> result)
     {
         if (schema.TryGetProperty("x-kubernetes-list-type", out var listType) &&
-            listType.ValueKind == JsonValueKind.String &&
-            listType.GetString() is "map" or "set")
+            listType.ValueKind == JsonValueKind.String)
         {
-            if (listType.GetString() == "set")
+            if (listType.GetString() == "atomic")
+            {
+                result[path] = [ThreeWayMerge.AtomicListSentinel];
+            }
+            else if (listType.GetString() == "set")
             {
                 result[path] = Array.Empty<string>();
             }
-            else if (schema.TryGetProperty("x-kubernetes-list-map-keys", out var mapKeys) &&
+            else if (listType.GetString() == "map" &&
+                     schema.TryGetProperty("x-kubernetes-list-map-keys", out var mapKeys) &&
                      mapKeys.ValueKind == JsonValueKind.Array)
             {
                 var keys = mapKeys.EnumerateArray()

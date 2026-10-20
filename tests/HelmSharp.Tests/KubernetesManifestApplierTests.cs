@@ -39,6 +39,30 @@ public sealed class KubernetesManifestApplierTests
         Assert.Contains("marker: retained", converted, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void SchemaConverter_DefaultsLegacyDaemonSetStrategyToOnDelete()
+    {
+        const string source = """
+            apiVersion: extensions/v1beta1
+            kind: DaemonSet
+            metadata:
+              name: agent
+            spec:
+              selector:
+                matchLabels:
+                  app: agent
+            """;
+        var identity = new ManifestIdentity("extensions/v1beta1", "DaemonSet", "agent", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            source, identity, "apps/v1", out var converted));
+
+        var document = HelmYaml.DeserializeDictionary(converted, StringComparer.Ordinal);
+        var spec = Assert.IsType<Dictionary<string, object?>>(document["spec"]);
+        var strategy = Assert.IsType<Dictionary<string, object?>>(spec["updateStrategy"]);
+        Assert.Equal("OnDelete", strategy["type"]);
+    }
+
     [Theory]
     [InlineData("flowcontrol.apiserver.k8s.io/v1beta1")]
     [InlineData("flowcontrol.apiserver.k8s.io/v1beta2")]
@@ -2260,6 +2284,11 @@ public sealed class KubernetesManifestApplierTests
                         "type": "object",
                         "properties": { "spec": { "type": "object", "properties": {
                           "config": { "type": "object" },
+                          "containers": {
+                            "type": "array",
+                            "x-kubernetes-list-type": "atomic",
+                            "items": { "type": "object", "properties": { "name": { "type": "string" }, "value": { "type": "string" } } }
+                          },
                           "entries": {
                             "type": "array",
                             "x-kubernetes-list-type": "map",
@@ -2291,6 +2320,7 @@ public sealed class KubernetesManifestApplierTests
                   "status": { "phase": "previous" },
                   "spec": {
                     "config": { "FOO": "chart", "foo": "operator" },
+                    "containers": [{ "name": "chart", "value": "before" }, { "name": "injected", "value": "retained" }],
                     "entries": [{ "name": "chart", "value": "before" }, { "name": "operator", "value": "retained" }],
                     "groups": { "one": { "entries": [{ "name": "chart", "value": "before" }, { "name": "operator", "value": "retained" }] } }
                   }
@@ -2306,6 +2336,9 @@ public sealed class KubernetesManifestApplierTests
             spec:
               config:
                 FOO: chart
+              containers:
+                - name: chart
+                  value: before
               entries:
                 - name: chart
                   value: before
@@ -2325,6 +2358,9 @@ public sealed class KubernetesManifestApplierTests
             spec:
               config:
                 FOO: chart
+              containers:
+                - name: chart
+                  value: after
               entries:
                 - name: chart
                   value: after
@@ -2346,6 +2382,9 @@ public sealed class KubernetesManifestApplierTests
         Assert.True(json.RootElement.TryGetProperty("status", out var status), replace.Content);
         Assert.Equal("chart", status.GetProperty("phase").GetString());
         Assert.Equal("operator", config.GetProperty("foo").GetString());
+        var containers = json.RootElement.GetProperty("spec").GetProperty("containers");
+        Assert.Single(containers.EnumerateArray());
+        Assert.Equal("after", containers[0].GetProperty("value").GetString());
         var entries = json.RootElement.GetProperty("spec").GetProperty("entries");
         Assert.Equal(2, entries.GetArrayLength());
         Assert.Equal("after", entries[0].GetProperty("value").GetString());

@@ -101,7 +101,11 @@ internal static class KubernetesManifestSchemaConverter
         if (ingressMigration)
             ConvertLegacyIngressSpec(converted);
         else if (legacyWorkloadMigration)
+        {
             ConvertLegacyWorkloadSelector(converted);
+            if (identity.Kind == "DaemonSet")
+                ConvertLegacyDaemonSetStrategy(converted);
+        }
         else if (horizontalPodAutoscalerMigration &&
                  !TryConvertHorizontalPodAutoscalerSpec(converted, identity.ApiVersion, targetApiVersion))
         {
@@ -443,6 +447,21 @@ internal static class KubernetesManifestSchemaConverter
         {
             ["matchLabels"] = labels
         };
+    }
+
+    private static void ConvertLegacyDaemonSetStrategy(Dictionary<string, object?> document)
+    {
+        if (!document.TryGetValue("spec", out var specValue) || specValue is not Dictionary<string, object?> spec)
+            return;
+
+        if (!spec.TryGetValue("updateStrategy", out var strategyValue) || strategyValue is not Dictionary<string, object?> strategy)
+        {
+            strategy = new Dictionary<string, object?>(StringComparer.Ordinal);
+            spec["updateStrategy"] = strategy;
+        }
+
+        // Legacy DaemonSet APIs defaulted an omitted strategy to OnDelete; apps/v1 defaults to RollingUpdate.
+        strategy.TryAdd("type", "OnDelete");
     }
 
     private static void ConvertLegacyIngressSpec(Dictionary<string, object?> document)

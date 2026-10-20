@@ -7,6 +7,59 @@ namespace HelmSharp.Tests;
 public sealed class ThreeWayMergeReviewTests
 {
     [Fact]
+    public void MergeResource_DropsAllocatedServiceFieldsWhenChangingToClusterIP()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: v1\nkind: Service\nspec:\n  type: NodePort\n  ports:\n  - port: 80\n    targetPort: 8080\n    nodePort: 30080\n",
+            "apiVersion: v1\nkind: Service\nspec:\n  type: ClusterIP\n  ports:\n  - port: 80\n    targetPort: 8080\n",
+            "apiVersion: v1\nkind: Service\nspec:\n  type: NodePort\n  clusterIP: 10.0.0.20\n  clusterIPs:\n  - 10.0.0.20\n  ports:\n  - port: 80\n    targetPort: 8080\n    nodePort: 30080\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var port = (IDictionary<string, object?>)((IList<object?>)spec["ports"]!)[0]!;
+
+        Assert.Equal("ClusterIP", spec["type"]);
+        Assert.False(port.ContainsKey("nodePort"));
+    }
+
+    [Fact]
+    public void MergeResource_DropsClusterIpAndPortsWhenChangingToExternalName()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: v1\nkind: Service\nspec:\n  type: NodePort\n  ports:\n  - port: 80\n    nodePort: 30080\n",
+            "apiVersion: v1\nkind: Service\nspec:\n  type: ExternalName\n  externalName: example.test\n",
+            "apiVersion: v1\nkind: Service\nspec:\n  type: NodePort\n  clusterIP: 10.0.0.20\n  clusterIPs:\n  - 10.0.0.20\n  ports:\n  - port: 80\n    nodePort: 30080\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+
+        Assert.Equal("example.test", spec["externalName"]);
+        Assert.False(spec.ContainsKey("clusterIP"));
+        Assert.False(spec.ContainsKey("clusterIPs"));
+        Assert.False(spec.ContainsKey("ports"));
+    }
+
+    [Fact]
+    public void MergeResource_ReplacesAtomicCustomListInsteadOfUsingBuiltInMapKeys()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  containers:\n  - name: chart\n    value: before\n",
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  containers:\n  - name: chart\n    value: after\n",
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  containers:\n  - name: chart\n    value: before\n  - name: injected\n    value: retained\n",
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+            {
+                ["spec.containers"] = [ThreeWayMerge.AtomicListSentinel]
+            });
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var containers = (IList<object?>)spec["containers"]!;
+
+        Assert.Single(containers);
+        Assert.Equal("after", ((IDictionary<string, object?>)containers[0]!)["value"]);
+    }
+
+    [Fact]
     public void MergeResource_PreservesPositionOfLiveOnlyInitContainer()
     {
         var merged = ThreeWayMerge.MergeResource(
