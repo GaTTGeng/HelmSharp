@@ -63,6 +63,84 @@ public sealed class KubernetesManifestApplierTests
         Assert.Equal("OnDelete", strategy["type"]);
     }
 
+    [Fact]
+    public void SchemaConverter_DefaultsLegacyStatefulSetStrategyToOnDelete()
+    {
+        const string source = """
+            apiVersion: apps/v1beta1
+            kind: StatefulSet
+            metadata:
+              name: database
+            spec:
+              selector:
+                matchLabels:
+                  app: database
+            """;
+        var identity = new ManifestIdentity("apps/v1beta1", "StatefulSet", "database", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            source, identity, "apps/v1", out var converted));
+
+        var document = HelmYaml.DeserializeDictionary(converted, StringComparer.Ordinal);
+        var spec = Assert.IsType<Dictionary<string, object?>>(document["spec"]);
+        var strategy = Assert.IsType<Dictionary<string, object?>>(spec["updateStrategy"]);
+        Assert.Equal("OnDelete", strategy["type"]);
+    }
+
+    [Fact]
+    public void SchemaConverter_MaterializesLegacyExtensionsDeploymentRollingUpdateDefaults()
+    {
+        const string source = """
+            apiVersion: extensions/v1beta1
+            kind: Deployment
+            metadata:
+              name: portal
+            spec:
+              selector:
+                matchLabels:
+                  app: portal
+            """;
+        var identity = new ManifestIdentity("extensions/v1beta1", "Deployment", "portal", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            source, identity, "apps/v1", out var converted));
+
+        var document = HelmYaml.DeserializeDictionary(converted, StringComparer.Ordinal);
+        var spec = Assert.IsType<Dictionary<string, object?>>(document["spec"]);
+        var strategy = Assert.IsType<Dictionary<string, object?>>(spec["strategy"]);
+        var rollingUpdate = Assert.IsType<Dictionary<string, object?>>(strategy["rollingUpdate"]);
+        Assert.Equal(1L, Convert.ToInt64(rollingUpdate["maxSurge"]));
+        Assert.Equal(1L, Convert.ToInt64(rollingUpdate["maxUnavailable"]));
+    }
+
+    [Fact]
+    public void SchemaConverter_MaterializesBetaCsiDriverStorageCapacityDefault()
+    {
+        const string source = """
+            apiVersion: storage.k8s.io/v1beta1
+            kind: CSIDriver
+            metadata:
+              name: csi.example
+            spec: {}
+            """;
+        var identity = new ManifestIdentity("storage.k8s.io/v1beta1", "CSIDriver", "csi.example", string.Empty);
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            source, identity, "storage.k8s.io/v1", out var converted));
+
+        var document = HelmYaml.DeserializeDictionary(converted, StringComparer.Ordinal);
+        var spec = Assert.IsType<Dictionary<string, object?>>(document["spec"]);
+        Assert.Equal(false, spec["storageCapacity"]);
+    }
+
+    [Fact]
+    public void SchemaConverter_DoesNotForceCsiStorageCapacityToUnservedV1WithoutAttemptedTarget()
+    {
+        var identity = new ManifestIdentity("storage.k8s.io/v1beta1", "CSIStorageCapacity", "capacity", "release-ns");
+
+        Assert.Null(KubernetesManifestSchemaConverter.GetCanonicalApiVersion(identity));
+    }
+
     [Theory]
     [InlineData("flowcontrol.apiserver.k8s.io/v1beta1")]
     [InlineData("flowcontrol.apiserver.k8s.io/v1beta2")]
@@ -2677,6 +2755,41 @@ public sealed class KubernetesManifestApplierTests
 
         var replace = Assert.Single(handler.Requests, request => request.Method == HttpMethod.Put);
         Assert.DoesNotContain("healthCheckNodePort", replace.Content, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_DoesNotRestoreClusterIpsForExternalNameService()
+    {
+        const string path = "/api/v1/namespaces/release-ns/services/api";
+        const string previousManifest = "apiVersion: v1\nkind: Service\nmetadata:\n  name: api\nspec:\n  type: ClusterIP\n  ports:\n  - port: 80\n";
+        const string upgradedManifest = "apiVersion: v1\nkind: Service\nmetadata:\n  name: api\nspec:\n  type: ExternalName\n  externalName: api.example.test\n";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "v1",
+                  "kind": "Service",
+                  "metadata": { "name": "api", "namespace": "release-ns", "resourceVersion": "42" },
+                  "spec": {
+                    "type": "ClusterIP",
+                    "clusterIP": "10.0.0.10",
+                    "clusterIPs": ["10.0.0.10"],
+                    "ipFamilyPolicy": "SingleStack",
+                    "ports": [{ "port": 80 }]
+                  }
+                }
+                """)
+            .Respond(HttpMethod.Put, path, HttpStatusCode.OK);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await AsyncEnumerableTestExtensions.DrainAsync(applier.ApplyUpgradeAsync(
+            upgradedManifest, previousManifest, "release-ns"));
+
+        var replace = Assert.Single(handler.Requests, request => request.Method == HttpMethod.Put);
+        Assert.Contains("\"type\":\"ExternalName\"", replace.Content);
+        Assert.DoesNotContain("clusterIP", replace.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("clusterIPs", replace.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("ipFamilyPolicy", replace.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("\"ports\"", replace.Content, StringComparison.OrdinalIgnoreCase);
     }
 
     [Theory]

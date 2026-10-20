@@ -18,7 +18,7 @@ internal static class KubernetesManifestSchemaConverter
             "PodDisruptionBudget" when identity.ApiVersion == "policy/v1beta1" => "policy/v1",
             "Role" or "RoleBinding" or "ClusterRole" or "ClusterRoleBinding"
                 when identity.ApiVersion == "rbac.authorization.k8s.io/v1beta1" => "rbac.authorization.k8s.io/v1",
-            "StorageClass" or "CSIDriver" or "CSINode" or "VolumeAttachment" or "CSIStorageCapacity"
+            "StorageClass" or "CSIDriver" or "CSINode" or "VolumeAttachment"
                 when identity.ApiVersion == "storage.k8s.io/v1beta1" => "storage.k8s.io/v1",
             "PriorityClass" when identity.ApiVersion == "scheduling.k8s.io/v1beta1" => "scheduling.k8s.io/v1",
             "Lease" when identity.ApiVersion == "coordination.k8s.io/v1beta1" => "coordination.k8s.io/v1",
@@ -103,8 +103,10 @@ internal static class KubernetesManifestSchemaConverter
         else if (legacyWorkloadMigration)
         {
             ConvertLegacyWorkloadSelector(converted);
-            if (identity.Kind == "DaemonSet")
-                ConvertLegacyDaemonSetStrategy(converted);
+            if (identity.Kind is "DaemonSet" or "StatefulSet")
+                ConvertLegacyOnDeleteStrategy(converted);
+            if (identity is { Kind: "Deployment", ApiVersion: "extensions/v1beta1" })
+                ConvertLegacyDeploymentRollingUpdateDefaults(converted);
         }
         else if (horizontalPodAutoscalerMigration &&
                  !TryConvertHorizontalPodAutoscalerSpec(converted, identity.ApiVersion, targetApiVersion))
@@ -130,6 +132,9 @@ internal static class KubernetesManifestSchemaConverter
             convertedDocument = document;
             return false;
         }
+
+        if (storageMigration && identity.Kind == "CSIDriver")
+            ConvertLegacyCsiDriverStorageCapacity(converted);
 
         converted["apiVersion"] = targetApiVersion;
         convertedDocument = HelmYaml.Serialize(converted);
@@ -449,7 +454,7 @@ internal static class KubernetesManifestSchemaConverter
         };
     }
 
-    private static void ConvertLegacyDaemonSetStrategy(Dictionary<string, object?> document)
+    private static void ConvertLegacyOnDeleteStrategy(Dictionary<string, object?> document)
     {
         if (!document.TryGetValue("spec", out var specValue) || specValue is not Dictionary<string, object?> spec)
             return;
@@ -460,8 +465,45 @@ internal static class KubernetesManifestSchemaConverter
             spec["updateStrategy"] = strategy;
         }
 
-        // Legacy DaemonSet APIs defaulted an omitted strategy to OnDelete; apps/v1 defaults to RollingUpdate.
+        // Legacy DaemonSet and StatefulSet APIs defaulted to OnDelete; apps/v1 defaults to RollingUpdate.
         strategy.TryAdd("type", "OnDelete");
+    }
+
+    private static void ConvertLegacyDeploymentRollingUpdateDefaults(Dictionary<string, object?> document)
+    {
+        if (!document.TryGetValue("spec", out var specValue) || specValue is not Dictionary<string, object?> spec)
+            return;
+
+        if (!spec.TryGetValue("strategy", out var strategyValue) || strategyValue is not Dictionary<string, object?> strategy)
+        {
+            strategy = new Dictionary<string, object?>(StringComparer.Ordinal);
+            spec["strategy"] = strategy;
+        }
+
+        if (strategy.TryGetValue("type", out var typeValue) &&
+            !string.Equals(typeValue?.ToString(), "RollingUpdate", StringComparison.Ordinal))
+            return;
+
+        if (!strategy.TryGetValue("rollingUpdate", out var rollingUpdateValue) ||
+            rollingUpdateValue is not Dictionary<string, object?> rollingUpdate)
+        {
+            rollingUpdate = new Dictionary<string, object?>(StringComparer.Ordinal);
+            strategy["rollingUpdate"] = rollingUpdate;
+        }
+
+        // extensions/v1beta1 defaulted both values to 1; apps/v1 defaults them to 25%.
+        rollingUpdate.TryAdd("maxSurge", 1);
+        rollingUpdate.TryAdd("maxUnavailable", 1);
+    }
+
+    private static void ConvertLegacyCsiDriverStorageCapacity(Dictionary<string, object?> document)
+    {
+        if (document.TryGetValue("spec", out var specValue) && specValue is Dictionary<string, object?> spec)
+        {
+            // storage.k8s.io/v1beta1 defaulted this field to false; materialize it
+            // so the v1 default cannot turn an omitted chart value into true.
+            spec.TryAdd("storageCapacity", false);
+        }
     }
 
     private static void ConvertLegacyIngressSpec(Dictionary<string, object?> document)
