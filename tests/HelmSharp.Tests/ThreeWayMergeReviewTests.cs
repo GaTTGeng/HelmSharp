@@ -40,6 +40,34 @@ public sealed class ThreeWayMergeReviewTests
     }
 
     [Fact]
+    public void MergeResource_ReplacesAtomicCustomMapAsOneField()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "spec:\n  config:\n    chart: before\n",
+            "spec:\n  config:\n    chart: after\n",
+            "spec:\n  config:\n    chart: before\n    injected: retained\n",
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+            {
+                ["spec.config"] = [ThreeWayMerge.AtomicListSentinel]
+            });
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var config = (IDictionary<string, object?>)spec["config"]!;
+
+        Assert.Equal("after", config["chart"]);
+        Assert.False(config.ContainsKey("injected"));
+    }
+
+    [Fact]
+    public void GetListMapKeySets_UsesAtomicDefaultsWhenCustomSchemaHasNoPath()
+    {
+        Assert.Empty(ThreeWayMerge.GetListMapKeySets(
+            "spec.containers",
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)));
+    }
+
+    [Fact]
     public void MergeResource_ReplacesAtomicCustomListInsteadOfUsingBuiltInMapKeys()
     {
         var merged = ThreeWayMerge.MergeResource(

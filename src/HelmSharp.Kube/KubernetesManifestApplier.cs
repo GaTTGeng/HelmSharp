@@ -391,9 +391,12 @@ public sealed class KubernetesManifestApplier
                         // ClusterIP(s) and IpFamilyPolicy are allocated/immutable after
                         // creation; healthCheckNodePort is server-allocated for
                         // LoadBalancer+Local services. All must survive the replace.
-                        item.Spec.ClusterIP = existing.Spec.ClusterIP;
-                        item.Spec.ClusterIPs = existing.Spec.ClusterIPs;
-                        item.Spec.IpFamilyPolicy ??= existing.Spec.IpFamilyPolicy;
+                        if (item.Spec.Type != "ExternalName")
+                        {
+                            item.Spec.ClusterIP = existing.Spec.ClusterIP;
+                            item.Spec.ClusterIPs = existing.Spec.ClusterIPs;
+                            item.Spec.IpFamilyPolicy ??= existing.Spec.IpFamilyPolicy;
+                        }
                         if (item.Spec.HealthCheckNodePort is null && SupportsHealthCheckNodePort(item.Spec))
                             item.Spec.HealthCheckNodePort = existing.Spec.HealthCheckNodePort;
                         return _client.CoreV1.ReplaceNamespacedServiceAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -1141,6 +1144,10 @@ public sealed class KubernetesManifestApplier
         string path,
         IDictionary<string, IReadOnlyList<string>> result)
     {
+        if (schema.TryGetProperty("x-kubernetes-map-type", out var mapType) &&
+            mapType.ValueKind == JsonValueKind.String && mapType.GetString() == "atomic")
+            result[path] = [ThreeWayMerge.AtomicListSentinel];
+
         if (schema.TryGetProperty("x-kubernetes-list-type", out var listType) &&
             listType.ValueKind == JsonValueKind.String)
         {

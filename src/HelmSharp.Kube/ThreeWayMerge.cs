@@ -59,6 +59,8 @@ internal static class ThreeWayMerge
         {
             spec.Remove("clusterIP");
             spec.Remove("clusterIPs");
+            spec.Remove("ipFamilies");
+            spec.Remove("ipFamilyPolicy");
             spec.Remove("ports");
         }
 
@@ -117,6 +119,18 @@ internal static class ThreeWayMerge
             var hasLast = last.TryGetValue(key, out var lastVal);
             var hasNew = newVals.TryGetValue(key, out var newVal);
             var hasLive = live.TryGetValue(key, out var liveVal);
+            var childPath = AppendPath(path, key);
+
+            if (hasLast && hasLive && IsAtomicCustomMap(childPath, customListMapKeys))
+            {
+                // CRD atomic maps are a single owned field: preserve live drift only
+                // while the chart leaves the complete map unchanged.
+                if (hasNew && DeepEquals(lastVal, newVal))
+                    merged[key] = DeepCopyValue(liveVal);
+                else if (!hasNew)
+                    merged.Remove(key);
+                continue;
+            }
 
             // An omitted map/set list is an empty desired list: reconcile ownership per item
             // so admission- or controller-added entries survive chart removal.
@@ -404,6 +418,10 @@ internal static class ThreeWayMerge
 
                 return [match.Value.ToArray()];
             }
+
+            // CRD arrays default to atomic when their schema is unavailable or
+            // does not declare list topology; built-in name heuristics do not apply.
+            return [];
         }
 
         // Built-in keys follow Kubernetes list-map paths; other lists, including Ingress rules, are atomic.
@@ -445,6 +463,13 @@ internal static class ThreeWayMerge
 
         return [];
     }
+
+    private static bool IsAtomicCustomMap(
+        string path,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys)
+        => customListMapKeys is not null &&
+           customListMapKeys.Any(entry =>
+               entry.Value is [AtomicListSentinel] && SchemaPathMatches(entry.Key, path));
 
     private static bool SchemaPathMatches(string schemaPath, string resourcePath)
     {

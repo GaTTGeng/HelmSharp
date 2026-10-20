@@ -459,13 +459,13 @@ public sealed class ThreeWayMergeTests
     }
 
     [Fact]
-    public void MergeResource_UsesBuiltInKeysWhenDiscoveredSchemaDoesNotDescribeList()
+    public void MergeResource_UsesBuiltInKeysWhenNoCustomSchemaIsProvided()
     {
         var merged = ThreeWayMerge.MergeResource(
             "spec:\n  matchConditions:\n  - name: chart\n    expression: before\n",
             "spec:\n  matchConditions:\n  - name: chart\n    expression: after\n",
             "spec:\n  matchConditions:\n  - name: chart\n    expression: before\n  - name: operator\n    expression: retained\n",
-            new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal));
+            customListMapKeys: null);
 
         var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
         var spec = (IDictionary<string, object?>)document["spec"]!;
