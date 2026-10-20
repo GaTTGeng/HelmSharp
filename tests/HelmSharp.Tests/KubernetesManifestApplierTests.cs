@@ -141,6 +141,14 @@ public sealed class KubernetesManifestApplierTests
         Assert.Null(KubernetesManifestSchemaConverter.GetCanonicalApiVersion(identity));
     }
 
+    [Fact]
+    public void SchemaConverter_DoesNotForceBetaCsiDriverToUnservedV1WithoutAttemptedTarget()
+    {
+        var identity = new ManifestIdentity("storage.k8s.io/v1beta1", "CSIDriver", "csi.example", string.Empty);
+
+        Assert.Null(KubernetesManifestSchemaConverter.GetCanonicalApiVersion(identity));
+    }
+
     [Theory]
     [InlineData("flowcontrol.apiserver.k8s.io/v1beta1")]
     [InlineData("flowcontrol.apiserver.k8s.io/v1beta2")]
@@ -396,6 +404,24 @@ public sealed class KubernetesManifestApplierTests
         Assert.NotNull(identity);
         Assert.Equal(string.Empty, identity.Namespace);
         Assert.Equal("ClusterRole/reader", identity.DisplayName);
+    }
+
+    [Theory]
+    [InlineData("MutatingWebhookConfiguration")]
+    [InlineData("ValidatingWebhookConfiguration")]
+    public void ManifestIdentity_ParseClearsNamespaceForBetaWebhookConfigurations(string kind)
+    {
+        var identity = ManifestIdentity.Parse($"""
+            apiVersion: admissionregistration.k8s.io/v1beta1
+            kind: {kind}
+            metadata:
+              name: sample
+              namespace: ignored
+            """, "release-ns");
+
+        Assert.NotNull(identity);
+        Assert.Equal(string.Empty, identity.Namespace);
+        Assert.Equal($"{kind}/sample", identity.DisplayName);
     }
 
     [Fact]

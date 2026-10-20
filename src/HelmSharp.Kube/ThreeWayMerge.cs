@@ -61,8 +61,11 @@ internal static class ThreeWayMerge
             spec.Remove("clusterIPs");
             spec.Remove("ipFamilies");
             spec.Remove("ipFamilyPolicy");
-            spec.Remove("ports");
         }
+
+        if (serviceType != "LoadBalancer" ||
+            !string.Equals(HelmYaml.GetString(spec, "externalTrafficPolicy"), "Local", StringComparison.Ordinal))
+            spec.Remove("healthCheckNodePort");
 
         if ((serviceType is "ClusterIP" or "ExternalName") &&
             spec.TryGetValue("ports", out var portsValue) && portsValue is IList<object?> ports)
