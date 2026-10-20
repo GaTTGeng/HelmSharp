@@ -296,7 +296,7 @@ public sealed class KubernetesManifestApplier
             ("scheduling.k8s.io/v1", "PriorityClass") => false,
             ("scheduling.k8s.io/v1beta1", "PriorityClass") => false,
             ("apiextensions.k8s.io/v1" or "apiextensions.k8s.io/v1beta1", "CustomResourceDefinition") => false,
-            ("admissionregistration.k8s.io/v1", "MutatingWebhookConfiguration" or "ValidatingWebhookConfiguration") => false,
+            ("admissionregistration.k8s.io/v1" or "admissionregistration.k8s.io/v1beta1", "MutatingWebhookConfiguration" or "ValidatingWebhookConfiguration") => false,
             ("apiregistration.k8s.io/v1", "APIService") => false,
             ("apiregistration.k8s.io/v1beta1", "APIService") => false,
             ("coordination.k8s.io/v1", "Lease") => true,
@@ -1058,8 +1058,8 @@ public sealed class KubernetesManifestApplier
         if (TryGetPreviousManifest(identity, out _))
         {
             var schema = await ReadCustomResourceSchemaAsync(resource, ct);
-            customListMapKeys = schema.ListMapKeys;
-            preserveRootStatus = schema.StatusSubresourceEnabled;
+            customListMapKeys = schema?.ListMapKeys;
+            preserveRootStatus = schema?.StatusSubresourceEnabled ?? true;
         }
         var item = HelmYaml.DeserializeDictionary(yaml);
 
@@ -1098,7 +1098,7 @@ public sealed class KubernetesManifestApplier
         return identity;
     }
 
-    private async Task<CustomResourceSchema> ReadCustomResourceSchemaAsync(
+    private async Task<CustomResourceSchema?> ReadCustomResourceSchemaAsync(
         DiscoveredResource resource,
         CancellationToken cancellationToken)
     {
@@ -1121,6 +1121,11 @@ public sealed class KubernetesManifestApplier
             var result = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
             CollectCustomListMapKeys(rootSchema, string.Empty, result);
             return new CustomResourceSchema(result, HasStatusSubresource(version));
+        }
+        catch (HttpOperationException ex) when ((int)ex.Response.StatusCode == 404)
+        {
+            // Built-in resources are discovered through the same API but have no CRD schema.
+            return null;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

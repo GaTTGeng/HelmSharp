@@ -18,7 +18,7 @@ internal static class KubernetesManifestSchemaConverter
             "PodDisruptionBudget" when identity.ApiVersion == "policy/v1beta1" => "policy/v1",
             "Role" or "RoleBinding" or "ClusterRole" or "ClusterRoleBinding"
                 when identity.ApiVersion == "rbac.authorization.k8s.io/v1beta1" => "rbac.authorization.k8s.io/v1",
-            "StorageClass" or "CSIDriver" or "CSINode" or "VolumeAttachment"
+            "StorageClass" or "CSINode" or "VolumeAttachment"
                 when identity.ApiVersion == "storage.k8s.io/v1beta1" => "storage.k8s.io/v1",
             "PriorityClass" when identity.ApiVersion == "scheduling.k8s.io/v1beta1" => "scheduling.k8s.io/v1",
             "Lease" when identity.ApiVersion == "coordination.k8s.io/v1beta1" => "coordination.k8s.io/v1",

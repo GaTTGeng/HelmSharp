@@ -10,24 +10,25 @@ public sealed class ThreeWayMergeReviewTests
     public void MergeResource_DropsAllocatedServiceFieldsWhenChangingToClusterIP()
     {
         var merged = ThreeWayMerge.MergeResource(
-            "apiVersion: v1\nkind: Service\nspec:\n  type: NodePort\n  ports:\n  - port: 80\n    targetPort: 8080\n    nodePort: 30080\n",
+            "apiVersion: v1\nkind: Service\nspec:\n  type: LoadBalancer\n  externalTrafficPolicy: Local\n  healthCheckNodePort: 30001\n  ports:\n  - port: 80\n    targetPort: 8080\n    nodePort: 30080\n",
             "apiVersion: v1\nkind: Service\nspec:\n  type: ClusterIP\n  ports:\n  - port: 80\n    targetPort: 8080\n",
-            "apiVersion: v1\nkind: Service\nspec:\n  type: NodePort\n  clusterIP: 10.0.0.20\n  clusterIPs:\n  - 10.0.0.20\n  ports:\n  - port: 80\n    targetPort: 8080\n    nodePort: 30080\n");
+            "apiVersion: v1\nkind: Service\nspec:\n  type: LoadBalancer\n  externalTrafficPolicy: Local\n  healthCheckNodePort: 30001\n  clusterIP: 10.0.0.20\n  clusterIPs:\n  - 10.0.0.20\n  ports:\n  - port: 80\n    targetPort: 8080\n    nodePort: 30080\n");
 
         var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
         var spec = (IDictionary<string, object?>)document["spec"]!;
         var port = (IDictionary<string, object?>)((IList<object?>)spec["ports"]!)[0]!;
 
         Assert.Equal("ClusterIP", spec["type"]);
+        Assert.False(spec.ContainsKey("healthCheckNodePort"));
         Assert.False(port.ContainsKey("nodePort"));
     }
 
     [Fact]
-    public void MergeResource_DropsClusterIpAndPortsWhenChangingToExternalName()
+    public void MergeResource_DropsAllocatedServiceFieldsWhenChangingToExternalName()
     {
         var merged = ThreeWayMerge.MergeResource(
             "apiVersion: v1\nkind: Service\nspec:\n  type: NodePort\n  ports:\n  - port: 80\n    nodePort: 30080\n",
-            "apiVersion: v1\nkind: Service\nspec:\n  type: ExternalName\n  externalName: example.test\n",
+            "apiVersion: v1\nkind: Service\nspec:\n  type: ExternalName\n  externalName: example.test\n  ports:\n  - name: https\n    port: 443\n",
             "apiVersion: v1\nkind: Service\nspec:\n  type: NodePort\n  clusterIP: 10.0.0.20\n  clusterIPs:\n  - 10.0.0.20\n  ports:\n  - port: 80\n    nodePort: 30080\n");
 
         var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
@@ -36,7 +37,8 @@ public sealed class ThreeWayMergeReviewTests
         Assert.Equal("example.test", spec["externalName"]);
         Assert.False(spec.ContainsKey("clusterIP"));
         Assert.False(spec.ContainsKey("clusterIPs"));
-        Assert.False(spec.ContainsKey("ports"));
+        var port = (IDictionary<string, object?>)((IList<object?>)spec["ports"]!)[0]!;
+        Assert.Equal(443L, port["port"]);
     }
 
     [Fact]
