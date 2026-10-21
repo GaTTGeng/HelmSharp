@@ -76,6 +76,26 @@ public class HelmClientReleaseTests
     }
 
     [Fact]
+    public void ConvertRestorationApiVersions_PreservesPreviousPodDisruptionBudgetVersionWithoutAttemptedTarget()
+    {
+        const string previous = """
+            apiVersion: policy/v1beta1
+            kind: PodDisruptionBudget
+            metadata:
+              name: app
+            spec:
+              selector:
+                matchLabels:
+                  app: app
+              minAvailable: 1
+            """;
+
+        var restored = HelmClient.ConvertRestorationApiVersions(previous, string.Empty, "default");
+
+        Assert.Contains("apiVersion: policy/v1beta1", restored, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RemoveCleanedDocuments_DropsOnlySuccessfullyDeletedResources()
     {
         const string manifest = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: removed\n---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: retained\n";

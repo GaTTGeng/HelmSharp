@@ -15,7 +15,6 @@ internal static class KubernetesManifestSchemaConverter
             "NetworkPolicy" when identity.ApiVersion == "extensions/v1beta1" => "networking.k8s.io/v1",
             "HorizontalPodAutoscaler" when identity.ApiVersion is "autoscaling/v2beta1" or "autoscaling/v2beta2" => "autoscaling/v2",
             "CronJob" when identity.ApiVersion == "batch/v1beta1" => "batch/v1",
-            "PodDisruptionBudget" when identity.ApiVersion == "policy/v1beta1" => "policy/v1",
             "Role" or "RoleBinding" or "ClusterRole" or "ClusterRoleBinding"
                 when identity.ApiVersion == "rbac.authorization.k8s.io/v1beta1" => "rbac.authorization.k8s.io/v1",
             "StorageClass" or "CSINode" or "VolumeAttachment"
@@ -103,10 +102,13 @@ internal static class KubernetesManifestSchemaConverter
         else if (legacyWorkloadMigration)
         {
             ConvertLegacyWorkloadSelector(converted);
-            if (identity.Kind is "DaemonSet" or "StatefulSet")
+            if ((identity.Kind is "DaemonSet" or "StatefulSet") &&
+                (identity.ApiVersion is "extensions/v1beta1" or "apps/v1beta1"))
                 ConvertLegacyOnDeleteStrategy(converted);
             if (identity is { Kind: "Deployment", ApiVersion: "extensions/v1beta1" })
                 ConvertLegacyDeploymentRollingUpdateDefaults(converted);
+            if (identity is { Kind: "Deployment", ApiVersion: "apps/v1beta1" })
+                ConvertLegacyDeploymentRevisionHistoryDefault(converted);
         }
         else if (horizontalPodAutoscalerMigration &&
                  !TryConvertHorizontalPodAutoscalerSpec(converted, identity.ApiVersion, targetApiVersion))
@@ -494,6 +496,15 @@ internal static class KubernetesManifestSchemaConverter
         // extensions/v1beta1 defaulted both values to 1; apps/v1 defaults them to 25%.
         rollingUpdate.TryAdd("maxSurge", 1);
         rollingUpdate.TryAdd("maxUnavailable", 1);
+    }
+
+    private static void ConvertLegacyDeploymentRevisionHistoryDefault(Dictionary<string, object?> document)
+    {
+        if (document.TryGetValue("spec", out var specValue) && specValue is Dictionary<string, object?> spec)
+        {
+            // apps/v1beta1 defaulted revisionHistoryLimit to 2; apps/v1 defaults it to 10.
+            spec.TryAdd("revisionHistoryLimit", 2);
+        }
     }
 
     private static void ConvertLegacyCsiDriverStorageCapacity(Dictionary<string, object?> document)
