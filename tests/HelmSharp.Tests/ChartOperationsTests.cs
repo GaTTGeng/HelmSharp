@@ -1155,6 +1155,19 @@ public class ChartOperationsTests : IDisposable
             Chart = chartDir,
             ValuesContent = "marker: previous\n"
         }));
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: rollback-final-save-failure
+            data:
+              value: current
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: removed-during-failed-rollback
+            """);
         await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
         {
             ReleaseName = "rollback-final-save-failure",
@@ -1174,7 +1187,8 @@ public class ChartOperationsTests : IDisposable
         var failedRollback = Assert.Single(releaseState.Records("rollback-final-save-failure"), record => record.Revision == 3);
         Assert.Equal("failed", failedRollback.Status);
         Assert.Contains("value: \"previous\"", failedRollback.AppliedManifest, StringComparison.Ordinal);
-        Assert.Contains("\"value\":\"previous\"", releaseState.ConfigMaps.Values.Single(), StringComparison.Ordinal);
+        Assert.Contains("name: removed-during-failed-rollback", failedRollback.DeletedManifest, StringComparison.Ordinal);
+        Assert.Contains(releaseState.ConfigMaps.Values, value => value.Contains("\"value\":\"previous\"", StringComparison.Ordinal));
     }
 
     [Fact]

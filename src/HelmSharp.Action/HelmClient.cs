@@ -1685,6 +1685,8 @@ public class HelmClient : IHelmClient
 
         var output = new StringBuilder();
         var appliedRollbackResources = new List<string>();
+        var deletedRollbackResources = new List<string>();
+        (string Manifest, IReadOnlyList<string> KeptResources) rollbackDeletion = (string.Empty, []);
 
         try
         {
@@ -1708,7 +1710,7 @@ public class HelmClient : IHelmClient
                 currentMainManifest,
                 ns,
                 operationToken);
-            var rollbackDeletion = FilterManifestForDeletion(rollbackOnlyManifest, ns);
+            rollbackDeletion = FilterManifestForDeletion(rollbackOnlyManifest, ns);
 
             await foreach (var resource in applier.ApplyAsync(mainManifest, ns, operationToken))
             {
@@ -1725,6 +1727,7 @@ public class HelmClient : IHelmClient
                                cancellationToken: operationToken))
             {
                 output.AppendLine($"Removed rollback resource {resource}");
+                deletedRollbackResources.Add(resource);
             }
 
             // --- 7. Post-rollback hooks ---
@@ -1752,7 +1755,9 @@ public class HelmClient : IHelmClient
                 store,
                 WithHookExecution(rollbackRecord with
                 {
-                    AppliedManifest = GetSuccessfullyAppliedManifest(mainManifest, appliedRollbackResources, ns)
+                    AppliedManifest = GetSuccessfullyAppliedManifest(mainManifest, appliedRollbackResources, ns),
+                    DeletedManifest = GetSuccessfullyDeletedManifest(
+                        rollbackDeletion.Manifest, deletedRollbackResources, ns)
                 }, hooks),
                 operationId,
                 ex);
@@ -1778,7 +1783,9 @@ public class HelmClient : IHelmClient
                 store,
                 WithHookExecution(rollbackRecord with
                 {
-                    AppliedManifest = GetSuccessfullyAppliedManifest(mainManifest, appliedRollbackResources, ns)
+                    AppliedManifest = GetSuccessfullyAppliedManifest(mainManifest, appliedRollbackResources, ns),
+                    DeletedManifest = GetSuccessfullyDeletedManifest(
+                        rollbackDeletion.Manifest, deletedRollbackResources, ns)
                 }, hooks),
                 operationId,
                 ex);

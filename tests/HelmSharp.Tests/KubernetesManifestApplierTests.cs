@@ -13,6 +13,22 @@ namespace HelmSharp.Tests;
 public sealed class KubernetesManifestApplierTests
 {
     [Theory]
+    [InlineData("admissionregistration.k8s.io")]
+    [InlineData("apps")]
+    [InlineData("extensions")]
+    [InlineData("networking.k8s.io")]
+    public void SchemaLookupFallback_RecognizesBuiltInApiGroups(string group)
+    {
+        Assert.True(KubernetesManifestApplier.IsKnownKubernetesApiGroup(group));
+    }
+
+    [Fact]
+    public void SchemaLookupFallback_LeavesCustomApiGroupsOnCustomResourceSemantics()
+    {
+        Assert.False(KubernetesManifestApplier.IsKnownKubernetesApiGroup("widgets.example.com"));
+    }
+
+    [Theory]
     [InlineData("scheduling.k8s.io/v1beta1", "scheduling.k8s.io/v1", "PriorityClass", false)]
     [InlineData("coordination.k8s.io/v1beta1", "coordination.k8s.io/v1", "Lease", true)]
     [InlineData("node.k8s.io/v1beta1", "node.k8s.io/v1", "RuntimeClass", false)]
@@ -85,6 +101,52 @@ public sealed class KubernetesManifestApplierTests
         var spec = Assert.IsType<Dictionary<string, object?>>(document["spec"]);
         var strategy = Assert.IsType<Dictionary<string, object?>>(spec["updateStrategy"]);
         Assert.Equal("OnDelete", strategy["type"]);
+    }
+
+    [Fact]
+    public void SchemaConverter_DoesNotDefaultAppsV1Beta2DaemonSetToOnDelete()
+    {
+        const string source = """
+            apiVersion: apps/v1beta2
+            kind: DaemonSet
+            metadata:
+              name: agent
+            spec:
+              selector:
+                matchLabels:
+                  app: agent
+            """;
+        var identity = new ManifestIdentity("apps/v1beta2", "DaemonSet", "agent", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            source, identity, "apps/v1", out var converted));
+
+        var document = HelmYaml.DeserializeDictionary(converted, StringComparer.Ordinal);
+        var spec = Assert.IsType<Dictionary<string, object?>>(document["spec"]);
+        Assert.False(spec.ContainsKey("updateStrategy"));
+    }
+
+    [Fact]
+    public void SchemaConverter_MaterializesAppsV1Beta1DeploymentRevisionHistoryDefault()
+    {
+        const string source = """
+            apiVersion: apps/v1beta1
+            kind: Deployment
+            metadata:
+              name: portal
+            spec:
+              selector:
+                matchLabels:
+                  app: portal
+            """;
+        var identity = new ManifestIdentity("apps/v1beta1", "Deployment", "portal", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            source, identity, "apps/v1", out var converted));
+
+        var document = HelmYaml.DeserializeDictionary(converted, StringComparer.Ordinal);
+        var spec = Assert.IsType<Dictionary<string, object?>>(document["spec"]);
+        Assert.Equal(2L, Convert.ToInt64(spec["revisionHistoryLimit"]));
     }
 
     [Fact]

@@ -1129,11 +1129,23 @@ public sealed class KubernetesManifestApplier
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            if (IsKnownKubernetesApiGroup(resource.Group))
+                return null;
+
             // Without schema access, treating CRD lists atomically is safer than
             // inferring Kubernetes merge keys from coincidental property names.
             return new CustomResourceSchema(new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal), StatusSubresourceEnabled: true);
         }
     }
+
+    internal static bool IsKnownKubernetesApiGroup(string group)
+        => group is "admissionregistration.k8s.io" or "apiextensions.k8s.io" or "apiregistration.k8s.io" or
+            "apps" or "authentication.k8s.io" or "authorization.k8s.io" or "autoscaling" or "batch" or
+            "certificates.k8s.io" or "coordination.k8s.io" or "discovery.k8s.io" or "events.k8s.io" or
+            "extensions" or "flowcontrol.apiserver.k8s.io" or "meta.k8s.io" or "metrics.k8s.io" or
+            "custom.metrics.k8s.io" or "external.metrics.k8s.io" or "networking.k8s.io" or "node.k8s.io" or "policy" or
+            "rbac.authorization.k8s.io" or "scheduling.k8s.io" or "storage.k8s.io" or
+            "resource.k8s.io" or "storagemigration.k8s.io";
 
     private static bool HasStatusSubresource(JsonElement version)
         => version.TryGetProperty("subresources", out var subresources) &&
