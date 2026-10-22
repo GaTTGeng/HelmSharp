@@ -18,6 +18,7 @@ internal static class ThreeWayMerge
     /// <param name="liveManifest">Current live resource as returned by the cluster, or null when it does not exist.</param>
     /// <param name="customListMapKeys">Declared list-map keys for custom resource paths, or null to use built-in Kubernetes defaults.</param>
     /// <param name="preserveRootStatus">Whether root status is managed through a Kubernetes status subresource.</param>
+    /// <param name="customListMapKeyDefaults">Schema defaults for custom list-map key fields.</param>
     /// <returns>
     /// The desired manifest when there is no live resource; otherwise the merged manifest that
     /// keeps user-side drift which does not conflict with chart changes.
@@ -27,7 +28,8 @@ internal static class ThreeWayMerge
         string newManifest,
         string? liveManifest,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys = null,
-        bool preserveRootStatus = true)
+        bool preserveRootStatus = true,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>? customListMapKeyDefaults = null)
     {
         var lastDoc = HelmYaml.DeserializeDictionary(lastManifest, StringComparer.Ordinal);
         var newDoc = HelmYaml.DeserializeDictionary(newManifest, StringComparer.Ordinal);
@@ -43,7 +45,7 @@ internal static class ThreeWayMerge
 
         // Deep merge at every level
         var resourceKind = HelmYaml.GetString(newDoc, "kind");
-        DeepThreeWayMerge(lastDoc, newDoc, liveDoc, merged, isRoot: true, isMetadata: false, path: "", customListMapKeys: customListMapKeys, preserveRootStatus: preserveRootStatus, resourceKind: resourceKind);
+        DeepThreeWayMerge(lastDoc, newDoc, liveDoc, merged, isRoot: true, isMetadata: false, path: "", customListMapKeys: customListMapKeys, preserveRootStatus: preserveRootStatus, resourceKind: resourceKind, customListMapKeyDefaults: customListMapKeyDefaults);
         RemoveServiceFieldsDisallowedByType(merged);
 
         return HelmYaml.Serialize(merged);
@@ -91,7 +93,8 @@ internal static class ThreeWayMerge
         string path,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys,
         bool preserveRootStatus,
-        string? resourceKind)
+        string? resourceKind,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>? customListMapKeyDefaults)
     {
         // Collect all keys from all three sources
         var allKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -155,7 +158,7 @@ internal static class ThreeWayMerge
                     continue;
                 }
 
-                if (TryMergeKeyedLists(removedLastList, emptyList, removedLiveList, listPath, customListMapKeys, resourceKind, out var remainingList))
+                if (TryMergeKeyedLists(removedLastList, emptyList, removedLiveList, listPath, customListMapKeys, resourceKind, customListMapKeyDefaults, out var remainingList))
                 {
                     if (remainingList.Count == 0)
                         merged.Remove(key);
@@ -188,7 +191,8 @@ internal static class ThreeWayMerge
                     path: AppendPath(path, key),
                     customListMapKeys: customListMapKeys,
                     preserveRootStatus: preserveRootStatus,
-                    resourceKind: resourceKind);
+                    resourceKind: resourceKind,
+                    customListMapKeyDefaults: customListMapKeyDefaults);
                 continue;
             }
 
@@ -229,6 +233,7 @@ internal static class ThreeWayMerge
                     AppendPath(path, key),
                     customListMapKeys,
                     resourceKind,
+                    customListMapKeyDefaults,
                     out var mergedList))
             {
                 merged[key] = mergedList;
@@ -294,21 +299,23 @@ internal static class ThreeWayMerge
         string path,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys,
         string? resourceKind,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>? customListMapKeyDefaults,
         out List<object?> merged)
     {
         merged = [];
         // A CRD schema is authoritative: paths absent from its map-key table are atomic lists.
         var keySets = GetListMapKeySets(path, customListMapKeys);
         var defaultTcpProtocol = IsBuiltInTcpPortList(path, customListMapKeys, resourceKind);
+        var keyDefaults = customListMapKeyDefaults?.FirstOrDefault(entry => SchemaPathMatches(entry.Key, path)).Value;
         Dictionary<string, IDictionary<string, object?>> lastItems = [];
         Dictionary<string, IDictionary<string, object?>> newItems = [];
         Dictionary<string, IDictionary<string, object?>> liveItems = [];
         string[]? selectedKeySet = null;
         foreach (var keySet in keySets)
         {
-            if (!TryIndexItems(last, keySet, defaultTcpProtocol, out var candidateLast) ||
-                !TryIndexItems(newValues, keySet, defaultTcpProtocol, out var candidateNew) ||
-                !TryIndexItems(live, keySet, defaultTcpProtocol, out var candidateLive))
+            if (!TryIndexItems(last, keySet, defaultTcpProtocol, keyDefaults, out var candidateLast) ||
+                !TryIndexItems(newValues, keySet, defaultTcpProtocol, keyDefaults, out var candidateNew) ||
+                !TryIndexItems(live, keySet, defaultTcpProtocol, keyDefaults, out var candidateLive))
                 continue;
 
             selectedKeySet = keySet;
@@ -324,7 +331,7 @@ internal static class ThreeWayMerge
         foreach (var item in newValues)
         {
             var newItem = (IDictionary<string, object?>)item!;
-            var key = GetItemKey(newItem, selectedKeySet, defaultTcpProtocol);
+            var key = GetItemKey(newItem, selectedKeySet, defaultTcpProtocol, keyDefaults);
             var hasLast = lastItems.TryGetValue(key, out var lastItem);
             var hasLive = liveItems.TryGetValue(key, out var liveItem);
             if (hasLast && !hasLive && DeepEquals(lastItem, newItem))
@@ -342,17 +349,18 @@ internal static class ThreeWayMerge
                     path: path + "[]",
                     customListMapKeys: customListMapKeys,
                     preserveRootStatus: true,
-                    resourceKind: resourceKind);
+                    resourceKind: resourceKind,
+                    customListMapKeyDefaults: customListMapKeyDefaults);
             merged.Add(mergedItem);
         }
 
         // Preserve chart ordering while placing injected entries before their next live anchor.
-        var liveKeys = live.Select(item => GetItemKey((IDictionary<string, object?>)item!, selectedKeySet, defaultTcpProtocol)).ToArray();
+        var liveKeys = live.Select(item => GetItemKey((IDictionary<string, object?>)item!, selectedKeySet, defaultTcpProtocol, keyDefaults)).ToArray();
         var ordered = new List<object?>();
         var inserted = new HashSet<string>(StringComparer.Ordinal);
         foreach (var newItem in merged)
         {
-            var newKey = GetItemKey((IDictionary<string, object?>)newItem!, selectedKeySet, defaultTcpProtocol);
+            var newKey = GetItemKey((IDictionary<string, object?>)newItem!, selectedKeySet, defaultTcpProtocol, keyDefaults);
             var anchorIndex = Array.IndexOf(liveKeys, newKey);
             if (anchorIndex >= 0)
             {
@@ -546,13 +554,14 @@ internal static class ThreeWayMerge
         IList<object?> values,
         IReadOnlyList<string> keyFields,
         bool defaultTcpProtocol,
+        IReadOnlyDictionary<string, string>? keyDefaults,
         out Dictionary<string, IDictionary<string, object?>> items)
     {
         items = new Dictionary<string, IDictionary<string, object?>>(StringComparer.Ordinal);
         foreach (var value in values)
         {
             if (value is not IDictionary<string, object?> item ||
-                !TryGetItemKey(item, keyFields, defaultTcpProtocol, out var key) ||
+                !TryGetItemKey(item, keyFields, defaultTcpProtocol, keyDefaults, out var key) ||
                 !items.TryAdd(key, item))
                 return false;
         }
@@ -564,6 +573,7 @@ internal static class ThreeWayMerge
         IDictionary<string, object?> item,
         IReadOnlyList<string> keyFields,
         bool defaultTcpProtocol,
+        IReadOnlyDictionary<string, string>? keyDefaults,
         out string key)
     {
         var values = new string[keyFields.Count];
@@ -573,6 +583,10 @@ internal static class ThreeWayMerge
             if (item.TryGetValue(field, out var value) && value is not null)
             {
                 values[index] = System.Text.Json.JsonSerializer.Serialize(value);
+            }
+            else if (keyDefaults is not null && keyDefaults.TryGetValue(field, out var defaultValue))
+            {
+                values[index] = defaultValue;
             }
             else if (defaultTcpProtocol && field == "protocol" &&
                      (keyFields.Contains("containerPort") || keyFields.Contains("port")))
@@ -590,9 +604,13 @@ internal static class ThreeWayMerge
         return true;
     }
 
-    private static string GetItemKey(IDictionary<string, object?> item, IReadOnlyList<string> keyFields, bool defaultTcpProtocol)
+    private static string GetItemKey(
+        IDictionary<string, object?> item,
+        IReadOnlyList<string> keyFields,
+        bool defaultTcpProtocol,
+        IReadOnlyDictionary<string, string>? keyDefaults)
     {
-        _ = TryGetItemKey(item, keyFields, defaultTcpProtocol, out var key);
+        _ = TryGetItemKey(item, keyFields, defaultTcpProtocol, keyDefaults, out var key);
         return key;
     }
 

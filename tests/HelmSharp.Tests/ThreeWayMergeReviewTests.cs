@@ -131,6 +131,34 @@ public sealed class ThreeWayMergeReviewTests
     }
 
     [Fact]
+    public void MergeResource_UsesCustomSchemaDefaultsForListMapKeys()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  rules:\n  - port: 53\n    value: before\n",
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  rules:\n  - port: 53\n    value: after\n",
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  rules:\n  - port: 53\n    protocol: UDP\n    value: before\n  - port: 54\n    protocol: UDP\n    value: injected\n",
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+            {
+                ["spec.rules"] = ["port", "protocol"]
+            },
+            customListMapKeyDefaults: new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal)
+            {
+                ["spec.rules"] = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["protocol"] = "\"UDP\""
+                }
+            });
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var rules = (IList<object?>)spec["rules"]!;
+
+        Assert.Equal(2, rules.Count);
+        Assert.Equal("after", ((IDictionary<string, object?>)rules[0]!)["value"]);
+        Assert.Equal("injected", ((IDictionary<string, object?>)rules[1]!)["value"]);
+    }
+
+    [Fact]
     public void GetListMapKeySets_UsesAtomicDefaultsWhenCustomSchemaHasNoPath()
     {
         Assert.Empty(ThreeWayMerge.GetListMapKeySets(
