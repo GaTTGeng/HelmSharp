@@ -2003,6 +2003,9 @@ public sealed class KubernetesManifestApplier
 
     private static bool IsDefaultedField(ManifestIdentity identity, string path, JsonElement value)
     {
+        if (IsDefaultedRestartPolicy(identity, path, value))
+            return true;
+
         // The API server restores Deployment replicas to 1 when the field is omitted.
         if (identity.Kind == "Deployment" && path == "spec.replicas")
             return value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var replicas) && replicas == 1;
@@ -2015,6 +2018,21 @@ public sealed class KubernetesManifestApplier
             "spec.type" => value.GetString() == "ClusterIP",
             "spec.sessionAffinity" => value.GetString() == "None",
             "spec.internalTrafficPolicy" => value.GetString() == "Cluster",
+            _ => false
+        };
+    }
+
+    private static bool IsDefaultedRestartPolicy(ManifestIdentity identity, string path, JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.String || value.GetString() != "Always")
+            return false;
+
+        return identity.Kind switch
+        {
+            "Pod" => path == "spec.restartPolicy",
+            "Deployment" or "DaemonSet" or "ReplicaSet" or "StatefulSet" or "ReplicationController" or "Job" =>
+                path == "spec.template.spec.restartPolicy",
+            "CronJob" => path == "spec.jobTemplate.spec.template.spec.restartPolicy",
             _ => false
         };
     }

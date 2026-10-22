@@ -476,6 +476,25 @@ public sealed class ThreeWayMergeTests
     }
 
     [Fact]
+    public void MergeResource_UsesGranularTopologyForCustomSelectorMaps()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  selector:\n    app: before\n",
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  selector:\n    app: after\n",
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  selector:\n    app: before\n    operator: retain\n",
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+            {
+                ["spec.entries"] = ["name"]
+            });
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var selector = (IDictionary<string, object?>)spec["selector"]!;
+        Assert.Equal("after", selector["app"]);
+        Assert.Equal("retain", selector["operator"]);
+    }
+
+    [Fact]
     public void MergeResource_TreatsUnmappedCustomListsAsAtomic()
     {
         var merged = ThreeWayMerge.MergeResource(
