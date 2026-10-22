@@ -108,6 +108,29 @@ public sealed class ThreeWayMergeReviewTests
         Assert.False(labels.ContainsKey("env"));
     }
 
+    [Theory]
+    [InlineData("MutatingWebhookConfiguration")]
+    [InlineData("ValidatingWebhookConfiguration")]
+    public void MergeResource_ReplacesWebhookLabelSelectorsAsWholeMaps(string kind)
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            $"apiVersion: admissionregistration.k8s.io/v1\nkind: {kind}\nwebhooks:\n- name: example.test\n  namespaceSelector:\n    matchLabels:\n      app: web\n  objectSelector:\n    matchLabels:\n      tier: frontend\n",
+            $"apiVersion: admissionregistration.k8s.io/v1\nkind: {kind}\nwebhooks:\n- name: example.test\n  namespaceSelector:\n    matchLabels:\n      app: api\n  objectSelector:\n    matchLabels:\n      tier: backend\n",
+            $"apiVersion: admissionregistration.k8s.io/v1\nkind: {kind}\nwebhooks:\n- name: example.test\n  namespaceSelector:\n    matchLabels:\n      app: web\n      env: production\n  objectSelector:\n    matchLabels:\n      tier: frontend\n      env: production\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var webhook = (IDictionary<string, object?>)((IList<object?>)document["webhooks"]!)[0]!;
+        var namespaceSelector = (IDictionary<string, object?>)webhook["namespaceSelector"]!;
+        var objectSelector = (IDictionary<string, object?>)webhook["objectSelector"]!;
+        var namespaceLabels = (IDictionary<string, object?>)namespaceSelector["matchLabels"]!;
+        var objectLabels = (IDictionary<string, object?>)objectSelector["matchLabels"]!;
+
+        Assert.Equal("api", namespaceLabels["app"]);
+        Assert.False(namespaceLabels.ContainsKey("env"));
+        Assert.Equal("backend", objectLabels["tier"]);
+        Assert.False(objectLabels.ContainsKey("env"));
+    }
+
     [Fact]
     public void MergeResource_MatchesSchemaPathsWithDottedDynamicMapKeys()
     {
