@@ -22,7 +22,6 @@ internal static class KubernetesManifestSchemaConverter
             "RuntimeClass" when identity.ApiVersion == "node.k8s.io/v1beta1" => "node.k8s.io/v1",
             "APIService" when identity.ApiVersion == "apiregistration.k8s.io/v1beta1" => "apiregistration.k8s.io/v1",
             "IngressClass" when identity.ApiVersion == "networking.k8s.io/v1beta1" => "networking.k8s.io/v1",
-            "EndpointSlice" when identity.ApiVersion == "discovery.k8s.io/v1beta1" => "discovery.k8s.io/v1",
             "MutatingWebhookConfiguration" or "ValidatingWebhookConfiguration"
                 when identity.ApiVersion == "admissionregistration.k8s.io/v1beta1" => "admissionregistration.k8s.io/v1",
             _ => null

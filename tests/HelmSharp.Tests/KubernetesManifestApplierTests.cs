@@ -181,6 +181,14 @@ public sealed class KubernetesManifestApplierTests
     }
 
     [Fact]
+    public void SchemaConverter_DoesNotForceEndpointSliceBetaToUnservedStableVersionWithoutAttemptedTarget()
+    {
+        var identity = new ManifestIdentity("discovery.k8s.io/v1beta1", "EndpointSlice", "endpoints", "release-ns");
+
+        Assert.Null(KubernetesManifestSchemaConverter.GetCanonicalApiVersion(identity));
+    }
+
+    [Fact]
     public void SchemaConverter_MaterializesLegacyExtensionsDeploymentRollingUpdateDefaults()
     {
         const string source = """
@@ -1812,6 +1820,74 @@ public sealed class KubernetesManifestApplierTests
                   "kind": "Deployment",
                   "metadata": { "name": "app", "namespace": "release-ns", "resourceVersion": "43" },
                   "spec": { "replicas": 1, "selector": { "matchLabels": { "app": "app" } }, "template": { "metadata": { "labels": { "app": "app" } }, "spec": { "containers": [{ "name": "app", "image": "example/app:v1" }] } } }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+
+        await using var applied = applier.ApplyUpgradeAsync(upgradedManifest, previousManifest, "release-ns").GetAsyncEnumerator();
+
+        Assert.True(await applied.MoveNextAsync());
+        Assert.Equal("Deployment/release-ns/app", applied.Current);
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(() => applied.MoveNextAsync().AsTask());
+    }
+
+    [Fact]
+    public async Task ApplyUpgradeAsync_ConfirmsAmbiguousReplaceWhenRestartPolicyDefaultsBackToAlways()
+    {
+        const string previousManifest = """
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: app
+            spec:
+              selector:
+                matchLabels:
+                  app: app
+              template:
+                metadata:
+                  labels:
+                    app: app
+                spec:
+                  restartPolicy: Always
+                  containers:
+                    - name: app
+                      image: example/app:v1
+            """;
+        const string upgradedManifest = """
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: app
+            spec:
+              selector:
+                matchLabels:
+                  app: app
+              template:
+                metadata:
+                  labels:
+                    app: app
+                spec:
+                  containers:
+                    - name: app
+                      image: example/app:v2
+            """;
+        const string path = "/apis/apps/v1/namespaces/release-ns/deployments/app";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "apps/v1",
+                  "kind": "Deployment",
+                  "metadata": { "name": "app", "namespace": "release-ns", "resourceVersion": "42" },
+                  "spec": { "selector": { "matchLabels": { "app": "app" } }, "template": { "metadata": { "labels": { "app": "app" } }, "spec": { "restartPolicy": "Always", "containers": [{ "name": "app", "image": "example/app:v1" }] } } }
+                }
+                """)
+            .Respond(HttpMethod.Put, path, HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                {
+                  "apiVersion": "apps/v1",
+                  "kind": "Deployment",
+                  "metadata": { "name": "app", "namespace": "release-ns", "resourceVersion": "43" },
+                  "spec": { "selector": { "matchLabels": { "app": "app" } }, "template": { "metadata": { "labels": { "app": "app" } }, "spec": { "restartPolicy": "Always", "containers": [{ "name": "app", "image": "example/app:v2" }] } } }
                 }
                 """);
         var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");

@@ -491,7 +491,7 @@ internal static class ThreeWayMerge
         IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys,
         string? resourceKind)
         => resourceKind == "ValidatingAdmissionPolicyBinding" && path == "spec.paramRef" ||
-           IsLabelSelectorPath(path) ||
+           customListMapKeys is null && IsBuiltInLabelSelectorPath(path, resourceKind) ||
            customListMapKeys is not null &&
            customListMapKeys.Any(entry =>
                entry.Value is [AtomicListSentinel] && SchemaPathMatches(entry.Key, path));
@@ -537,8 +537,13 @@ internal static class ThreeWayMerge
             path.EndsWith(".initContainers[].ports", StringComparison.Ordinal) ||
             path.EndsWith(".ephemeralContainers[].ports", StringComparison.Ordinal));
 
-    private static bool IsLabelSelectorPath(string path)
+    private static bool IsBuiltInLabelSelectorPath(string path, string? resourceKind)
     {
+        if (resourceKind is not ("Deployment" or "DaemonSet" or "ReplicaSet" or "StatefulSet" or
+            "Job" or "CronJob" or "ReplicationController" or "Service" or "NetworkPolicy" or
+            "PodDisruptionBudget" or "ResourceQuota" or "HorizontalPodAutoscaler"))
+            return false;
+
         var parts = SplitPath(path);
         return parts.Length > 1 && parts[^1] is "selector" or "podSelector" or "namespaceSelector" or "labelSelector";
     }
