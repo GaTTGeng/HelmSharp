@@ -11,7 +11,6 @@ internal static class KubernetesManifestSchemaConverter
         {
             "Deployment" or "DaemonSet" or "ReplicaSet" or "StatefulSet"
                 when identity.ApiVersion is "extensions/v1beta1" or "apps/v1beta1" or "apps/v1beta2" => "apps/v1",
-            "Ingress" when identity.ApiVersion is "extensions/v1beta1" or "networking.k8s.io/v1beta1" => "networking.k8s.io/v1",
             "NetworkPolicy" when identity.ApiVersion == "extensions/v1beta1" => "networking.k8s.io/v1",
             "HorizontalPodAutoscaler" when identity.ApiVersion is "autoscaling/v2beta1" or "autoscaling/v2beta2" => "autoscaling/v2",
             "Role" or "RoleBinding" or "ClusterRole" or "ClusterRoleBinding"

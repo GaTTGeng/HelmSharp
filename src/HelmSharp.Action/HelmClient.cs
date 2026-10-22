@@ -807,12 +807,20 @@ public class HelmClient : IHelmClient
                 var attemptedOnlyManifest = string.Empty;
                 try
                 {
-                    attemptedOnlyManifest = await GetAttemptedOnlyManifestAsync(
+                    var priorEffectiveManifest = ResolvePreviousManifestForUpgrade(history, ns) ?? previous.Manifest;
+                    var currentAttemptOnly = await GetAttemptedOnlyManifestAsync(
                         applier,
                         previous.Manifest,
                         mainManifest,
                         ns,
                         CancellationToken.None);
+                    var earlierFailedAttemptOnly = await GetAttemptedOnlyManifestAsync(
+                        applier,
+                        previous.Manifest,
+                        priorEffectiveManifest,
+                        ns,
+                        CancellationToken.None);
+                    attemptedOnlyManifest = MergeAppliedManifests(currentAttemptOnly, earlierFailedAttemptOnly, ns);
                     if (!string.IsNullOrWhiteSpace(attemptedOnlyManifest))
                     {
                         await foreach (var resource in applier.DeleteAsync(attemptedOnlyManifest, ns, cancellationToken: CancellationToken.None))

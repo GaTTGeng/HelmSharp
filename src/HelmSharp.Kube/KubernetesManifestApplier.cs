@@ -1217,7 +1217,11 @@ public sealed class KubernetesManifestApplier
     }
 
     private static string AppendSchemaPath(string path, string property)
-        => path.Length == 0 ? property : path + "." + property;
+    {
+        var escapedProperty = property.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace(".", "\\.", StringComparison.Ordinal);
+        return path.Length == 0 ? escapedProperty : path + "." + escapedProperty;
+    }
 
     private async Task<DiscoveredResource> DiscoverResourceAsync(
         ManifestIdentity identity,
@@ -1673,7 +1677,8 @@ public sealed class KubernetesManifestApplier
                 after!,
                 TryGetTypedResourceScope(identity, out _),
                 identity.Kind,
-                preserveRootStatus);
+                preserveRootStatus,
+                customListMapKeys: null);
         }
         catch
         {
@@ -1713,7 +1718,7 @@ public sealed class KubernetesManifestApplier
             // Only record progress if the read-back also reflects the chart-owned payload.
             var expectedYaml = MergeWithLiveResource(identity, desiredYaml, before!, customListMapKeys, preserveRootStatus);
             var typedResource = TryGetTypedResourceScope(identity, out _);
-            return ContainsExpectedManifest(expectedYaml, after!, typedResource, identity.Kind, preserveRootStatus) &&
+            return ContainsExpectedManifest(expectedYaml, after!, typedResource, identity.Kind, preserveRootStatus, customListMapKeys) &&
                    RemovedValuesAreAbsent(expectedYaml, before!, after!, identity, typedResource, customListMapKeys, preserveRootStatus);
         }
         catch
@@ -1722,7 +1727,7 @@ public sealed class KubernetesManifestApplier
         }
     }
 
-    private static bool ContainsExpectedManifest<T>(string expectedYaml, T actualResource, bool allowCaseInsensitiveProperties, string resourceKind, bool preserveRootStatus)
+    private static bool ContainsExpectedManifest<T>(string expectedYaml, T actualResource, bool allowCaseInsensitiveProperties, string resourceKind, bool preserveRootStatus, IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys)
     {
         using var expected = JsonDocument.Parse(JsonSerializer.Serialize(
             HelmYaml.DeserializeDictionary(expectedYaml, StringComparer.Ordinal)));
@@ -1735,7 +1740,9 @@ public sealed class KubernetesManifestApplier
             isTypedResource: allowCaseInsensitiveProperties,
             inQuantityMap: false,
             resourceKind,
-            preserveRootStatus);
+            preserveRootStatus,
+            customListMapKeys,
+            path: string.Empty);
     }
 
     private static bool RemovedValuesAreAbsent<T>(
@@ -1771,7 +1778,9 @@ public sealed class KubernetesManifestApplier
         bool isTypedResource,
         bool inQuantityMap,
         string resourceKind,
-        bool preserveRootStatus)
+        bool preserveRootStatus,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys,
+        string path)
     {
         if (expected.ValueKind == JsonValueKind.Object)
         {
@@ -1795,7 +1804,9 @@ public sealed class KubernetesManifestApplier
                         resourceKind == "HorizontalPodAutoscaler" && parentName == "target" &&
                         property.Name is "averageValue" or "value",
                         resourceKind,
-                        preserveRootStatus))
+                        preserveRootStatus,
+                        customListMapKeys,
+                        AppendJsonPath(path, property.Name)))
                 {
                     return false;
                 }
@@ -1811,12 +1822,19 @@ public sealed class KubernetesManifestApplier
 
             var expectedItems = expected.EnumerateArray().ToArray();
             var actualItems = actual.EnumerateArray().ToArray();
+            var setList = resourceKind == "ValidatingAdmissionPolicyBinding" && path == "spec.validationActions" ||
+                          customListMapKeys is not null && customListMapKeys.Any(entry =>
+                              entry.Value.Count == 0 && ThreeWayMerge.SchemaPathMatches(entry.Key, path));
+            if (setList)
+                return expectedItems.All(expectedItem => actualItems.Any(actualItem =>
+                    ContainsExpectedValue(expectedItem, actualItem, parentName, allowCaseInsensitiveProperties, isTypedResource, inQuantityMap, resourceKind, preserveRootStatus, customListMapKeys, path + "[]")));
+
             // Preserve submitted order while allowing admission webhooks to insert extra entries.
             var actualIndex = 0;
             foreach (var expectedItem in expectedItems)
             {
                 while (actualIndex < actualItems.Length &&
-                       !ContainsExpectedValue(expectedItem, actualItems[actualIndex], parentName, allowCaseInsensitiveProperties, isTypedResource, inQuantityMap, resourceKind, preserveRootStatus))
+                       !ContainsExpectedValue(expectedItem, actualItems[actualIndex], parentName, allowCaseInsensitiveProperties, isTypedResource, inQuantityMap, resourceKind, preserveRootStatus, customListMapKeys, path + "[]"))
                 {
                     actualIndex++;
                 }
@@ -1917,19 +1935,21 @@ public sealed class KubernetesManifestApplier
             return false;
 
         var expectedItems = expected.EnumerateArray().ToArray();
+        var defaultTcpProtocol = IsBuiltInTcpPortList(identity, path, customListMapKeys);
         var keyFields = SelectArrayIdentityKeys(
             expectedItems,
             before.EnumerateArray().ToArray(),
             actual.EnumerateArray().ToArray(),
-            ThreeWayMerge.GetListMapKeySets(path, customListMapKeys));
+            ThreeWayMerge.GetListMapKeySets(path, customListMapKeys),
+            defaultTcpProtocol);
         foreach (var beforeItem in before.EnumerateArray())
         {
-            var expectedItem = expectedItems.FirstOrDefault(candidate => SameArrayItem(candidate, beforeItem, keyFields));
+            var expectedItem = expectedItems.FirstOrDefault(candidate => SameArrayItem(candidate, beforeItem, keyFields, defaultTcpProtocol));
             if (expectedItem.ValueKind != JsonValueKind.Undefined)
             {
                 if (keyFields is not null)
                 {
-                    var actualItem = actual.EnumerateArray().FirstOrDefault(candidate => SameArrayItem(candidate, beforeItem, keyFields));
+                    var actualItem = actual.EnumerateArray().FirstOrDefault(candidate => SameArrayItem(candidate, beforeItem, keyFields, defaultTcpProtocol));
                     if (actualItem.ValueKind != JsonValueKind.Undefined &&
                         !RemovedValuesAreAbsent(
                             expectedItem,
@@ -1947,7 +1967,7 @@ public sealed class KubernetesManifestApplier
                 continue;
             }
 
-            if (actual.EnumerateArray().Any(actualItem => SameArrayItem(actualItem, beforeItem, keyFields)))
+            if (actual.EnumerateArray().Any(actualItem => SameArrayItem(actualItem, beforeItem, keyFields, defaultTcpProtocol)))
                 return false;
         }
 
@@ -1957,28 +1977,40 @@ public sealed class KubernetesManifestApplier
     private static bool IsDefaultedField(ManifestIdentity identity, string path, JsonElement value)
     {
         // The API server restores Deployment replicas to 1 when the field is omitted.
-        return identity.Kind == "Deployment" && path == "spec.replicas" &&
-               value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var replicas) && replicas == 1;
+        if (identity.Kind == "Deployment" && path == "spec.replicas")
+            return value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var replicas) && replicas == 1;
+
+        if (identity.Kind != "Service" || value.ValueKind != JsonValueKind.String)
+            return false;
+
+        return path switch
+        {
+            "spec.type" => value.GetString() == "ClusterIP",
+            "spec.sessionAffinity" => value.GetString() == "None",
+            "spec.internalTrafficPolicy" => value.GetString() == "Cluster",
+            _ => false
+        };
     }
 
     private static string[]? SelectArrayIdentityKeys(
         IReadOnlyList<JsonElement> expected,
         IReadOnlyList<JsonElement> before,
         IReadOnlyList<JsonElement> actual,
-        IReadOnlyList<string[]> keySets)
+        IReadOnlyList<string[]> keySets,
+        bool defaultTcpProtocol)
     {
         foreach (var keySet in keySets)
         {
-            if (HasUniqueArrayIdentity(expected, keySet) &&
-                HasUniqueArrayIdentity(before, keySet) &&
-                HasUniqueArrayIdentity(actual, keySet))
+            if (HasUniqueArrayIdentity(expected, keySet, defaultTcpProtocol) &&
+                HasUniqueArrayIdentity(before, keySet, defaultTcpProtocol) &&
+                HasUniqueArrayIdentity(actual, keySet, defaultTcpProtocol))
                 return keySet;
         }
 
         return null;
     }
 
-    private static bool HasUniqueArrayIdentity(IReadOnlyList<JsonElement> items, IReadOnlyList<string> keyFields)
+    private static bool HasUniqueArrayIdentity(IReadOnlyList<JsonElement> items, IReadOnlyList<string> keyFields, bool defaultTcpProtocol)
     {
         var identities = new HashSet<string>(StringComparer.Ordinal);
         foreach (var item in items)
@@ -1986,26 +2018,26 @@ public sealed class KubernetesManifestApplier
             if (item.ValueKind != JsonValueKind.Object)
                 return false;
 
-            if (!TryGetArrayIdentity(item, keyFields, out var identity) || !identities.Add(identity))
+            if (!TryGetArrayIdentity(item, keyFields, defaultTcpProtocol, out var identity) || !identities.Add(identity))
                 return false;
         }
 
         return true;
     }
 
-    private static bool SameArrayItem(JsonElement left, JsonElement right, IReadOnlyList<string>? keyFields)
+    private static bool SameArrayItem(JsonElement left, JsonElement right, IReadOnlyList<string>? keyFields, bool defaultTcpProtocol = false)
     {
         if (keyFields is not null && left.ValueKind == JsonValueKind.Object && right.ValueKind == JsonValueKind.Object)
         {
-            return TryGetArrayIdentity(left, keyFields, out var leftIdentity) &&
-                   TryGetArrayIdentity(right, keyFields, out var rightIdentity) &&
+            return TryGetArrayIdentity(left, keyFields, defaultTcpProtocol, out var leftIdentity) &&
+                   TryGetArrayIdentity(right, keyFields, defaultTcpProtocol, out var rightIdentity) &&
                    string.Equals(leftIdentity, rightIdentity, StringComparison.Ordinal);
         }
 
         return JsonValuesEqual(left, right);
     }
 
-    private static bool TryGetArrayIdentity(JsonElement item, IReadOnlyList<string> keyFields, out string identity)
+    private static bool TryGetArrayIdentity(JsonElement item, IReadOnlyList<string> keyFields, bool defaultTcpProtocol, out string identity)
     {
         var values = new List<string>(keyFields.Count);
         foreach (var keyField in keyFields)
@@ -2014,7 +2046,7 @@ public sealed class KubernetesManifestApplier
             {
                 values.Add(value.GetRawText());
             }
-            else if (keyField == "protocol" &&
+            else if (defaultTcpProtocol && keyField == "protocol" &&
                      (keyFields.Contains("containerPort") || keyFields.Contains("port")))
             {
                 // Kubernetes defaults an omitted Service/container port protocol to TCP.
@@ -2031,8 +2063,22 @@ public sealed class KubernetesManifestApplier
         return true;
     }
 
+    private static bool IsBuiltInTcpPortList(
+        ManifestIdentity identity,
+        string path,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys)
+        => customListMapKeys is null &&
+           (identity.Kind == "Service" && path == "spec.ports" ||
+            path.EndsWith(".containers[].ports", StringComparison.Ordinal) ||
+            path.EndsWith(".initContainers[].ports", StringComparison.Ordinal) ||
+            path.EndsWith(".ephemeralContainers[].ports", StringComparison.Ordinal));
+
     private static string AppendJsonPath(string path, string property)
-        => path.Length == 0 ? property : path + "." + property;
+    {
+        var escapedProperty = property.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace(".", "\\.", StringComparison.Ordinal);
+        return path.Length == 0 ? escapedProperty : path + "." + escapedProperty;
+    }
 
     private static bool JsonValuesEqual(JsonElement left, JsonElement right)
     {

@@ -534,6 +534,17 @@ public sealed class FailedUpgradeBaselineTests : IDisposable
     }
 
     [Fact]
+    public void ConvertRestorationApiVersions_PreservesBetaIngressWhenNoTargetWasAttempted()
+    {
+        const string previousManifest = "apiVersion: extensions/v1beta1\nkind: Ingress\nmetadata:\n  name: legacy\n";
+
+        var restored = HelmClient.ConvertRestorationApiVersions(previousManifest, string.Empty, "test-ns");
+        var document = HelmYaml.DeserializeDictionary(restored, StringComparer.Ordinal);
+
+        Assert.Equal("extensions/v1beta1", HelmYaml.GetString(document, "apiVersion"));
+    }
+
+    [Fact]
     public void ConvertRestorationApiVersions_MatchesClusterScopedBetaResourcesWithoutNamespace()
     {
         const string previousManifest = """

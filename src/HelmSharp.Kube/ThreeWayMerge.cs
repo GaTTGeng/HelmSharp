@@ -128,7 +128,7 @@ internal static class ThreeWayMerge
             var hasLive = live.TryGetValue(key, out var liveVal);
             var childPath = AppendPath(path, key);
 
-            if (hasLast && hasLive && IsAtomicCustomMap(childPath, customListMapKeys, resourceKind))
+            if (hasLast && hasLive && IsAtomicMap(childPath, customListMapKeys, resourceKind))
             {
                 // CRD atomic maps are a single owned field: preserve live drift only
                 // while the chart leaves the complete map unchanged.
@@ -299,15 +299,16 @@ internal static class ThreeWayMerge
         merged = [];
         // A CRD schema is authoritative: paths absent from its map-key table are atomic lists.
         var keySets = GetListMapKeySets(path, customListMapKeys);
+        var defaultTcpProtocol = IsBuiltInTcpPortList(path, customListMapKeys, resourceKind);
         Dictionary<string, IDictionary<string, object?>> lastItems = [];
         Dictionary<string, IDictionary<string, object?>> newItems = [];
         Dictionary<string, IDictionary<string, object?>> liveItems = [];
         string[]? selectedKeySet = null;
         foreach (var keySet in keySets)
         {
-            if (!TryIndexItems(last, keySet, out var candidateLast) ||
-                !TryIndexItems(newValues, keySet, out var candidateNew) ||
-                !TryIndexItems(live, keySet, out var candidateLive))
+            if (!TryIndexItems(last, keySet, defaultTcpProtocol, out var candidateLast) ||
+                !TryIndexItems(newValues, keySet, defaultTcpProtocol, out var candidateNew) ||
+                !TryIndexItems(live, keySet, defaultTcpProtocol, out var candidateLive))
                 continue;
 
             selectedKeySet = keySet;
@@ -323,7 +324,7 @@ internal static class ThreeWayMerge
         foreach (var item in newValues)
         {
             var newItem = (IDictionary<string, object?>)item!;
-            var key = GetItemKey(newItem, selectedKeySet);
+            var key = GetItemKey(newItem, selectedKeySet, defaultTcpProtocol);
             var hasLast = lastItems.TryGetValue(key, out var lastItem);
             var hasLive = liveItems.TryGetValue(key, out var liveItem);
             if (hasLast && !hasLive && DeepEquals(lastItem, newItem))
@@ -346,12 +347,12 @@ internal static class ThreeWayMerge
         }
 
         // Preserve chart ordering while placing injected entries before their next live anchor.
-        var liveKeys = live.Select(item => GetItemKey((IDictionary<string, object?>)item!, selectedKeySet)).ToArray();
+        var liveKeys = live.Select(item => GetItemKey((IDictionary<string, object?>)item!, selectedKeySet, defaultTcpProtocol)).ToArray();
         var ordered = new List<object?>();
         var inserted = new HashSet<string>(StringComparer.Ordinal);
         foreach (var newItem in merged)
         {
-            var newKey = GetItemKey((IDictionary<string, object?>)newItem!, selectedKeySet);
+            var newKey = GetItemKey((IDictionary<string, object?>)newItem!, selectedKeySet, defaultTcpProtocol);
             var anchorIndex = Array.IndexOf(liveKeys, newKey);
             if (anchorIndex >= 0)
             {
@@ -477,37 +478,81 @@ internal static class ThreeWayMerge
         return [];
     }
 
-    private static bool IsAtomicCustomMap(
+    private static bool IsAtomicMap(
         string path,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys,
         string? resourceKind)
         => resourceKind == "ValidatingAdmissionPolicyBinding" && path == "spec.paramRef" ||
+           IsLabelSelectorPath(path) ||
            customListMapKeys is not null &&
            customListMapKeys.Any(entry =>
                entry.Value is [AtomicListSentinel] && SchemaPathMatches(entry.Key, path));
 
-    private static bool SchemaPathMatches(string schemaPath, string resourcePath)
+    internal static bool SchemaPathMatches(string schemaPath, string resourcePath)
     {
-        var schemaParts = schemaPath.Split('.');
-        var resourceParts = resourcePath.Split('.');
+        var schemaParts = SplitPath(schemaPath);
+        var resourceParts = SplitPath(resourcePath);
         return schemaParts.Length == resourceParts.Length &&
                schemaParts.Zip(resourceParts).All(pair => pair.First == "*" ||
                    string.Equals(pair.First, pair.Second, StringComparison.Ordinal));
     }
 
+    private static string[] SplitPath(string path)
+    {
+        var parts = new List<string>();
+        var part = new System.Text.StringBuilder();
+        for (var index = 0; index < path.Length; index++)
+        {
+            var character = path[index];
+            if (character == '\\' && index + 1 < path.Length)
+                part.Append(path[++index]);
+            else if (character == '.')
+            {
+                parts.Add(part.ToString());
+                part.Clear();
+            }
+            else
+                part.Append(character);
+        }
+
+        parts.Add(part.ToString());
+        return parts.ToArray();
+    }
+
+    private static bool IsBuiltInTcpPortList(
+        string path,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys,
+        string? resourceKind)
+        => customListMapKeys is null &&
+           (resourceKind == "Service" && path == "spec.ports" ||
+            path.EndsWith(".containers[].ports", StringComparison.Ordinal) ||
+            path.EndsWith(".initContainers[].ports", StringComparison.Ordinal) ||
+            path.EndsWith(".ephemeralContainers[].ports", StringComparison.Ordinal));
+
+    private static bool IsLabelSelectorPath(string path)
+    {
+        var parts = SplitPath(path);
+        return parts.Length > 1 && parts[^1] is "selector" or "podSelector" or "namespaceSelector" or "labelSelector";
+    }
+
     private static string AppendPath(string path, string key)
-        => path.Length == 0 ? key : path + "." + key;
+    {
+        var escapedKey = key.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace(".", "\\.", StringComparison.Ordinal);
+        return path.Length == 0 ? escapedKey : path + "." + escapedKey;
+    }
 
     private static bool TryIndexItems(
         IList<object?> values,
         IReadOnlyList<string> keyFields,
+        bool defaultTcpProtocol,
         out Dictionary<string, IDictionary<string, object?>> items)
     {
         items = new Dictionary<string, IDictionary<string, object?>>(StringComparer.Ordinal);
         foreach (var value in values)
         {
             if (value is not IDictionary<string, object?> item ||
-                !TryGetItemKey(item, keyFields, out var key) ||
+                !TryGetItemKey(item, keyFields, defaultTcpProtocol, out var key) ||
                 !items.TryAdd(key, item))
                 return false;
         }
@@ -518,6 +563,7 @@ internal static class ThreeWayMerge
     private static bool TryGetItemKey(
         IDictionary<string, object?> item,
         IReadOnlyList<string> keyFields,
+        bool defaultTcpProtocol,
         out string key)
     {
         var values = new string[keyFields.Count];
@@ -528,7 +574,7 @@ internal static class ThreeWayMerge
             {
                 values[index] = System.Text.Json.JsonSerializer.Serialize(value);
             }
-            else if (field == "protocol" &&
+            else if (defaultTcpProtocol && field == "protocol" &&
                      (keyFields.Contains("containerPort") || keyFields.Contains("port")))
             {
                 values[index] = "\"TCP\"";
@@ -544,9 +590,9 @@ internal static class ThreeWayMerge
         return true;
     }
 
-    private static string GetItemKey(IDictionary<string, object?> item, IReadOnlyList<string> keyFields)
+    private static string GetItemKey(IDictionary<string, object?> item, IReadOnlyList<string> keyFields, bool defaultTcpProtocol)
     {
-        _ = TryGetItemKey(item, keyFields, out var key);
+        _ = TryGetItemKey(item, keyFields, defaultTcpProtocol, out var key);
         return key;
     }
 
