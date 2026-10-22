@@ -42,7 +42,8 @@ internal static class ThreeWayMerge
         var merged = DeepCopyDict(newDoc);
 
         // Deep merge at every level
-        DeepThreeWayMerge(lastDoc, newDoc, liveDoc, merged, isRoot: true, isMetadata: false, path: "", customListMapKeys: customListMapKeys, preserveRootStatus: preserveRootStatus);
+        var resourceKind = HelmYaml.GetString(newDoc, "kind");
+        DeepThreeWayMerge(lastDoc, newDoc, liveDoc, merged, isRoot: true, isMetadata: false, path: "", customListMapKeys: customListMapKeys, preserveRootStatus: preserveRootStatus, resourceKind: resourceKind);
         RemoveServiceFieldsDisallowedByType(merged);
 
         return HelmYaml.Serialize(merged);
@@ -55,6 +56,8 @@ internal static class ThreeWayMerge
             return;
 
         var serviceType = HelmYaml.GetString(spec, "type") ?? "ClusterIP";
+        if (serviceType != "LoadBalancer")
+            spec.Remove("allocateLoadBalancerNodePorts");
         if (serviceType == "ExternalName")
         {
             spec.Remove("clusterIP");
@@ -87,7 +90,8 @@ internal static class ThreeWayMerge
         bool isMetadata,
         string path,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys,
-        bool preserveRootStatus)
+        bool preserveRootStatus,
+        string? resourceKind)
     {
         // Collect all keys from all three sources
         var allKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -124,7 +128,7 @@ internal static class ThreeWayMerge
             var hasLive = live.TryGetValue(key, out var liveVal);
             var childPath = AppendPath(path, key);
 
-            if (hasLast && hasLive && IsAtomicCustomMap(childPath, customListMapKeys))
+            if (hasLast && hasLive && IsAtomicCustomMap(childPath, customListMapKeys, resourceKind))
             {
                 // CRD atomic maps are a single owned field: preserve live drift only
                 // while the chart leaves the complete map unchanged.
@@ -142,7 +146,7 @@ internal static class ThreeWayMerge
             {
                 IList<object?> emptyList = Array.Empty<object?>();
                 var listPath = AppendPath(path, key);
-                if (TryMergeSetList(removedLastList, emptyList, removedLiveList, listPath, customListMapKeys, out var remainingSet))
+                if (TryMergeSetList(removedLastList, emptyList, removedLiveList, listPath, customListMapKeys, resourceKind, out var remainingSet))
                 {
                     if (remainingSet.Count == 0)
                         merged.Remove(key);
@@ -151,7 +155,7 @@ internal static class ThreeWayMerge
                     continue;
                 }
 
-                if (TryMergeKeyedLists(removedLastList, emptyList, removedLiveList, listPath, customListMapKeys, out var remainingList))
+                if (TryMergeKeyedLists(removedLastList, emptyList, removedLiveList, listPath, customListMapKeys, resourceKind, out var remainingList))
                 {
                     if (remainingList.Count == 0)
                         merged.Remove(key);
@@ -183,7 +187,8 @@ internal static class ThreeWayMerge
                     isMetadata: isRoot && key == "metadata",
                     path: AppendPath(path, key),
                     customListMapKeys: customListMapKeys,
-                    preserveRootStatus: preserveRootStatus);
+                    preserveRootStatus: preserveRootStatus,
+                    resourceKind: resourceKind);
                 continue;
             }
 
@@ -207,7 +212,7 @@ internal static class ThreeWayMerge
                 lastVal is IList<object?> lastList &&
                 newVal is IList<object?> newList &&
                 liveVal is IList<object?> liveList &&
-                TryMergeSetList(lastList, newList, liveList, AppendPath(path, key), customListMapKeys, out var mergedSet))
+                TryMergeSetList(lastList, newList, liveList, AppendPath(path, key), customListMapKeys, resourceKind, out var mergedSet))
             {
                 merged[key] = mergedSet;
                 continue;
@@ -223,6 +228,7 @@ internal static class ThreeWayMerge
                     liveKeyedList,
                     AppendPath(path, key),
                     customListMapKeys,
+                    resourceKind,
                     out var mergedList))
             {
                 merged[key] = mergedList;
@@ -287,6 +293,7 @@ internal static class ThreeWayMerge
         IList<object?> live,
         string path,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys,
+        string? resourceKind,
         out List<object?> merged)
     {
         merged = [];
@@ -333,7 +340,8 @@ internal static class ThreeWayMerge
                     isMetadata: false,
                     path: path + "[]",
                     customListMapKeys: customListMapKeys,
-                    preserveRootStatus: true);
+                    preserveRootStatus: true,
+                    resourceKind: resourceKind);
             merged.Add(mergedItem);
         }
 
@@ -375,13 +383,15 @@ internal static class ThreeWayMerge
         IList<object?> live,
         string path,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys,
+        string? resourceKind,
         out List<object?> merged)
     {
         merged = [];
         // Set lists are value keyed, so a live-only value survives unless the chart now owns that value.
         var customSet = customListMapKeys is not null &&
                         customListMapKeys.Any(entry => entry.Value.Count == 0 && SchemaPathMatches(entry.Key, path));
-        if (!customSet && path != "metadata.finalizers")
+        var builtInSet = resourceKind == "ValidatingAdmissionPolicyBinding" && path == "spec.validationActions";
+        if (!customSet && path != "metadata.finalizers" && !builtInSet)
             return false;
 
         foreach (var value in newValues)
@@ -469,8 +479,10 @@ internal static class ThreeWayMerge
 
     private static bool IsAtomicCustomMap(
         string path,
-        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys)
-        => customListMapKeys is not null &&
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys,
+        string? resourceKind)
+        => resourceKind == "ValidatingAdmissionPolicyBinding" && path == "spec.paramRef" ||
+           customListMapKeys is not null &&
            customListMapKeys.Any(entry =>
                entry.Value is [AtomicListSentinel] && SchemaPathMatches(entry.Key, path));
 

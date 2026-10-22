@@ -14,7 +14,6 @@ internal static class KubernetesManifestSchemaConverter
             "Ingress" when identity.ApiVersion is "extensions/v1beta1" or "networking.k8s.io/v1beta1" => "networking.k8s.io/v1",
             "NetworkPolicy" when identity.ApiVersion == "extensions/v1beta1" => "networking.k8s.io/v1",
             "HorizontalPodAutoscaler" when identity.ApiVersion is "autoscaling/v2beta1" or "autoscaling/v2beta2" => "autoscaling/v2",
-            "CronJob" when identity.ApiVersion == "batch/v1beta1" => "batch/v1",
             "Role" or "RoleBinding" or "ClusterRole" or "ClusterRoleBinding"
                 when identity.ApiVersion == "rbac.authorization.k8s.io/v1beta1" => "rbac.authorization.k8s.io/v1",
             "StorageClass" or "CSINode" or "VolumeAttachment"
@@ -106,7 +105,10 @@ internal static class KubernetesManifestSchemaConverter
                 (identity.ApiVersion is "extensions/v1beta1" or "apps/v1beta1"))
                 ConvertLegacyOnDeleteStrategy(converted);
             if (identity is { Kind: "Deployment", ApiVersion: "extensions/v1beta1" })
+            {
                 ConvertLegacyDeploymentRollingUpdateDefaults(converted);
+                ConvertLegacyExtensionsDeploymentRevisionHistoryDefault(converted);
+            }
             if (identity is { Kind: "Deployment", ApiVersion: "apps/v1beta1" })
                 ConvertLegacyDeploymentRevisionHistoryDefault(converted);
         }
@@ -504,6 +506,15 @@ internal static class KubernetesManifestSchemaConverter
         {
             // apps/v1beta1 defaulted revisionHistoryLimit to 2; apps/v1 defaults it to 10.
             spec.TryAdd("revisionHistoryLimit", 2);
+        }
+    }
+
+    private static void ConvertLegacyExtensionsDeploymentRevisionHistoryDefault(Dictionary<string, object?> document)
+    {
+        if (document.TryGetValue("spec", out var specValue) && specValue is Dictionary<string, object?> spec)
+        {
+            // extensions/v1beta1 retained all old ReplicaSets by default; int32 max preserves that behavior.
+            spec.TryAdd("revisionHistoryLimit", int.MaxValue);
         }
     }
 

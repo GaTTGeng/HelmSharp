@@ -12,7 +12,7 @@ public sealed class ThreeWayMergeReviewTests
         var merged = ThreeWayMerge.MergeResource(
             "apiVersion: v1\nkind: Service\nspec:\n  type: LoadBalancer\n  externalTrafficPolicy: Local\n  healthCheckNodePort: 30001\n  ports:\n  - port: 80\n    targetPort: 8080\n    nodePort: 30080\n",
             "apiVersion: v1\nkind: Service\nspec:\n  type: ClusterIP\n  ports:\n  - port: 80\n    targetPort: 8080\n",
-            "apiVersion: v1\nkind: Service\nspec:\n  type: LoadBalancer\n  externalTrafficPolicy: Local\n  healthCheckNodePort: 30001\n  clusterIP: 10.0.0.20\n  clusterIPs:\n  - 10.0.0.20\n  ports:\n  - port: 80\n    targetPort: 8080\n    nodePort: 30080\n");
+            "apiVersion: v1\nkind: Service\nspec:\n  type: LoadBalancer\n  externalTrafficPolicy: Local\n  allocateLoadBalancerNodePorts: true\n  healthCheckNodePort: 30001\n  clusterIP: 10.0.0.20\n  clusterIPs:\n  - 10.0.0.20\n  ports:\n  - port: 80\n    targetPort: 8080\n    nodePort: 30080\n");
 
         var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
         var spec = (IDictionary<string, object?>)document["spec"]!;
@@ -20,7 +20,37 @@ public sealed class ThreeWayMergeReviewTests
 
         Assert.Equal("ClusterIP", spec["type"]);
         Assert.False(spec.ContainsKey("healthCheckNodePort"));
+        Assert.False(spec.ContainsKey("allocateLoadBalancerNodePorts"));
         Assert.False(port.ContainsKey("nodePort"));
+    }
+
+    [Fact]
+    public void MergeResource_MergesValidationActionsAsASet()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicyBinding\nspec:\n  validationActions:\n  - Deny\n",
+            "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicyBinding\nspec:\n  validationActions:\n  - Warn\n",
+            "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicyBinding\nspec:\n  validationActions:\n  - Deny\n  - Audit\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        Assert.Equal(["Warn", "Audit"], ((IList<object?>)spec["validationActions"]!).Cast<string>());
+    }
+
+    [Fact]
+    public void MergeResource_ReplacesBuiltInAtomicParamRefAsAWholeMap()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicyBinding\nspec:\n  paramRef:\n    name: policy-params\n    namespace: before\n",
+            "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicyBinding\nspec:\n  paramRef:\n    name: policy-params\n    namespace: after\n",
+            "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicyBinding\nspec:\n  paramRef:\n    selector:\n      matchLabels:\n        app: operator\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var paramRef = (IDictionary<string, object?>)spec["paramRef"]!;
+        Assert.Equal("policy-params", paramRef["name"]);
+        Assert.Equal("after", paramRef["namespace"]);
+        Assert.False(paramRef.ContainsKey("selector"));
     }
 
     [Fact]
