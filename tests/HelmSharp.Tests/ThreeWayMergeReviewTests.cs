@@ -92,6 +92,45 @@ public sealed class ThreeWayMergeReviewTests
     }
 
     [Fact]
+    public void MergeResource_ReplacesNetworkPolicySelectorAsOneField()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nspec:\n  podSelector:\n    matchLabels:\n      app: web\n",
+            "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nspec:\n  podSelector:\n    matchLabels:\n      app: api\n",
+            "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nspec:\n  podSelector:\n    matchLabels:\n      app: web\n      env: prod\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var selector = (IDictionary<string, object?>)spec["podSelector"]!;
+        var labels = (IDictionary<string, object?>)selector["matchLabels"]!;
+
+        Assert.Equal("api", labels["app"]);
+        Assert.False(labels.ContainsKey("env"));
+    }
+
+    [Fact]
+    public void MergeResource_MatchesSchemaPathsWithDottedDynamicMapKeys()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "spec:\n  tenants:\n    example.com:\n      rules:\n      - name: chart\n        value: before\n",
+            "spec:\n  tenants:\n    example.com:\n      rules:\n      - name: chart\n        value: after\n",
+            "spec:\n  tenants:\n    example.com:\n      rules:\n      - name: chart\n        value: before\n      - name: injected\n        value: retained\n",
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+            {
+                ["spec.tenants.*.rules"] = ["name"]
+            });
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var tenants = (IDictionary<string, object?>)((IDictionary<string, object?>)document["spec"]!)["tenants"]!;
+        var tenant = (IDictionary<string, object?>)tenants["example.com"]!;
+        var rules = (IList<object?>)tenant["rules"]!;
+
+        Assert.Equal(2, rules.Count);
+        Assert.Equal("after", ((IDictionary<string, object?>)rules[0]!)["value"]);
+        Assert.Equal("injected", ((IDictionary<string, object?>)rules[1]!)["name"]);
+    }
+
+    [Fact]
     public void GetListMapKeySets_UsesAtomicDefaultsWhenCustomSchemaHasNoPath()
     {
         Assert.Empty(ThreeWayMerge.GetListMapKeySets(
