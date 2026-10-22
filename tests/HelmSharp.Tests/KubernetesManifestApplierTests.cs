@@ -188,6 +188,16 @@ public sealed class KubernetesManifestApplierTests
         Assert.Null(KubernetesManifestSchemaConverter.GetCanonicalApiVersion(identity));
     }
 
+    [Theory]
+    [InlineData("autoscaling/v2beta1")]
+    [InlineData("autoscaling/v2beta2")]
+    public void SchemaConverter_DoesNotForceBetaHpaToUnservedStableVersionWithoutAttemptedTarget(string apiVersion)
+    {
+        var identity = new ManifestIdentity(apiVersion, "HorizontalPodAutoscaler", "worker", "release-ns");
+
+        Assert.Null(KubernetesManifestSchemaConverter.GetCanonicalApiVersion(identity));
+    }
+
     [Fact]
     public void SchemaConverter_MaterializesLegacyExtensionsDeploymentRollingUpdateDefaults()
     {

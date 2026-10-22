@@ -541,11 +541,13 @@ internal static class ThreeWayMerge
     {
         if (resourceKind is not ("Deployment" or "DaemonSet" or "ReplicaSet" or "StatefulSet" or
             "Job" or "CronJob" or "ReplicationController" or "Service" or "NetworkPolicy" or
-            "PodDisruptionBudget" or "ResourceQuota" or "HorizontalPodAutoscaler"))
+            "PodDisruptionBudget" or "ResourceQuota" or "HorizontalPodAutoscaler" or
+            "MutatingWebhookConfiguration" or "ValidatingWebhookConfiguration"))
             return false;
 
         var parts = SplitPath(path);
-        return parts.Length > 1 && parts[^1] is "selector" or "podSelector" or "namespaceSelector" or "labelSelector";
+        return parts.Length > 1 && parts[^1] is "selector" or "podSelector" or "namespaceSelector" or
+            "objectSelector" or "labelSelector";
     }
 
     private static string AppendPath(string path, string key)
