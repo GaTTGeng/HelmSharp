@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using HelmSharp.Chart;
 using k8s;
@@ -28,6 +29,9 @@ public sealed class KubernetesManifestApplier
     private readonly string _fieldManager;
     private readonly Func<TimeSpan, CancellationToken, Task> _discoveryDelay;
     private readonly Dictionary<(string ApiVersion, string Kind), DiscoveredResource> _discoveredResources = new();
+    private bool _lastApplyMayHaveCommitted;
+    private IReadOnlyDictionary<ManifestIdentity, string> _previousManifestByIdentity =
+        new Dictionary<ManifestIdentity, string>();
 
     /// <param name="client">Kubernetes client used for all API operations.</param>
     /// <param name="fieldManager">Field manager name recorded on create/replace calls (server-side apply bookkeeping).</param>
@@ -96,19 +100,71 @@ public sealed class KubernetesManifestApplier
             if (identity is null)
                 continue;
 
+            _lastApplyMayHaveCommitted = false;
+            Exception? applyError = null;
             try
             {
                 identity = await ApplyOneAsync(identity, doc, cancellationToken);
             }
-            catch (KubernetesResourceOperationException)
+            catch (KubernetesResourceOperationException ex)
             {
-                throw;
+                applyError = ex;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                throw new KubernetesResourceOperationException(identity, ex);
+                applyError = new KubernetesResourceOperationException(identity, ex);
             }
+            catch (OperationCanceledException ex) when (_lastApplyMayHaveCommitted)
+            {
+                // Preserve confirmed write progress before propagating in-flight cancellation.
+                applyError = ex;
+            }
+
+            if (applyError is not null)
+            {
+                // A request can time out after the API server commits the write. Report
+                // that resource as attempted when read-back confirms the write advanced,
+                // so failure recovery records it in the failed revision's baseline.
+                if (_lastApplyMayHaveCommitted)
+                    yield return identity.DisplayName;
+                throw applyError;
+            }
+
             yield return identity.DisplayName;
+        }
+    }
+
+    /// <summary>
+    /// Applies an upgrade manifest while preserving live changes that the previous release
+    /// manifest shows HelmSharp does not own.
+    /// </summary>
+    /// <param name="manifest">New multi-document YAML manifest rendered from the chart.</param>
+    /// <param name="previousManifest">Manifest recorded by the previously deployed release revision.</param>
+    /// <param name="defaultNamespace">Namespace used when a document omits <c>metadata.namespace</c>.</param>
+    /// <param name="cancellationToken">Cancels API calls.</param>
+    internal async IAsyncEnumerable<string> ApplyUpgradeAsync(
+        string manifest,
+        string previousManifest,
+        string defaultNamespace,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var priorMergeBaseline = _previousManifestByIdentity;
+        _previousManifestByIdentity = SplitDocuments(previousManifest)
+            .Select(document => (Document: document, Identity: ManifestIdentity.Parse(document, defaultNamespace)))
+            .Where(item => item.Identity is not null)
+            .GroupBy(item => item.Identity!)
+            .ToDictionary(group => group.Key, group => group.Last().Document);
+
+        try
+        {
+            await foreach (var resource in ApplyAsync(manifest, defaultNamespace, cancellationToken))
+                yield return resource;
+        }
+        finally
+        {
+            // Atomic failure recovery reuses this applier to restore the prior manifest.
+            // Keep the three-way baseline scoped to the upgrade apply, not recovery.
+            _previousManifestByIdentity = priorMergeBaseline;
         }
     }
 
@@ -226,19 +282,31 @@ public sealed class KubernetesManifestApplier
             ("batch/v1", "Job" or "CronJob") => true,
             ("networking.k8s.io/v1", "Ingress" or "NetworkPolicy") => true,
             ("networking.k8s.io/v1", "IngressClass") => false,
+            ("networking.k8s.io/v1beta1", "IngressClass") => false,
             ("rbac.authorization.k8s.io/v1", "Role" or "RoleBinding") => true,
             ("rbac.authorization.k8s.io/v1", "ClusterRole" or "ClusterRoleBinding") => false,
+            ("rbac.authorization.k8s.io/v1beta1", "Role" or "RoleBinding") => true,
+            ("rbac.authorization.k8s.io/v1beta1", "ClusterRole" or "ClusterRoleBinding") => false,
             ("autoscaling/v1" or "autoscaling/v2", "HorizontalPodAutoscaler") => true,
             ("policy/v1", "PodDisruptionBudget") => true,
             ("storage.k8s.io/v1", "StorageClass" or "CSIDriver" or "CSINode" or "VolumeAttachment") => false,
+            ("storage.k8s.io/v1", "CSIStorageCapacity") => true,
+            ("storage.k8s.io/v1beta1", "CSIStorageCapacity") => true,
+            ("storage.k8s.io/v1beta1", "StorageClass" or "CSIDriver" or "CSINode" or "VolumeAttachment") => false,
             ("scheduling.k8s.io/v1", "PriorityClass") => false,
+            ("scheduling.k8s.io/v1beta1", "PriorityClass") => false,
             ("apiextensions.k8s.io/v1" or "apiextensions.k8s.io/v1beta1", "CustomResourceDefinition") => false,
-            ("admissionregistration.k8s.io/v1", "MutatingWebhookConfiguration" or "ValidatingWebhookConfiguration") => false,
+            ("admissionregistration.k8s.io/v1" or "admissionregistration.k8s.io/v1beta1", "MutatingWebhookConfiguration" or "ValidatingWebhookConfiguration") => false,
             ("apiregistration.k8s.io/v1", "APIService") => false,
+            ("apiregistration.k8s.io/v1beta1", "APIService") => false,
             ("coordination.k8s.io/v1", "Lease") => true,
+            ("coordination.k8s.io/v1beta1", "Lease") => true,
             ("node.k8s.io/v1", "RuntimeClass") => false,
+            ("node.k8s.io/v1beta1", "RuntimeClass") => false,
             ("discovery.k8s.io/v1", "EndpointSlice") => true,
-            ("flowcontrol.apiserver.k8s.io/v1", "FlowSchema" or "PriorityLevelConfiguration") => false,
+            ("flowcontrol.apiserver.k8s.io/v1" or "flowcontrol.apiserver.k8s.io/v1beta1" or
+                "flowcontrol.apiserver.k8s.io/v1beta2" or "flowcontrol.apiserver.k8s.io/v1beta3",
+                "FlowSchema" or "PriorityLevelConfiguration") => false,
             _ => null
         };
         namespaced = scope ?? false;
@@ -252,6 +320,19 @@ public sealed class KubernetesManifestApplier
 
     private async Task<ManifestIdentity> ApplyOneAsync(ManifestIdentity identity, string yaml, CancellationToken ct)
     {
+        Task UpsertWithIntentAsync<T>(
+            Func<Task<T>> read,
+            Func<Task<T>> create,
+            Func<T, Task<T>> replace)
+            => UpsertNamespacedAsync(
+                read,
+                create,
+                replace,
+                identity,
+                yaml,
+                () => ct.ThrowIfCancellationRequested(),
+                () => ct = CancellationToken.None);
+
         // Typed-client dispatch: known built-in kinds deserialize to strongly typed
         // models and use read/replace/create upserts, preserving fields the typed
         // model carries (for example Service healthCheckNodePort). Unknown kinds fall
@@ -260,150 +341,165 @@ public sealed class KubernetesManifestApplier
         {
             // ─── Core v1 ───
             case ("v1", "Namespace"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoreV1.ReadNamespaceAsync(identity.Name, cancellationToken: ct),
                     () => _client.CoreV1.CreateNamespaceAsync(KubernetesYaml.Deserialize<V1Namespace>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1Namespace>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1Namespace>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.CoreV1.ReplaceNamespaceAsync(item, identity.Name, cancellationToken: ct);
                     });
                 break;
             case ("v1", "ConfigMap"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoreV1.ReadNamespacedConfigMapAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.CoreV1.CreateNamespacedConfigMapAsync(KubernetesYaml.Deserialize<V1ConfigMap>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1ConfigMap>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1ConfigMap>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.CoreV1.ReplaceNamespacedConfigMapAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
                     });
                 break;
             case ("v1", "Secret"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoreV1.ReadNamespacedSecretAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.CoreV1.CreateNamespacedSecretAsync(KubernetesYaml.Deserialize<V1Secret>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1Secret>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1Secret>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.CoreV1.ReplaceNamespacedSecretAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
                     });
                 break;
             case ("v1", "Service"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoreV1.ReadNamespacedServiceAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.CoreV1.CreateNamespacedServiceAsync(KubernetesYaml.Deserialize<V1Service>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1Service>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1Service>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         // ClusterIP(s) and IpFamilyPolicy are allocated/immutable after
                         // creation; healthCheckNodePort is server-allocated for
                         // LoadBalancer+Local services. All must survive the replace.
-                        item.Spec.ClusterIP = existing.Spec.ClusterIP;
-                        item.Spec.ClusterIPs = existing.Spec.ClusterIPs;
-                        item.Spec.IpFamilyPolicy ??= existing.Spec.IpFamilyPolicy;
+                        if (item.Spec.Type != "ExternalName")
+                        {
+                            item.Spec.ClusterIP = existing.Spec.ClusterIP;
+                            item.Spec.ClusterIPs = existing.Spec.ClusterIPs;
+                            item.Spec.IpFamilyPolicy ??= existing.Spec.IpFamilyPolicy;
+                        }
                         if (item.Spec.HealthCheckNodePort is null && SupportsHealthCheckNodePort(item.Spec))
                             item.Spec.HealthCheckNodePort = existing.Spec.HealthCheckNodePort;
                         return _client.CoreV1.ReplaceNamespacedServiceAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
                     });
                 break;
             case ("v1", "ServiceAccount"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoreV1.ReadNamespacedServiceAccountAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.CoreV1.CreateNamespacedServiceAccountAsync(KubernetesYaml.Deserialize<V1ServiceAccount>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1ServiceAccount>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1ServiceAccount>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.CoreV1.ReplaceNamespacedServiceAccountAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
                     });
                 break;
             case ("v1", "PersistentVolumeClaim"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoreV1.ReadNamespacedPersistentVolumeClaimAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.CoreV1.CreateNamespacedPersistentVolumeClaimAsync(KubernetesYaml.Deserialize<V1PersistentVolumeClaim>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1PersistentVolumeClaim>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1PersistentVolumeClaim>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.CoreV1.ReplaceNamespacedPersistentVolumeClaimAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
                     });
                 break;
             case ("v1", "PersistentVolume"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoreV1.ReadPersistentVolumeAsync(identity.Name, cancellationToken: ct),
                     () => _client.CoreV1.CreatePersistentVolumeAsync(KubernetesYaml.Deserialize<V1PersistentVolume>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1PersistentVolume>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1PersistentVolume>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.CoreV1.ReplacePersistentVolumeAsync(item, identity.Name, cancellationToken: ct);
                     });
                 break;
             case ("v1", "LimitRange"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoreV1.ReadNamespacedLimitRangeAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.CoreV1.CreateNamespacedLimitRangeAsync(KubernetesYaml.Deserialize<V1LimitRange>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1LimitRange>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1LimitRange>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.CoreV1.ReplaceNamespacedLimitRangeAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
                     });
                 break;
             case ("v1", "ResourceQuota"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoreV1.ReadNamespacedResourceQuotaAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.CoreV1.CreateNamespacedResourceQuotaAsync(KubernetesYaml.Deserialize<V1ResourceQuota>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1ResourceQuota>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1ResourceQuota>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.CoreV1.ReplaceNamespacedResourceQuotaAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
                     });
                 break;
             case ("v1", "Pod"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoreV1.ReadNamespacedPodAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.CoreV1.CreateNamespacedPodAsync(KubernetesYaml.Deserialize<V1Pod>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1Pod>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1Pod>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.CoreV1.ReplaceNamespacedPodAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
                     });
                 break;
             case ("v1", "Endpoints"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoreV1.ReadNamespacedEndpointsAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.CoreV1.CreateNamespacedEndpointsAsync(KubernetesYaml.Deserialize<V1Endpoints>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1Endpoints>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1Endpoints>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.CoreV1.ReplaceNamespacedEndpointsAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
                     });
                 break;
             case ("v1", "ReplicationController"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoreV1.ReadNamespacedReplicationControllerAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.CoreV1.CreateNamespacedReplicationControllerAsync(KubernetesYaml.Deserialize<V1ReplicationController>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1ReplicationController>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1ReplicationController>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.CoreV1.ReplaceNamespacedReplicationControllerAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -412,48 +508,52 @@ public sealed class KubernetesManifestApplier
 
             // ─── apps/v1 ───
             case ("apps/v1", "Deployment"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.AppsV1.ReadNamespacedDeploymentAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.AppsV1.CreateNamespacedDeploymentAsync(KubernetesYaml.Deserialize<V1Deployment>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1Deployment>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1Deployment>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.AppsV1.ReplaceNamespacedDeploymentAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
                     });
                 break;
             case ("apps/v1", "StatefulSet"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.AppsV1.ReadNamespacedStatefulSetAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.AppsV1.CreateNamespacedStatefulSetAsync(KubernetesYaml.Deserialize<V1StatefulSet>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1StatefulSet>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1StatefulSet>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.AppsV1.ReplaceNamespacedStatefulSetAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
                     });
                 break;
             case ("apps/v1", "DaemonSet"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.AppsV1.ReadNamespacedDaemonSetAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.AppsV1.CreateNamespacedDaemonSetAsync(KubernetesYaml.Deserialize<V1DaemonSet>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1DaemonSet>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1DaemonSet>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.AppsV1.ReplaceNamespacedDaemonSetAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
                     });
                 break;
             case ("apps/v1", "ReplicaSet"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.AppsV1.ReadNamespacedReplicaSetAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.AppsV1.CreateNamespacedReplicaSetAsync(KubernetesYaml.Deserialize<V1ReplicaSet>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1ReplicaSet>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1ReplicaSet>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.AppsV1.ReplaceNamespacedReplicaSetAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -462,12 +562,13 @@ public sealed class KubernetesManifestApplier
 
             // ─── batch/v1 ───
             case ("batch/v1", "Job"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.BatchV1.ReadNamespacedJobAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.BatchV1.CreateNamespacedJobAsync(KubernetesYaml.Deserialize<V1Job>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1Job>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1Job>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         // The Job selector is controller-assigned and immutable — carry
@@ -477,12 +578,13 @@ public sealed class KubernetesManifestApplier
                     });
                 break;
             case ("batch/v1", "CronJob"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.BatchV1.ReadNamespacedCronJobAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.BatchV1.CreateNamespacedCronJobAsync(KubernetesYaml.Deserialize<V1CronJob>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1CronJob>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1CronJob>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.BatchV1.ReplaceNamespacedCronJobAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -491,36 +593,39 @@ public sealed class KubernetesManifestApplier
 
             // ─── networking.k8s.io/v1 ───
             case ("networking.k8s.io/v1", "Ingress"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.NetworkingV1.ReadNamespacedIngressAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.NetworkingV1.CreateNamespacedIngressAsync(KubernetesYaml.Deserialize<V1Ingress>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1Ingress>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1Ingress>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.NetworkingV1.ReplaceNamespacedIngressAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
                     });
                 break;
             case ("networking.k8s.io/v1", "NetworkPolicy"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.NetworkingV1.ReadNamespacedNetworkPolicyAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.NetworkingV1.CreateNamespacedNetworkPolicyAsync(KubernetesYaml.Deserialize<V1NetworkPolicy>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1NetworkPolicy>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1NetworkPolicy>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.NetworkingV1.ReplaceNamespacedNetworkPolicyAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
                     });
                 break;
             case ("networking.k8s.io/v1", "IngressClass"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.NetworkingV1.ReadIngressClassAsync(identity.Name, cancellationToken: ct),
                     () => _client.NetworkingV1.CreateIngressClassAsync(KubernetesYaml.Deserialize<V1IngressClass>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1IngressClass>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1IngressClass>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.NetworkingV1.ReplaceIngressClassAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -528,47 +633,51 @@ public sealed class KubernetesManifestApplier
 
             // ─── rbac.authorization.k8s.io/v1 ───
             case ("rbac.authorization.k8s.io/v1", "Role"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.RbacAuthorizationV1.ReadNamespacedRoleAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.RbacAuthorizationV1.CreateNamespacedRoleAsync(KubernetesYaml.Deserialize<V1Role>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1Role>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1Role>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.RbacAuthorizationV1.ReplaceNamespacedRoleAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
                     });
                 break;
             case ("rbac.authorization.k8s.io/v1", "RoleBinding"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.RbacAuthorizationV1.ReadNamespacedRoleBindingAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.RbacAuthorizationV1.CreateNamespacedRoleBindingAsync(KubernetesYaml.Deserialize<V1RoleBinding>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1RoleBinding>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1RoleBinding>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.RbacAuthorizationV1.ReplaceNamespacedRoleBindingAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
                     });
                 break;
             case ("rbac.authorization.k8s.io/v1", "ClusterRole"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.RbacAuthorizationV1.ReadClusterRoleAsync(identity.Name, cancellationToken: ct),
                     () => _client.RbacAuthorizationV1.CreateClusterRoleAsync(KubernetesYaml.Deserialize<V1ClusterRole>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1ClusterRole>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1ClusterRole>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.RbacAuthorizationV1.ReplaceClusterRoleAsync(item, identity.Name, cancellationToken: ct);
                     });
                 break;
             case ("rbac.authorization.k8s.io/v1", "ClusterRoleBinding"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.RbacAuthorizationV1.ReadClusterRoleBindingAsync(identity.Name, cancellationToken: ct),
                     () => _client.RbacAuthorizationV1.CreateClusterRoleBindingAsync(KubernetesYaml.Deserialize<V1ClusterRoleBinding>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1ClusterRoleBinding>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1ClusterRoleBinding>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.RbacAuthorizationV1.ReplaceClusterRoleBindingAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -576,24 +685,26 @@ public sealed class KubernetesManifestApplier
 
             // ─── autoscaling/v2 ───
             case ("autoscaling/v2", "HorizontalPodAutoscaler"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.AutoscalingV2.ReadNamespacedHorizontalPodAutoscalerAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.AutoscalingV2.CreateNamespacedHorizontalPodAutoscalerAsync(KubernetesYaml.Deserialize<V2HorizontalPodAutoscaler>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V2HorizontalPodAutoscaler>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V2HorizontalPodAutoscaler>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.AutoscalingV2.ReplaceNamespacedHorizontalPodAutoscalerAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
                     });
                 break;
             case ("autoscaling/v1", "HorizontalPodAutoscaler"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.AutoscalingV1.ReadNamespacedHorizontalPodAutoscalerAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.AutoscalingV1.CreateNamespacedHorizontalPodAutoscalerAsync(KubernetesYaml.Deserialize<V1HorizontalPodAutoscaler>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1HorizontalPodAutoscaler>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1HorizontalPodAutoscaler>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.AutoscalingV1.ReplaceNamespacedHorizontalPodAutoscalerAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -602,12 +713,13 @@ public sealed class KubernetesManifestApplier
 
             // ─── policy/v1 ───
             case ("policy/v1", "PodDisruptionBudget"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.PolicyV1.ReadNamespacedPodDisruptionBudgetAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.PolicyV1.CreateNamespacedPodDisruptionBudgetAsync(KubernetesYaml.Deserialize<V1PodDisruptionBudget>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1PodDisruptionBudget>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1PodDisruptionBudget>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.PolicyV1.ReplaceNamespacedPodDisruptionBudgetAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -616,45 +728,49 @@ public sealed class KubernetesManifestApplier
 
             // ─── storage.k8s.io/v1 ───
             case ("storage.k8s.io/v1", "StorageClass"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.StorageV1.ReadStorageClassAsync(identity.Name, cancellationToken: ct),
                     () => _client.StorageV1.CreateStorageClassAsync(KubernetesYaml.Deserialize<V1StorageClass>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1StorageClass>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1StorageClass>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.StorageV1.ReplaceStorageClassAsync(item, identity.Name, cancellationToken: ct);
                     });
                 break;
             case ("storage.k8s.io/v1", "CSIDriver"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.StorageV1.ReadCSIDriverAsync(identity.Name, cancellationToken: ct),
                     () => _client.StorageV1.CreateCSIDriverAsync(KubernetesYaml.Deserialize<V1CSIDriver>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1CSIDriver>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1CSIDriver>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.StorageV1.ReplaceCSIDriverAsync(item, identity.Name, cancellationToken: ct);
                     });
                 break;
             case ("storage.k8s.io/v1", "CSINode"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.StorageV1.ReadCSINodeAsync(identity.Name, cancellationToken: ct),
                     () => _client.StorageV1.CreateCSINodeAsync(KubernetesYaml.Deserialize<V1CSINode>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1CSINode>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1CSINode>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.StorageV1.ReplaceCSINodeAsync(item, identity.Name, cancellationToken: ct);
                     });
                 break;
             case ("storage.k8s.io/v1", "VolumeAttachment"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.StorageV1.ReadVolumeAttachmentAsync(identity.Name, cancellationToken: ct),
                     () => _client.StorageV1.CreateVolumeAttachmentAsync(KubernetesYaml.Deserialize<V1VolumeAttachment>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1VolumeAttachment>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1VolumeAttachment>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.StorageV1.ReplaceVolumeAttachmentAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -662,12 +778,13 @@ public sealed class KubernetesManifestApplier
 
             // ─── scheduling.k8s.io/v1 ───
             case ("scheduling.k8s.io/v1", "PriorityClass"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.SchedulingV1.ReadPriorityClassAsync(identity.Name, cancellationToken: ct),
                     () => _client.SchedulingV1.CreatePriorityClassAsync(KubernetesYaml.Deserialize<V1PriorityClass>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1PriorityClass>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1PriorityClass>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.SchedulingV1.ReplacePriorityClassAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -675,12 +792,13 @@ public sealed class KubernetesManifestApplier
 
             // ─── apiextensions.k8s.io/v1 ───
             case ("apiextensions.k8s.io/v1", "CustomResourceDefinition"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.ApiextensionsV1.ReadCustomResourceDefinitionAsync(identity.Name, cancellationToken: ct),
                     () => _client.ApiextensionsV1.CreateCustomResourceDefinitionAsync(KubernetesYaml.Deserialize<V1CustomResourceDefinition>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1CustomResourceDefinition>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1CustomResourceDefinition>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.ApiextensionsV1.ReplaceCustomResourceDefinitionAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -688,23 +806,25 @@ public sealed class KubernetesManifestApplier
 
             // ─── admissionregistration.k8s.io/v1 ───
             case ("admissionregistration.k8s.io/v1", "MutatingWebhookConfiguration"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.AdmissionregistrationV1.ReadMutatingWebhookConfigurationAsync(identity.Name, cancellationToken: ct),
                     () => _client.AdmissionregistrationV1.CreateMutatingWebhookConfigurationAsync(KubernetesYaml.Deserialize<V1MutatingWebhookConfiguration>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1MutatingWebhookConfiguration>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1MutatingWebhookConfiguration>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.AdmissionregistrationV1.ReplaceMutatingWebhookConfigurationAsync(item, identity.Name, cancellationToken: ct);
                     });
                 break;
             case ("admissionregistration.k8s.io/v1", "ValidatingWebhookConfiguration"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.AdmissionregistrationV1.ReadValidatingWebhookConfigurationAsync(identity.Name, cancellationToken: ct),
                     () => _client.AdmissionregistrationV1.CreateValidatingWebhookConfigurationAsync(KubernetesYaml.Deserialize<V1ValidatingWebhookConfiguration>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1ValidatingWebhookConfiguration>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1ValidatingWebhookConfiguration>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.AdmissionregistrationV1.ReplaceValidatingWebhookConfigurationAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -712,12 +832,13 @@ public sealed class KubernetesManifestApplier
 
             // ─── apiregistration.k8s.io/v1 ───
             case ("apiregistration.k8s.io/v1", "APIService"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.ApiregistrationV1.ReadAPIServiceAsync(identity.Name, cancellationToken: ct),
                     () => _client.ApiregistrationV1.CreateAPIServiceAsync(KubernetesYaml.Deserialize<V1APIService>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1APIService>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1APIService>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.ApiregistrationV1.ReplaceAPIServiceAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -725,12 +846,13 @@ public sealed class KubernetesManifestApplier
 
             // ─── coordination.k8s.io/v1 ───
             case ("coordination.k8s.io/v1", "Lease"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.CoordinationV1.ReadNamespacedLeaseAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.CoordinationV1.CreateNamespacedLeaseAsync(KubernetesYaml.Deserialize<V1Lease>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1Lease>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1Lease>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.CoordinationV1.ReplaceNamespacedLeaseAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -739,12 +861,13 @@ public sealed class KubernetesManifestApplier
 
             // ─── node.k8s.io/v1 ───
             case ("node.k8s.io/v1", "RuntimeClass"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.NodeV1.ReadRuntimeClassAsync(identity.Name, cancellationToken: ct),
                     () => _client.NodeV1.CreateRuntimeClassAsync(KubernetesYaml.Deserialize<V1RuntimeClass>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1RuntimeClass>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1RuntimeClass>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.NodeV1.ReplaceRuntimeClassAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -752,12 +875,13 @@ public sealed class KubernetesManifestApplier
 
             // ─── discovery.k8s.io/v1 ───
             case ("discovery.k8s.io/v1", "EndpointSlice"):
-                await UpsertNamespacedAsync(
+                await UpsertWithIntentAsync(
                     () => _client.DiscoveryV1.ReadNamespacedEndpointSliceAsync(identity.Name, identity.Namespace, cancellationToken: ct),
                     () => _client.DiscoveryV1.CreateNamespacedEndpointSliceAsync(KubernetesYaml.Deserialize<V1EndpointSlice>(yaml), identity.Namespace, cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1EndpointSlice>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1EndpointSlice>(upgradeYaml);
                         item.Metadata.NamespaceProperty = identity.Namespace;
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.DiscoveryV1.ReplaceNamespacedEndpointSliceAsync(item, identity.Name, identity.Namespace, cancellationToken: ct);
@@ -766,23 +890,25 @@ public sealed class KubernetesManifestApplier
 
             // ─── flowcontrol.apiserver.k8s.io/v1 ───
             case ("flowcontrol.apiserver.k8s.io/v1", "FlowSchema"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.FlowcontrolApiserverV1.ReadFlowSchemaAsync(identity.Name, cancellationToken: ct),
                     () => _client.FlowcontrolApiserverV1.CreateFlowSchemaAsync(KubernetesYaml.Deserialize<V1FlowSchema>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1FlowSchema>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1FlowSchema>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.FlowcontrolApiserverV1.ReplaceFlowSchemaAsync(item, identity.Name, cancellationToken: ct);
                     });
                 break;
             case ("flowcontrol.apiserver.k8s.io/v1", "PriorityLevelConfiguration"):
-                await UpsertClusterAsync(
+                await UpsertWithIntentAsync(
                     () => _client.FlowcontrolApiserverV1.ReadPriorityLevelConfigurationAsync(identity.Name, cancellationToken: ct),
                     () => _client.FlowcontrolApiserverV1.CreatePriorityLevelConfigurationAsync(KubernetesYaml.Deserialize<V1PriorityLevelConfiguration>(yaml), cancellationToken: ct),
                     existing =>
                     {
-                        var item = KubernetesYaml.Deserialize<V1PriorityLevelConfiguration>(yaml);
+                        var upgradeYaml = MergeWithLiveResource(identity, yaml, existing);
+                        var item = KubernetesYaml.Deserialize<V1PriorityLevelConfiguration>(upgradeYaml);
                         item.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
                         return _client.FlowcontrolApiserverV1.ReplacePriorityLevelConfigurationAsync(item, identity.Name, cancellationToken: ct);
                     });
@@ -797,10 +923,152 @@ public sealed class KubernetesManifestApplier
         return identity;
     }
 
+    private string MergeWithLiveResource(
+        ManifestIdentity identity,
+        string desiredManifest,
+        object liveResource,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys = null,
+        bool preserveRootStatus = true,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>? customListMapKeyDefaults = null)
+    {
+        if (!TryGetPreviousManifest(identity, out var previousManifest))
+            return desiredManifest;
+
+        var previousIdentity = ManifestIdentity.Parse(previousManifest, identity.Namespace);
+        if (previousIdentity is null ||
+            !KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+                previousManifest,
+                previousIdentity,
+                identity.ApiVersion,
+                out previousManifest))
+        {
+            // A baseline from an unknown schema cannot safely drive field ownership in
+            // the target version; skip merging rather than treating renamed fields as additions.
+            return desiredManifest;
+        }
+
+        // The typed Kubernetes read result already contains the same live object whose
+        // resourceVersion is used by the following Replace request.
+        var liveManifest = JsonSerializer.Serialize(liveResource);
+        return ThreeWayMerge.MergeResource(
+            NormalizeSecretStringData(identity, previousManifest),
+            NormalizeSecretStringData(identity, desiredManifest),
+            liveManifest,
+            customListMapKeys,
+            preserveRootStatus,
+            customListMapKeyDefaults);
+    }
+
+    private static string NormalizeSecretStringData(ManifestIdentity identity, string manifest)
+    {
+        if (identity.ApiVersion != "v1" || identity.Kind != "Secret")
+            return manifest;
+
+        var document = HelmYaml.DeserializeDictionary(manifest, StringComparer.Ordinal);
+        if (!document.TryGetValue("stringData", out var stringDataValue) ||
+            stringDataValue is not IDictionary<string, object?> stringData)
+            return manifest;
+
+        var data = document.TryGetValue("data", out var dataValue) &&
+                   dataValue is IDictionary<string, object?> existingData
+            ? existingData
+            : new Dictionary<string, object?>(StringComparer.Ordinal);
+
+        // Kubernetes stores stringData as base64 data and never returns stringData on reads.
+        // Canonicalizing both chart revisions lets three-way merge detect removed keys.
+        foreach (var (key, value) in stringData)
+        {
+            var text = value?.ToString() ?? string.Empty;
+            data[key] = Convert.ToBase64String(Encoding.UTF8.GetBytes(text));
+        }
+
+        document["data"] = data;
+        document.Remove("stringData");
+        return HelmYaml.Serialize(document);
+    }
+
+    private bool TryGetPreviousManifest(ManifestIdentity identity, out string previousManifest)
+    {
+        if (_previousManifestByIdentity.TryGetValue(identity, out previousManifest!))
+            return true;
+
+        // Discovery can reveal that a custom resource is cluster-scoped only after its
+        // prior manifest was parsed, when the default namespace was still attached.
+        if (string.IsNullOrWhiteSpace(identity.Namespace))
+        {
+            var matches = _previousManifestByIdentity
+                .Where(pair => SameResourceTypeAndName(pair.Key, identity))
+                .Select(pair => pair.Value)
+                .Take(2)
+                .ToArray();
+            if (matches.Length == 1)
+            {
+                previousManifest = matches[0];
+                return true;
+            }
+        }
+
+        // apiVersion can change while the chart keeps the same Kubernetes object. A
+        // three-way baseline still applies because the API group, kind, scope, and name
+        // identify that object independently of its currently served version.
+        var versionMatches = _previousManifestByIdentity
+            .Where(pair => SameResourceTypeAndName(pair.Key, identity) &&
+                           string.Equals(pair.Key.Namespace, identity.Namespace, StringComparison.Ordinal))
+            .Select(pair => pair.Value)
+            .Take(2)
+            .ToArray();
+        if (versionMatches.Length == 1)
+        {
+            previousManifest = versionMatches[0];
+            return true;
+        }
+
+        previousManifest = string.Empty;
+        return false;
+    }
+
+    private static bool SameResourceTypeAndName(ManifestIdentity left, ManifestIdentity right)
+        => string.Equals(GetCanonicalApiGroup(left), GetCanonicalApiGroup(right), StringComparison.Ordinal) &&
+           string.Equals(left.Kind, right.Kind, StringComparison.Ordinal) &&
+           string.Equals(left.Name, right.Name, StringComparison.Ordinal);
+
+    private static string GetCanonicalApiGroup(ManifestIdentity identity)
+    {
+        var separator = identity.ApiVersion.IndexOf('/');
+        var apiGroup = separator < 0 ? string.Empty : identity.ApiVersion[..separator];
+        if (apiGroup != "extensions")
+            return apiGroup;
+
+        // Kubernetes moved several built-in resources out of the legacy extensions
+        // group without changing their stored object identity. Keep aliases narrowly
+        // limited to those known built-ins so unrelated custom resources cannot collide.
+        return identity.Kind switch
+        {
+            "Deployment" or "DaemonSet" or "ReplicaSet" => "apps",
+            "Ingress" or "NetworkPolicy" => "networking.k8s.io",
+            "PodSecurityPolicy" => "policy",
+            _ => apiGroup
+        };
+    }
+
     private async Task<ManifestIdentity> ApplyDiscoveredResourceAsync(ManifestIdentity identity, string yaml, CancellationToken ct)
     {
         // Retry discovery: the CR may be applied in the same pass that created its CRD.
         var resource = await DiscoverResourceAsync(identity, retryRegistration: true, ct);
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys = null;
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>? customListMapKeyDefaults = null;
+        var preserveRootStatus = true;
+        CustomResourceSchema? schema = null;
+        if (!IsKnownKubernetesApiGroup(resource.Group))
+        {
+            schema = await ReadCustomResourceSchemaAsync(resource, ct);
+            preserveRootStatus = schema?.StatusSubresourceEnabled ?? true;
+        }
+        if (TryGetPreviousManifest(identity, out _))
+        {
+            customListMapKeys = schema?.ListMapKeys;
+            customListMapKeyDefaults = schema?.ListMapKeyDefaults;
+        }
         var item = HelmYaml.DeserializeDictionary(yaml);
 
         if (resource.Namespaced)
@@ -809,11 +1077,15 @@ public sealed class KubernetesManifestApplier
             await UpsertNamespacedAsync(
                 () => _client.CustomObjects.GetNamespacedCustomObjectAsync(resource.Group, resource.Version, identity.Namespace, resource.Plural, identity.Name, ct),
                 () => _client.CustomObjects.CreateNamespacedCustomObjectAsync(item, resource.Group, resource.Version, identity.Namespace, resource.Plural, null, _fieldManager, null, null, ct),
-                existing =>
+                async existing =>
                 {
+                    item = HelmYaml.DeserializeDictionary(
+                        MergeWithLiveResource(identity, yaml, existing, customListMapKeys, preserveRootStatus, customListMapKeyDefaults),
+                        StringComparer.Ordinal);
+                    SetNamespace(item, identity.Namespace);
                     SetResourceVersion(item, existing);
-                    return _client.CustomObjects.ReplaceNamespacedCustomObjectAsync(item, resource.Group, resource.Version, identity.Namespace, resource.Plural, identity.Name, null, _fieldManager, null, ct);
-                });
+                    return await _client.CustomObjects.ReplaceNamespacedCustomObjectAsync(item, resource.Group, resource.Version, identity.Namespace, resource.Plural, identity.Name, null, _fieldManager, null, ct);
+                }, identity, yaml, () => ct.ThrowIfCancellationRequested(), () => ct = CancellationToken.None, customListMapKeys, preserveRootStatus, customListMapKeyDefaults);
             return identity;
         }
 
@@ -822,12 +1094,157 @@ public sealed class KubernetesManifestApplier
         await UpsertClusterAsync(
             () => _client.CustomObjects.GetClusterCustomObjectAsync(resource.Group, resource.Version, resource.Plural, identity.Name, ct),
             () => _client.CustomObjects.CreateClusterCustomObjectAsync(item, resource.Group, resource.Version, resource.Plural, null, _fieldManager, null, null, ct),
-            existing =>
+            async existing =>
             {
+                item = HelmYaml.DeserializeDictionary(
+                    MergeWithLiveResource(identity, yaml, existing, customListMapKeys, preserveRootStatus, customListMapKeyDefaults),
+                    StringComparer.Ordinal);
+                SetNamespace(item, namespaceName: null);
                 SetResourceVersion(item, existing);
-                return _client.CustomObjects.ReplaceClusterCustomObjectAsync(item, resource.Group, resource.Version, resource.Plural, identity.Name, null, _fieldManager, null, ct);
-            });
+                return await _client.CustomObjects.ReplaceClusterCustomObjectAsync(item, resource.Group, resource.Version, resource.Plural, identity.Name, null, _fieldManager, null, ct);
+            }, identity, yaml, () => ct.ThrowIfCancellationRequested(), () => ct = CancellationToken.None, customListMapKeys, preserveRootStatus, customListMapKeyDefaults);
         return identity;
+    }
+
+    private async Task<CustomResourceSchema?> ReadCustomResourceSchemaAsync(
+        DiscoveredResource resource,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var crd = await _client.ApiextensionsV1.ReadCustomResourceDefinitionAsync(
+                $"{resource.Plural}.{resource.Group}",
+                cancellationToken: cancellationToken);
+            using var document = JsonDocument.Parse(JsonSerializer.Serialize(crd));
+            var versions = document.RootElement.GetProperty("spec").GetProperty("versions");
+            var version = versions.EnumerateArray().FirstOrDefault(candidate =>
+                candidate.GetProperty("name").GetString() == resource.Version &&
+                (!candidate.TryGetProperty("served", out var served) || served.GetBoolean()));
+            if (version.ValueKind == JsonValueKind.Undefined)
+                return new CustomResourceSchema(new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal), new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal), StatusSubresourceEnabled: true);
+            if (!version.TryGetProperty("schema", out var schema) ||
+                !schema.TryGetProperty("openAPIV3Schema", out var rootSchema))
+                return new CustomResourceSchema(new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal), new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal), HasStatusSubresource(version));
+
+            var result = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+            var keyDefaults = new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal);
+            CollectCustomListMapKeys(rootSchema, string.Empty, result, keyDefaults);
+            return new CustomResourceSchema(result, keyDefaults, HasStatusSubresource(version));
+        }
+        catch (HttpOperationException ex) when ((int)ex.Response.StatusCode == 404)
+        {
+            // Built-in resources are discovered through the same API but have no CRD schema.
+            return null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            if (IsKnownKubernetesApiGroup(resource.Group))
+                return null;
+
+            // Without schema access, treating CRD lists atomically is safer than
+            // inferring Kubernetes merge keys from coincidental property names.
+            return new CustomResourceSchema(new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal), new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal), StatusSubresourceEnabled: true);
+        }
+    }
+
+    internal static bool IsKnownKubernetesApiGroup(string group)
+        => group is "admissionregistration.k8s.io" or "apiextensions.k8s.io" or "apiregistration.k8s.io" or
+            "apps" or "authentication.k8s.io" or "authorization.k8s.io" or "autoscaling" or "batch" or
+            "certificates.k8s.io" or "coordination.k8s.io" or "discovery.k8s.io" or "events.k8s.io" or
+            "extensions" or "flowcontrol.apiserver.k8s.io" or "meta.k8s.io" or "metrics.k8s.io" or
+            "custom.metrics.k8s.io" or "external.metrics.k8s.io" or "networking.k8s.io" or "node.k8s.io" or "policy" or
+            "rbac.authorization.k8s.io" or "scheduling.k8s.io" or "storage.k8s.io" or
+            "resource.k8s.io" or "storagemigration.k8s.io";
+
+    private static bool HasStatusSubresource(JsonElement version)
+        => version.TryGetProperty("subresources", out var subresources) &&
+           subresources.ValueKind == JsonValueKind.Object &&
+           subresources.TryGetProperty("status", out _);
+
+    private sealed record CustomResourceSchema(
+        IReadOnlyDictionary<string, IReadOnlyList<string>> ListMapKeys,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> ListMapKeyDefaults,
+        bool StatusSubresourceEnabled);
+
+    private static void CollectCustomListMapKeys(
+        JsonElement schema,
+        string path,
+        IDictionary<string, IReadOnlyList<string>> result,
+        IDictionary<string, IReadOnlyDictionary<string, string>> keyDefaults)
+    {
+        if (schema.TryGetProperty("x-kubernetes-map-type", out var mapType) &&
+            mapType.ValueKind == JsonValueKind.String && mapType.GetString() == "atomic")
+            result[path] = [ThreeWayMerge.AtomicListSentinel];
+
+        if (schema.TryGetProperty("x-kubernetes-list-type", out var listType) &&
+            listType.ValueKind == JsonValueKind.String)
+        {
+            if (listType.GetString() == "atomic")
+            {
+                result[path] = [ThreeWayMerge.AtomicListSentinel];
+            }
+            else if (listType.GetString() == "set")
+            {
+                result[path] = Array.Empty<string>();
+            }
+            else if (listType.GetString() == "map" &&
+                     schema.TryGetProperty("x-kubernetes-list-map-keys", out var mapKeys) &&
+                     mapKeys.ValueKind == JsonValueKind.Array)
+            {
+                var keys = mapKeys.EnumerateArray()
+                    .Where(key => key.ValueKind == JsonValueKind.String)
+                    .Select(key => key.GetString()!)
+                    .ToArray();
+                if (keys.Length > 0)
+                {
+                    result[path] = keys;
+                    if (schema.TryGetProperty("items", out var listItems) &&
+                        listItems.ValueKind == JsonValueKind.Object &&
+                        listItems.TryGetProperty("properties", out var itemProperties) &&
+                        itemProperties.ValueKind == JsonValueKind.Object)
+                    {
+                        var defaults = new Dictionary<string, string>(StringComparer.Ordinal);
+                        foreach (var key in keys)
+                        {
+                            if (itemProperties.TryGetProperty(key, out var keySchema) &&
+                                keySchema.TryGetProperty("default", out var defaultValue))
+                                defaults[key] = defaultValue.GetRawText();
+                        }
+                        if (defaults.Count > 0)
+                            keyDefaults[path] = defaults;
+                    }
+                }
+            }
+        }
+
+        if (schema.TryGetProperty("properties", out var properties) && properties.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in properties.EnumerateObject())
+                CollectCustomListMapKeys(property.Value, AppendSchemaPath(path, property.Name), result, keyDefaults);
+        }
+
+        if (schema.TryGetProperty("items", out var items))
+        {
+            if (items.ValueKind == JsonValueKind.Object)
+                CollectCustomListMapKeys(items, path + "[]", result, keyDefaults);
+            else if (items.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var itemSchema in items.EnumerateArray())
+                    CollectCustomListMapKeys(itemSchema, path + "[]", result, keyDefaults);
+            }
+        }
+
+        // Dynamic map keys need a wildcard path so nested CRD list semantics still match.
+        if (schema.TryGetProperty("additionalProperties", out var additionalProperties) &&
+            additionalProperties.ValueKind == JsonValueKind.Object)
+            CollectCustomListMapKeys(additionalProperties, AppendSchemaPath(path, "*"), result, keyDefaults);
+    }
+
+    private static string AppendSchemaPath(string path, string property)
+    {
+        var escapedProperty = property.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace(".", "\\.", StringComparison.Ordinal);
+        return path.Length == 0 ? escapedProperty : path + "." + escapedProperty;
     }
 
     private async Task<DiscoveredResource> DiscoverResourceAsync(
@@ -1205,10 +1622,17 @@ public sealed class KubernetesManifestApplier
             : new DiscoveredResource(group, version, match.Name, match.Namespaced);
     }
 
-    private static async Task UpsertNamespacedAsync<T>(
+    private async Task UpsertNamespacedAsync<T>(
         Func<Task<T>> read,
         Func<Task<T>> create,
-        Func<T, Task<T>> replace)
+        Func<T, Task<T>> replace,
+        ManifestIdentity identity,
+        string desiredYaml,
+        Action throwIfCancellationRequested,
+        Action disableCancellationForRecovery,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys = null,
+        bool preserveRootStatus = true,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>? customListMapKeyDefaults = null)
     {
         // 404 from the read means "not created yet" — the create path. Replace is
         // preferred over patch so the applied manifest fully defines the object,
@@ -1216,19 +1640,571 @@ public sealed class KubernetesManifestApplier
         try
         {
             var existing = await read();
-            await replace(existing);
+            // Keep cancellation before the write outside ambiguous-write recovery.
+            throwIfCancellationRequested();
+            try
+            {
+                await replace(existing);
+            }
+            catch (Exception ex) when (IsAmbiguousWriteFailure(ex))
+            {
+                if (ex is OperationCanceledException)
+                    // The request was invoked, so finish read-back without the canceled operation token.
+                    disableCancellationForRecovery();
+                _lastApplyMayHaveCommitted |= await ReplaceMayHaveCommittedAsync(read, existing, identity, desiredYaml, customListMapKeys, preserveRootStatus, customListMapKeyDefaults);
+                throw;
+            }
         }
         catch (HttpOperationException ex) when ((int)ex.Response.StatusCode == 404)
         {
-            await create();
+            // Do not dispatch a create that was already canceled after the initial read.
+            throwIfCancellationRequested();
+            try
+            {
+                await create();
+            }
+            catch (Exception writeError) when (IsAmbiguousWriteFailure(writeError))
+            {
+                if (writeError is OperationCanceledException)
+                    // The create may have committed before cancellation interrupted its response.
+                    disableCancellationForRecovery();
+                _lastApplyMayHaveCommitted |= await CreateMayHaveCommittedAsync(read, identity, desiredYaml, preserveRootStatus);
+                throw;
+            }
         }
     }
 
-    private static Task UpsertClusterAsync<T>(
+    private Task UpsertClusterAsync<T>(
         Func<Task<T>> read,
         Func<Task<T>> create,
-        Func<T, Task<T>> replace)
-        => UpsertNamespacedAsync(read, create, replace);
+        Func<T, Task<T>> replace,
+        ManifestIdentity identity,
+        string desiredYaml,
+        Action throwIfCancellationRequested,
+        Action disableCancellationForRecovery,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys = null,
+        bool preserveRootStatus = true,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>? customListMapKeyDefaults = null)
+        => UpsertNamespacedAsync(read, create, replace, identity, desiredYaml, throwIfCancellationRequested, disableCancellationForRecovery, customListMapKeys, preserveRootStatus, customListMapKeyDefaults);
+
+    private static async Task<bool> CreateMayHaveCommittedAsync<T>(
+        Func<Task<T>> read,
+        ManifestIdentity identity,
+        string desiredYaml,
+        bool preserveRootStatus)
+    {
+        try
+        {
+            var after = await read();
+            // A different actor may have created this identity after our initial 404.
+            // Only count the ambiguous create as applied when the read-back matches our payload.
+            return ContainsExpectedManifest(
+                NormalizeSecretStringData(identity, desiredYaml),
+                after!,
+                TryGetTypedResourceScope(identity, out _),
+                identity.Kind,
+                preserveRootStatus,
+                customListMapKeys: null);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsAmbiguousWriteFailure(Exception exception)
+    {
+        if (exception is not HttpOperationException http)
+            return true;
+
+        var statusCode = (int)http.Response.StatusCode;
+        return statusCode == 0 || statusCode >= 500;
+    }
+
+    private async Task<bool> ReplaceMayHaveCommittedAsync<T>(
+        Func<Task<T>> read,
+        T before,
+        ManifestIdentity identity,
+        string desiredYaml,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys,
+        bool preserveRootStatus,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>? customListMapKeyDefaults)
+    {
+        try
+        {
+            var after = await read();
+            var beforeVersion = GetResourceVersion(before);
+            var afterVersion = GetResourceVersion(after);
+            if (beforeVersion is null || afterVersion is null ||
+                string.Equals(beforeVersion, afterVersion, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            // A controller can advance resourceVersion independently of this replace.
+            // Only record progress if the read-back also reflects the chart-owned payload.
+            var expectedYaml = MergeWithLiveResource(identity, desiredYaml, before!, customListMapKeys, preserveRootStatus, customListMapKeyDefaults);
+            var typedResource = TryGetTypedResourceScope(identity, out _);
+            return ContainsExpectedManifest(expectedYaml, after!, typedResource, identity.Kind, preserveRootStatus, customListMapKeys) &&
+                   RemovedValuesAreAbsent(expectedYaml, before!, after!, identity, typedResource, customListMapKeys, preserveRootStatus);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool ContainsExpectedManifest<T>(string expectedYaml, T actualResource, bool allowCaseInsensitiveProperties, string resourceKind, bool preserveRootStatus, IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys)
+    {
+        using var expected = JsonDocument.Parse(JsonSerializer.Serialize(
+            HelmYaml.DeserializeDictionary(expectedYaml, StringComparer.Ordinal)));
+        using var actual = JsonDocument.Parse(JsonSerializer.Serialize(actualResource));
+        return ContainsExpectedValue(
+            expected.RootElement,
+            actual.RootElement,
+            parentName: null,
+            allowCaseInsensitiveProperties,
+            isTypedResource: allowCaseInsensitiveProperties,
+            inQuantityMap: false,
+            resourceKind,
+            preserveRootStatus,
+            customListMapKeys,
+            path: string.Empty);
+    }
+
+    private static bool RemovedValuesAreAbsent<T>(
+        string expectedYaml,
+        T beforeResource,
+        T actualResource,
+        ManifestIdentity identity,
+        bool allowCaseInsensitiveProperties,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys,
+        bool preserveRootStatus)
+    {
+        using var expected = JsonDocument.Parse(JsonSerializer.Serialize(
+            HelmYaml.DeserializeDictionary(expectedYaml, StringComparer.Ordinal)));
+        using var before = JsonDocument.Parse(JsonSerializer.Serialize(beforeResource));
+        using var actual = JsonDocument.Parse(JsonSerializer.Serialize(actualResource));
+        return RemovedValuesAreAbsent(
+            expected.RootElement,
+            before.RootElement,
+            actual.RootElement,
+            identity,
+            parentName: null,
+            allowCaseInsensitiveProperties,
+            path: string.Empty,
+            customListMapKeys,
+            preserveRootStatus);
+    }
+
+    private static bool ContainsExpectedValue(
+        JsonElement expected,
+        JsonElement actual,
+        string? parentName,
+        bool allowCaseInsensitiveProperties,
+        bool isTypedResource,
+        bool inQuantityMap,
+        string resourceKind,
+        bool preserveRootStatus,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys,
+        string path)
+    {
+        if (expected.ValueKind == JsonValueKind.Object)
+        {
+            if (actual.ValueKind != JsonValueKind.Object)
+                return false;
+
+            foreach (var property in expected.EnumerateObject())
+            {
+                if (IsServerManagedField(parentName, property.Name, preserveRootStatus))
+                    continue;
+
+                var matchModelAliases = allowCaseInsensitiveProperties && !IsArbitraryMap(parentName) && !inQuantityMap;
+                if (!TryGetPropertyExactThenIgnoreCase(actual, property.Name, matchModelAliases, out var actualValue) ||
+                    !ContainsExpectedValue(
+                        property.Value,
+                        actualValue,
+                        property.Name,
+                        allowCaseInsensitiveProperties && !IsArbitraryMap(property.Name),
+                        isTypedResource,
+                        inQuantityMap || IsQuantityField(property.Name, parentName, resourceKind) ||
+                        resourceKind == "HorizontalPodAutoscaler" && parentName == "target" &&
+                        property.Name is "averageValue" or "value",
+                        resourceKind,
+                        preserveRootStatus,
+                        customListMapKeys,
+                        AppendJsonPath(path, property.Name)))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        if (expected.ValueKind == JsonValueKind.Array)
+        {
+            if (actual.ValueKind != JsonValueKind.Array)
+                return false;
+
+            var expectedItems = expected.EnumerateArray().ToArray();
+            var actualItems = actual.EnumerateArray().ToArray();
+            var setList = resourceKind == "ValidatingAdmissionPolicyBinding" && path == "spec.validationActions" ||
+                          customListMapKeys is not null && customListMapKeys.Any(entry =>
+                              entry.Value.Count == 0 && ThreeWayMerge.SchemaPathMatches(entry.Key, path));
+            if (setList)
+                return expectedItems.All(expectedItem => actualItems.Any(actualItem =>
+                    ContainsExpectedValue(expectedItem, actualItem, parentName, allowCaseInsensitiveProperties, isTypedResource, inQuantityMap, resourceKind, preserveRootStatus, customListMapKeys, path + "[]")));
+
+            // Preserve submitted order while allowing admission webhooks to insert extra entries.
+            var actualIndex = 0;
+            foreach (var expectedItem in expectedItems)
+            {
+                while (actualIndex < actualItems.Length &&
+                       !ContainsExpectedValue(expectedItem, actualItems[actualIndex], parentName, allowCaseInsensitiveProperties, isTypedResource, inQuantityMap, resourceKind, preserveRootStatus, customListMapKeys, path + "[]"))
+                {
+                    actualIndex++;
+                }
+
+                if (actualIndex == actualItems.Length)
+                    return false;
+
+                actualIndex++;
+            }
+
+            return true;
+        }
+
+        if (expected.ValueKind == JsonValueKind.Number && actual.ValueKind == JsonValueKind.Number)
+            return expected.GetDecimal() == actual.GetDecimal();
+
+        if (isTypedResource && inQuantityMap &&
+            expected.ValueKind == JsonValueKind.String && actual.ValueKind == JsonValueKind.String)
+        {
+            try
+            {
+                // Quantity strings can differ while representing the same fixed-point value.
+                var expectedQuantity = new ResourceQuantity(expected.GetString()!).ToString();
+                var actualQuantity = new ResourceQuantity(actual.GetString()!).ToString();
+                return string.Equals(expectedQuantity, actualQuantity, StringComparison.Ordinal);
+            }
+            catch (FormatException)
+            {
+                // Invalid quantity text falls back to exact comparison below.
+            }
+        }
+
+        return expected.ValueKind == actual.ValueKind &&
+               string.Equals(expected.ToString(), actual.ToString(), StringComparison.Ordinal);
+    }
+
+    private static bool RemovedValuesAreAbsent(
+        JsonElement expected,
+        JsonElement before,
+        JsonElement actual,
+        ManifestIdentity identity,
+        string? parentName,
+        bool allowCaseInsensitiveProperties,
+        string path,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys,
+        bool preserveRootStatus)
+    {
+        if (before.ValueKind == JsonValueKind.Object && expected.ValueKind == JsonValueKind.Object)
+        {
+            var matchModelAliases = allowCaseInsensitiveProperties && !IsArbitraryMap(parentName);
+            foreach (var beforeProperty in before.EnumerateObject())
+            {
+                if (IsServerManagedField(parentName, beforeProperty.Name, preserveRootStatus) || beforeProperty.Value.ValueKind == JsonValueKind.Null)
+                    continue;
+
+                if (!expected.TryGetProperty(beforeProperty.Name, out var expectedValue))
+                {
+                    if (TryGetPropertyExactThenIgnoreCase(actual, beforeProperty.Name, matchModelAliases, out var retainedValue) &&
+                        !IsDefaultedField(identity, AppendJsonPath(path, beforeProperty.Name), retainedValue))
+                        return false;
+                    continue;
+                }
+
+                if (TryGetPropertyExactThenIgnoreCase(actual, beforeProperty.Name, matchModelAliases, out var actualValue) &&
+                    beforeProperty.Value.ValueKind == JsonValueKind.Object && expectedValue.ValueKind == JsonValueKind.Object &&
+                    !RemovedValuesAreAbsent(expectedValue, beforeProperty.Value, actualValue, identity, beforeProperty.Name, allowCaseInsensitiveProperties && !IsArbitraryMap(beforeProperty.Name), AppendJsonPath(path, beforeProperty.Name), customListMapKeys, preserveRootStatus))
+                {
+                    return false;
+                }
+
+                if (TryGetPropertyExactThenIgnoreCase(actual, beforeProperty.Name, matchModelAliases, out actualValue) &&
+                    beforeProperty.Value.ValueKind == JsonValueKind.Array && expectedValue.ValueKind == JsonValueKind.Array &&
+                    !RemovedArrayValuesAreAbsent(expectedValue, beforeProperty.Value, actualValue, identity, AppendJsonPath(path, beforeProperty.Name), customListMapKeys, preserveRootStatus))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        if (before.ValueKind == JsonValueKind.Array && expected.ValueKind == JsonValueKind.Array)
+            return RemovedArrayValuesAreAbsent(expected, before, actual, identity, path, customListMapKeys, preserveRootStatus);
+
+        return true;
+    }
+
+    private static bool RemovedArrayValuesAreAbsent(
+        JsonElement expected,
+        JsonElement before,
+        JsonElement actual,
+        ManifestIdentity identity,
+        string path,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys,
+        bool preserveRootStatus)
+    {
+        if (actual.ValueKind != JsonValueKind.Array)
+            return false;
+
+        var expectedItems = expected.EnumerateArray().ToArray();
+        var defaultTcpProtocol = IsBuiltInTcpPortList(identity, path, customListMapKeys);
+        var keyFields = SelectArrayIdentityKeys(
+            expectedItems,
+            before.EnumerateArray().ToArray(),
+            actual.EnumerateArray().ToArray(),
+            ThreeWayMerge.GetListMapKeySets(path, customListMapKeys),
+            defaultTcpProtocol);
+        foreach (var beforeItem in before.EnumerateArray())
+        {
+            var expectedItem = expectedItems.FirstOrDefault(candidate => SameArrayItem(candidate, beforeItem, keyFields, defaultTcpProtocol));
+            if (expectedItem.ValueKind != JsonValueKind.Undefined)
+            {
+                if (keyFields is not null)
+                {
+                    var actualItem = actual.EnumerateArray().FirstOrDefault(candidate => SameArrayItem(candidate, beforeItem, keyFields, defaultTcpProtocol));
+                    if (actualItem.ValueKind != JsonValueKind.Undefined &&
+                        !RemovedValuesAreAbsent(
+                            expectedItem,
+                            beforeItem,
+                            actualItem,
+                            identity,
+                            parentName: null,
+                            allowCaseInsensitiveProperties: false,
+                            path + "[]",
+                            customListMapKeys,
+                            preserveRootStatus))
+                        return false;
+                }
+
+                continue;
+            }
+
+            if (actual.EnumerateArray().Any(actualItem => SameArrayItem(actualItem, beforeItem, keyFields, defaultTcpProtocol)))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsDefaultedField(ManifestIdentity identity, string path, JsonElement value)
+    {
+        if (IsDefaultedRestartPolicy(identity, path, value))
+            return true;
+
+        // The API server restores Deployment replicas to 1 when the field is omitted.
+        if (identity.Kind == "Deployment" && path == "spec.replicas")
+            return value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var replicas) && replicas == 1;
+
+        if (identity.Kind != "Service" || value.ValueKind != JsonValueKind.String)
+            return false;
+
+        return path switch
+        {
+            "spec.type" => value.GetString() == "ClusterIP",
+            "spec.sessionAffinity" => value.GetString() == "None",
+            "spec.internalTrafficPolicy" => value.GetString() == "Cluster",
+            _ => false
+        };
+    }
+
+    private static bool IsDefaultedRestartPolicy(ManifestIdentity identity, string path, JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.String || value.GetString() != "Always")
+            return false;
+
+        return identity.Kind switch
+        {
+            "Pod" => path == "spec.restartPolicy",
+            "Deployment" or "DaemonSet" or "ReplicaSet" or "StatefulSet" or "ReplicationController" or "Job" =>
+                path == "spec.template.spec.restartPolicy",
+            "CronJob" => path == "spec.jobTemplate.spec.template.spec.restartPolicy",
+            _ => false
+        };
+    }
+
+    private static string[]? SelectArrayIdentityKeys(
+        IReadOnlyList<JsonElement> expected,
+        IReadOnlyList<JsonElement> before,
+        IReadOnlyList<JsonElement> actual,
+        IReadOnlyList<string[]> keySets,
+        bool defaultTcpProtocol)
+    {
+        foreach (var keySet in keySets)
+        {
+            if (HasUniqueArrayIdentity(expected, keySet, defaultTcpProtocol) &&
+                HasUniqueArrayIdentity(before, keySet, defaultTcpProtocol) &&
+                HasUniqueArrayIdentity(actual, keySet, defaultTcpProtocol))
+                return keySet;
+        }
+
+        return null;
+    }
+
+    private static bool HasUniqueArrayIdentity(IReadOnlyList<JsonElement> items, IReadOnlyList<string> keyFields, bool defaultTcpProtocol)
+    {
+        var identities = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in items)
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                return false;
+
+            if (!TryGetArrayIdentity(item, keyFields, defaultTcpProtocol, out var identity) || !identities.Add(identity))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool SameArrayItem(JsonElement left, JsonElement right, IReadOnlyList<string>? keyFields, bool defaultTcpProtocol = false)
+    {
+        if (keyFields is not null && left.ValueKind == JsonValueKind.Object && right.ValueKind == JsonValueKind.Object)
+        {
+            return TryGetArrayIdentity(left, keyFields, defaultTcpProtocol, out var leftIdentity) &&
+                   TryGetArrayIdentity(right, keyFields, defaultTcpProtocol, out var rightIdentity) &&
+                   string.Equals(leftIdentity, rightIdentity, StringComparison.Ordinal);
+        }
+
+        return JsonValuesEqual(left, right);
+    }
+
+    private static bool TryGetArrayIdentity(JsonElement item, IReadOnlyList<string> keyFields, bool defaultTcpProtocol, out string identity)
+    {
+        var values = new List<string>(keyFields.Count);
+        foreach (var keyField in keyFields)
+        {
+            if (item.TryGetProperty(keyField, out var value) && value.ValueKind != JsonValueKind.Null)
+            {
+                values.Add(value.GetRawText());
+            }
+            else if (defaultTcpProtocol && keyField == "protocol" &&
+                     (keyFields.Contains("containerPort") || keyFields.Contains("port")))
+            {
+                // Kubernetes defaults an omitted Service/container port protocol to TCP.
+                values.Add("\"TCP\"");
+            }
+            else
+            {
+                identity = string.Empty;
+                return false;
+            }
+        }
+
+        identity = string.Join("\u001f", values);
+        return true;
+    }
+
+    private static bool IsBuiltInTcpPortList(
+        ManifestIdentity identity,
+        string path,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys)
+        => customListMapKeys is null &&
+           (identity.Kind == "Service" && path == "spec.ports" ||
+            path.EndsWith(".containers[].ports", StringComparison.Ordinal) ||
+            path.EndsWith(".initContainers[].ports", StringComparison.Ordinal) ||
+            path.EndsWith(".ephemeralContainers[].ports", StringComparison.Ordinal));
+
+    private static string AppendJsonPath(string path, string property)
+    {
+        var escapedProperty = property.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace(".", "\\.", StringComparison.Ordinal);
+        return path.Length == 0 ? escapedProperty : path + "." + escapedProperty;
+    }
+
+    private static bool JsonValuesEqual(JsonElement left, JsonElement right)
+    {
+        if (left.ValueKind != right.ValueKind)
+            return left.ValueKind == JsonValueKind.Number && right.ValueKind == JsonValueKind.Number &&
+                   left.GetDecimal() == right.GetDecimal();
+
+        if (left.ValueKind == JsonValueKind.Object)
+        {
+            var leftProperties = left.EnumerateObject().ToArray();
+            var rightProperties = right.EnumerateObject().ToDictionary(property => property.Name, property => property.Value, StringComparer.Ordinal);
+            return leftProperties.Length == rightProperties.Count &&
+                   leftProperties.All(property => rightProperties.TryGetValue(property.Name, out var value) && JsonValuesEqual(property.Value, value));
+        }
+
+        if (left.ValueKind == JsonValueKind.Array)
+        {
+            var leftItems = left.EnumerateArray().ToArray();
+            var rightItems = right.EnumerateArray().ToArray();
+            return leftItems.Length == rightItems.Length && leftItems.Zip(rightItems).All(pair => JsonValuesEqual(pair.First, pair.Second));
+        }
+
+        return left.ValueKind == JsonValueKind.Number
+            ? left.GetDecimal() == right.GetDecimal()
+            : string.Equals(left.ToString(), right.ToString(), StringComparison.Ordinal);
+    }
+
+    private static bool IsQuantityField(string? propertyName, string? parentName, string resourceKind)
+        => propertyName is "requests" or "limits" or "capacity" or "allocatable" or "sizeLimit" or "divisor" ||
+           resourceKind == "ResourceQuota" && parentName == "spec" && propertyName is "hard" or "used" ||
+           resourceKind == "LimitRange" && parentName == "spec" &&
+           propertyName is "default" or "defaultRequest" or "min" or "max" or "maxLimitRequestRatio";
+
+    private static bool IsArbitraryMap(string? propertyName)
+        => propertyName is "data" or "binaryData" or "stringData" or "labels" or "annotations" or
+            "matchLabels" or "selector" or "nodeSelector" or "requests" or "limits" or "capacity" or "allocatable" or
+            "hard" or "used" or "parameters";
+
+    private static bool IsServerManagedField(string? parentName, string propertyName, bool preserveRootStatus)
+        => preserveRootStatus && parentName is null && string.Equals(propertyName, "status", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(parentName, "metadata", StringComparison.OrdinalIgnoreCase) &&
+           propertyName is "resourceVersion" or "uid" or "generation" or "creationTimestamp" or "managedFields" or "selfLink";
+
+    private static bool TryGetPropertyExactThenIgnoreCase(JsonElement element, string name, bool allowCaseInsensitiveProperties, out JsonElement value)
+    {
+        if (element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out value))
+            return true;
+
+        if (allowCaseInsensitiveProperties && TryGetPropertyIgnoreCase(element, name, out value))
+            return true;
+
+        value = default;
+        return false;
+    }
+
+    private static string? GetResourceVersion<T>(T resource)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(resource));
+        if (!TryGetPropertyIgnoreCase(document.RootElement, "metadata", out var metadata) ||
+            !TryGetPropertyIgnoreCase(metadata, "resourceVersion", out var resourceVersion))
+        {
+            return null;
+        }
+
+        return resourceVersion.ValueKind == JsonValueKind.String ? resourceVersion.GetString() : null;
+    }
+
+    private static bool TryGetPropertyIgnoreCase(JsonElement element, string name, out JsonElement value)
+    {
+        foreach (var property in element.EnumerateObject())
+        {
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = property.Value;
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
+    }
 
     private static IEnumerable<string> SplitDocuments(string manifest)
     {

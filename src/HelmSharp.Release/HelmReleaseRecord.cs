@@ -50,6 +50,15 @@ public sealed record HelmReleaseRecord
     /// <summary>Rendered multi-document manifest applied for this revision.</summary>
     public string Manifest { get; init; } = string.Empty;
 
+    /// <summary>
+    /// Manifest documents known to have been applied before a failed revision was recorded.
+    /// Null for Helm records and older records without this HelmSharp extension.
+    /// </summary>
+    public string? AppliedManifest { get; init; }
+
+    /// <summary>Manifest identities successfully deleted while recovering this failed revision.</summary>
+    public string? DeletedManifest { get; init; }
+
     /// <summary>User-supplied values (<c>config</c>) for this revision, as YAML.</summary>
     public string ValuesYaml { get; init; } = string.Empty;
 
