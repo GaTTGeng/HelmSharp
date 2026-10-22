@@ -96,6 +96,23 @@ public class HelmClientReleaseTests
     }
 
     [Fact]
+    public void ConvertRestorationApiVersions_PreservesPreviousCronJobVersionWithoutAttemptedTarget()
+    {
+        const string previous = """
+            apiVersion: batch/v1beta1
+            kind: CronJob
+            metadata:
+              name: backup
+            spec:
+              schedule: "0 2 * * *"
+            """;
+
+        var restored = HelmClient.ConvertRestorationApiVersions(previous, string.Empty, "default");
+
+        Assert.Contains("apiVersion: batch/v1beta1", restored, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RemoveCleanedDocuments_DropsOnlySuccessfullyDeletedResources()
     {
         const string manifest = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: removed\n---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: retained\n";

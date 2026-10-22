@@ -150,6 +150,37 @@ public sealed class KubernetesManifestApplierTests
     }
 
     [Fact]
+    public void SchemaConverter_MaterializesExtensionsV1Beta1DeploymentRevisionHistoryDefault()
+    {
+        const string source = """
+            apiVersion: extensions/v1beta1
+            kind: Deployment
+            metadata:
+              name: portal
+            spec:
+              selector:
+                matchLabels:
+                  app: portal
+            """;
+        var identity = new ManifestIdentity("extensions/v1beta1", "Deployment", "portal", "release-ns");
+
+        Assert.True(KubernetesManifestSchemaConverter.TryConvertToApiVersion(
+            source, identity, "apps/v1", out var converted));
+
+        var document = HelmYaml.DeserializeDictionary(converted, StringComparer.Ordinal);
+        var spec = Assert.IsType<Dictionary<string, object?>>(document["spec"]);
+        Assert.Equal(int.MaxValue, Convert.ToInt32(spec["revisionHistoryLimit"]));
+    }
+
+    [Fact]
+    public void SchemaConverter_DoesNotForceCronJobToUnservedStableVersionWithoutAttemptedTarget()
+    {
+        var identity = new ManifestIdentity("batch/v1beta1", "CronJob", "backup", "release-ns");
+
+        Assert.Null(KubernetesManifestSchemaConverter.GetCanonicalApiVersion(identity));
+    }
+
+    [Fact]
     public void SchemaConverter_MaterializesLegacyExtensionsDeploymentRollingUpdateDefaults()
     {
         const string source = """
@@ -1652,6 +1683,64 @@ public sealed class KubernetesManifestApplierTests
                   "kind": "Widget",
                   "metadata": { "name": "sample", "namespace": "release-ns" },
                   "spec": { "Foo": "requested" }
+                }
+                """);
+        var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");
+        var progress = new List<string>();
+
+        await Assert.ThrowsAsync<KubernetesResourceOperationException>(async () =>
+        {
+            await foreach (var resource in applier.ApplyAsync(manifest, "release-ns"))
+                progress.Add(resource);
+        });
+
+        Assert.Empty(progress);
+    }
+
+    [Fact]
+    public async Task ApplyAsync_DoesNotConfirmAmbiguousCustomResourceCreateWhenRootStatusDiffersWithoutSubresource()
+    {
+        const string manifest = """
+            apiVersion: example.com/v1
+            kind: Widget
+            metadata:
+              name: sample
+            spec:
+              value: requested
+            status:
+              phase: requested
+            """;
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, "/apis/example.com/v1", HttpStatusCode.OK, """
+                {
+                  "kind": "APIResourceList",
+                  "apiVersion": "v1",
+                  "groupVersion": "example.com/v1",
+                  "resources": [{ "name": "widgets", "kind": "Widget", "namespaced": true }]
+                }
+                """)
+            .Respond(HttpMethod.Get, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/widgets.example.com", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "apiextensions.k8s.io/v1",
+                  "kind": "CustomResourceDefinition",
+                  "metadata": { "name": "widgets.example.com" },
+                  "spec": { "versions": [{ "name": "v1", "served": true, "schema": {
+                    "openAPIV3Schema": { "type": "object", "properties": {
+                      "spec": { "type": "object", "properties": { "value": { "type": "string" } } },
+                      "status": { "type": "object", "properties": { "phase": { "type": "string" } } }
+                    } }
+                  } }] }
+                }
+                """)
+            .Respond(HttpMethod.Get, "/apis/example.com/v1/namespaces/release-ns/widgets/sample", HttpStatusCode.NotFound)
+            .Respond(HttpMethod.Post, "/apis/example.com/v1/namespaces/release-ns/widgets", HttpStatusCode.InternalServerError)
+            .Respond(HttpMethod.Get, "/apis/example.com/v1/namespaces/release-ns/widgets/sample", HttpStatusCode.OK, """
+                {
+                  "apiVersion": "example.com/v1",
+                  "kind": "Widget",
+                  "metadata": { "name": "sample", "namespace": "release-ns" },
+                  "spec": { "value": "requested" },
+                  "status": { "phase": "controller" }
                 }
                 """);
         var applier = new KubernetesManifestApplier(KubernetesTestClientBuilder.Create(handler), "helmsharp-test");

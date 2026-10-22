@@ -1055,11 +1055,15 @@ public sealed class KubernetesManifestApplier
         var resource = await DiscoverResourceAsync(identity, retryRegistration: true, ct);
         IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys = null;
         var preserveRootStatus = true;
+        CustomResourceSchema? schema = null;
+        if (!IsKnownKubernetesApiGroup(resource.Group))
+        {
+            schema = await ReadCustomResourceSchemaAsync(resource, ct);
+            preserveRootStatus = schema?.StatusSubresourceEnabled ?? true;
+        }
         if (TryGetPreviousManifest(identity, out _))
         {
-            var schema = await ReadCustomResourceSchemaAsync(resource, ct);
             customListMapKeys = schema?.ListMapKeys;
-            preserveRootStatus = schema?.StatusSubresourceEnabled ?? true;
         }
         var item = HelmYaml.DeserializeDictionary(yaml);
 
@@ -1635,7 +1639,7 @@ public sealed class KubernetesManifestApplier
                 if (writeError is OperationCanceledException)
                     // The create may have committed before cancellation interrupted its response.
                     disableCancellationForRecovery();
-                _lastApplyMayHaveCommitted |= await CreateMayHaveCommittedAsync(read, identity, desiredYaml);
+                _lastApplyMayHaveCommitted |= await CreateMayHaveCommittedAsync(read, identity, desiredYaml, preserveRootStatus);
                 throw;
             }
         }
@@ -1656,7 +1660,8 @@ public sealed class KubernetesManifestApplier
     private static async Task<bool> CreateMayHaveCommittedAsync<T>(
         Func<Task<T>> read,
         ManifestIdentity identity,
-        string desiredYaml)
+        string desiredYaml,
+        bool preserveRootStatus)
     {
         try
         {
@@ -1668,7 +1673,7 @@ public sealed class KubernetesManifestApplier
                 after!,
                 TryGetTypedResourceScope(identity, out _),
                 identity.Kind,
-                preserveRootStatus: true);
+                preserveRootStatus);
         }
         catch
         {
