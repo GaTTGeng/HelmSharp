@@ -928,7 +928,8 @@ public sealed class KubernetesManifestApplier
         string desiredManifest,
         object liveResource,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys = null,
-        bool preserveRootStatus = true)
+        bool preserveRootStatus = true,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>? customListMapKeyDefaults = null)
     {
         if (!TryGetPreviousManifest(identity, out var previousManifest))
             return desiredManifest;
@@ -954,7 +955,8 @@ public sealed class KubernetesManifestApplier
             NormalizeSecretStringData(identity, desiredManifest),
             liveManifest,
             customListMapKeys,
-            preserveRootStatus);
+            preserveRootStatus,
+            customListMapKeyDefaults);
     }
 
     private static string NormalizeSecretStringData(ManifestIdentity identity, string manifest)
@@ -1054,6 +1056,7 @@ public sealed class KubernetesManifestApplier
         // Retry discovery: the CR may be applied in the same pass that created its CRD.
         var resource = await DiscoverResourceAsync(identity, retryRegistration: true, ct);
         IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys = null;
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>? customListMapKeyDefaults = null;
         var preserveRootStatus = true;
         CustomResourceSchema? schema = null;
         if (!IsKnownKubernetesApiGroup(resource.Group))
@@ -1064,6 +1067,7 @@ public sealed class KubernetesManifestApplier
         if (TryGetPreviousManifest(identity, out _))
         {
             customListMapKeys = schema?.ListMapKeys;
+            customListMapKeyDefaults = schema?.ListMapKeyDefaults;
         }
         var item = HelmYaml.DeserializeDictionary(yaml);
 
@@ -1076,12 +1080,12 @@ public sealed class KubernetesManifestApplier
                 async existing =>
                 {
                     item = HelmYaml.DeserializeDictionary(
-                        MergeWithLiveResource(identity, yaml, existing, customListMapKeys, preserveRootStatus),
+                        MergeWithLiveResource(identity, yaml, existing, customListMapKeys, preserveRootStatus, customListMapKeyDefaults),
                         StringComparer.Ordinal);
                     SetNamespace(item, identity.Namespace);
                     SetResourceVersion(item, existing);
                     return await _client.CustomObjects.ReplaceNamespacedCustomObjectAsync(item, resource.Group, resource.Version, identity.Namespace, resource.Plural, identity.Name, null, _fieldManager, null, ct);
-                }, identity, yaml, () => ct.ThrowIfCancellationRequested(), () => ct = CancellationToken.None, customListMapKeys, preserveRootStatus);
+                }, identity, yaml, () => ct.ThrowIfCancellationRequested(), () => ct = CancellationToken.None, customListMapKeys, preserveRootStatus, customListMapKeyDefaults);
             return identity;
         }
 
@@ -1093,12 +1097,12 @@ public sealed class KubernetesManifestApplier
             async existing =>
             {
                 item = HelmYaml.DeserializeDictionary(
-                    MergeWithLiveResource(identity, yaml, existing, customListMapKeys, preserveRootStatus),
+                    MergeWithLiveResource(identity, yaml, existing, customListMapKeys, preserveRootStatus, customListMapKeyDefaults),
                     StringComparer.Ordinal);
                 SetNamespace(item, namespaceName: null);
                 SetResourceVersion(item, existing);
                 return await _client.CustomObjects.ReplaceClusterCustomObjectAsync(item, resource.Group, resource.Version, resource.Plural, identity.Name, null, _fieldManager, null, ct);
-            }, identity, yaml, () => ct.ThrowIfCancellationRequested(), () => ct = CancellationToken.None, customListMapKeys, preserveRootStatus);
+            }, identity, yaml, () => ct.ThrowIfCancellationRequested(), () => ct = CancellationToken.None, customListMapKeys, preserveRootStatus, customListMapKeyDefaults);
         return identity;
     }
 
@@ -1117,14 +1121,15 @@ public sealed class KubernetesManifestApplier
                 candidate.GetProperty("name").GetString() == resource.Version &&
                 (!candidate.TryGetProperty("served", out var served) || served.GetBoolean()));
             if (version.ValueKind == JsonValueKind.Undefined)
-                return new CustomResourceSchema(new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal), StatusSubresourceEnabled: true);
+                return new CustomResourceSchema(new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal), new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal), StatusSubresourceEnabled: true);
             if (!version.TryGetProperty("schema", out var schema) ||
                 !schema.TryGetProperty("openAPIV3Schema", out var rootSchema))
-                return new CustomResourceSchema(new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal), HasStatusSubresource(version));
+                return new CustomResourceSchema(new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal), new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal), HasStatusSubresource(version));
 
             var result = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
-            CollectCustomListMapKeys(rootSchema, string.Empty, result);
-            return new CustomResourceSchema(result, HasStatusSubresource(version));
+            var keyDefaults = new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal);
+            CollectCustomListMapKeys(rootSchema, string.Empty, result, keyDefaults);
+            return new CustomResourceSchema(result, keyDefaults, HasStatusSubresource(version));
         }
         catch (HttpOperationException ex) when ((int)ex.Response.StatusCode == 404)
         {
@@ -1138,7 +1143,7 @@ public sealed class KubernetesManifestApplier
 
             // Without schema access, treating CRD lists atomically is safer than
             // inferring Kubernetes merge keys from coincidental property names.
-            return new CustomResourceSchema(new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal), StatusSubresourceEnabled: true);
+            return new CustomResourceSchema(new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal), new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal), StatusSubresourceEnabled: true);
         }
     }
 
@@ -1158,12 +1163,14 @@ public sealed class KubernetesManifestApplier
 
     private sealed record CustomResourceSchema(
         IReadOnlyDictionary<string, IReadOnlyList<string>> ListMapKeys,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> ListMapKeyDefaults,
         bool StatusSubresourceEnabled);
 
     private static void CollectCustomListMapKeys(
         JsonElement schema,
         string path,
-        IDictionary<string, IReadOnlyList<string>> result)
+        IDictionary<string, IReadOnlyList<string>> result,
+        IDictionary<string, IReadOnlyDictionary<string, string>> keyDefaults)
     {
         if (schema.TryGetProperty("x-kubernetes-map-type", out var mapType) &&
             mapType.ValueKind == JsonValueKind.String && mapType.GetString() == "atomic")
@@ -1189,31 +1196,48 @@ public sealed class KubernetesManifestApplier
                     .Select(key => key.GetString()!)
                     .ToArray();
                 if (keys.Length > 0)
+                {
                     result[path] = keys;
+                    if (schema.TryGetProperty("items", out var listItems) &&
+                        listItems.ValueKind == JsonValueKind.Object &&
+                        listItems.TryGetProperty("properties", out var itemProperties) &&
+                        itemProperties.ValueKind == JsonValueKind.Object)
+                    {
+                        var defaults = new Dictionary<string, string>(StringComparer.Ordinal);
+                        foreach (var key in keys)
+                        {
+                            if (itemProperties.TryGetProperty(key, out var keySchema) &&
+                                keySchema.TryGetProperty("default", out var defaultValue))
+                                defaults[key] = defaultValue.GetRawText();
+                        }
+                        if (defaults.Count > 0)
+                            keyDefaults[path] = defaults;
+                    }
+                }
             }
         }
 
         if (schema.TryGetProperty("properties", out var properties) && properties.ValueKind == JsonValueKind.Object)
         {
             foreach (var property in properties.EnumerateObject())
-                CollectCustomListMapKeys(property.Value, AppendSchemaPath(path, property.Name), result);
+                CollectCustomListMapKeys(property.Value, AppendSchemaPath(path, property.Name), result, keyDefaults);
         }
 
         if (schema.TryGetProperty("items", out var items))
         {
             if (items.ValueKind == JsonValueKind.Object)
-                CollectCustomListMapKeys(items, path + "[]", result);
+                CollectCustomListMapKeys(items, path + "[]", result, keyDefaults);
             else if (items.ValueKind == JsonValueKind.Array)
             {
                 foreach (var itemSchema in items.EnumerateArray())
-                    CollectCustomListMapKeys(itemSchema, path + "[]", result);
+                    CollectCustomListMapKeys(itemSchema, path + "[]", result, keyDefaults);
             }
         }
 
         // Dynamic map keys need a wildcard path so nested CRD list semantics still match.
         if (schema.TryGetProperty("additionalProperties", out var additionalProperties) &&
             additionalProperties.ValueKind == JsonValueKind.Object)
-            CollectCustomListMapKeys(additionalProperties, AppendSchemaPath(path, "*"), result);
+            CollectCustomListMapKeys(additionalProperties, AppendSchemaPath(path, "*"), result, keyDefaults);
     }
 
     private static string AppendSchemaPath(string path, string property)
@@ -1607,7 +1631,8 @@ public sealed class KubernetesManifestApplier
         Action throwIfCancellationRequested,
         Action disableCancellationForRecovery,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys = null,
-        bool preserveRootStatus = true)
+        bool preserveRootStatus = true,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>? customListMapKeyDefaults = null)
     {
         // 404 from the read means "not created yet" — the create path. Replace is
         // preferred over patch so the applied manifest fully defines the object,
@@ -1626,7 +1651,7 @@ public sealed class KubernetesManifestApplier
                 if (ex is OperationCanceledException)
                     // The request was invoked, so finish read-back without the canceled operation token.
                     disableCancellationForRecovery();
-                _lastApplyMayHaveCommitted |= await ReplaceMayHaveCommittedAsync(read, existing, identity, desiredYaml, customListMapKeys, preserveRootStatus);
+                _lastApplyMayHaveCommitted |= await ReplaceMayHaveCommittedAsync(read, existing, identity, desiredYaml, customListMapKeys, preserveRootStatus, customListMapKeyDefaults);
                 throw;
             }
         }
@@ -1658,8 +1683,9 @@ public sealed class KubernetesManifestApplier
         Action throwIfCancellationRequested,
         Action disableCancellationForRecovery,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys = null,
-        bool preserveRootStatus = true)
-        => UpsertNamespacedAsync(read, create, replace, identity, desiredYaml, throwIfCancellationRequested, disableCancellationForRecovery, customListMapKeys, preserveRootStatus);
+        bool preserveRootStatus = true,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>? customListMapKeyDefaults = null)
+        => UpsertNamespacedAsync(read, create, replace, identity, desiredYaml, throwIfCancellationRequested, disableCancellationForRecovery, customListMapKeys, preserveRootStatus, customListMapKeyDefaults);
 
     private static async Task<bool> CreateMayHaveCommittedAsync<T>(
         Func<Task<T>> read,
@@ -1701,7 +1727,8 @@ public sealed class KubernetesManifestApplier
         ManifestIdentity identity,
         string desiredYaml,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys,
-        bool preserveRootStatus)
+        bool preserveRootStatus,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>? customListMapKeyDefaults)
     {
         try
         {
@@ -1716,7 +1743,7 @@ public sealed class KubernetesManifestApplier
 
             // A controller can advance resourceVersion independently of this replace.
             // Only record progress if the read-back also reflects the chart-owned payload.
-            var expectedYaml = MergeWithLiveResource(identity, desiredYaml, before!, customListMapKeys, preserveRootStatus);
+            var expectedYaml = MergeWithLiveResource(identity, desiredYaml, before!, customListMapKeys, preserveRootStatus, customListMapKeyDefaults);
             var typedResource = TryGetTypedResourceScope(identity, out _);
             return ContainsExpectedManifest(expectedYaml, after!, typedResource, identity.Kind, preserveRootStatus, customListMapKeys) &&
                    RemovedValuesAreAbsent(expectedYaml, before!, after!, identity, typedResource, customListMapKeys, preserveRootStatus);
