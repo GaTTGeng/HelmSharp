@@ -94,6 +94,17 @@ public class HelmV3ReleaseStorageTests
         Assert.Equal(deletedAt, decoded.DeletedAt);
     }
 
+    [Fact]
+    public void EncodeThenDecode_PreservesFailedRevisionDeletionTombstones()
+    {
+        const string deletedManifest = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: removed\n";
+        var record = CreateRecord() with { Status = "failed", DeletedManifest = deletedManifest };
+
+        var decoded = HelmV3ReleaseCodec.Decode(HelmV3ReleaseCodec.Encode(record));
+
+        Assert.Equal(deletedManifest, decoded.DeletedManifest);
+    }
+
 
     [Fact]
     public void DecodeThenEncode_PreservesOpaqueHelmChartPayload()

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using HelmSharp.Action;
 using HelmSharp.Chart;
 using HelmSharp.Kube;
@@ -898,6 +899,66 @@ public class ChartOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task ReleaseLifecycle_UpgradePreservesLiveOnlyFieldsAndAppliesChartChangesAndRemovals()
+    {
+        var chartDir = await CreateMinimalChartAsync("upgrade-preservation-chart");
+        var templatePath = Path.Combine(chartDir, "templates", "configmap.yaml");
+        const string resourcePath = "/api/v1/namespaces/test-ns/configmaps/upgrade-preservation";
+        await File.WriteAllTextAsync(templatePath, """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: upgrade-preservation
+            data:
+              chartOwned: before
+              liveDeleted: retain-delete
+              chartRemoved: obsolete
+            """);
+
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "upgrade-preservation",
+            Chart = chartDir
+        }));
+
+        var liveResource = JsonNode.Parse(releaseState.ConfigMaps[resourcePath])!;
+        liveResource["data"]!["operatorAdded"] = "retain";
+        liveResource["data"]!.AsObject().Remove("liveDeleted");
+        liveResource["metadata"]!["annotations"] = new JsonObject
+        {
+            ["operator.example/managed"] = "retain"
+        };
+        releaseState.ConfigMaps[resourcePath] = liveResource.ToJsonString(ReleaseLifecycleState.JsonDefaults);
+
+        await File.WriteAllTextAsync(templatePath, """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: upgrade-preservation
+            data:
+              chartOwned: after
+              liveDeleted: retain-delete
+            """);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "upgrade-preservation",
+            Chart = chartDir
+        }));
+
+        using var applied = JsonDocument.Parse(releaseState.ConfigMaps[resourcePath]);
+        var root = applied.RootElement;
+        var data = root.GetProperty("data");
+        Assert.Equal("after", data.GetProperty("chartOwned").GetString());
+        Assert.False(data.TryGetProperty("chartRemoved", out _));
+        Assert.False(data.TryGetProperty("liveDeleted", out _));
+        Assert.Equal("retain", data.GetProperty("operatorAdded").GetString());
+        Assert.Equal("retain", root.GetProperty("metadata").GetProperty("annotations")
+            .GetProperty("operator.example/managed").GetString());
+    }
+
+    [Fact]
     public async Task ReleaseLifecycle_InstallDisabledDoesNotCreateMissingRelease()
     {
         var chartDir = await CreateMinimalChartAsync("install-disabled-chart");
@@ -1070,6 +1131,64 @@ public class ChartOperationsTests : IDisposable
         Assert.Equal((2, "deployed"), (records[1].Revision, records[1].Status));
         Assert.Equal((3, "failed"), (records[2].Revision, records[2].Status));
         Assert.StartsWith("Rollback failed:", records[2].Description);
+        Assert.Contains("kind: Deployment", records[2].AppliedManifest, StringComparison.Ordinal);
+        Assert.Contains("name: rollback-wait-failure", records[2].AppliedManifest, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ReleaseLifecycle_RollbackFinalSaveFailurePersistsAppliedManifest()
+    {
+        var chartDir = await CreateMinimalChartAsync("rollback-final-save-failure-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: rollback-final-save-failure
+            data:
+              value: {{ .Values.marker | quote }}
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-final-save-failure",
+            Chart = chartDir,
+            ValuesContent = "marker: previous\n"
+        }));
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: rollback-final-save-failure
+            data:
+              value: current
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: removed-during-failed-rollback
+            """);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "rollback-final-save-failure",
+            Chart = chartDir,
+            ValuesContent = "marker: current\n"
+        }));
+        releaseState.FailNextSecretUpdate = true;
+
+        await Assert.ThrowsAsync<HttpOperationException>(() => client.RollbackAsync(new HelmRollbackRequest
+        {
+            ReleaseName = "rollback-final-save-failure",
+            Namespace = "test-ns",
+            Revision = 1,
+            Wait = false
+        }));
+
+        var failedRollback = Assert.Single(releaseState.Records("rollback-final-save-failure"), record => record.Revision == 3);
+        Assert.Equal("failed", failedRollback.Status);
+        Assert.Contains("value: \"previous\"", failedRollback.AppliedManifest, StringComparison.Ordinal);
+        Assert.Contains("name: removed-during-failed-rollback", failedRollback.DeletedManifest, StringComparison.Ordinal);
+        Assert.Contains(releaseState.ConfigMaps.Values, value => value.Contains("\"value\":\"previous\"", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -2415,6 +2534,11 @@ public class ChartOperationsTests : IDisposable
                     releaseState.FailNextSecretCreate = false;
                     return JsonResponse(request, HttpStatusCode.InternalServerError, "{ \"code\": 500 }");
                 }
+                if (request.Method == HttpMethod.Put && releaseState.FailNextSecretUpdate)
+                {
+                    releaseState.FailNextSecretUpdate = false;
+                    return JsonResponse(request, HttpStatusCode.InternalServerError, "{ \"code\": 500 }");
+                }
                 if (request.Method == HttpMethod.Post && releaseState.CreateNextSecretThenReturnConflict)
                 {
                     releaseState.CreateNextSecretThenReturnConflict = false;
@@ -2588,6 +2712,7 @@ public class ChartOperationsTests : IDisposable
         internal List<(HttpMethod Method, string Path, string Content)> ConfigMapWrites { get; } = [];
         internal Dictionary<string, string> ConfigMaps { get; } = new(StringComparer.Ordinal);
         public bool FailNextSecretCreate { get; set; }
+        public bool FailNextSecretUpdate { get; set; }
         public bool CreateNextSecretThenReturnConflict { get; set; }
         internal CancellationTokenSource? CancelOnNextReleaseSecretRead { get; set; }
         internal CancellationTokenSource? CancelAfterNextSecretCreate { get; set; }

@@ -22,6 +22,7 @@ This project follows semantic versioning once stable releases begin.
 
 ### Fixed
 
+- Preserved live-only Kubernetes fields during release upgrades while applying chart-owned changes and removals (#258).
 - Plugin listing now falls back to default metadata when an installed plugin's `plugin.json` contains valid JSON with unsupported value types, so one malformed plugin does not interrupt listing (#265).
 
 ### Security
