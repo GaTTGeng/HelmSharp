@@ -6,6 +6,28 @@ namespace HelmSharp.Tests;
 /// <summary>Regression coverage for reviewed three-way list merge behavior.</summary>
 public sealed class ThreeWayMergeReviewTests
 {
+    [Theory]
+    [InlineData("Deployment", "strategy", "Recreate")]
+    [InlineData("DaemonSet", "updateStrategy", "OnDelete")]
+    [InlineData("StatefulSet", "updateStrategy", "OnDelete")]
+    public void MergeResource_DropsRollingUpdateSettingsWhenSwitchingStrategy(
+        string kind,
+        string strategyKey,
+        string newStrategyType)
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            $"apiVersion: apps/v1\nkind: {kind}\nspec:\n  {strategyKey}:\n    type: RollingUpdate\n",
+            $"apiVersion: apps/v1\nkind: {kind}\nspec:\n  {strategyKey}:\n    type: {newStrategyType}\n",
+            $"apiVersion: apps/v1\nkind: {kind}\nspec:\n  {strategyKey}:\n    type: RollingUpdate\n    rollingUpdate:\n      maxUnavailable: 1\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var strategy = (IDictionary<string, object?>)spec[strategyKey]!;
+
+        Assert.Equal(newStrategyType, strategy["type"]);
+        Assert.False(strategy.ContainsKey("rollingUpdate"));
+    }
+
     [Fact]
     public void MergeResource_DropsAllocatedServiceFieldsWhenChangingToClusterIP()
     {

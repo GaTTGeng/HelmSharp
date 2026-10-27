@@ -47,8 +47,30 @@ internal static class ThreeWayMerge
         var resourceKind = HelmYaml.GetString(newDoc, "kind");
         DeepThreeWayMerge(lastDoc, newDoc, liveDoc, merged, isRoot: true, isMetadata: false, path: "", customListMapKeys: customListMapKeys, preserveRootStatus: preserveRootStatus, resourceKind: resourceKind, customListMapKeyDefaults: customListMapKeyDefaults);
         RemoveServiceFieldsDisallowedByType(merged);
+        RemoveWorkloadStrategyFieldsDisallowedByType(merged);
 
         return HelmYaml.Serialize(merged);
+    }
+
+    private static void RemoveWorkloadStrategyFieldsDisallowedByType(IDictionary<string, object?> document)
+    {
+        var kind = HelmYaml.GetString(document, "kind");
+        var strategyKey = kind switch
+        {
+            "Deployment" => "strategy",
+            "DaemonSet" or "StatefulSet" => "updateStrategy",
+            _ => null
+        };
+        if (strategyKey is null ||
+            !document.TryGetValue("spec", out var specValue) || specValue is not IDictionary<string, object?> spec ||
+            !spec.TryGetValue(strategyKey, out var strategyValue) || strategyValue is not IDictionary<string, object?> strategy)
+            return;
+
+        // These workload APIs only accept rollingUpdate settings with the RollingUpdate strategy.
+        // API-server defaults on the live object must not survive a chart switch to Recreate/OnDelete.
+        var strategyType = HelmYaml.GetString(strategy, "type");
+        if (strategyType is not null && strategyType != "RollingUpdate")
+            strategy.Remove("rollingUpdate");
     }
 
     private static void RemoveServiceFieldsDisallowedByType(IDictionary<string, object?> document)
