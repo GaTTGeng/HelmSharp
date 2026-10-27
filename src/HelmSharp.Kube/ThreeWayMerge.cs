@@ -190,12 +190,17 @@ internal static class ThreeWayMerge
                 }
             }
 
-            // If both last and new have nested dicts, recurse
-            if (hasLast && hasNew && hasLive &&
-                lastVal is IDictionary<string, object?> lastDict &&
+            // A map first introduced by the chart has no prior owned children, so reconcile
+            // it against an empty ancestor to retain unrelated live-only children.
+            if (hasNew && hasLive &&
                 newVal is IDictionary<string, object?> newDict &&
-                liveVal is IDictionary<string, object?> liveDict)
+                liveVal is IDictionary<string, object?> liveDict &&
+                (!hasLast || lastVal is IDictionary<string, object?>) &&
+                !IsAtomicMap(childPath, customListMapKeys, resourceKind))
             {
+                var lastDict = hasLast
+                    ? (IDictionary<string, object?>)lastVal!
+                    : new Dictionary<string, object?>(StringComparer.Ordinal);
                 // Ensure merged has a dict for this key
                 if (!merged.TryGetValue(key, out var mergedChild) ||
                     mergedChild is not IDictionary<string, object?> mergedChildDict)
