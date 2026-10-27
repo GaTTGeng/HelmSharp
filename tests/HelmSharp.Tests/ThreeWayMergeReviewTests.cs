@@ -6,6 +6,42 @@ namespace HelmSharp.Tests;
 /// <summary>Regression coverage for reviewed three-way list merge behavior.</summary>
 public sealed class ThreeWayMergeReviewTests
 {
+    [Fact]
+    public void MergeResource_PreservesLiveOnlyChildrenWhenChartIntroducesMap()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: settings\n",
+            "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: settings\n  annotations:\n    chart.example/managed: enabled\n",
+            "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: settings\n  annotations:\n    operator.example/owner: platform\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var metadata = (IDictionary<string, object?>)document["metadata"]!;
+        var annotations = (IDictionary<string, object?>)metadata["annotations"]!;
+
+        Assert.Equal("enabled", annotations["chart.example/managed"]);
+        Assert.Equal("platform", annotations["operator.example/owner"]);
+    }
+
+    [Fact]
+    public void MergeResource_ReplacesAtomicMapIntroducedByChartAsAWhole()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: example.com/v1\nkind: Widget\n",
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  config:\n    chart: managed\n",
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  config:\n    operator: injected\n",
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+            {
+                ["spec.config"] = [ThreeWayMerge.AtomicListSentinel]
+            });
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var config = (IDictionary<string, object?>)spec["config"]!;
+
+        Assert.Equal("managed", config["chart"]);
+        Assert.False(config.ContainsKey("operator"));
+    }
+
     [Theory]
     [InlineData("Deployment", "strategy", "Recreate")]
     [InlineData("DaemonSet", "updateStrategy", "OnDelete")]
