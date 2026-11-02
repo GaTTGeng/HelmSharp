@@ -709,4 +709,62 @@ public sealed class ThreeWayMergeReviewTests
         Assert.Equal("retained", valueFrom["operatorKey"]);
         Assert.True(valueFrom.ContainsKey("resourceFieldRef"));
     }
+
+    [Fact]
+    public void MergeResource_KeepsCustomServiceFieldsWhenKindMatchesBuiltIn()
+    {
+        const string manifest = "apiVersion: example.com/v1\nkind: Service\nspec:\n  ports:\n  - port: 80\n    nodePort: 30080\n";
+        var merged = ThreeWayMerge.MergeResource(
+            manifest,
+            manifest,
+            manifest,
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+            {
+                ["spec.ports"] = ["port"]
+            });
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var port = (IDictionary<string, object?>)((IList<object?>)spec["ports"]!)[0]!;
+
+        Assert.Equal(30080L, port["nodePort"]);
+    }
+
+    [Fact]
+    public void MergeResource_KeepsCustomWorkloadStrategyWhenKindMatchesBuiltIn()
+    {
+        const string manifest = "apiVersion: example.com/v1\nkind: Deployment\nspec:\n  strategy:\n    type: Recreate\n    rollingUpdate:\n      maxUnavailable: 1\n";
+        var merged = ThreeWayMerge.MergeResource(
+            manifest,
+            manifest,
+            manifest,
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+            {
+                ["spec.containers"] = ["name"]
+            });
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var strategy = (IDictionary<string, object?>)spec["strategy"]!;
+
+        Assert.True(strategy.ContainsKey("rollingUpdate"));
+    }
+
+    [Fact]
+    public void MergeResource_RemovesNestedAtomicMapWhenChartRemovesParent()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  options:\n    config:\n      mode: safe\n",
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  name: widget\n",
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  options:\n    config:\n      mode: safe\n      token: injected\n",
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+            {
+                ["spec.options.config"] = [ThreeWayMerge.AtomicListSentinel]
+            });
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+
+        Assert.False(spec.ContainsKey("options"));
+    }
 }

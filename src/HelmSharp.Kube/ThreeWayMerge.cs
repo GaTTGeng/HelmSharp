@@ -46,10 +46,24 @@ internal static class ThreeWayMerge
         // Deep merge at every level
         var resourceKind = HelmYaml.GetString(newDoc, "kind");
         DeepThreeWayMerge(lastDoc, newDoc, liveDoc, merged, isRoot: true, isMetadata: false, path: "", customListMapKeys: customListMapKeys, preserveRootStatus: preserveRootStatus, resourceKind: resourceKind, customListMapKeyDefaults: customListMapKeyDefaults);
-        RemoveServiceFieldsDisallowedByType(merged);
-        RemoveWorkloadStrategyFieldsDisallowedByType(merged);
+        // Built-in API versions accept only their own field sets; a custom resource that
+        // reuses a built-in kind must keep its schema-defined fields.
+        if (IsBuiltInApiVersion(HelmYaml.GetString(newDoc, "apiVersion")))
+        {
+            RemoveServiceFieldsDisallowedByType(merged);
+            RemoveWorkloadStrategyFieldsDisallowedByType(merged);
+        }
 
         return HelmYaml.Serialize(merged);
+    }
+
+    // Core-group objects have no group prefix; grouped built-ins use reserved groups, so a
+    // discovered custom resource that reuses a built-in kind is excluded from cleanup.
+    private static bool IsBuiltInApiVersion(string? apiVersion)
+    {
+        var separator = apiVersion?.IndexOf('/') ?? -1;
+        return separator < 0 ||
+               KubernetesManifestApplier.IsKnownKubernetesApiGroup(apiVersion![..separator]);
     }
 
     private static void RemoveWorkloadStrategyFieldsDisallowedByType(IDictionary<string, object?> document)
@@ -241,7 +255,7 @@ internal static class ThreeWayMerge
                 lastVal is IDictionary<string, object?> removedLastMap &&
                 liveVal is IDictionary<string, object?> removedLiveMap)
             {
-                var remaining = PreserveLiveOnlyFields(removedLastMap, removedLiveMap, AppendPath(path, key), customListMapKeys);
+                var remaining = PreserveLiveOnlyFields(removedLastMap, removedLiveMap, AppendPath(path, key), resourceKind, customListMapKeys);
                 if (remaining.Count == 0)
                     merged.Remove(key);
                 else
@@ -314,6 +328,7 @@ internal static class ThreeWayMerge
         IDictionary<string, object?> last,
         IDictionary<string, object?> live,
         string path,
+        string? resourceKind,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys)
     {
         var result = new Dictionary<string, object?>(StringComparer.Ordinal);
@@ -327,6 +342,15 @@ internal static class ThreeWayMerge
                 (IsExclusiveMappingContainer(childPath) || IsExclusiveMappingMember(path, key)))
                 continue;
 
+            // An atomic map is a single chart-owned field: when the chart removes its
+            // parent, previously owned children must not survive as live-only fragments.
+            if (liveValue is IDictionary<string, object?> && IsAtomicMap(childPath, customListMapKeys, resourceKind))
+            {
+                if (!last.ContainsKey(key))
+                    result[key] = DeepCopyValue(liveValue);
+                continue;
+            }
+
             if (!last.TryGetValue(key, out var lastValue))
             {
                 result[key] = DeepCopyValue(liveValue);
@@ -334,7 +358,7 @@ internal static class ThreeWayMerge
             else if (lastValue is IDictionary<string, object?> lastChild &&
                      liveValue is IDictionary<string, object?> liveChild)
             {
-                var liveOnlyChildren = PreserveLiveOnlyFields(lastChild, liveChild, childPath, customListMapKeys);
+                var liveOnlyChildren = PreserveLiveOnlyFields(lastChild, liveChild, childPath, resourceKind, customListMapKeys);
                 if (liveOnlyChildren.Count > 0)
                     result[key] = liveOnlyChildren;
             }
@@ -486,7 +510,9 @@ internal static class ThreeWayMerge
         // Set lists are value keyed, so a live-only value survives unless the chart now owns that value.
         var customSet = customListMapKeys is not null &&
                         customListMapKeys.Any(entry => entry.Value.Count == 0 && SchemaPathMatches(entry.Key, path));
-        var builtInSet = resourceKind == "ValidatingAdmissionPolicyBinding" && path == "spec.validationActions";
+        var builtInSet = customListMapKeys is null &&
+                         resourceKind == "ValidatingAdmissionPolicyBinding" &&
+                         path == "spec.validationActions";
         if (!customSet && path != "metadata.finalizers" && !builtInSet)
             return false;
 
@@ -577,8 +603,9 @@ internal static class ThreeWayMerge
         string path,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys,
         string? resourceKind)
-        => resourceKind == "ValidatingAdmissionPolicyBinding" && path == "spec.paramRef" ||
-           customListMapKeys is null && IsBuiltInLabelSelectorPath(path, resourceKind) ||
+        => customListMapKeys is null &&
+           (resourceKind == "ValidatingAdmissionPolicyBinding" && path == "spec.paramRef" ||
+            IsBuiltInLabelSelectorPath(path, resourceKind)) ||
            customListMapKeys is not null &&
            customListMapKeys.Any(entry =>
                entry.Value is [AtomicListSentinel] && SchemaPathMatches(entry.Key, path));
