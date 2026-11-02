@@ -538,4 +538,79 @@ public sealed class ThreeWayMergeReviewTests
         Assert.Equal(2, versions.Count);
         Assert.Equal("v2", ((IDictionary<string, object?>)versions[1]!)["name"]);
     }
+
+    [Fact]
+    public void MergeResource_PreservesLiveOnlyEntriesWhenChartIntroducesKeyedList()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        image: app:v1\n",
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        image: app:v1\n        env:\n        - name: CHART\n          value: chart\n",
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        image: app:v1\n        env:\n        - name: OPERATOR\n          value: operator\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var template = (IDictionary<string, object?>)spec["template"]!;
+        var podSpec = (IDictionary<string, object?>)template["spec"]!;
+        var container = (IDictionary<string, object?>)((IList<object?>)podSpec["containers"]!)[0]!;
+        var env = (IList<object?>)container["env"]!;
+
+        Assert.Equal(
+            ["CHART", "OPERATOR"],
+            env.Select(item => (string)((IDictionary<string, object?>)item!)["name"]!));
+    }
+
+    [Fact]
+    public void MergeResource_PreservesLiveOnlyEntriesWhenChartIntroducesSetList()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "metadata:\n  labels:\n    app: chart\n",
+            "metadata:\n  labels:\n    app: chart\n  finalizers:\n  - chart.example/new\n",
+            "metadata:\n  labels:\n    app: chart\n  finalizers:\n  - controller.example/guard\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var metadata = (IDictionary<string, object?>)document["metadata"]!;
+        Assert.Equal(["chart.example/new", "controller.example/guard"], (IList<object?>)metadata["finalizers"]!);
+    }
+
+    [Theory]
+    [InlineData("livenessProbe")]
+    [InlineData("readinessProbe")]
+    [InlineData("startupProbe")]
+    public void MergeResource_DropsObsoleteProbeHandlerWhenChartSwitchesAction(string probeName)
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            $"spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        {probeName}:\n          httpGet:\n            path: /healthz\n            port: 8080\n",
+            $"spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        {probeName}:\n          exec:\n            command:\n            - cat\n            - /tmp/healthy\n",
+            $"spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        {probeName}:\n          httpGet:\n            path: /healthz\n            port: 8080\n            scheme: HTTP\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var template = (IDictionary<string, object?>)spec["template"]!;
+        var podSpec = (IDictionary<string, object?>)template["spec"]!;
+        var container = (IDictionary<string, object?>)((IList<object?>)podSpec["containers"]!)[0]!;
+        var probe = (IDictionary<string, object?>)container[probeName]!;
+
+        Assert.True(probe.ContainsKey("exec"));
+        Assert.False(probe.ContainsKey("httpGet"));
+    }
+
+    [Fact]
+    public void MergeResource_DropsObsoleteLifecycleHandlerWhenChartSwitchesAction()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        lifecycle:\n          postStart:\n            httpGet:\n              path: /ready\n              port: 8080\n",
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        lifecycle:\n          postStart:\n            exec:\n              command:\n              - touch\n              - /tmp/ready\n",
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        lifecycle:\n          postStart:\n            httpGet:\n              path: /ready\n              port: 8080\n              scheme: HTTP\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var template = (IDictionary<string, object?>)spec["template"]!;
+        var podSpec = (IDictionary<string, object?>)template["spec"]!;
+        var container = (IDictionary<string, object?>)((IList<object?>)podSpec["containers"]!)[0]!;
+        var lifecycle = (IDictionary<string, object?>)container["lifecycle"]!;
+        var postStart = (IDictionary<string, object?>)lifecycle["postStart"]!;
+
+        Assert.True(postStart.ContainsKey("exec"));
+        Assert.False(postStart.ContainsKey("httpGet"));
+    }
 }

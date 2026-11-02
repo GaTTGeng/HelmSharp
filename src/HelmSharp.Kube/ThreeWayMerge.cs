@@ -223,13 +223,24 @@ internal static class ThreeWayMerge
                 continue;
             }
 
+            // Probe and lifecycle handlers are mutually exclusive actions. When the chart
+            // selects a different action, server defaults on the previous handler must not
+            // survive as live-only data or the merged probe would carry two handlers.
+            if (hasLive && hasLast && !hasNew &&
+                IsProbeOrLifecycleHandlerContainer(path) && IsHandlerKey(key) &&
+                newVals.Keys.Any(IsHandlerKey))
+            {
+                merged.Remove(key);
+                continue;
+            }
+
             // If the chart removes an entire mapping, reconcile its children individually so
             // unchanged chart fields disappear while live edits and live-only children survive.
             if (hasLive && hasLast && !hasNew &&
                 lastVal is IDictionary<string, object?> removedLastMap &&
                 liveVal is IDictionary<string, object?> removedLiveMap)
             {
-                var remaining = PreserveLiveOnlyFields(removedLastMap, removedLiveMap);
+                var remaining = PreserveLiveOnlyFields(removedLastMap, removedLiveMap, AppendPath(path, key));
                 if (remaining.Count == 0)
                     merged.Remove(key);
                 else
@@ -237,34 +248,36 @@ internal static class ThreeWayMerge
                 continue;
             }
 
-            // Kubernetes list-map fields such as pod containers are owned per named item;
-            // a chart edit to one item must not discard admission-added live items.
-            if (hasLast && hasNew && hasLive &&
-                lastVal is IList<object?> lastList &&
-                newVal is IList<object?> newList &&
-                liveVal is IList<object?> liveList &&
-                TryMergeSetList(lastList, newList, liveList, AppendPath(path, key), customListMapKeys, resourceKind, out var mergedSet))
+            // Kubernetes map/set lists are owned per item, including a list the chart newly
+            // introduces: an absent ancestor is an empty list, so independent live entries
+            // survive. Atomic lists still follow chart output below.
+            var lastList = !hasLast || lastVal is null
+                ? Array.Empty<object?>()
+                : lastVal as IList<object?>;
+            if (lastList is not null &&
+                newVal is IList<object?> desiredList &&
+                liveVal is IList<object?> currentList)
             {
-                merged[key] = mergedSet;
-                continue;
-            }
+                var listPath = AppendPath(path, key);
+                if (TryMergeSetList(lastList, desiredList, currentList, listPath, customListMapKeys, resourceKind, out var mergedSet))
+                {
+                    merged[key] = mergedSet;
+                    continue;
+                }
 
-            if (hasLast && hasNew && hasLive &&
-                lastVal is IList<object?> lastKeyedList &&
-                newVal is IList<object?> newKeyedList &&
-                liveVal is IList<object?> liveKeyedList &&
-                TryMergeKeyedLists(
-                    lastKeyedList,
-                    newKeyedList,
-                    liveKeyedList,
-                    AppendPath(path, key),
-                    customListMapKeys,
-                    resourceKind,
-                    customListMapKeyDefaults,
-                    out var mergedList))
-            {
-                merged[key] = mergedList;
-                continue;
+                if (TryMergeKeyedLists(
+                        lastList,
+                        desiredList,
+                        currentList,
+                        listPath,
+                        customListMapKeys,
+                        resourceKind,
+                        customListMapKeyDefaults,
+                        out var mergedList))
+                {
+                    merged[key] = mergedList;
+                    continue;
+                }
             }
 
             // Three-way decision:
@@ -298,11 +311,18 @@ internal static class ThreeWayMerge
 
     private static Dictionary<string, object?> PreserveLiveOnlyFields(
         IDictionary<string, object?> last,
-        IDictionary<string, object?> live)
+        IDictionary<string, object?> live,
+        string path)
     {
         var result = new Dictionary<string, object?>(StringComparer.Ordinal);
+        var isHandlerContainer = IsProbeOrLifecycleHandlerContainer(path);
         foreach (var (key, liveValue) in live)
         {
+            // A probe or lifecycle handler is a single owned action, not a map of
+            // independently owned defaults: drop it as a unit when the chart removed it.
+            if (isHandlerContainer && IsHandlerKey(key))
+                continue;
+
             if (!last.TryGetValue(key, out var lastValue))
             {
                 result[key] = DeepCopyValue(liveValue);
@@ -310,7 +330,7 @@ internal static class ThreeWayMerge
             else if (lastValue is IDictionary<string, object?> lastChild &&
                      liveValue is IDictionary<string, object?> liveChild)
             {
-                var liveOnlyChildren = PreserveLiveOnlyFields(lastChild, liveChild);
+                var liveOnlyChildren = PreserveLiveOnlyFields(lastChild, liveChild, AppendPath(path, key));
                 if (liveOnlyChildren.Count > 0)
                     result[key] = liveOnlyChildren;
             }
@@ -318,6 +338,17 @@ internal static class ThreeWayMerge
 
         return result;
     }
+
+    // Kubernetes declares probe and lifecycle actions as mutually exclusive handler mappings.
+    private static bool IsProbeOrLifecycleHandlerContainer(string path)
+        => path.EndsWith(".livenessProbe", StringComparison.Ordinal) ||
+           path.EndsWith(".readinessProbe", StringComparison.Ordinal) ||
+           path.EndsWith(".startupProbe", StringComparison.Ordinal) ||
+           path.EndsWith(".lifecycle.postStart", StringComparison.Ordinal) ||
+           path.EndsWith(".lifecycle.preStop", StringComparison.Ordinal);
+
+    private static bool IsHandlerKey(string key)
+        => key is "exec" or "httpGet" or "tcpSocket" or "grpc" or "sleep";
 
     private static bool TryMergeKeyedLists(
         IList<object?> last,
