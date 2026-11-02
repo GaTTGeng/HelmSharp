@@ -226,8 +226,9 @@ internal static class ThreeWayMerge
             // Discriminated Kubernetes mappings (probe/lifecycle actions, volume sources,
             // env value sources) are chart-owned units. Once the chart selects another
             // member or removes the unit, server defaults on the previous member must not
-            // survive as live-only data or the replacement would carry two members.
-            if (hasLive && hasLast && !hasNew &&
+            // survive as live-only data or the replacement would carry two members. Only
+            // apply these built-in PodSpec heuristics when no CRD schema is authoritative.
+            if (customListMapKeys is null && hasLive && hasLast && !hasNew &&
                 (IsExclusiveMappingContainer(childPath) || IsExclusiveMappingMember(path, key)))
             {
                 merged.Remove(key);
@@ -240,7 +241,7 @@ internal static class ThreeWayMerge
                 lastVal is IDictionary<string, object?> removedLastMap &&
                 liveVal is IDictionary<string, object?> removedLiveMap)
             {
-                var remaining = PreserveLiveOnlyFields(removedLastMap, removedLiveMap, AppendPath(path, key));
+                var remaining = PreserveLiveOnlyFields(removedLastMap, removedLiveMap, AppendPath(path, key), customListMapKeys);
                 if (remaining.Count == 0)
                     merged.Remove(key);
                 else
@@ -312,7 +313,8 @@ internal static class ThreeWayMerge
     private static Dictionary<string, object?> PreserveLiveOnlyFields(
         IDictionary<string, object?> last,
         IDictionary<string, object?> live,
-        string path)
+        string path,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys)
     {
         var result = new Dictionary<string, object?>(StringComparer.Ordinal);
         foreach (var (key, liveValue) in live)
@@ -320,7 +322,9 @@ internal static class ThreeWayMerge
             var childPath = AppendPath(path, key);
             // Discriminated mappings are single owned units, not maps of independently
             // owned defaults, so never retain a fragment of a member the chart dropped.
-            if (IsExclusiveMappingContainer(childPath) || IsExclusiveMappingMember(path, key))
+            // Custom resources keep their CRD-declared map topology instead.
+            if (customListMapKeys is null &&
+                (IsExclusiveMappingContainer(childPath) || IsExclusiveMappingMember(path, key)))
                 continue;
 
             if (!last.TryGetValue(key, out var lastValue))
@@ -330,7 +334,7 @@ internal static class ThreeWayMerge
             else if (lastValue is IDictionary<string, object?> lastChild &&
                      liveValue is IDictionary<string, object?> liveChild)
             {
-                var liveOnlyChildren = PreserveLiveOnlyFields(lastChild, liveChild, childPath);
+                var liveOnlyChildren = PreserveLiveOnlyFields(lastChild, liveChild, childPath, customListMapKeys);
                 if (liveOnlyChildren.Count > 0)
                     result[key] = liveOnlyChildren;
             }

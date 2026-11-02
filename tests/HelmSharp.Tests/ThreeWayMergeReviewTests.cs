@@ -668,4 +668,45 @@ public sealed class ThreeWayMergeReviewTests
         Assert.True(valueFrom.ContainsKey("secretKeyRef"));
         Assert.False(valueFrom.ContainsKey("resourceFieldRef"));
     }
+
+    [Fact]
+    public void MergeResource_KeepsCustomGranularMapWhenChartRemovesIt()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  valueFrom:\n    chartKey: old\n",
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  name: widget\n",
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  valueFrom:\n    chartKey: old\n    operatorKey: retained\n",
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+            {
+                ["spec.containers"] = ["name"]
+            });
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var valueFrom = (IDictionary<string, object?>)spec["valueFrom"]!;
+
+        Assert.Equal("retained", valueFrom["operatorKey"]);
+        Assert.False(valueFrom.ContainsKey("chartKey"));
+    }
+
+    [Fact]
+    public void MergeResource_KeepsCustomNestedFieldNamedLikeAValueSource()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  config:\n    valueFrom:\n      resourceFieldRef:\n        fieldPath: status.podIP\n",
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  name: widget\n",
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  config:\n    valueFrom:\n      resourceFieldRef:\n        fieldPath: status.podIP\n        divisor: \"1\"\n      operatorKey: retained\n",
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+            {
+                ["spec.containers"] = ["name"]
+            });
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var config = (IDictionary<string, object?>)spec["config"]!;
+        var valueFrom = (IDictionary<string, object?>)config["valueFrom"]!;
+
+        Assert.Equal("retained", valueFrom["operatorKey"]);
+        Assert.True(valueFrom.ContainsKey("resourceFieldRef"));
+    }
 }
