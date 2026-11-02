@@ -336,14 +336,20 @@ internal static class ThreeWayMerge
         foreach (var (key, liveValue) in live)
         {
             var childPath = AppendPath(path, key);
+            var hasLastValue = last.TryGetValue(key, out var lastValue);
+
             // Discriminated mappings are single owned units, not maps of independently
             // owned defaults, so never retain a fragment of a member the chart dropped.
-            // Custom resources keep their CRD-declared map topology instead.
+            // A handler the chart never owned is wholly live-only and survives removal of
+            // its parent; one the chart owned before disappears as a unit. Custom resources
+            // keep their CRD-declared map topology instead.
             if (customListMapKeys is null &&
                 (IsExclusiveMappingContainer(childPath) || IsExclusiveMappingMember(path, key)))
+            {
+                if (!hasLastValue)
+                    result[key] = DeepCopyValue(liveValue);
                 continue;
-
-            var hasLastValue = last.TryGetValue(key, out var lastValue);
+            }
 
             // An atomic map is a single chart-owned field: when the chart removes its
             // parent, previously owned children must not survive as live-only fragments.
@@ -468,7 +474,15 @@ internal static class ThreeWayMerge
                 continue;
 
             var mergedItem = DeepCopyDictionary(newItem);
-            if (hasLive)
+            var itemPath = path + "[]";
+            if (IsAtomicMap(itemPath, customListMapKeys, resourceKind))
+            {
+                // Atomic map list items are replaced as a whole; keep the live item only
+                // when the chart leaves the previous item unchanged.
+                if (hasLast && hasLive && DeepEquals(lastItem, newItem))
+                    mergedItem = DeepCopyDictionary(liveItem!);
+            }
+            else if (hasLive)
             {
                 // A chart item that only now matches a live entry has no prior owned
                 // children; merge against an empty ancestor so its live-only fields survive.
@@ -482,7 +496,7 @@ internal static class ThreeWayMerge
                     mergedItem,
                     isRoot: false,
                     isMetadata: false,
-                    path: path + "[]",
+                    path: itemPath,
                     customListMapKeys: customListMapKeys,
                     preserveRootStatus: true,
                     resourceKind: resourceKind,

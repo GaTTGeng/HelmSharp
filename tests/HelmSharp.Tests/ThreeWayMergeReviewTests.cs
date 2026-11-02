@@ -811,4 +811,64 @@ public sealed class ThreeWayMergeReviewTests
         Assert.Single(env);
         Assert.Equal("kept", ((IDictionary<string, object?>)env[0]!)["value"]);
     }
+
+    [Fact]
+    public void MergeResource_PreservesInjectedLifecycleHandlerWhenChartRemovesParent()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        lifecycle:\n          postStart:\n            httpGet:\n              path: /ready\n              port: 8080\n",
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        image: app:v2\n",
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        image: app:v2\n        lifecycle:\n          postStart:\n            httpGet:\n              path: /ready\n              port: 8080\n          preStop:\n            exec:\n              command:\n              - sleep\n              - \"5\"\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var template = (IDictionary<string, object?>)spec["template"]!;
+        var podSpec = (IDictionary<string, object?>)template["spec"]!;
+        var container = (IDictionary<string, object?>)((IList<object?>)podSpec["containers"]!)[0]!;
+        var lifecycle = (IDictionary<string, object?>)container["lifecycle"]!;
+
+        Assert.True(lifecycle.ContainsKey("preStop"));
+        Assert.False(lifecycle.ContainsKey("postStart"));
+    }
+
+    [Fact]
+    public void MergeResource_ReplacesAtomicMapListItemAsAWhole()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  rules:\n  - name: A\n    mode: before\n",
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  rules:\n  - name: A\n    mode: after\n",
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  rules:\n  - name: A\n    mode: before\n    token: injected\n",
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+            {
+                ["spec.rules"] = ["name"],
+                ["spec.rules[]"] = [ThreeWayMerge.AtomicListSentinel]
+            });
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var rule = (IDictionary<string, object?>)((IList<object?>)spec["rules"]!)[0]!;
+
+        Assert.Equal("after", rule["mode"]);
+        Assert.False(rule.ContainsKey("token"));
+    }
+
+    [Fact]
+    public void MergeResource_PreservesLiveAtomicMapListItemWhenChartUnchanged()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  rules:\n  - name: A\n    mode: before\n",
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  rules:\n  - name: A\n    mode: before\n",
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  rules:\n  - name: A\n    mode: before\n    token: injected\n",
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+            {
+                ["spec.rules"] = ["name"],
+                ["spec.rules[]"] = [ThreeWayMerge.AtomicListSentinel]
+            });
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var rule = (IDictionary<string, object?>)((IList<object?>)spec["rules"]!)[0]!;
+
+        Assert.Equal("injected", rule["token"]);
+    }
 }
