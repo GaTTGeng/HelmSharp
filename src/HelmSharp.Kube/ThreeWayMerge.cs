@@ -223,12 +223,12 @@ internal static class ThreeWayMerge
                 continue;
             }
 
-            // Probe and lifecycle handlers are mutually exclusive actions. When the chart
-            // selects a different action, server defaults on the previous handler must not
-            // survive as live-only data or the merged probe would carry two handlers.
+            // Discriminated Kubernetes mappings (probe/lifecycle actions, volume sources,
+            // env value sources) are chart-owned units. Once the chart selects another
+            // member or removes the unit, server defaults on the previous member must not
+            // survive as live-only data or the replacement would carry two members.
             if (hasLive && hasLast && !hasNew &&
-                IsProbeOrLifecycleHandlerContainer(path) && IsHandlerKey(key) &&
-                newVals.Keys.Any(IsHandlerKey))
+                (IsExclusiveMappingContainer(childPath) || IsExclusiveMappingMember(path, key)))
             {
                 merged.Remove(key);
                 continue;
@@ -315,12 +315,12 @@ internal static class ThreeWayMerge
         string path)
     {
         var result = new Dictionary<string, object?>(StringComparer.Ordinal);
-        var isHandlerContainer = IsProbeOrLifecycleHandlerContainer(path);
         foreach (var (key, liveValue) in live)
         {
-            // A probe or lifecycle handler is a single owned action, not a map of
-            // independently owned defaults: drop it as a unit when the chart removed it.
-            if (isHandlerContainer && IsHandlerKey(key))
+            var childPath = AppendPath(path, key);
+            // Discriminated mappings are single owned units, not maps of independently
+            // owned defaults, so never retain a fragment of a member the chart dropped.
+            if (IsExclusiveMappingContainer(childPath) || IsExclusiveMappingMember(path, key))
                 continue;
 
             if (!last.TryGetValue(key, out var lastValue))
@@ -330,7 +330,7 @@ internal static class ThreeWayMerge
             else if (lastValue is IDictionary<string, object?> lastChild &&
                      liveValue is IDictionary<string, object?> liveChild)
             {
-                var liveOnlyChildren = PreserveLiveOnlyFields(lastChild, liveChild, AppendPath(path, key));
+                var liveOnlyChildren = PreserveLiveOnlyFields(lastChild, liveChild, childPath);
                 if (liveOnlyChildren.Count > 0)
                     result[key] = liveOnlyChildren;
             }
@@ -338,6 +338,23 @@ internal static class ThreeWayMerge
 
         return result;
     }
+
+    // Kubernetes requires exactly one member of these discriminated mappings.
+    private static bool IsExclusiveMappingMember(string containerPath, string member)
+    {
+        if (IsProbeOrLifecycleHandlerContainer(containerPath))
+            return IsHandlerKey(member);
+        if (containerPath.EndsWith(".volumes[]", StringComparison.Ordinal))
+            return IsVolumeSourceKey(member);
+
+        return containerPath.EndsWith(".valueFrom", StringComparison.Ordinal) &&
+               (member is "fieldRef" or "resourceFieldRef" or "configMapKeyRef" or "secretKeyRef");
+    }
+
+    // Mappings that are themselves a single chart-owned unit rather than a field bag.
+    private static bool IsExclusiveMappingContainer(string path)
+        => IsProbeOrLifecycleHandlerContainer(path) ||
+           path.EndsWith(".valueFrom", StringComparison.Ordinal);
 
     // Kubernetes declares probe and lifecycle actions as mutually exclusive handler mappings.
     private static bool IsProbeOrLifecycleHandlerContainer(string path)
@@ -349,6 +366,14 @@ internal static class ThreeWayMerge
 
     private static bool IsHandlerKey(string key)
         => key is "exec" or "httpGet" or "tcpSocket" or "grpc" or "sleep";
+
+    private static bool IsVolumeSourceKey(string key)
+        => key is "awsElasticBlockStore" or "azureDisk" or "azureFile" or "cephfs" or "cinder" or
+            "configMap" or "csi" or "downwardAPI" or "emptyDir" or "ephemeral" or "fc" or
+            "flexVolume" or "flocker" or "gcePersistentDisk" or "gitRepo" or "glusterfs" or
+            "hostPath" or "image" or "iscsi" or "nfs" or "persistentVolumeClaim" or
+            "photonPersistentDisk" or "portworxVolume" or "projected" or "quobyte" or "rbd" or
+            "scaleIO" or "secret" or "storageos" or "vsphereVolume";
 
     private static bool TryMergeKeyedLists(
         IList<object?> last,

@@ -613,4 +613,59 @@ public sealed class ThreeWayMergeReviewTests
         Assert.True(postStart.ContainsKey("exec"));
         Assert.False(postStart.ContainsKey("httpGet"));
     }
+
+    [Fact]
+    public void MergeResource_RemovesProbeWhenChartDeletesIt()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        livenessProbe:\n          httpGet:\n            path: /healthz\n            port: 8080\n",
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        image: app:v2\n",
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        image: app:v2\n        livenessProbe:\n          httpGet:\n            path: /healthz\n            port: 8080\n          timeoutSeconds: 1\n          periodSeconds: 10\n          successThreshold: 1\n          failureThreshold: 3\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var template = (IDictionary<string, object?>)spec["template"]!;
+        var podSpec = (IDictionary<string, object?>)template["spec"]!;
+        var container = (IDictionary<string, object?>)((IList<object?>)podSpec["containers"]!)[0]!;
+
+        Assert.False(container.ContainsKey("livenessProbe"));
+    }
+
+    [Fact]
+    public void MergeResource_DropsObsoleteVolumeSourceWhenChartSwitchesType()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "spec:\n  template:\n    spec:\n      volumes:\n      - name: config\n        configMap:\n          name: chart-config\n",
+            "spec:\n  template:\n    spec:\n      volumes:\n      - name: config\n        secret:\n          secretName: chart-secret\n",
+            "spec:\n  template:\n    spec:\n      volumes:\n      - name: config\n        configMap:\n          name: chart-config\n          defaultMode: 420\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var template = (IDictionary<string, object?>)spec["template"]!;
+        var podSpec = (IDictionary<string, object?>)template["spec"]!;
+        var volume = (IDictionary<string, object?>)((IList<object?>)podSpec["volumes"]!)[0]!;
+
+        Assert.True(volume.ContainsKey("secret"));
+        Assert.False(volume.ContainsKey("configMap"));
+    }
+
+    [Fact]
+    public void MergeResource_DropsObsoleteEnvValueSourceWhenChartSwitchesType()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        env:\n        - name: POD_IP\n          valueFrom:\n            resourceFieldRef:\n              fieldPath: status.podIP\n",
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        env:\n        - name: POD_IP\n          valueFrom:\n            secretKeyRef:\n              name: app-secret\n              key: pod-ip\n",
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        env:\n        - name: POD_IP\n          valueFrom:\n            resourceFieldRef:\n              fieldPath: status.podIP\n              divisor: \"1\"\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var template = (IDictionary<string, object?>)spec["template"]!;
+        var podSpec = (IDictionary<string, object?>)template["spec"]!;
+        var container = (IDictionary<string, object?>)((IList<object?>)podSpec["containers"]!)[0]!;
+        var env = (IDictionary<string, object?>)((IList<object?>)container["env"]!)[0]!;
+        var valueFrom = (IDictionary<string, object?>)env["valueFrom"]!;
+
+        Assert.True(valueFrom.ContainsKey("secretKeyRef"));
+        Assert.False(valueFrom.ContainsKey("resourceFieldRef"));
+    }
 }
