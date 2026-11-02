@@ -255,7 +255,7 @@ internal static class ThreeWayMerge
                 lastVal is IDictionary<string, object?> removedLastMap &&
                 liveVal is IDictionary<string, object?> removedLiveMap)
             {
-                var remaining = PreserveLiveOnlyFields(removedLastMap, removedLiveMap, AppendPath(path, key), resourceKind, customListMapKeys);
+                var remaining = PreserveLiveOnlyFields(removedLastMap, removedLiveMap, AppendPath(path, key), resourceKind, customListMapKeys, customListMapKeyDefaults);
                 if (remaining.Count == 0)
                     merged.Remove(key);
                 else
@@ -329,7 +329,8 @@ internal static class ThreeWayMerge
         IDictionary<string, object?> live,
         string path,
         string? resourceKind,
-        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys)
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? customListMapKeys,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>? customListMapKeyDefaults)
     {
         var result = new Dictionary<string, object?>(StringComparer.Ordinal);
         foreach (var (key, liveValue) in live)
@@ -342,25 +343,43 @@ internal static class ThreeWayMerge
                 (IsExclusiveMappingContainer(childPath) || IsExclusiveMappingMember(path, key)))
                 continue;
 
+            var hasLastValue = last.TryGetValue(key, out var lastValue);
+
             // An atomic map is a single chart-owned field: when the chart removes its
             // parent, previously owned children must not survive as live-only fragments.
             if (liveValue is IDictionary<string, object?> && IsAtomicMap(childPath, customListMapKeys, resourceKind))
             {
-                if (!last.ContainsKey(key))
+                if (!hasLastValue)
                     result[key] = DeepCopyValue(liveValue);
                 continue;
             }
 
-            if (!last.TryGetValue(key, out var lastValue))
+            if (!hasLastValue)
             {
                 result[key] = DeepCopyValue(liveValue);
             }
             else if (lastValue is IDictionary<string, object?> lastChild &&
                      liveValue is IDictionary<string, object?> liveChild)
             {
-                var liveOnlyChildren = PreserveLiveOnlyFields(lastChild, liveChild, childPath, resourceKind, customListMapKeys);
+                var liveOnlyChildren = PreserveLiveOnlyFields(lastChild, liveChild, childPath, resourceKind, customListMapKeys, customListMapKeyDefaults);
                 if (liveOnlyChildren.Count > 0)
                     result[key] = liveOnlyChildren;
+            }
+            else if (lastValue is IList<object?> lastChildList && liveValue is IList<object?> liveChildList)
+            {
+                // Reconcile against an empty desired list so only live-added entries of a
+                // chart-owned map/set list survive the removed parent; atomic lists drop.
+                IList<object?> emptyList = Array.Empty<object?>();
+                if (TryMergeSetList(lastChildList, emptyList, liveChildList, childPath, customListMapKeys, resourceKind, out var remainingSet))
+                {
+                    if (remainingSet.Count > 0)
+                        result[key] = remainingSet;
+                }
+                else if (TryMergeKeyedLists(lastChildList, emptyList, liveChildList, childPath, customListMapKeys, resourceKind, customListMapKeyDefaults, out var remainingList))
+                {
+                    if (remainingList.Count > 0)
+                        result[key] = remainingList;
+                }
             }
         }
 
@@ -449,9 +468,15 @@ internal static class ThreeWayMerge
                 continue;
 
             var mergedItem = DeepCopyDictionary(newItem);
-            if (hasLast && hasLive)
+            if (hasLive)
+            {
+                // A chart item that only now matches a live entry has no prior owned
+                // children; merge against an empty ancestor so its live-only fields survive.
+                IDictionary<string, object?> ancestor = hasLast
+                    ? lastItem!
+                    : new Dictionary<string, object?>(StringComparer.Ordinal);
                 DeepThreeWayMerge(
-                    lastItem!,
+                    ancestor,
                     newItem,
                     liveItem!,
                     mergedItem,
@@ -462,6 +487,7 @@ internal static class ThreeWayMerge
                     preserveRootStatus: true,
                     resourceKind: resourceKind,
                     customListMapKeyDefaults: customListMapKeyDefaults);
+            }
             merged.Add(mergedItem);
         }
 

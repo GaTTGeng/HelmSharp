@@ -767,4 +767,48 @@ public sealed class ThreeWayMergeReviewTests
 
         Assert.False(spec.ContainsKey("options"));
     }
+
+    [Fact]
+    public void MergeResource_KeepsLiveOnlyItemsWhenChartRemovesParentOfMapList()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  options:\n    rules:\n    - name: chart\n      value: before\n",
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  name: widget\n",
+            "apiVersion: example.com/v1\nkind: Widget\nspec:\n  options:\n    rules:\n    - name: chart\n      value: before\n    - name: operator\n      value: kept\n",
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+            {
+                ["spec.options.rules"] = ["name"]
+            });
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var options = (IDictionary<string, object?>)spec["options"]!;
+        var rules = (IList<object?>)options["rules"]!;
+
+        Assert.Single(rules);
+        Assert.Equal("operator", ((IDictionary<string, object?>)rules[0]!)["name"]);
+    }
+
+    [Fact]
+    public void MergeResource_PreservesLiveOnlyFieldsWhenChartStartsRenderingListEntry()
+    {
+        var merged = ThreeWayMerge.MergeResource(
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        image: app:v1\n",
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        image: app:v2\n      - name: sidecar\n        image: sidecar:v2\n",
+            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n        image: app:v1\n      - name: sidecar\n        image: sidecar:v1\n        env:\n        - name: INJECTED\n          value: kept\n");
+
+        var document = HelmYaml.DeserializeDictionary(merged, StringComparer.Ordinal);
+        var spec = (IDictionary<string, object?>)document["spec"]!;
+        var template = (IDictionary<string, object?>)spec["template"]!;
+        var podSpec = (IDictionary<string, object?>)template["spec"]!;
+        var containers = (IList<object?>)podSpec["containers"]!;
+        var sidecar = containers
+            .Select(item => (IDictionary<string, object?>)item!)
+            .Single(item => Equals(item["name"], "sidecar"));
+
+        Assert.Equal("sidecar:v2", sidecar["image"]);
+        var env = (IList<object?>)sidecar["env"]!;
+        Assert.Single(env);
+        Assert.Equal("kept", ((IDictionary<string, object?>)env[0]!)["value"]);
+    }
 }
