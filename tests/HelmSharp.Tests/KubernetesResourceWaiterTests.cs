@@ -111,6 +111,54 @@ public sealed class KubernetesResourceWaiterTests
     }
 
     [Fact]
+    public async Task WaitForReadyAsync_CrashLoopBackOffCanRecover()
+    {
+        const string path = "/api/v1/namespaces/release-ns/pods/web";
+        var handler = new KubernetesApiHandler()
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, CrashLoopPod)
+            .Respond(HttpMethod.Get, path, HttpStatusCode.OK, """
+                { "apiVersion": "v1", "kind": "Pod", "metadata": { "name": "web" },
+                  "status": { "phase": "Running", "conditions": [{ "type": "Ready", "status": "True" }] } }
+                """);
+        var clock = new DeterministicTimeProvider(DateTimeOffset.UnixEpoch);
+        var waiter = new KubernetesResourceWaiter(KubernetesTestClientBuilder.Create(handler), 10, clock, new DeterministicPolling(clock).DelayAsync);
+
+        var messages = await AsyncEnumerableTestExtensions.CollectAsync(waiter.WaitForReadyAsync(PodManifest, "release-ns"));
+
+        Assert.Contains("  Pod/release-ns/web is ready", messages);
+        Assert.Equal(2, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task WaitForReadyAsync_CrashLoopBackOffUntilDeadlineTimesOut()
+    {
+        var handler = new KubernetesApiHandler()
+            .RespondAlways(HttpMethod.Get, "/api/v1/namespaces/release-ns/pods/web", HttpStatusCode.OK, CrashLoopPod);
+        var waiter = CreateDeterministicWaiter(handler);
+
+        var exception = await Assert.ThrowsAsync<TimeoutException>(() =>
+            AsyncEnumerableTestExtensions.DrainAsync(waiter.WaitForReadyAsync(PodManifest, "release-ns")));
+
+        Assert.Contains("Pod/release-ns/web", exception.Message);
+        Assert.Contains("CrashLoopBackOff", exception.Message);
+    }
+
+    private const string PodManifest = """
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: web
+        """;
+
+    private const string CrashLoopPod = """
+        { "apiVersion": "v1", "kind": "Pod", "metadata": { "name": "web" },
+          "status": { "phase": "Running", "containerStatuses": [
+            { "name": "web", "ready": false, "restartCount": 2, "image": "web", "imageID": "web",
+              "state": { "waiting": { "reason": "CrashLoopBackOff" } } }
+          ] } }
+        """;
+
+    [Fact]
     public async Task WaitForReadyAsync_WaitsForServiceClusterIpAndLoadBalancerIngress()
     {
         var handler = new KubernetesApiHandler()
