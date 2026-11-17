@@ -57,4 +57,6 @@ The direct applier deletes every valid resource document it receives. It does no
 
 `KubernetesResourceWaiter` observes common workload kinds: Deployments, StatefulSets, DaemonSets, ReplicaSets, Jobs, Pods, PVCs, Endpoints, and v2 HPAs. Jobs are only waited on when the caller requests it. Objects outside this set are accepted as applied; they are not proof that an operator-managed resource is ready.
 
+A Pod in `CrashLoopBackOff` remains pending while the waiter polls for its Ready condition. If it does not recover by the deadline, the waiter reports a timeout with the last observed status; a Pod in the Failed phase is reported as a terminal failure.
+
 For a full Helm-style lifecycle, including hooks and stored revisions, use [Install and upgrade releases](release-workflows.md). Keep direct delete operations behind the same authorization and approval path as apply.

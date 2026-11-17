@@ -809,8 +809,7 @@ public sealed class KubernetesResourceWaiter
     private async Task<(bool Ready, bool Failed, string Status)> CheckPodAsync(
         string name, string ns, CancellationToken ct)
     {
-        // Pod readiness is the Ready condition; Failed phase and CrashLoopBackOff are
-        // terminal so a crash-looping pod fails the wait instead of timing out.
+        // A crash-looping container can recover; only the Failed Pod phase is terminal.
         var pod = await _client.CoreV1.ReadNamespacedPodAsync(name, ns, cancellationToken: ct);
         var phase = pod.Status?.Phase;
 
@@ -822,13 +821,13 @@ public sealed class KubernetesResourceWaiter
         if (phase == "Failed")
             return (false, true, $"Pod failed: {pod.Status?.Reason ?? "unknown"}");
 
-        // Check container statuses for crash loops
+        // Preserve the waiting reason for timeout diagnostics while polling for recovery.
         var containerStatuses = pod.Status?.ContainerStatuses;
         if (containerStatuses is not null)
         {
             var waiting = containerStatuses.FirstOrDefault(c => c.State?.Waiting?.Reason == "CrashLoopBackOff");
             if (waiting is not null)
-                return (false, true, "Pod in CrashLoopBackOff");
+                return (false, false, "Pod in CrashLoopBackOff");
         }
 
         return (false, false, $"Pod phase: {phase ?? "Pending"}");

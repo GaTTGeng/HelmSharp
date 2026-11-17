@@ -57,4 +57,6 @@ await foreach (var resource in applier.DeleteAsync(
 
 `KubernetesResourceWaiter` 会观察常见工作负载：Deployment、StatefulSet、DaemonSet、ReplicaSet、Job、Pod、PVC、Endpoints 和 v2 HPA。仅在调用方明确请求时才等待 Job。这个集合之外的对象只表示已被接受，不能证明 operator 管理的资源已经就绪。
 
+处于 `CrashLoopBackOff` 的 Pod 会继续等待 Ready 状态；如果在截止时间前未恢复，等待器会报告超时和最后观察到的状态。处于 Failed 阶段的 Pod 则报告为终止失败。
+
 如需完整的 Helm 风格生命周期，包括 hook 和持久化 revision，请使用[安装和升级 Release](release-workflows.md)。直接删除也应放在和提交相同的授权、审批路径之后。
