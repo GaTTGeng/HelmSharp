@@ -34,6 +34,22 @@ CLI 颜色、进度文案、终端格式和插件执行不是目标，除非它�
 | Kubernetes Secrets 发布历史 | 已支持 | 不依赖 Helm CLI 也能保存发布记录。 |
 | OCI 注册表和来源证明 | 计划中 | API 或方向存在，但还不是完整生产对齐。 |
 
+### Kubernetes 提交与清理契约
+
+下表描述当前行为。[#258](https://github.com/GaTTGeng/HelmSharp/issues/258) 已由 [PR #270](https://github.com/GaTTGeng/HelmSharp/pull/270) 完成；字段归属行为已可用，但受下述基线和列表限制约束。相关选项和方法见 [Action API](api/generated/action.md) 与 [Kube API](api/generated/kube.md)。
+
+| 范围 | 当前行为与边界 | 测试证据 |
+| --- | --- | --- |
+| 命名空间与作用域 | 清单显式声明的命名空间优先于默认值；集群级资源不带命名空间。`CreateNamespace` 默认为 true，会创建缺失的目标命名空间。 | [身份与命名空间测试](https://github.com/GaTTGeng/HelmSharp/blob/master/tests/HelmSharp.Tests/KubernetesManifestApplierTests.cs#L481-L577) |
+| 发现 | 常见类型使用强类型 endpoint；其他类型通过集群发现及其作用域访问。提交使用声明的 API version，并短暂重试注册延迟；删除可使用同 group 的其他 served version。不支持的 core 类型和直接删除发现耗尽会失败。 | [发现测试](https://github.com/GaTTGeng/HelmSharp/blob/master/tests/HelmSharp.Tests/KubernetesManifestApplierTests.cs#L2739-L2908)、[删除测试](https://github.com/GaTTGeng/HelmSharp/blob/master/tests/HelmSharp.Tests/KubernetesManifestApplierTests.cs#L3090-L3200) |
+| 创建与更新 | 提交器创建不存在的对象并替换已有对象。直接 `ApplyAsync` 没有历史 release 基线。升级有先前清单时使用下述三方合并；新资源和卸载后重新安装没有此基线。 | [提交测试](https://github.com/GaTTGeng/HelmSharp/blob/master/tests/HelmSharp.Tests/KubernetesManifestApplierTests.cs#L578-L635)、[合并测试](https://github.com/GaTTGeng/HelmSharp/blob/master/tests/HelmSharp.Tests/ThreeWayMergeTests.cs)、[生命周期测试](https://github.com/GaTTGeng/HelmSharp/blob/master/tests/HelmSharp.Tests/ChartOperationsTests.cs#L902) |
+| 提交模式 | 托管生命周期在变更前拒绝 `HelmExecutionOptions.ServerSideApply = true`；非空请求 `ServerSideApply`、`Force` 和 `TakeOwnership` 也会被拒绝。field manager 只发送给发现路径的创建/替换请求，不发送给强类型资源；它不会启用 server-side apply。 | [生命周期校验测试](https://github.com/GaTTGeng/HelmSharp/blob/master/tests/HelmSharp.Tests/ChartOperationsTests.cs#L1497)、[提交测试](https://github.com/GaTTGeng/HelmSharp/blob/master/tests/HelmSharp.Tests/KubernetesManifestApplierTests.cs#L2739) |
+| 删除与传播策略 | 直接删除和 release 清理按清单逆序处理。直接删除默认为 `Background`；卸载的 `DeletionPropagation` 还支持 `Foreground` 和 `Orphan`。回滚及 hook 清理使用 background。对象 404 视为成功；其他 API 错误停止删除并报告资源身份。 | [删除测试](https://github.com/GaTTGeng/HelmSharp/blob/master/tests/HelmSharp.Tests/KubernetesManifestApplierTests.cs#L3062-L3358)、[生命周期测试](https://github.com/GaTTGeng/HelmSharp/blob/master/tests/HelmSharp.Tests/ChartOperationsTests.cs#L1935) |
+| Keep 策略 | 卸载和回滚清理会过滤 `helm.sh/resource-policy: keep`；直接 `DeleteAsync` 不解释该注解。删除 owner 或命名空间时，该注解无法阻止 Kubernetes 级联删除。 | [生命周期测试](https://github.com/GaTTGeng/HelmSharp/blob/master/tests/HelmSharp.Tests/ChartOperationsTests.cs#L671-L767)、[卸载测试](https://github.com/GaTTGeng/HelmSharp/blob/master/tests/HelmSharp.Tests/ChartOperationsTests.cs#L1756) |
+| Hook 清理 | 支持 `before-hook-creation`（默认）、`hook-succeeded` 和 `hook-failed`；清理使用 background 并等待对象消失。成功 hook 在整批结束后逆序清理；失败或取消会触发有界收尾。策略不会删除 CRD hook。`DisableHooks` 会跳过执行及清理。 | [Hook 测试](https://github.com/GaTTGeng/HelmSharp/blob/master/tests/HelmSharp.Tests/HelmHookTests.cs#L389-L669)、[失败测试](https://github.com/GaTTGeng/HelmSharp/blob/master/tests/HelmSharp.Tests/HelmHookTests.cs#L760-L947)、[禁用测试](https://github.com/GaTTGeng/HelmSharp/blob/master/tests/HelmSharp.Tests/ChartOperationsTests.cs#L1796) |
+
+清理失败处理和生命周期选项详见 [release 工作流](guide/release-workflows.md)；直接调用和发现错误详见 [Kubernetes 操作](guide/kubernetes-operations.md)。就绪与超时覆盖由 [#315](https://github.com/GaTTGeng/HelmSharp/issues/315) 跟踪。
+
 ### 升级时的资源字段归属
 
 对于上一已部署 release 清单中已有的资源，`HelmClient` 升级会比较该 revision 保存的清单、新渲染的 Chart 清单和 Kubernetes 当前对象。只存在于 live 对象中的字段、live 侧的删除，以及 Chart 未修改字段的 live 改动会保留。Chart 删除的字段会保持缺省，即使 live 对象曾修改该字段也会删除。已知 Kubernetes list-map 路径和 CRD schema 声明的 list-map 键会逐项合并；其他列表视为原子值并遵循 Chart。`resourceVersion`、`uid` 和 `status` 等 Kubernetes 管理字段仍以集群为准。没有先前清单条目的资源、卸载后重新安装，以及直接调用 `KubernetesManifestApplier.ApplyAsync` 时，替换会使用期望清单，不执行三方归属合并。该行为由实际 install/upgrade 生命周期路径覆盖；详见合并和生命周期专项测试。
