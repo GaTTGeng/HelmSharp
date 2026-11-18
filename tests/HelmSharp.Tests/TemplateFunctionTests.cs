@@ -725,6 +725,26 @@ public class TemplateFunctionTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void Add1_IncrementsIntegerArgumentsAndPipelineValues()
+    {
+        var chart = new HelmChart {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
+            direct: {{ add1 4 | quote }}
+            pipeline: {{ "-2" | add1 }}
+            fraction: {{ add1 2.8 }}
+            fractionalString: {{ add1 "2.8" }}
+            """ }
+        };
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>());
+        var result = renderer.Render();
+        Assert.Contains("direct: \"5\"", result);
+        Assert.Contains("pipeline: -1", result);
+        Assert.Contains("fraction: 3", result);
+        Assert.Contains("fractionalString: 1", result);
+    }
+
+    [Fact]
     public void ToDecimal_ParsesInputsAsOctal()
     {
         var chart = new HelmChart {

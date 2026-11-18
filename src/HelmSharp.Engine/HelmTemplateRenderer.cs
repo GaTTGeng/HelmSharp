@@ -1213,6 +1213,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             // Math functions. add/sub/mul/div/mod left-fold their arguments through
             // the operator; a piped value is inserted as the first (leftmost) operand.
             "add" => FoldMathArgs(tokens, context, pipelineValue, "+"),
+            "add1" => Add1(tokens, context, pipelineValue),
             "sub" => FoldMathArgs(tokens, context, pipelineValue, "-"),
             "mul" => FoldMathArgs(tokens, context, pipelineValue, "*"),
             "div" => FoldMathArgs(tokens, context, pipelineValue, "/"),
@@ -2386,6 +2387,19 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
     // ────────────────────────────────────────────────────────────
     //  MATH HELPERS — resolve args here, compute in MathFunctions
     // ────────────────────────────────────────────────────────────
+    private long Add1(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue)
+    {
+        var count = tokens.Count - 1 + (pipelineValue is null ? 0 : 1);
+        if (count != 1)
+            throw new ArgumentException($"wrong number of args for add1: want 1 got {count}");
+        var value = pipelineValue ?? EvaluateToken(tokens[1], context);
+        // Sprig's integer conversion rejects fractional strings rather than truncating them.
+        var number = value is string s && !long.TryParse(s, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out _)
+            ? 0L
+            : TypeConverters.ToLong(value);
+        return unchecked(number + 1);
+    }
+
     /// <summary>
     /// Left-folds arguments through a binary operator for Sprig's
     /// <c>add</c>/<c>sub</c>/<c>mul</c>/<c>div</c>/<c>mod</c>. When invoked through a
