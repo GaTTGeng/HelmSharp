@@ -6,6 +6,10 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+### Security
+
+- Updated the documentation build's Vite dependency to address development-server and editor integration advisories (#376).
+
 ## [2.0.0] - 2026-11-18
 
 ### Added
