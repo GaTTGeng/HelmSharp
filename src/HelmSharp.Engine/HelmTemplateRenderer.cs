@@ -1595,14 +1595,29 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             return token[1..^1].Replace("\r", string.Empty, StringComparison.Ordinal);
         if (token.StartsWith('('))
         {
-            var memberSeparator = token.LastIndexOf(").", StringComparison.Ordinal);
-            if (memberSeparator > 0)
+            var depth = 0;
+            var quote = '\0';
+            var escaped = false;
+            for (var i = 0; i < token.Length; i++)
             {
-                var value = EvaluatePipeline(token[1..memberSeparator].Trim(), context);
-                return ResolveMembers(value, token[(memberSeparator + 2)..]);
+                var ch = token[i];
+                if (quote != '\0')
+                {
+                    if (escaped) escaped = false;
+                    else if (ch == '\\' && quote != '`') escaped = true;
+                    else if (ch == quote) quote = '\0';
+                    continue;
+                }
+                if (ch is '"' or '\'' or '`') quote = ch;
+                else if (ch == '(') depth++;
+                else if (ch == ')' && --depth == 0)
+                {
+                    var value = EvaluatePipeline(token[1..i].Trim(), context);
+                    if (i == token.Length - 1) return value;
+                    if (token[i + 1] == '.') return ResolveMembers(value, token[(i + 2)..]);
+                    break;
+                }
             }
-            if (token.EndsWith(')'))
-                return EvaluatePipeline(token[1..^1].Trim(), context);
         }
         // Path resolution order: bare `.` is the current dot; `$` is the root
         // object; `$.x` is rewritten to a root path; `$name` goes through the

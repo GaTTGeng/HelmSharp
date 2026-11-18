@@ -11,6 +11,41 @@ namespace HelmSharp.Tests;
 public class TemplateFunctionTests(ITestOutputHelper output)
 {
 
+    [Theory]
+    [InlineData(false, "Asia/Shanghai", "1", "chemairs")]
+    [InlineData(true, "UTC", "3", "customdb")]
+    public void Render_NestedDefaultAndDig_UsesFallbacksAndOverrides(
+        bool useOverrides, string timezone, string replicas, string database)
+    {
+        var chart = new HelmChart {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
+            timezone: {{ ((.Values.global | default dict).timezone | default "Asia/Shanghai") | quote }}
+            replicas: {{ dig "airsbo" 1 (.Values.replicas | default dict) | quote }}
+            database: {{ (dig "chemairs" "chemairs" (.Values.postgresql.databases | default dict)) | quote }}
+            """ }
+        };
+        var values = new Dictionary<string, object?>
+        {
+            ["postgresql"] = new Dictionary<string, object?>()
+        };
+        if (useOverrides)
+        {
+            values["global"] = new Dictionary<string, object?> { ["timezone"] = "UTC" };
+            values["replicas"] = new Dictionary<string, object?> { ["airsbo"] = 3 };
+            values["postgresql"] = new Dictionary<string, object?>
+            {
+                ["databases"] = new Dictionary<string, object?> { ["chemairs"] = "customdb" }
+            };
+        }
+
+        var result = new HelmTemplateRenderer(chart, "demo", "default", values).Render();
+
+        Assert.Contains($"timezone: \"{timezone}\"", result);
+        Assert.Contains($"replicas: \"{replicas}\"", result);
+        Assert.Contains($"database: \"{database}\"", result);
+    }
+
     [HelmCliFact]
     public async Task Render_EnvironmentFunction_ReportsHelmCompatiblePathAwareDiagnostic()
     {

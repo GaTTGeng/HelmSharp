@@ -25,6 +25,7 @@ public class HelmTemplateGoldenTests
     [InlineData("dependencies")]
     [InlineData("dependency-values")]
     [InlineData("control-flow")]
+    [InlineData("nested-default-dig")]
     public async Task Render_FixtureChart_MatchesHelmTemplate(string fixtureName)
     {
         var chartPath = TestFixtures.ChartPath(fixtureName);
@@ -43,6 +44,22 @@ public class HelmTemplateGoldenTests
         Assert.Equal(
             NormalizeManifest(expected.Stdout),
             NormalizeManifest(renderer.Render()));
+    }
+
+    [HelmCliFact]
+    public async Task Render_NestedDefaultDigWithOverrides_MatchesHelmTemplate()
+    {
+        var chartPath = TestFixtures.ChartPath("nested-default-dig");
+        var overrides = Path.Combine(chartPath, "overrides.yaml");
+        var expected = await HelmCliRunner.TemplateAsync(
+            chartPath, "golden-release", "golden-namespace", overrides, CancellationToken.None);
+        Assert.True(expected.ExitCode == 0, expected.Stderr);
+
+        var chart = await HelmChartLoader.LoadAsync(chartPath, CancellationToken.None);
+        var values = await HelmValues.BuildAsync(chart, [overrides], null, null, null, null, null, CancellationToken.None);
+        var renderer = new HelmTemplateRenderer(chart, "golden-release", "golden-namespace", values);
+
+        Assert.Equal(NormalizeManifest(expected.Stdout), NormalizeManifest(renderer.Render()));
     }
 
     [Theory]

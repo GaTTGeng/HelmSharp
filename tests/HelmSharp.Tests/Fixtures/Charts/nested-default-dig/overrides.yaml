@@ -1,0 +1,7 @@
+global:
+  timezone: UTC
+replicas:
+  airsbo: 3
+postgresql:
+  databases:
+    chemairs: customdb
