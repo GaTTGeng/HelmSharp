@@ -9,6 +9,7 @@ This project follows semantic versioning once stable releases begin.
 ### Fixed
 
 - Render empty dictionaries in included helpers with two-variable ranges (#379).
+- Support the Sprig `add1` template function (#380).
 
 ## [2.0.0] - 2026-11-18
 
