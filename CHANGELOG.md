@@ -6,6 +6,10 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+### Fixed
+
+- Render empty dictionaries in included helpers with two-variable ranges (#379).
+
 ## [2.0.0] - 2026-11-18
 
 ### Added

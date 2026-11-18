@@ -1612,6 +1612,8 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
         if (token == "true") return true;
         if (token == "false") return false;
         if (token == "nil") return null;
+        // A bare zero-argument function in an argument position is evaluated by Go templates.
+        if (token == "dict") return new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
         if (long.TryParse(token, out var l)) return l;
         if (double.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out var d)) return d;
         if (token == "$")
