@@ -28,3 +28,4 @@ data:
   user-delimiter-empty: {{ urlJoin (dict "userinfo" "a/b") | quote }}
   asterisk: {{ urlJoin (dict "path" "*") | quote }}
   asterisk-roundtrip: {{ "*" | urlParse | urlJoin | quote }}
+  fragment-control: {{ "https://example.com/#line\nbreak" | urlParse | urlJoin | quote }}

@@ -28,9 +28,6 @@ internal static class UrlFunctions
 
     private static Dictionary<string, object?> ParseUrl(string input)
     {
-        if (input.Any(c => c < 32 || c == 127))
-            throw new FormatException("net/url: invalid control character in URL");
-
         var result = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["scheme"] = "", ["host"] = "", ["hostname"] = "", ["path"] = "",
@@ -43,6 +40,9 @@ internal static class UrlFunctions
             result["fragment"] = Unescape(rest[(hash + 1)..]);
             rest = rest[..hash];
         }
+        // Go checks the URL before the fragment for literal control characters.
+        if (rest.Any(c => c < 32 || c == 127))
+            throw new FormatException("net/url: invalid control character in URL");
 
         var scheme = Regex.Match(rest, "^([A-Za-z][A-Za-z0-9+.-]*):");
         if (scheme.Success)
