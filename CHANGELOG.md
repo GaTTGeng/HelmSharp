@@ -6,10 +6,6 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
-### Security
-
-- Updated the documentation build's Vite dependency to address development-server and editor integration advisories (#376).
-
 ## [2.0.0] - 2026-11-18
 
 ### Added
@@ -40,6 +36,7 @@ This project follows semantic versioning once stable releases begin.
 
 ### Security
 
+- Updated the documentation build's Vite dependency to address development-server and editor integration advisories (#376).
 - Enforced decompressed resource limits for chart archive loading and repository extraction (compressed input size, total decompressed bytes, per-entry bytes, entry count, decompression amplification, and packaged dependency depth), metered on every decompressed byte and every tar entry and shared across nested dependency archives. Repository downloads abort mid-stream at the compressed-input limit instead of buffering oversized responses, pull/extraction applies the budgets before any archive traversal, directory-sourced dependency archives are size-checked before buffering, cached extractions are scoped to the active limit profile, and dependency and pull operations honor the configured limits. Explicit trusted-chart options and partial-extraction cleanup on failure (#261).
 - Replaced the HelmProvenance pseudo-signature (a Base64 SHA-512 digest presented as a PGP signature) with real OpenPGP verification that binds chart digest, signed metadata, and trusted signer identity ([GHSA-p8v5-2m72-3hrw](https://github.com/GaTTGeng/HelmSharp/security/advisories/GHSA-p8v5-2m72-3hrw)). Authenticity verification now requires explicit trusted keys and fails closed on tampered charts, tampered signed metadata, malformed armor, unknown keys, and invalid signatures. **Breaking API change:** `GenerateProvFileAsync` and the hash-only `VerifyAsync` overload are removed; legacy pseudo-signature `.prov` files no longer pass authenticity checks and must be re-signed. Hash-only integrity remains available under the explicitly non-authenticating `CheckDigestAsync` (#262).
 - Trusted provenance keyrings now import only keys OpenPGP authorizes to sign: revoked keys, expired keys, and encryption-only (or otherwise non-signing) keys can no longer act as trusted signers, and verification fails closed when the signer is not a valid signing key.
