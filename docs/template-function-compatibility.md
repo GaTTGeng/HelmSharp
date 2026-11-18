@@ -4,7 +4,7 @@ This is the maintained inventory for HelmSharp's managed renderer. It is an impl
 
 ## Baseline and method
 
-The inventory was audited against:
+The inventory was originally audited against the versions below. New Helm CLI parity validation uses v4.2.2, as pinned in CI; the inventory has not yet been re-audited against Helm v4.
 
 - Helm [`v3.21.3` `pkg/engine/funcs.go`](https://github.com/helm/helm/blob/v3.21.3/pkg/engine/funcs.go)
 - Sprig [`v3.3.0` `functions.go`](https://github.com/Masterminds/sprig/blob/v3.3.0/functions.go), the version declared by [Helm's `go.mod`](https://github.com/helm/helm/blob/v3.21.3/go.mod)

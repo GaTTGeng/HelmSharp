@@ -2,7 +2,7 @@
 
 HelmSharp is not trying to be a command-line emulator. It is trying to give .NET applications the Helm behavior they need when rendering charts and managing releases from inside a process.
 
-The Helm CLI is used as a test oracle. It is not required at runtime by consumers.
+Helm CLI v4.2.2 is the test oracle for new compatibility validation and is pinned in CI and release workflows. It is not required at runtime by consumers.
 
 ## Validation scope
 
