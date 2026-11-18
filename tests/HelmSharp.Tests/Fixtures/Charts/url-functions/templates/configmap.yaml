@@ -1,0 +1,28 @@
+{{- $url := urlParse "https://user:p%40ss@Example.COM:8443/a%20b/c%2Fd?q=a%2Fb#frag%20ment" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: url-functions
+data:
+  scheme: {{ $url.scheme | quote }}
+  userinfo: {{ $url.userinfo | quote }}
+  host: {{ $url.host | quote }}
+  hostname: {{ $url.hostname | quote }}
+  path: {{ $url.path | quote }}
+  query: {{ $url.query | quote }}
+  fragment: {{ $url.fragment | quote }}
+  joined: {{ urlJoin $url | quote }}
+  pipeline: {{ "https://example.com/a%20b" | urlParse | urlJoin | quote }}
+  missing: {{ urlJoin (dict "path" "relative path") | quote }}
+  opaque: {{ "mailto:user@example.com" | urlParse | urlJoin | quote }}
+  relative: {{ "folder/a%2Bb?x=1#one%2Ftwo" | urlParse | urlJoin | quote }}
+  ipv6: {{ "http://[2001:db8::1]:8080/a" | urlParse | urlJoin | quote }}
+  unicode: {{ "https://example.com/%E4%B8%AD%E6%96%87#%E4%B8%AD" | urlParse | urlJoin | quote }}
+  relative-colon: {{ urlJoin (dict "path" "a:b") | quote }}
+  host-path: {{ urlJoin (dict "scheme" "https" "host" "example.com:443" "path" "a b" "query" "q=a+b" "fragment" "a/b?c") | quote }}
+  blank: {{ urlJoin (dict) | quote }}
+  zone: {{ "http://[fe80::1%25eth0]:8080/" | urlParse | urlJoin | quote }}
+  user: {{ "http://a%3Ab:p%2Fq@example.com/" | urlParse | urlJoin | quote }}
+  special: {{ urlJoin (dict "path" "/a!$&'()*+,;=:@[]" "fragment" "!$&'()*+,;=:@/?[]") | quote }}
+  user-delimiter: {{ urlJoin (dict "scheme" "https" "host" "example.com" "userinfo" "a/b") | quote }}
+  user-delimiter-empty: {{ urlJoin (dict "userinfo" "a/b") | quote }}

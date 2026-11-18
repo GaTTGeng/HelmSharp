@@ -16,6 +16,12 @@ public class TemplateErrorGoldenTests
     [InlineData("error-missing-function-no-args", "missingFunction", "missingFunction")]
     [InlineData("error-substr", "slice bounds out of range [4:2]", "slice bounds out of range [4:2]")]
     [InlineData("error-malformed", "unexpected EOF", "Missing 'end'")]
+    [InlineData("error-url-escape", "unable to parse url", "unable to parse url")]
+    [InlineData("error-url-port", "unable to parse url", "unable to parse url")]
+    [InlineData("error-url-field", "unable to parse path key", "unable to parse path key")]
+    [InlineData("error-url-args", "wrong number of args", "wrong number of args")]
+    [InlineData("error-url-userinfo", "unable to parse userinfo in dict", "unable to parse userinfo in dict")]
+    [InlineData("error-url-type", "expected string", "urlParse requires a string")]
     public async Task Render_ErrorFixture_FailsWhenHelmTemplateFails(
         string fixtureName,
         string helmErrorNeedle,
