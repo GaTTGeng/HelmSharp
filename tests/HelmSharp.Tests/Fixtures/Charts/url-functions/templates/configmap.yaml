@@ -26,3 +26,5 @@ data:
   special: {{ urlJoin (dict "path" "/a!$&'()*+,;=:@[]" "fragment" "!$&'()*+,;=:@/?[]") | quote }}
   user-delimiter: {{ urlJoin (dict "scheme" "https" "host" "example.com" "userinfo" "a/b") | quote }}
   user-delimiter-empty: {{ urlJoin (dict "userinfo" "a/b") | quote }}
+  asterisk: {{ urlJoin (dict "path" "*") | quote }}
+  asterisk-roundtrip: {{ "*" | urlParse | urlJoin | quote }}

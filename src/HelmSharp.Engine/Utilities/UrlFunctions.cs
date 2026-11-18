@@ -126,7 +126,8 @@ internal static class UrlFunctions
                 if (normalizedUserinfo.Length > 0) result.Append(normalizedUserinfo).Append('@');
                 result.Append(Escape(host, EscapeMode.Host));
             }
-            var escapedPath = Escape(path, EscapeMode.Path);
+            // Go preserves the request-target asterisk as a complete path.
+            var escapedPath = path == "*" ? "*" : Escape(path, EscapeMode.Path);
             if (host.Length > 0 && escapedPath.Length > 0 && escapedPath[0] != '/') result.Append('/');
             if (result.Length == 0 && escapedPath.Split('/')[0].Contains(':')) result.Append("./");
             result.Append(escapedPath);
@@ -141,16 +142,28 @@ internal static class UrlFunctions
         var open = host.LastIndexOf('[');
         if (open >= 0)
         {
+            if (open != 0) throw new FormatException("invalid IP-literal");
             var close = host.LastIndexOf(']');
             if (close < open) throw new FormatException("missing ']' in host");
             if (!IsPort(host[(close + 1)..])) throw new FormatException("invalid port after host");
-            var address = Unescape(host[(open + 1)..close]);
+            var encodedAddress = host[1..close];
+            var zone = encodedAddress.IndexOf("%25", StringComparison.Ordinal);
+            // Go uses different escape restrictions for the address and its zone.
+            ValidateHost(zone < 0 ? encodedAddress : encodedAddress[..zone], isZone: false);
+            if (zone >= 0) ValidateHost(encodedAddress[zone..], isZone: true);
+            var address = Unescape(encodedAddress);
             if (!IPAddress.TryParse(address, out var ip) || ip.AddressFamily != System.Net.Sockets.AddressFamily.InterNetworkV6)
                 throw new FormatException("invalid IP-literal");
-            return host[..open] + "[" + address + "]" + host[(close + 1)..];
+            return "[" + address + "]" + host[(close + 1)..];
         }
         var colon = host.LastIndexOf(':');
         if (colon >= 0 && !IsPort(host[colon..])) throw new FormatException("invalid port after host");
+        ValidateHost(host, isZone: false);
+        return Unescape(host);
+    }
+
+    private static void ValidateHost(string host, bool isZone)
+    {
         for (var i = 0; i < host.Length; i++)
         {
             var c = host[i];
@@ -159,13 +172,13 @@ internal static class UrlFunctions
                 if (i + 2 >= host.Length || !Uri.IsHexDigit(host[i + 1]) || !Uri.IsHexDigit(host[i + 2]))
                     throw new FormatException("invalid URL escape");
                 var b = Convert.ToByte(host.Substring(i + 1, 2), 16);
-                if (b < 128 && b != 37) throw new FormatException("invalid URL escape");
+                if (isZone ? b != 37 && b != 32 && !Allowed(b, EscapeMode.Host) : b < 128 && b != 37)
+                    throw new FormatException("invalid URL escape");
                 i += 2;
             }
             else if (c < 128 && !Allowed((byte)c, EscapeMode.Host))
                 throw new FormatException("invalid character in host name");
         }
-        return Unescape(host);
     }
 
     private static bool IsPort(string port) => port.Length == 0 || port[0] == ':' && port.Skip(1).All(char.IsAsciiDigit);

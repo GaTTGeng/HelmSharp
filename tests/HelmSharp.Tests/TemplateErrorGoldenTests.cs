@@ -23,6 +23,8 @@ public class TemplateErrorGoldenTests
     [InlineData("error-url-userinfo", "unable to parse userinfo in dict", "unable to parse userinfo in dict")]
     [InlineData("error-url-type", "expected string", "urlParse requires a string")]
     [InlineData("error-url-ipvfuture", "invalid host", "invalid IP-literal")]
+    [InlineData("error-url-ipv6-escape", "invalid URL escape", "invalid URL escape")]
+    [InlineData("error-url-ipv6-prefix", "invalid IP-literal", "invalid IP-literal")]
     public async Task Render_ErrorFixture_FailsWhenHelmTemplateFails(
         string fixtureName,
         string helmErrorNeedle,
