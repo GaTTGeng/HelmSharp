@@ -176,6 +176,23 @@ public class EdgeCaseTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void RangeWithTwoVariables_EmptyMapInIncludedHelper()
+    {
+        var chart = new HelmChart
+        {
+            Name = "test", Version = "1.0.0", ValuesYaml = "",
+            Templates = { ["templates/test.yaml"] = """
+            {{- define "test.helper" -}}
+            {{- range $k, $v := .data }}{{ $k }}{{- end }}
+            {{- end }}
+            result: {{ include "test.helper" (dict "data" dict) | quote }}
+            """ }
+        };
+        var renderer = new HelmTemplateRenderer(chart, "rel", "default", new Dictionary<string, object?>());
+        Assert.Contains("result: \"\"", renderer.Render());
+    }
+
+    [Fact]
     public void RangeOverNil()
     {
         var chart = new HelmChart
