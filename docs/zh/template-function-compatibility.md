@@ -4,7 +4,7 @@
 
 ## 基线与方法
 
-审计使用以下上游版本：
+清单最初的审计依据如下。新的 Helm CLI 对照验证使用 CI 中固定的 v4.2.2；此清单尚未针对 Helm v4 重新审计。
 
 - Helm [`v3.21.3` 的 `pkg/engine/funcs.go`](https://github.com/helm/helm/blob/v3.21.3/pkg/engine/funcs.go)
 - Sprig [`v3.3.0` 的 `functions.go`](https://github.com/Masterminds/sprig/blob/v3.3.0/functions.go)；该版本由 [Helm 的 `go.mod`](https://github.com/helm/helm/blob/v3.21.3/go.mod) 声明

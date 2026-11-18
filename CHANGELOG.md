@@ -6,6 +6,10 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+### Changed
+
+- Document Helm CLI v4.2.2 as the baseline for new compatibility validation.
+
 ### Fixed
 
 - Render empty dictionaries in included helpers with two-variable ranges (#379).
