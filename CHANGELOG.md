@@ -23,6 +23,7 @@ This project follows semantic versioning once stable releases begin.
 
 ### Fixed
 
+- Preserve the complete chart root when passing the current context to included templates through a dictionary (#374).
 - Keep crash-looping Pods pending until they become Ready or the wait times out (#259).
 - Preserved live-only Kubernetes fields during release upgrades while applying chart-owned changes and removals (#258).
 - Plugin listing now falls back to default metadata when an installed plugin's `plugin.json` contains valid JSON with unsupported value types, so one malformed plugin does not interrupt listing (#265).

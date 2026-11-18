@@ -5,3 +5,7 @@ metadata:
 data:
   dependencyCount: {{ len .Chart.Dependencies | quote }}
   global: {{ .Values.global.shared | quote }}
+  root: {{ include "child.root" (dict "root" .) | quote }}
+{{- define "child.root" -}}
+{{ .root.Values.config.color }}:{{ .root.Chart.Name }}:{{ .root.Template.Name }}
+{{- end }}

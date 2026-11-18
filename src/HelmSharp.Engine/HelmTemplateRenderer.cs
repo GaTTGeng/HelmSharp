@@ -190,6 +190,8 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                     CurrentTemplatePath = path,
                     Variables = new Dictionary<string, object?>(_root.Variables, StringComparer.Ordinal)
                 };
+                // The initial dot is the complete chart root, with this template's path.
+                templateContext = templateContext with { Dot = CreateRootDot(templateContext) };
                 var rendered = RenderSection(withoutDefines, templateContext);
                 if (string.IsNullOrWhiteSpace(rendered))
                     continue;
@@ -453,13 +455,13 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
 
                 try
                 {
-                    var rendered = RenderSection(
-                        StripDefines(content),
-                        childContext with
-                        {
-                            CurrentTemplatePath = path,
-                            Variables = new Dictionary<string, object?>(childContext.Variables, StringComparer.Ordinal)
-                        });
+                    var templateContext = childContext with
+                    {
+                        CurrentTemplatePath = path,
+                        Variables = new Dictionary<string, object?>(childContext.Variables, StringComparer.Ordinal)
+                    };
+                    templateContext = templateContext with { Dot = CreateRootDot(templateContext) };
+                    var rendered = RenderSection(StripDefines(content), templateContext);
                     if (!string.IsNullOrWhiteSpace(rendered))
                         AddManifestDocuments(manifests, $"{chartPath}/{path}", rendered);
                 }
@@ -628,6 +630,7 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                 CurrentTemplatePath = path,
                 Variables = new Dictionary<string, object?>(_root.Variables, StringComparer.Ordinal)
             };
+            notesContext = notesContext with { Dot = CreateRootDot(notesContext) };
             var rendered = RenderSection(withoutDefines, notesContext);
             return rendered.Trim();
         }
