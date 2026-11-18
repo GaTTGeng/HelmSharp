@@ -39,7 +39,7 @@ public sealed class HelmProvenanceSigningKey : IDisposable
 
         // Validate parseability up front so callers get a clear error at construction.
         _ = LoadSecretKey(secretKeyData, passphrase);
-        return new HelmProvenanceSigningKey((byte[])secretKeyData.Clone(), passphrase is null ? null : (char[])passphrase.Clone());
+        return new HelmProvenanceSigningKey((byte[])secretKeyData.Clone(), (char[]?)passphrase?.Clone());
     }
 
     /// <summary>

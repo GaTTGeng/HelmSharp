@@ -46,13 +46,13 @@ public class HelmProvenanceTests
         var keyPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, kp, keyCreatedAt);
         var encAlgo = passphrase is null ? SymmetricKeyAlgorithmTag.Null : SymmetricKeyAlgorithmTag.Aes256;
         var krg = new PgpKeyRingGenerator(
-            (int)PgpSignature.PositiveCertification,
+            PgpSignature.PositiveCertification,
             keyPair,
             userId,
             encAlgo,
             HashAlgorithmTag.Sha512,
             true,
-            passphrase ?? (char[])null!,
+            passphrase!,
             false,
             hashed.Generate(),
             null,
@@ -89,7 +89,7 @@ public class HelmProvenanceTests
         packets.SetSignatureCreationTime(false, signatureCreatedAt);
         packets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
         var ringGenerator = new PgpKeyRingGenerator(
-            (int)PgpSignature.PositiveCertification,
+            PgpSignature.PositiveCertification,
             pair,
             "Future signer <future@example.com>",
             SymmetricKeyAlgorithmTag.Null,
@@ -115,7 +115,7 @@ public class HelmProvenanceTests
         var packets = new PgpSignatureSubpacketGenerator();
         packets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
         var ringGenerator = new PgpKeyRingGenerator(
-            (int)PgpSignature.PositiveCertification,
+            PgpSignature.PositiveCertification,
             keyPair,
             userId,
             SymmetricKeyAlgorithmTag.Null,
@@ -213,7 +213,7 @@ public class HelmProvenanceTests
     /// signatures that are mathematically valid under the subkey but not authorized by
     /// OpenPGP key flags (the attack under test).
     /// </summary>
-    private static (PgpSecretKeyRing SecretRing, PgpPublicKeyRing PublicRing, byte[] EncryptionSubkeySecret) CreateRingWithEncryptionSubkey(
+    private static (PgpPublicKeyRing PublicRing, byte[] EncryptionSubkeySecret) CreateRingWithEncryptionSubkey(
         string userId = "Primary <primary@example.com>")
     {
         var kpg = new RsaKeyPairGenerator();
@@ -224,7 +224,7 @@ public class HelmProvenanceTests
         var primaryHashed = new PgpSignatureSubpacketGenerator();
         primaryHashed.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
         var krg = new PgpKeyRingGenerator(
-            (int)PgpSignature.PositiveCertification,
+            PgpSignature.PositiveCertification,
             primaryPair,
             userId,
             SymmetricKeyAlgorithmTag.Null,
@@ -243,7 +243,6 @@ public class HelmProvenanceTests
         encHashed.SetKeyFlags(true, PgpKeyFlags.CanEncryptCommunications | PgpKeyFlags.CanEncryptStorage);
         krg.AddSubKey(encPair, encHashed.Generate(), null);
 
-        var secretRing = krg.GenerateSecretKeyRing();
         var publicRing = krg.GeneratePublicKeyRing();
 
         // A bare subkey secret encoding does not parse as a secret key ring, so the
@@ -252,7 +251,7 @@ public class HelmProvenanceTests
         // mathematically valid under the encryption-only subkey in the ring above.
         var attackPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, subKp, createdAt);
         var attackSecret = new PgpSecretKey(
-            (int)PgpSignature.PositiveCertification,
+            PgpSignature.PositiveCertification,
             attackPair,
             "attacker",
             SymmetricKeyAlgorithmTag.Null,
@@ -269,7 +268,7 @@ public class HelmProvenanceTests
             attackSecretBytes = ms.ToArray();
         }
 
-        return (secretRing, publicRing, attackSecretBytes);
+        return (publicRing, attackSecretBytes);
     }
 
     private static (PgpSecretKeyRing SecretRing, PgpPublicKeyRing PublicRing) CreateRingWithSigningSubkey(
@@ -292,7 +291,7 @@ public class HelmProvenanceTests
         if (expiredPrimary)
             primaryFlags.SetKeyExpirationTime(false, 1);
         var keyRingGenerator = new PgpKeyRingGenerator(
-            (int)PgpSignature.PositiveCertification,
+            PgpSignature.PositiveCertification,
             primaryPair,
             userId,
             SymmetricKeyAlgorithmTag.Null,
@@ -422,7 +421,7 @@ public class HelmProvenanceTests
         var parsed = new PgpObjectFactory(Convert.FromBase64String(base64)).NextPgpObject() as PgpSignatureList;
         Assert.NotNull(parsed);
         using var signatureBytes = new MemoryStream();
-        RemoveHashedCreationTime(parsed![0]).Encode(signatureBytes);
+        RemoveHashedCreationTime(parsed[0]).Encode(signatureBytes);
         var encoded = Convert.ToBase64String(signatureBytes.ToArray());
         var wrapped = string.Join('\n', Enumerable.Range(0, (encoded.Length + 63) / 64)
             .Select(index => encoded.Substring(index * 64, Math.Min(64, encoded.Length - index * 64))));
@@ -442,7 +441,7 @@ public class HelmProvenanceTests
         var hashed = new PgpSignatureSubpacketGenerator();
         hashed.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
         var krg = new PgpKeyRingGenerator(
-            (int)PgpSignature.PositiveCertification,
+            PgpSignature.PositiveCertification,
             pair,
             userId,
             SymmetricKeyAlgorithmTag.Null,
@@ -640,7 +639,7 @@ public class HelmProvenanceTests
         {
             packets.AddCustomSubpacket(new RevocationKey(
                 false,
-                (RevocationKeyTag)0,
+                0,
                 revoker.Algorithm,
                 revoker.GetFingerprint()));
         }
@@ -806,7 +805,7 @@ public class HelmProvenanceTests
         hashed.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
         hashed.SetKeyExpirationTime(false, 1L);
         var krg = new PgpKeyRingGenerator(
-            (int)PgpSignature.PositiveCertification,
+            PgpSignature.PositiveCertification,
             pair,
             userId,
             SymmetricKeyAlgorithmTag.Null,
@@ -896,7 +895,7 @@ public class HelmProvenanceTests
         var chartName = Path.GetFileName(chartDir);
         await using var fileStream = File.Create(tgzPath);
         await using var gzip = new System.IO.Compression.GZipStream(fileStream, System.IO.Compression.CompressionLevel.Optimal);
-        using var tar = new System.Formats.Tar.TarWriter(gzip);
+        await using var tar = new System.Formats.Tar.TarWriter(gzip);
         foreach (var file in Directory.EnumerateFiles(chartDir, "*", SearchOption.AllDirectories))
         {
             var rel = Path.GetRelativePath(chartDir, file).Replace('\\', '/');
@@ -1089,7 +1088,7 @@ public class HelmProvenanceTests
             await HelmProvenance.SignAsync(tgz, signingKey);
 
             PgpPublicKey version6Primary = new(new PublicKeyPacket(
-                (byte)6,
+                6,
                 trustedV4Key.PublicKey.Algorithm,
                 trustedV4Key.PublicKey.CreationTime,
                 trustedV4Key.PublicKey.PublicKeyPacket.Key));
@@ -1224,7 +1223,7 @@ public class HelmProvenanceTests
         Assert.All(passphraseCopy, value => Assert.Equal('\0', value));
         Assert.Equal(originalInput, secretBytes);
         Assert.Equal("passphrase", new string(passphrase));
-        Assert.Throws<ObjectDisposedException>(() => signingKey.GetSecretKey());
+        Assert.Throws<ObjectDisposedException>(signingKey.GetSecretKey);
     }
 
     [Fact]
@@ -1237,7 +1236,7 @@ public class HelmProvenanceTests
             var passphrase = "sécret-秘密".ToCharArray();
             var (_, _, signingKey, trustedKey) = CreateTestKeys(passphrase: passphrase);
 
-            var provPath = await HelmProvenance.SignAsync(tgz, signingKey);
+            await HelmProvenance.SignAsync(tgz, signingKey);
             var result = await HelmProvenance.VerifyAsync(tgz, [trustedKey]);
             Assert.True(result.IsValid, result.FailureReason);
         }
@@ -1352,7 +1351,7 @@ public class HelmProvenanceTests
         packets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
         AddUnknownCriticalSubpacket(packets);
         var keyRingGenerator = new PgpKeyRingGenerator(
-            (int)PgpSignature.PositiveCertification,
+            PgpSignature.PositiveCertification,
             pair,
             "Critical extension <critical@example.com>",
             SymmetricKeyAlgorithmTag.Null,
@@ -1376,7 +1375,7 @@ public class HelmProvenanceTests
     public void FromKeyringData_ForgedPrimaryCertificationCannotExtendExpiry()
     {
         const string userId = "Signing subkey <subkey@example.com>";
-        var (secretRing, publicRing) = CreateRingWithSigningSubkey(userId, expiredPrimary: true);
+        var (secretRing, publicRing) = CreateRingWithSigningSubkey(expiredPrimary: true);
         var signingSecret = secretRing.GetSecretKeys().Last();
         var primaryPublic = publicRing.GetPublicKeys().First(key => key.IsMasterKey);
 
@@ -1618,7 +1617,7 @@ public class HelmProvenanceTests
         packets.SetSignatureExpirationTime(false, 30);
         packets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
         var ringGenerator = new PgpKeyRingGenerator(
-            (int)PgpSignature.PositiveCertification,
+            PgpSignature.PositiveCertification,
             pair,
             userId,
             SymmetricKeyAlgorithmTag.Null,
@@ -1647,7 +1646,7 @@ public class HelmProvenanceTests
         var createdAt = DateTime.UtcNow.AddDays(-3);
         var pair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaGeneral, keyGenerator.GenerateKeyPair(), createdAt);
         var packet = new PublicKeyPacket(
-            (byte)3,
+            3,
             pair.PublicKey.Algorithm,
             pair.PublicKey.CreationTime,
             pair.PublicKey.PublicKeyPacket.Key);
@@ -1685,7 +1684,7 @@ public class HelmProvenanceTests
         var primarySecret = secretRing.GetSecretKeys().First();
         var originalPrimary = publicRing.GetPublicKeys().First(key => key.IsMasterKey);
         var primary = new PgpPublicKey(new PublicKeyPacket(
-            (byte)3,
+            3,
             originalPrimary.Algorithm,
             originalPrimary.CreationTime,
             originalPrimary.PublicKeyPacket.Key));
@@ -1721,7 +1720,7 @@ public class HelmProvenanceTests
             var primarySecret = secretRing.GetSecretKeys().First();
             var version4Primary = primarySecret.PublicKey;
             var version3Primary = new PgpPublicKey(new PublicKeyPacket(
-                (byte)3,
+                3,
                 version4Primary.Algorithm,
                 version4Primary.CreationTime,
                 version4Primary.PublicKeyPacket.Key));
@@ -2308,7 +2307,7 @@ public class HelmProvenanceTests
             signatureGenerator.Update(canonical, 0, canonical.Length);
             var signature = signatureGenerator.Generate();
             using var armoredBytes = new MemoryStream();
-            using (var armored = new ArmoredOutputStream(armoredBytes))
+            await using (var armored = new ArmoredOutputStream(armoredBytes))
                 signature.Encode(armored);
             var weakProvenance = provenance[..signatureStart] + Encoding.ASCII.GetString(armoredBytes.ToArray());
             await File.WriteAllTextAsync(provenancePath, weakProvenance);
@@ -2417,7 +2416,7 @@ public class HelmProvenanceTests
                 .Select(line => line.TrimEnd(' ', '\t'))));
             weakGenerator.Update(canonicalBytes, 0, canonicalBytes.Length);
             await using var weakSignatureBytes = new MemoryStream();
-            using (var armor = new ArmoredOutputStream(weakSignatureBytes))
+            await using (var armor = new ArmoredOutputStream(weakSignatureBytes))
                 weakGenerator.Generate().Encode(armor);
             var weakSignatureArmor = Encoding.ASCII.GetString(weakSignatureBytes.ToArray());
             var combined = ReplaceSignaturePayload(
@@ -2695,7 +2694,7 @@ public class HelmProvenanceTests
 
             // Replace the signed digest with a different valid-looking hash.
             var prov = await File.ReadAllTextAsync(provPath);
-            var fakeHash = Convert.ToHexString(SHA256.HashData(Encoding.ASCII.GetBytes("different"))).ToLowerInvariant();
+            var fakeHash = Convert.ToHexString(SHA256.HashData("different"u8)).ToLowerInvariant();
             var realHash = HelmProvenance.ExtractSha256(prov)!;
             prov = prov.Replace(realHash, fakeHash, StringComparison.Ordinal);
             await File.WriteAllTextAsync(provPath, prov);
@@ -2781,7 +2780,7 @@ public class HelmProvenanceTests
     [Fact]
     public void FromKeyringData_PrimaryWithEncryptionOnlySubkey_KeepsPrimaryOnly()
     {
-        var (_, publicRing, _) = CreateRingWithEncryptionSubkey();
+        var (publicRing, _) = CreateRingWithEncryptionSubkey();
         byte[] publicBytes;
         using (var ms = new MemoryStream())
         {
@@ -2800,7 +2799,7 @@ public class HelmProvenanceTests
     [Fact]
     public void FromKeyringData_EncryptionOnlySubkeyAlone_IsRejected()
     {
-        var (_, publicRing, _) = CreateRingWithEncryptionSubkey();
+        var (publicRing, _) = CreateRingWithEncryptionSubkey();
         var encryptionSubkey = publicRing.GetPublicKeys().Last();
 
         byte[] subkeyBytes;
@@ -2841,7 +2840,7 @@ public class HelmProvenanceTests
         var packets = new PgpSignatureSubpacketGenerator();
         packets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
         var ringGenerator = new PgpKeyRingGenerator(
-            (int)PgpSignature.PositiveCertification,
+            PgpSignature.PositiveCertification,
             pair,
             "Weak RSA <weak-rsa@example.com>",
             SymmetricKeyAlgorithmTag.Null,
@@ -2875,7 +2874,7 @@ public class HelmProvenanceTests
         var packets = new PgpSignatureSubpacketGenerator();
         packets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
         var ringGenerator = new PgpKeyRingGenerator(
-            (int)PgpSignature.PositiveCertification,
+            PgpSignature.PositiveCertification,
             pair,
             $"ECDSA {curveName} <{curveName.ToLowerInvariant()}@example.com>",
             SymmetricKeyAlgorithmTag.Null,
@@ -2967,7 +2966,7 @@ public class HelmProvenanceTests
     }
 
     [Fact]
-    public async Task FromKeyringData_MergesRenewedCertificateCopiesBeforeFiltering()
+    public void FromKeyringData_MergesRenewedCertificateCopiesBeforeFiltering()
     {
         const string userId = "Renewed signer <renewed@example.com>";
         var (secretRing, publicRing, _, _) = CreateTestKeys(
@@ -3435,7 +3434,7 @@ public class HelmProvenanceTests
             keyGenerator.GenerateKeyPair(),
             DateTime.UtcNow);
         var version6Public = new PgpPublicKey(new PublicKeyPacket(
-            (byte)6,
+            6,
             originalPair.PublicKey.Algorithm,
             originalPair.PublicKey.CreationTime,
             originalPair.PublicKey.PublicKeyPacket.Key));
@@ -3443,7 +3442,7 @@ public class HelmProvenanceTests
         var packets = new PgpSignatureSubpacketGenerator();
         packets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
         var secretKey = new PgpSecretKey(
-            (int)PgpSignature.PositiveCertification,
+            PgpSignature.PositiveCertification,
             version6Pair,
             "V6 signer <v6@example.com>",
             SymmetricKeyAlgorithmTag.Null,
@@ -3470,7 +3469,7 @@ public class HelmProvenanceTests
             keyGenerator.GenerateKeyPair(),
             DateTime.UtcNow);
         var version3Public = new PgpPublicKey(new PublicKeyPacket(
-            (byte)3,
+            3,
             originalPair.PublicKey.Algorithm,
             originalPair.PublicKey.CreationTime,
             originalPair.PublicKey.PublicKeyPacket.Key));
@@ -3478,7 +3477,7 @@ public class HelmProvenanceTests
         var packets = new PgpSignatureSubpacketGenerator();
         packets.SetKeyFlags(true, PgpKeyFlags.CanSign | PgpKeyFlags.CanCertify);
         var secretKey = new PgpSecretKey(
-            (int)PgpSignature.PositiveCertification,
+            PgpSignature.PositiveCertification,
             version3Pair,
             "V3 signer <v3@example.com>",
             SymmetricKeyAlgorithmTag.Null,
@@ -3661,7 +3660,7 @@ public class HelmProvenanceTests
         var masterV4 = publicRing.GetPublicKeys().Single(key => key.IsMasterKey);
         var subkey = publicRing.GetPublicKeys().Single(key => !key.IsMasterKey);
         var masterV6 = new PgpPublicKey(new PublicKeyPacket(
-            (byte)6,
+            6,
             masterV4.Algorithm,
             masterV4.CreationTime,
             masterV4.PublicKeyPacket.Key));
@@ -3745,7 +3744,7 @@ public class HelmProvenanceTests
     [Fact]
     public void FromKeyringData_ForgedSubkeyBinding_CannotAuthorizeSigning()
     {
-        var (_, publicRing, encryptionSecretBytes) = CreateRingWithEncryptionSubkey();
+        var (publicRing, encryptionSecretBytes) = CreateRingWithEncryptionSubkey();
         var master = publicRing.GetPublicKeys().First(key => key.IsMasterKey);
         var encryptionSubkey = publicRing.GetPublicKeys().First(key => !key.IsMasterKey);
         var secretFactory = new PgpObjectFactory(new MemoryStream(encryptionSecretBytes));
@@ -3853,7 +3852,7 @@ public class HelmProvenanceTests
         var primaryFlags = new PgpSignatureSubpacketGenerator();
         primaryFlags.SetKeyFlags(true, PgpKeyFlags.CanCertify);
         var keyRingGenerator = new PgpKeyRingGenerator(
-            (int)PgpSignature.PositiveCertification,
+            PgpSignature.PositiveCertification,
             primaryPair,
             "Back signature <backsignature@example.com>",
             SymmetricKeyAlgorithmTag.Null,
@@ -3994,7 +3993,7 @@ public class HelmProvenanceTests
     [Fact]
     public void FromSecretKeyData_EncryptionOnlySubkey_IsRejected()
     {
-        var (_, _, subSecretBytes) = CreateRingWithEncryptionSubkey();
+        var (_, subSecretBytes) = CreateRingWithEncryptionSubkey();
 
         // The signing wrapper must not select secret material that its matching public
         // key policy forbids from signing provenance data.
@@ -4533,7 +4532,7 @@ public class HelmProvenanceTests
             var (_, _, signingKey, _) = CreateTestKeys();
 
             using var cts = new CancellationTokenSource();
-            cts.Cancel();
+            await cts.CancelAsync();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(
                 () => HelmProvenance.SignAsync(tgz, signingKey, cts.Token));
         }
@@ -4554,7 +4553,7 @@ public class HelmProvenanceTests
             await HelmProvenance.SignAsync(tgz, signingKey);
 
             using var cts = new CancellationTokenSource();
-            cts.Cancel();
+            await cts.CancelAsync();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(
                 () => HelmProvenance.VerifyAsync(tgz, [trustedKey], null, cts.Token));
         }
@@ -4780,7 +4779,7 @@ public class HelmProvenanceTests
             var archivePath = Path.Combine(work, "rootchart-0.1.0.tgz");
             await using (var file = File.Create(archivePath))
             await using (var gzip = new System.IO.Compression.GZipStream(file, System.IO.Compression.CompressionLevel.Optimal))
-            using (var tar = new System.Formats.Tar.TarWriter(gzip))
+            await using (var tar = new System.Formats.Tar.TarWriter(gzip))
             {
                 var childYaml = Encoding.UTF8.GetBytes(DefaultChartYaml.Replace("provchart", "dependency", StringComparison.Ordinal));
                 var rootYaml = Encoding.UTF8.GetBytes(DefaultChartYaml.Replace("provchart", "rootchart", StringComparison.Ordinal));
@@ -4817,7 +4816,7 @@ public class HelmProvenanceTests
             var archivePath = Path.Combine(work, "rootchart-0.1.0.tgz");
             await using (var file = File.Create(archivePath))
             await using (var gzip = new System.IO.Compression.GZipStream(file, System.IO.Compression.CompressionLevel.Optimal))
-            using (var tar = new System.Formats.Tar.TarWriter(gzip))
+            await using (var tar = new System.Formats.Tar.TarWriter(gzip))
             {
                 var decoyYaml = Encoding.UTF8.GetBytes(DefaultChartYaml.Replace("provchart", "decoy", StringComparison.Ordinal));
                 var rootYaml = Encoding.UTF8.GetBytes(DefaultChartYaml.Replace("provchart", "rootchart", StringComparison.Ordinal));
@@ -4854,7 +4853,7 @@ public class HelmProvenanceTests
             var archivePath = Path.Combine(work, "rootchart-0.1.0.tgz");
             await using (var file = File.Create(archivePath))
             await using (var gzip = new System.IO.Compression.GZipStream(file, System.IO.Compression.CompressionLevel.Optimal))
-            using (var tar = new System.Formats.Tar.TarWriter(gzip))
+            await using (var tar = new System.Formats.Tar.TarWriter(gzip))
             {
                 var rootYaml = Encoding.UTF8.GetBytes(DefaultChartYaml.Replace("provchart", "rootchart", StringComparison.Ordinal));
                 await tar.WriteEntryAsync(new System.Formats.Tar.PaxTarEntry(
@@ -4865,7 +4864,7 @@ public class HelmProvenanceTests
                 await tar.WriteEntryAsync(new System.Formats.Tar.PaxTarEntry(
                     System.Formats.Tar.TarEntryType.RegularFile, "other-root/payload.txt")
                 {
-                    DataStream = new MemoryStream(Encoding.UTF8.GetBytes("payload"))
+                    DataStream = new MemoryStream("payload"u8.ToArray())
                 });
             }
 
@@ -4893,9 +4892,9 @@ public class HelmProvenanceTests
             var archivePath = Path.Combine(work, "rootchart-0.1.0.tgz");
             await using (var file = File.Create(archivePath))
             await using (var gzip = new System.IO.Compression.GZipStream(file, System.IO.Compression.CompressionLevel.Optimal))
-            using (var tar = new System.Formats.Tar.TarWriter(gzip))
+            await using (var tar = new System.Formats.Tar.TarWriter(gzip))
             {
-                var unsafeContent = Encoding.UTF8.GetBytes("untrusted archive content");
+                var unsafeContent = "untrusted archive content"u8.ToArray();
                 await tar.WriteEntryAsync(new System.Formats.Tar.PaxTarEntry(
                     System.Formats.Tar.TarEntryType.RegularFile, unsafeEntryName)
                 {
@@ -4969,7 +4968,7 @@ public class HelmProvenanceTests
             var archivePath = Path.Combine(work, "rootchart-0.1.0.tgz");
             await using (var file = File.Create(archivePath))
             await using (var gzip = new System.IO.Compression.GZipStream(file, System.IO.Compression.CompressionLevel.Optimal))
-            using (var tar = new System.Formats.Tar.TarWriter(gzip))
+            await using (var tar = new System.Formats.Tar.TarWriter(gzip))
             {
                 await tar.WriteEntryAsync(new System.Formats.Tar.PaxTarEntry(
                     System.Formats.Tar.TarEntryType.Directory, "rootchart/"));
@@ -5261,17 +5260,17 @@ public class HelmProvenanceTests
             var (secretRing, publicRing, _, trustedKey) = CreateTestKeys(userId: "Helm Interop <interop@example.com>");
 
             var secretPath = Path.Combine(work, "secret.gpg");
-            using (var fs = File.Create(secretPath))
+            await using (var fs = File.Create(secretPath))
                 secretRing.Encode(fs);
 
             var pubPath = Path.Combine(work, "public.gpg");
-            using (var fs = File.Create(pubPath))
+            await using (var fs = File.Create(pubPath))
                 publicRing.Encode(fs);
 
             var outDir = Path.Combine(work, "out");
             Directory.CreateDirectory(outDir);
 
-            var (exitCode, stdout, stderr) = await RunHelmAsync(
+            var (exitCode, _, _) = await RunHelmAsync(
                 "package", chartDir, "--destination", outDir,
                 "--sign", "--key", "Helm Interop", "--keyring", secretPath);
             Assert.Equal(0, exitCode);
@@ -5299,13 +5298,13 @@ public class HelmProvenanceTests
         try
         {
             var tgz = await CreateTestChartArchiveAsync(work);
-            var (secretRing, publicRing, signingKey, _) = CreateTestKeys(userId: "HelmSharp Signer <signer@example.com>");
+            var (_, publicRing, signingKey, _) = CreateTestKeys(userId: "HelmSharp Signer <signer@example.com>");
 
             await HelmProvenance.SignAsync(tgz, signingKey);
 
             // Export the public key in the binary keyring form helm reads.
             var pubPath = Path.Combine(work, "public.gpg");
-            using (var fs = File.Create(pubPath))
+            await using (var fs = File.Create(pubPath))
                 publicRing.Encode(fs);
 
             var (exitCode, stdout, stderr) = await RunHelmAsync("verify", tgz, "--keyring", pubPath);
@@ -5342,7 +5341,7 @@ public class HelmProvenanceTests
 
             var (_, publicRing, _, _) = CreateTestKeys();
             var pubPath = Path.Combine(work, "public.gpg");
-            using (var fs = File.Create(pubPath))
+            await using (var fs = File.Create(pubPath))
                 publicRing.Encode(fs);
 
             var (exitCode, _, _) = await RunHelmAsync("verify", tgz, "--keyring", pubPath);
@@ -5368,12 +5367,12 @@ public class HelmProvenanceTests
             var chartDir = CreateChartDirectory(work, "helmchart", ChartYamlWithMaintainers("helmchart"));
             var (secretRing, publicRing, _, trustedKey) = CreateTestKeys(userId: "Helm Interop <interop@example.com>");
             var secretPath = Path.Combine(work, "secret.gpg");
-            using (var fs = File.Create(secretPath))
+            await using (var fs = File.Create(secretPath))
                 secretRing.Encode(fs);
 
             var outDir = Path.Combine(work, "out");
             Directory.CreateDirectory(outDir);
-            var (exitCode, stdout, stderr) = await RunHelmAsync(
+            var (exitCode, _, _) = await RunHelmAsync(
                 "package", chartDir, "--destination", outDir,
                 "--sign", "--key", "Helm Interop", "--keyring", secretPath);
             Assert.Equal(0, exitCode);
@@ -5395,7 +5394,7 @@ public class HelmProvenanceTests
 
             // helm must still accept its own signature once the standard checksum is present.
             var pubPath = Path.Combine(work, "public.gpg");
-            using (var fs = File.Create(pubPath))
+            await using (var fs = File.Create(pubPath))
                 publicRing.Encode(fs);
             var (verifyExit, verifyOut, verifyErr) = await RunHelmAsync("verify", tgz, "--keyring", pubPath);
             Assert.True(verifyExit == 0, $"helm verify failed ({verifyExit}): {verifyErr}\n{verifyOut}");
@@ -5475,12 +5474,12 @@ public class HelmProvenanceTests
             var chartDir = CreateChartDirectory(work, "helmchart", ChartYamlWithMaintainers("helmchart"));
             var (secretRing, _, _, trustedKey) = CreateTestKeys(userId: "Helm Interop <interop@example.com>");
             var secretPath = Path.Combine(work, "secret.gpg");
-            using (var fs = File.Create(secretPath))
+            await using (var fs = File.Create(secretPath))
                 secretRing.Encode(fs);
 
             var outDir = Path.Combine(work, "out");
             Directory.CreateDirectory(outDir);
-            var (exitCode, _, stderr) = await RunHelmAsync(
+            var (exitCode, _, _) = await RunHelmAsync(
                 "package", chartDir, "--destination", outDir,
                 "--sign", "--key", "Helm Interop", "--keyring", secretPath);
             Assert.Equal(0, exitCode);
@@ -5510,7 +5509,7 @@ public class HelmProvenanceTests
         try
         {
             var tgz = await CreateChartArchiveAsync(work, "provchart", ChartYamlWithMaintainers("provchart"));
-            var (secretRing, publicRing, signingKey, _) = CreateTestKeys(userId: "HelmSharp Signer <signer@example.com>");
+            var (_, publicRing, signingKey, _) = CreateTestKeys(userId: "HelmSharp Signer <signer@example.com>");
 
             var provPath = await HelmProvenance.SignAsync(tgz, signingKey);
 
@@ -5521,7 +5520,7 @@ public class HelmProvenanceTests
             Assert.DoesNotContain("\n- email: alice@example.com", prov, StringComparison.Ordinal);
 
             var pubPath = Path.Combine(work, "public.gpg");
-            using (var fs = File.Create(pubPath))
+            await using (var fs = File.Create(pubPath))
                 publicRing.Encode(fs);
             var (exitCode, stdout, stderr) = await RunHelmAsync("verify", tgz, "--keyring", pubPath);
             Assert.True(exitCode == 0, $"helm verify failed ({exitCode}): {stderr}\n{stdout}");
@@ -5587,7 +5586,7 @@ public class HelmProvenanceTests
             var provenance = await File.ReadAllTextAsync(provenancePath);
             var signatureStart = provenance.IndexOf("-----BEGIN PGP SIGNATURE-----", StringComparison.Ordinal);
             Assert.NotEqual(-1, signatureStart);
-            using var decodedSignature = PgpUtilities.GetDecoderStream(
+            await using var decodedSignature = PgpUtilities.GetDecoderStream(
                 new MemoryStream(Encoding.ASCII.GetBytes(provenance[signatureStart..])));
             var signatureList = Assert.IsType<PgpSignatureList>(new PgpObjectFactory(decodedSignature).NextPgpObject());
             Assert.Equal(PgpSignature.CanonicalTextDocument, signatureList[0].SignatureType);
@@ -5649,12 +5648,12 @@ public class HelmProvenanceTests
             var chartDir = CreateChartDirectory(work, "helmchart", ChartYamlWithNonAscii("helmchart"));
             var (secretRing, _, _, trustedKey) = CreateTestKeys(userId: "Helm Interop <interop@example.com>");
             var secretPath = Path.Combine(work, "secret.gpg");
-            using (var fs = File.Create(secretPath))
+            await using (var fs = File.Create(secretPath))
                 secretRing.Encode(fs);
 
             var outDir = Path.Combine(work, "out");
             Directory.CreateDirectory(outDir);
-            var (exitCode, _, stderr) = await RunHelmAsync(
+            var (exitCode, _, _) = await RunHelmAsync(
                 "package", chartDir, "--destination", outDir,
                 "--sign", "--key", "Helm Interop", "--keyring", secretPath);
             Assert.Equal(0, exitCode);
@@ -5683,7 +5682,7 @@ public class HelmProvenanceTests
         try
         {
             var tgz = await CreateChartArchiveAsync(work, "provchart", ChartYamlWithNonAscii("provchart"));
-            var (secretRing, publicRing, signingKey, _) = CreateTestKeys(userId: "HelmSharp Signer <signer@example.com>");
+            var (_, publicRing, signingKey, _) = CreateTestKeys(userId: "HelmSharp Signer <signer@example.com>");
 
             var provPath = await HelmProvenance.SignAsync(tgz, signingKey);
 
@@ -5694,7 +5693,7 @@ public class HelmProvenanceTests
             Assert.Contains("名字 Test", prov, StringComparison.Ordinal);
 
             var pubPath = Path.Combine(work, "public.gpg");
-            using (var fs = File.Create(pubPath))
+            await using (var fs = File.Create(pubPath))
                 publicRing.Encode(fs);
             var (exitCode, stdout, stderr) = await RunHelmAsync("verify", tgz, "--keyring", pubPath);
             Assert.True(exitCode == 0, $"helm verify failed ({exitCode}): {stderr}\n{stdout}");

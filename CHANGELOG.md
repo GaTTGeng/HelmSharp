@@ -6,6 +6,8 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-18
+
 ### Added
 
 - Documented Kubernetes apply, resource ownership, deletion, and hook cleanup behavior in English and Chinese (#314).
@@ -20,6 +22,10 @@ This project follows semantic versioning once stable releases begin.
 - Made Kubernetes deletion deterministic across uninstall, rollback, and hook cleanup, including reverse ordering, propagation policies, keep annotations, discovered resource identity, and actionable failure diagnostics (#232).
 - Hardened Kubernetes wait controls by rejecting non-positive waiter timeouts and documenting standard polling, cancellation, Job waiting, and unsupported Helm status-watcher semantics (#233).
 - Retried Kubernetes API discovery briefly on apply when a custom-resource kind is not yet registered, so a CRD and its custom resource can ship in one release without intermittent install failures.
+
+### Removed
+
+- Removed the Helm comparison tool and its API server configuration from the documentation site because no supported server is available.
 
 ### Fixed
 
@@ -42,10 +48,6 @@ This project follows semantic versioning once stable releases begin.
 - Provenance verification streams chart hashing and caps `.prov` input at 16 MiB; trusted-key policy now lets the latest valid self-signature or subkey binding supersede older KeyFlags, including when the latest assertion omits KeyFlags.
 - Provenance signing validates directory-entry paths, and digest checking streams chart archives while enforcing the default compressed-size limit and bounded `.prov` input.
 - Trusted-key verification honors V2/V3 key-packet expiration, takes V6 primary-key expiry from its Direct Key signature, and rejects modern policy signatures without hashed creation times; provenance verification rejects non-V6 signatures made by V6 keys and unregistered clear-signature hash-header names.
-
-### Removed
-
-- Removed the Helm comparison tool and its API server configuration from the documentation site because no supported server is available.
 
 ## [1.3.2] - 2026-08-13
 
@@ -299,7 +301,8 @@ This was achieved by fixing two parser bugs that blocked full-chart rendering (#
 - Open source project documentation.
 - GitHub Actions workflows for CI and NuGet release publishing.
 
-[Unreleased]: https://github.com/GaTTGeng/HelmSharp/compare/1.3.2...HEAD
+[Unreleased]: https://github.com/GaTTGeng/HelmSharp/compare/2.0.0...HEAD
+[2.0.0]: https://github.com/GaTTGeng/HelmSharp/compare/1.3.2...2.0.0
 [1.3.2]: https://github.com/GaTTGeng/HelmSharp/compare/1.3.1...1.3.2
 [1.3.1]: https://github.com/GaTTGeng/HelmSharp/compare/1.3.0...1.3.1
 [1.3.0]: https://github.com/GaTTGeng/HelmSharp/compare/1.2.0...1.3.0
