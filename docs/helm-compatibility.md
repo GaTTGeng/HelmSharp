@@ -35,7 +35,8 @@ Exact CLI colors, progress text, terminal formatting, and plugin execution are n
 | Install, upgrade, rollback, uninstall | Supported | Managed lifecycle flows persist deployed, superseded, failed, and retained-uninstall revisions; support operation-wide timeouts, atomic recovery, rollback reservations, and deterministic hooks. Unsupported Helm options fail before mutation. |
 | Kubernetes apply, delete, wait | Partial | Typed operations cover common resources. Other API resources are discovered from the target cluster for apply/delete; readiness behavior remains selective. |
 | Release history in Kubernetes Secrets | Supported | Release records can be persisted without Helm CLI. |
-| OCI registry and provenance | Planned | API surface exists or is planned; production parity is not complete. |
+| OCI registry | Planned | Registry authentication and chart push/pull parity are not complete. |
+| Chart provenance | Partial | OpenPGP signing and trusted-key verification are available; see [Chart provenance and signing](guide/chart-provenance.md) for requirements and limits. |
 
 ### Kubernetes apply and cleanup contract
 
@@ -63,7 +64,7 @@ These are the areas to check before betting a production workflow on exact Helm 
 
 - obscure values coercion and edge-case list syntax;
 - OCI authentication and registry flows;
-- provenance verification;
+- provenance interoperability outside the documented signing and verification workflows;
 - Sprig functions or Go-template behaviors outside the implemented surface;
 - readiness for uncommon Kubernetes resource kinds;
 - safe replacement for Helm plugin execution.

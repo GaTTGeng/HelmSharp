@@ -6,6 +6,8 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-11-18
+
 ### Added
 
 - Support the Sprig `urlParse` and `urlJoin` template functions (#345).
@@ -13,6 +15,7 @@ This project follows semantic versioning once stable releases begin.
 ### Changed
 
 - Document Helm CLI v4.2.2 as the baseline for new compatibility validation.
+- Update README and documentation site version references and provenance capability descriptions.
 
 ### Fixed
 
@@ -316,7 +319,8 @@ This was achieved by fixing two parser bugs that blocked full-chart rendering (#
 - Open source project documentation.
 - GitHub Actions workflows for CI and NuGet release publishing.
 
-[Unreleased]: https://github.com/GaTTGeng/HelmSharp/compare/2.0.0...HEAD
+[Unreleased]: https://github.com/GaTTGeng/HelmSharp/compare/2.0.1...HEAD
+[2.0.1]: https://github.com/GaTTGeng/HelmSharp/compare/2.0.0...2.0.1
 [2.0.0]: https://github.com/GaTTGeng/HelmSharp/compare/1.3.2...2.0.0
 [1.3.2]: https://github.com/GaTTGeng/HelmSharp/compare/1.3.1...1.3.2
 [1.3.1]: https://github.com/GaTTGeng/HelmSharp/compare/1.3.0...1.3.1

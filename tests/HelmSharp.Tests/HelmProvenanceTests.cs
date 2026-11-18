@@ -1623,7 +1623,7 @@ public class HelmProvenanceTests
             SymmetricKeyAlgorithmTag.Null,
             HashAlgorithmTag.Sha512,
             true,
-            (char[])null!,
+            null!,
             false,
             packets.Generate(),
             null,

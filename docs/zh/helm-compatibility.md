@@ -32,7 +32,8 @@ CLI 颜色、进度文案、终端格式和插件执行不是目标，除非它�
 | 安装、升级、回滚、卸载 | 已支持 | 托管生命周期会持久化 deployed、superseded、failed 以及保留历史的卸载 revision，并支持操作级超时、原子恢复、回滚预留和确定性 hook；不支持的 Helm 选项会在变更前失败。 |
 | Kubernetes 提交、删除、等待 | 部分支持 | 常见资源使用静态客户端；其他 API 资源会从目标集群发现后执行提交/删除。就绪判断仍只覆盖选定资源。 |
 | Kubernetes Secrets 发布历史 | 已支持 | 不依赖 Helm CLI 也能保存发布记录。 |
-| OCI 注册表和来源证明 | 计划中 | API 或方向存在，但还不是完整生产对齐。 |
+| OCI 注册表 | 计划中 | 注册表认证和 Chart 推拉对齐尚未完成。 |
+| Chart 来源证明 | 部分支持 | 已支持 OpenPGP 签名和可信密钥验证；要求与限制见 [Chart 溯源与签名](guide/chart-provenance.md)。 |
 
 ### Kubernetes 提交与清理契约
 
@@ -60,7 +61,7 @@ CLI 颜色、进度文案、终端格式和插件执行不是目标，除非它�
 
 - 少见 values 类型转换和 list 语法；
 - OCI 认证和注册表流程；
-- 来源证明校验；
+- 已文档化签名和校验流程之外的来源证明互操作；
 - 实现范围之外的 Sprig 函数或 Go-template 行为；
 - 少见 Kubernetes 资源类型的就绪判断；
 - Helm plugin 的安全替代模型。

@@ -3,7 +3,7 @@
 `HelmSharp.Kube` is the lower-level Kubernetes layer. Install it when YAML already exists and your code needs managed apply, delete, resource identity, or selective readiness waiting.
 
 ```powershell
-dotnet add package HelmSharp.Kube --version 1.3.2
+dotnet add package HelmSharp.Kube --version 2.0.1
 ```
 
 | Type | Use |

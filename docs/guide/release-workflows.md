@@ -3,7 +3,7 @@
 Use `HelmSharp.Action` when a component owns a deployment, not just its YAML. `HelmClient.UpgradeInstallAsync` combines chart loading, values, rendering, hooks, Kubernetes apply, optional readiness waiting, and release-history persistence.
 
 ```powershell
-dotnet add package HelmSharp.Action --version 1.3.2
+dotnet add package HelmSharp.Action --version 2.0.1
 ```
 
 ## Start with a dry run

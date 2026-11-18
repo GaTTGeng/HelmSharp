@@ -38,8 +38,8 @@ features:
 Install the chart and renderer packages:
 
 ```powershell
-dotnet add package HelmSharp.Chart --version 1.3.2
-dotnet add package HelmSharp.Engine --version 1.3.2
+dotnet add package HelmSharp.Chart --version 2.0.1
+dotnet add package HelmSharp.Engine --version 2.0.1
 ```
 
 Then load a chart directory, build its values, and render it. The [quickstart](getting-started.md) contains a copyable program and explains the three objects involved.

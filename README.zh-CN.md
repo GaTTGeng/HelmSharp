@@ -11,7 +11,7 @@ HelmSharp 是一个面向 .NET 的托管 Helm 风格库，用于在不调用 `he
 
 项目仍在积极开发中。M1（Helm 模板对齐）、M2（Chart 打包和仓库对齐）以及 M3（发布生命周期对齐）均已完成。渲染器和发布生命周期会持续通过聚焦测试用 Chart、受控 Kubernetes 依赖以及选定公开 Helm Chart 校验；后续里程碑将扩展 Kubernetes 语义和兼容性覆盖。
 
-最新发布版本是 **1.3.2**。下文以及所链接指南中的 M2 Chart 分发和 M3 发布生命周期能力已包含在 1.3.2 NuGet 包中。
+最新发布版本是 **2.0.1**。下文以及所链接指南中的 M2 Chart 分发和 M3 发布生命周期能力已包含在 2.0.1 NuGet 包中。
 
 文档站点：[https://gattgeng.github.io/HelmSharp/](https://gattgeng.github.io/HelmSharp/)
 
@@ -144,7 +144,7 @@ await foreach (var line in client.UpgradeInstallStreamAsync(new HelmUpgradeInsta
 - 使用兼容 Helm v3 的 Kubernetes Secret 保存 Release 历史，包括失败 revision 和保留历史的卸载 revision。
 - 提供 install、upgrade、uninstall、rollback、status、history、manifest、values、hooks、notes 和 test 相关 API，并支持按 revision 查询、生命周期超时、原子恢复和确定性 hook 执行。
 
-完整示例见 [Chart 打包与仓库工作流指南](docs/zh/guide/chart-distribution.md)。OCI 与来源证明对齐将单独推进。
+完整示例见 [Chart 打包与仓库工作流指南](docs/zh/guide/chart-distribution.md)。OpenPGP 签名与校验见 [Chart 溯源指南](docs/zh/guide/chart-provenance.md)。OCI 注册表对齐仍在规划中。
 
 ## 兼容性验证
 
@@ -156,7 +156,7 @@ HelmSharp 使用聚焦测试用 Chart 和选定公开 Chart，将托管渲染结
 
 ## 当前边界
 
-HelmSharp 不是完整的 Helm CLI 克隆。尚未实现的模板函数会产生包含模板路径的渲染诊断，而不会被静默替代。对于静态客户端未包含的 Kubernetes 资源，apply/delete 会从目标集群发现资源类型；就绪判断仍只覆盖选定的资源类型。高级 Helm 行为、插件、provenance 校验和 OCI 认证流程仍可能需要补充实现。
+HelmSharp 不是完整的 Helm CLI 克隆。尚未实现的模板函数会产生包含模板路径的渲染诊断，而不会被静默替代。对于静态客户端未包含的 Kubernetes 资源，apply/delete 会从目标集群发现资源类型；就绪判断仍只覆盖选定的资源类型。高级 Helm 行为、插件、部分 provenance 互操作场景和 OCI 认证流程仍可能需要补充实现。
 
 ## 文档
 

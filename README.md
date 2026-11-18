@@ -11,7 +11,7 @@ HelmSharp is a managed .NET library for rendering Helm-style charts and driving 
 
 The project is under active development. M1 (Helm template parity), M2 (chart packaging and repository parity), and M3 (release lifecycle parity) are complete. The renderer and lifecycle flows are continuously checked with focused fixtures, controlled Kubernetes dependencies, and selected public Helm charts. Later milestones expand Kubernetes semantics and compatibility coverage.
 
-The latest published version is **1.3.2**. The M2 chart-distribution and M3 release-lifecycle capabilities described below and in the linked guides are available in the 1.3.2 NuGet packages.
+The latest published version is **2.0.1**. The M2 chart-distribution and M3 release-lifecycle capabilities described below and in the linked guides are available in the 2.0.1 NuGet packages.
 
 Documentation site: [https://gattgeng.github.io/HelmSharp/](https://gattgeng.github.io/HelmSharp/)
 
@@ -144,7 +144,7 @@ The list below describes the current `master` branch. See the version note above
 - Helm v3-compatible release history stored in Kubernetes Secrets, including failed and retained-uninstall revisions.
 - Install, upgrade, uninstall, rollback, status, history, manifest, values, hooks, notes, and test-oriented APIs with revision-aware inspection, lifecycle timeouts, atomic recovery, and deterministic hook execution.
 
-See the [chart packaging and repository workflow guide](docs/guide/chart-distribution.md) for complete examples. OCI/provenance parity remains planned separately.
+See the [chart packaging and repository workflow guide](docs/guide/chart-distribution.md) for complete examples. For OpenPGP signing and verification, see the [chart provenance guide](docs/guide/chart-provenance.md). OCI registry parity remains planned.
 
 ## Compatibility Validation
 
@@ -156,7 +156,7 @@ For supported behavior, known boundaries, and guidance for validating a producti
 
 ## Known Scope
 
-HelmSharp is not a full Helm CLI clone. An unimplemented template function produces a path-aware rendering diagnostic; it is not silently substituted. Kubernetes apply/delete discovers resource kinds from the target cluster for kinds outside the typed client surface, while readiness handling remains selective. Advanced Helm behaviors, plugins, provenance verification flows, and OCI authentication flows may need additional implementation.
+HelmSharp is not a full Helm CLI clone. An unimplemented template function produces a path-aware rendering diagnostic; it is not silently substituted. Kubernetes apply/delete discovers resource kinds from the target cluster for kinds outside the typed client surface, while readiness handling remains selective. Advanced Helm behaviors, plugins, some provenance interoperability scenarios, and OCI authentication flows may need additional implementation.
 
 ## Documentation
 
