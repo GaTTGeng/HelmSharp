@@ -26,6 +26,7 @@ public class HelmTemplateGoldenTests
     [InlineData("dependency-values")]
     [InlineData("control-flow")]
     [InlineData("nested-default-dig")]
+    [InlineData("url-functions")] // CI oracle: Helm v4.2.2.
     public async Task Render_FixtureChart_MatchesHelmTemplate(string fixtureName)
     {
         var chartPath = TestFixtures.ChartPath(fixtureName);

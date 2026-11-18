@@ -1178,6 +1178,8 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
             "nospace" => StringFunctions.Nospace(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "swapcase" => StringFunctions.Swapcase(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
             "shuffle" => StringFunctions.Shuffle(TypeConverters.ToTemplateString(pipelineValue ?? EvaluateToken(tokens.ElementAtOrDefault(1), context))),
+            "urlParse" => UrlFunctions.Parse(ResolveUrlArgument(tokens, context, pipelineValue, hasPipelineValue)),
+            "urlJoin" => UrlFunctions.Join(ResolveUrlArgument(tokens, context, pipelineValue, hasPipelineValue)),
             // Sprig regex forms are `fn PATTERN INPUT …`: the pattern is the first
             // explicit argument and the subject comes from the pipeline (or the
             // next argument), so the calls below pass the subject before the pattern.
@@ -1394,6 +1396,13 @@ public sealed class HelmTemplateRenderer : IEvaluationContext
                         ? EvaluateToken(expression, context)
                         : throw new UnsupportedTemplateFeatureException($"Helm template function '{head}' is not supported by the managed renderer.")
         };
+    }
+
+    private object? ResolveUrlArgument(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, bool hasPipelineValue)
+    {
+        if (tokens.Count - 1 + (hasPipelineValue ? 1 : 0) != 1)
+            throw new InvalidOperationException($"wrong number of args for {tokens[0]}: want 1");
+        return hasPipelineValue ? pipelineValue : EvaluateToken(tokens[1], context);
     }
 
     private List<object?> EvaluateFunctionArguments(

@@ -1,0 +1,1 @@
+value: {{ urlParse "http://foo[::1]/" }}

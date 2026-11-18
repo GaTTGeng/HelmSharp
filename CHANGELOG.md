@@ -6,6 +6,10 @@ This project follows semantic versioning once stable releases begin.
 
 ## [Unreleased]
 
+### Added
+
+- Support the Sprig `urlParse` and `urlJoin` template functions (#345).
+
 ### Changed
 
 - Document Helm CLI v4.2.2 as the baseline for new compatibility validation.
