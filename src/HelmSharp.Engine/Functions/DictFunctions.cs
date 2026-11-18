@@ -130,19 +130,18 @@ internal static class DictFunctions
     }
 
     /// <summary>
-    /// Sprig <c>dig</c>: walks a chain of keys (<c>dig KEY1 KEY2 … DEFAULT</c>) and
-    /// returns DEFAULT as soon as any level is missing or not a map. The last
-    /// argument is always the default, not a key.
+    /// Sprig <c>dig</c>: walks keys in <c>dig KEY1 KEY2 … DEFAULT DICT</c>,
+    /// returning DEFAULT when a key is missing.
     /// </summary>
     public static object? Dig(IReadOnlyList<string> tokens, TemplateContext context, object? pipelineValue, IEvaluationContext eval)
     {
         var args = tokens.Skip(1).Select(t => eval.EvaluateToken(t, context)).ToList();
-        if (pipelineValue != null) args.Insert(0, pipelineValue);
-        if (args.Count < 2) return null;
+        if (pipelineValue != null) args.Add(pipelineValue);
+        if (args.Count < 3) return null;
 
-        var current = args[0];
-        var defaultVal = args[^1];
-        for (var i = 1; i < args.Count - 1; i++)
+        var current = args[^1];
+        var defaultVal = args[^2];
+        for (var i = 0; i < args.Count - 2; i++)
         {
             var key = TypeConverters.ToTemplateString(args[i]);
             current = current switch

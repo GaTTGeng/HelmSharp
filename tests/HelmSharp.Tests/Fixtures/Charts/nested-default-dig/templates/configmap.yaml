@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: reproduce
+data:
+  timezone: {{ ((.Values.global | default dict).timezone | default "Asia/Shanghai") | quote }}
+  replicas: {{ dig "airsbo" 1 (.Values.replicas | default dict) | quote }}
+  database: {{ (dig "chemairs" "chemairs" (.Values.postgresql.databases | default dict)) | quote }}
+  piped: {{ (dict "outer" (dict "inner" "value")) | dig "outer" "inner" "fallback" | quote }}

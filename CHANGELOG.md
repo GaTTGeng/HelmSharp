@@ -12,6 +12,7 @@ This project follows semantic versioning once stable releases begin.
 
 ### Fixed
 
+- Render nested parenthesized defaults and Sprig `dig` with Helm-compatible argument ordering (#384).
 - Render empty dictionaries in included helpers with two-variable ranges (#379).
 - Support the Sprig `add1` template function (#380).
 
