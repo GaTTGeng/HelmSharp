@@ -12,8 +12,8 @@ namespace HelmSharp.Engine;
 /// <param name="ReleaseNamespace">Target namespace exposed as <c>.Release.Namespace</c>.</param>
 /// <param name="Values">Merged chart/user values exposed as <c>.Values</c>.</param>
 /// <param name="Dot">
-/// Current <c>.</c> scope root. Starts as the values object; <c>range</c>/<c>with</c> bodies
-/// replace it with the iterated item, so helpers must read this instead of assuming values.
+/// Current <c>.</c> scope. Template entry points initialize it to the complete chart root;
+/// <c>range</c>/<c>with</c> bodies replace it with the iterated item.
 /// </param>
 /// <param name="Variables">
 /// Template variables (<c>$name</c>, including <c>$</c> itself) visible in this scope.

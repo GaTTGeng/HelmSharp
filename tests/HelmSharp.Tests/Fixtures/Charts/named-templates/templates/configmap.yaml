@@ -11,5 +11,7 @@ data:
   tplCurrentDot: {{ with dict "name" .Values.target.name "label" .Values.target.label "Template" .Template }}{{ tpl $.Values.tpl.currentDot . | quote }}{{ end }}
   tplRoot: {{ tpl .Values.tpl.release . | quote }}
   withTplRoot: {{ with .Values.target }}{{ tpl $.Values.tpl.currentName $ | quote }}{{ end }}
+  includeRoot: {{ include "named.root" (dict "root" .) | quote }}
+  includeScopedRoot: {{ with .Values.target }}{{ include "named.scoped" (dict "scope" . "root" $) | quote }}{{ end }}
   block: |
 {{ include "named.block" .Values.target | nindent 4 }}

@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using HelmSharp.Action;
 using HelmSharp.Chart;
 using HelmSharp.Engine;
 
@@ -42,6 +43,35 @@ public class HelmTemplateGoldenTests
         Assert.Equal(
             NormalizeManifest(expected.Stdout),
             NormalizeManifest(renderer.Render()));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TemplateAsync_IncludeDictRoot_PreservesOverriddenValues(bool useSetString)
+    {
+        var request = new HelmTemplateRequest
+        {
+            Chart = TestFixtures.ChartPath("named-templates"),
+            ReleaseName = "demo",
+            Namespace = "default"
+        };
+        if (useSetString)
+            request.SetStringValues = new Dictionary<string, string> { ["target.name"] = "override" };
+        else
+            request.ValuesContent = "target:\n  name: override\n";
+
+        var result = await new HelmClient(new StaticHelmOptionsProvider()).TemplateAsync(request);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("includeRoot: \"override:demo:named-templates:named-templates/templates/configmap.yaml\"", result.StandardOutput);
+        Assert.Contains("includeScopedRoot: \"override:override\"", result.StandardOutput);
+    }
+
+    private sealed class StaticHelmOptionsProvider : IHelmOptionsProvider
+    {
+        public ValueTask<HelmExecutionOptions> GetHelmAsync(CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(new HelmExecutionOptions());
     }
 
     [Fact]
