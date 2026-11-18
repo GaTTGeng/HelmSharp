@@ -35,9 +35,10 @@ internal static class UrlFunctions
         };
         var rest = input;
         var hash = rest.IndexOf('#');
+        var fragment = "";
         if (hash >= 0)
         {
-            result["fragment"] = Unescape(rest[(hash + 1)..]);
+            fragment = rest[(hash + 1)..];
             rest = rest[..hash];
         }
         // Go checks the URL before the fragment for literal control characters.
@@ -60,6 +61,7 @@ internal static class UrlFunctions
         if (!rest.StartsWith('/') && scheme.Success)
         {
             result["opaque"] = rest;
+            result["fragment"] = Unescape(fragment);
             return result;
         }
         if (!scheme.Success && !rest.StartsWith('/') && rest.Split('/')[0].Contains(':'))
@@ -83,6 +85,7 @@ internal static class UrlFunctions
             result["hostname"] = hostname;
         }
         result["path"] = Unescape(rest);
+        result["fragment"] = Unescape(fragment);
         return result;
     }
 

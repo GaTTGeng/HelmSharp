@@ -26,6 +26,7 @@ public class TemplateErrorGoldenTests
     [InlineData("error-url-ipv6-escape", "invalid URL escape", "invalid URL escape")]
     [InlineData("error-url-ipv6-prefix", "invalid IP-literal", "invalid IP-literal")]
     [InlineData("error-url-control", "invalid control character", "invalid control character")]
+    [InlineData("error-url-precedence", "invalid port", "invalid port")]
     public async Task Render_ErrorFixture_FailsWhenHelmTemplateFails(
         string fixtureName,
         string helmErrorNeedle,
