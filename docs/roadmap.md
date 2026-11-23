@@ -6,11 +6,11 @@ GitHub milestones remain the source of truth for issue-level scope.
 
 ## Current focus
 
-**M1: Helm Template Parity** is complete in 1.1.0, **M2: Chart Packaging and Repository Parity** is complete in 1.2.0, and **M3: Release Lifecycle Parity** is complete in 1.3.0. Work now focuses on Kubernetes operations, OCI/provenance, public SDK hardening, and compatibility expansion from real user charts.
+**M1: Helm Template Parity** is complete in 1.1.0, **M2: Chart Packaging and Repository Parity** is complete in 1.2.0, **M3: Release Lifecycle Parity** is complete in 1.3.0, and **M4: Kubernetes Apply and Wait Semantics** runtime behavior shipped in 2.0.0 with its compatibility contract, compiled SDK example, and [kind lifecycle test lane](testing-kind-lifecycle.md) verified on `master`. Active work focuses on OCI/provenance, public SDK hardening, and template/Sprig compatibility expansion from real user charts.
 
-The latest published version is 2.0.1. M2 chart-distribution and M3 release-lifecycle documentation describe APIs available from the 2.0.1 NuGet packages.
+The latest published version is 2.0.1. M2 chart-distribution, M3 release-lifecycle, and M4 Kubernetes apply/wait/cleanup runtime capabilities are available from the 2.0.1 NuGet packages.
 
-Review the [compatibility page](helm-compatibility.md) for current rendering coverage, the [chart distribution guide](guide/chart-distribution.md) for M2 workflows, or follow the later milestones on GitHub for release lifecycle, Kubernetes semantics, OCI, and public SDK hardening.
+Review the [compatibility page](helm-compatibility.md) for current rendering and [Kubernetes apply/wait/cleanup contracts](helm-compatibility.md#kubernetes-apply-and-cleanup-contract), the [wait, Job, and cleanup example](examples/kubernetes-wait-and-cleanup.md) for M4 configuration, the [chart distribution guide](guide/chart-distribution.md) for M2 workflows, or follow the remaining milestones on GitHub for OCI, public SDK hardening, and renderer parity.
 
 ## Delivery principles
 
@@ -27,8 +27,8 @@ Review the [compatibility page](helm-compatibility.md) for current rendering cov
 | [M1: Helm Template Parity](https://github.com/GaTTGeng/HelmSharp/milestone/1) | Complete in 1.1.0 | Render common charts from .NET with predictable Helm-compatible output. |
 | [M2: Chart Packaging and Repository Parity](https://github.com/GaTTGeng/HelmSharp/milestone/2) | Complete in 1.2.0 | Package, index, pull, and resolve chart dependencies without CLI handoffs. |
 | [M3: Release Lifecycle Parity](https://github.com/GaTTGeng/HelmSharp/milestone/6) | Complete in 1.3.0 | Install, upgrade, rollback, uninstall, status, history, and hook behavior with durable revision transitions. |
-| [M4: Kubernetes Apply and Wait Semantics](https://github.com/GaTTGeng/HelmSharp/milestone/5) | Planned | Correct resource identity, namespace handling, readiness, Jobs, deletion, and hook cleanup. |
-| [M5: OCI and Provenance](https://github.com/GaTTGeng/HelmSharp/milestone/4) | Planned | Registry authentication, chart pull/push, signing, and verification. |
+| [M4: Kubernetes Apply and Wait Semantics](https://github.com/GaTTGeng/HelmSharp/milestone/4) | Complete (contract verified on `master`) | Verified [apply/cleanup](helm-compatibility.md#kubernetes-apply-and-cleanup-contract) and [readiness/wait/timeout/cancellation](helm-compatibility.md#kubernetes-readiness-wait-timeout-and-cancellation-contract) contracts, [working SDK example](examples/kubernetes-wait-and-cleanup.md), API tests, and [kind lifecycle evidence](testing-kind-lifecycle.md). |
+| [M5: OCI and Provenance](https://github.com/GaTTGeng/HelmSharp/milestone/5) | Planned | Registry authentication, chart pull/push, signing, and verification. |
 | [M6: Public SDK Hardening](https://github.com/GaTTGeng/HelmSharp/milestone/3) | Ongoing | Better docs, examples, nullable correctness, package quality, and API polish. |
 | [M7: Compatibility Expansion Research](https://github.com/GaTTGeng/HelmSharp/milestone/7) | Research | Evidence-based decision on `netstandard`, .NET Framework, and longer target support. |
 

@@ -48,6 +48,7 @@ const englishSidebar = [
     items: [
       { text: 'Build a render-preview endpoint', link: '/examples/render-preview-api' },
       { text: 'Turn a review into a deployment', link: '/examples/dry-run-deployment' },
+      { text: 'Configure waits, Jobs, and cleanup', link: '/examples/kubernetes-wait-and-cleanup' },
       { text: 'Generate manifests for GitOps', link: '/examples/gitops-pr-generator' },
       { text: 'Render a public chart', link: '/examples/real-chart-rendering' },
       { text: 'Keep tenant defaults isolated', link: '/examples/multi-tenant-options' }
@@ -141,6 +142,7 @@ const chineseSidebar = [
     items: [
       { text: '构建渲染预览接口', link: '/zh/examples/render-preview-api' },
       { text: '把评审结果变成部署', link: '/zh/examples/dry-run-deployment' },
+      { text: '配置等待、Job 与清理', link: '/zh/examples/kubernetes-wait-and-cleanup' },
       { text: '为 GitOps 生成清单', link: '/zh/examples/gitops-pr-generator' },
       { text: '渲染公开 Chart', link: '/zh/examples/real-chart-rendering' },
       { text: '隔离租户默认配置', link: '/zh/examples/multi-tenant-options' }

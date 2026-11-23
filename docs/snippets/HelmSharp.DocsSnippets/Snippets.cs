@@ -286,7 +286,92 @@ public static class Snippets
             VerifyDigests = true
         }, cancellationToken);
     // #endregion dependency-build
+
+    // #region kubernetes-wait-and-cleanup
+    public static async Task<string> DeployWithWaitAndCleanupAsync(
+        string chartPath,
+        string valuesPath,
+        CancellationToken cancellationToken)
+    {
+        var client = new HelmClient(new DeploymentOptionsProvider());
+
+        var request = new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "payments",
+            Namespace = "platform",
+            CreateNamespace = true,
+            Chart = chartPath,
+            ValuesFiles = [valuesPath],
+            Wait = true,
+            WaitForJobs = true,
+            TimeoutSeconds = 300,
+            Atomic = true,
+            CleanupOnFail = true,
+            DisableHooks = false
+        };
+
+        try
+        {
+            var result = await client.UpgradeInstallAsync(request, cancellationToken);
+            if (!result.Succeeded)
+                throw new InvalidOperationException($"Release failed: {result.StandardError}");
+
+            return result.StandardOutput;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Caller cancellation propagates; never treat it as readiness success.
+            throw;
+        }
+        catch (TimeoutException ex)
+        {
+            // Wait deadline expired, including Pods that stayed in CrashLoopBackOff (#259)
+            // instead of reaching Ready=True; ex.Message carries the last observed status.
+            return $"Timed out waiting for readiness: {ex.Message}";
+        }
+        catch (OperationCanceledException ex)
+        {
+            // Operation-wide TimeoutSeconds expired during an API read or poll delay.
+            return $"Operation timed out before readiness completed: {ex.Message}";
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Terminal failure (for example: Failed Pod phase, Job exceeding backoffLimit,
+            // Lost PVC, or autoscaling/v2 HPA with ScalingActive=False).
+            return $"Terminal workload or hook failure: {ex.Message}";
+        }
+    }
+    // #endregion kubernetes-wait-and-cleanup
+
+    // #region kubernetes-safe-cleanup
+    public static Task<CommandResult> UninstallWithCleanupWaitAsync(
+        IHelmClient client,
+        CancellationToken cancellationToken)
+        => client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "payments",
+            Namespace = "platform",
+            KeepHistory = true,
+            Wait = true,
+            TimeoutSeconds = 120,
+            DeletionPropagation = HelmDeletionPropagation.Foreground
+        }, cancellationToken);
+    // #endregion kubernetes-safe-cleanup
 }
+
+// #region deployment-options-provider
+public sealed class DeploymentOptionsProvider : IHelmOptionsProvider
+{
+    public ValueTask<HelmExecutionOptions> GetHelmAsync(CancellationToken cancellationToken = default)
+        => ValueTask.FromResult(new HelmExecutionOptions
+        {
+            DefaultNamespace = "platform",
+            FieldManager = "my-deployment-service",
+            TimeoutSeconds = 300,
+            ServerSideApply = false
+        });
+}
+// #endregion deployment-options-provider
 
 // #region options-provider
 public sealed class StaticHelmOptionsProvider : IHelmOptionsProvider

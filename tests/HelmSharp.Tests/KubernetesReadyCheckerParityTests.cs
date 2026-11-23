@@ -194,6 +194,23 @@ public sealed class KubernetesReadyCheckerParityTests
         yield return [CreateCase("Job", "batch/v1", "/apis/batch/v1/namespaces/ns/jobs/demo",
             Job(completions: 1, succeeded: 1, conditions: [("Failed", "True", "BackoffLimitExceeded")]),
             waitForJobs: true, outcome: ReadinessOutcome.Failed)];
+
+        // HorizontalPodAutoscaler: autoscaling/v2 requires ScalingActive=True (ScalingActive=False
+        // is terminal, missing conditions stay pending); autoscaling/v1 is treated as ready immediately.
+        yield return [CreateCase("HorizontalPodAutoscaler", "autoscaling/v2",
+            "/apis/autoscaling/v2/namespaces/ns/horizontalpodautoscalers/demo",
+            Hpa(conditions: [("ScalingActive", "True", "ValidMetricFound")]))];
+        yield return [CreateCase("HorizontalPodAutoscaler", "autoscaling/v2",
+            "/apis/autoscaling/v2/namespaces/ns/horizontalpodautoscalers/demo",
+            Hpa(conditions: [("ScalingActive", "False", "FailedGetResourceMetric")]),
+            outcome: ReadinessOutcome.Failed)];
+        yield return [CreateCase("HorizontalPodAutoscaler", "autoscaling/v2",
+            "/apis/autoscaling/v2/namespaces/ns/horizontalpodautoscalers/demo",
+            Hpa(conditions: null),
+            outcome: ReadinessOutcome.Pending)];
+        yield return [CreateCase("HorizontalPodAutoscaler", "autoscaling/v1",
+            "/apis/autoscaling/v1/namespaces/ns/horizontalpodautoscalers/demo",
+            "{}")];
     }
 
     private static ReadinessCase CreateCase(
@@ -475,6 +492,20 @@ public sealed class KubernetesReadyCheckerParityTests
                     addresses = ready ? new[] { new { ip = "10.0.0.1" } } : [],
                     notReadyAddresses = new[] { new { ip = "10.0.0.2" } }
                 }
+            }
+        });
+
+    private static string Hpa((string Type, string Status, string Reason)[]? conditions)
+        => Serialize(new
+        {
+            apiVersion = "autoscaling/v2",
+            kind = "HorizontalPodAutoscaler",
+            metadata = new { name = "demo" },
+            status = new
+            {
+                conditions = conditions?
+                    .Select(c => new { type = c.Type, status = c.Status, reason = c.Reason })
+                    .ToArray()
             }
         });
 
