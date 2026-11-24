@@ -190,6 +190,17 @@ internal static class HelmCliRunner
         return RunAsync(arguments, CommandTimeout, cancellationToken);
     }
 
+    public static Task<HelmCliResult> PullOciPlainHttpAsync(string chartRef, string? version, CancellationToken cancellationToken)
+    {
+        var arguments = new List<string> { "pull", chartRef, "--plain-http" };
+        if (version is not null)
+        {
+            arguments.Add("--version");
+            arguments.Add(version);
+        }
+        return RunAsync(arguments, CommandTimeout, cancellationToken);
+    }
+
     public static Task<HelmCliResult> DependencyListAsync(
         string chartPath,
         CancellationToken cancellationToken)

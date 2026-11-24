@@ -6,4 +6,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="HelmSharp.Repo" />
+    <InternalsVisibleTo Include="HelmSharp.Tests" />
+  </ItemGroup>
+
 </Project>
