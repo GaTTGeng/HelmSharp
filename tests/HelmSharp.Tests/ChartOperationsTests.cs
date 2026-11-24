@@ -2931,6 +2931,51 @@ public class ChartOperationsTests : IDisposable
             path.EndsWith("/configmaps/introduced-by-second-failure", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public async Task ReleaseLifecycle_UninstallWaitFallsBackOnlyWhenTimeoutIsOmitted(int nonPositiveTimeout)
+    {
+        var chartDir = await CreateMinimalChartAsync("uninstall-timeout-contract-chart");
+        await File.WriteAllTextAsync(Path.Combine(chartDir, "templates", "configmap.yaml"), """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: app-config
+            """);
+        var releaseState = new ReleaseLifecycleState();
+        var client = CreateLifecycleClient(releaseState);
+        await DrainAsync(client.UpgradeInstallStreamAsync(new HelmUpgradeInstallRequest
+        {
+            ReleaseName = "uninstall-timeout-contract",
+            Namespace = "test-ns",
+            Chart = chartDir
+        }));
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "uninstall-timeout-contract",
+            Namespace = "test-ns",
+            Wait = true,
+            TimeoutSeconds = nonPositiveTimeout
+        }));
+
+        Assert.Contains(releaseState.DeletedPaths, path =>
+            path.EndsWith("/configmaps/app-config", StringComparison.Ordinal));
+        Assert.Single(releaseState.Secrets.Values);
+
+        var completed = await client.UninstallAsync(new HelmUninstallRequest
+        {
+            ReleaseName = "uninstall-timeout-contract",
+            Namespace = "test-ns",
+            Wait = true,
+            TimeoutSeconds = null
+        });
+
+        Assert.Equal(0, completed.ExitCode);
+        Assert.Empty(releaseState.Secrets);
+    }
+
     private sealed class StaticHelmOptionsProvider(HelmExecutionOptions options) : IHelmOptionsProvider
     {
 

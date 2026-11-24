@@ -22,6 +22,6 @@
 
 <<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#kubernetes-safe-cleanup{csharp}
 
-`UninstallAsync` 会按清单逆序删除 release 资源，对直接删除请求遵守 `helm.sh/resource-policy: keep`，并在 `Wait = true` 时通过 `KubernetesResourceWaiter.WaitForDeletedAsync` 持续轮询，直到每个已删除资源均已消失。设置 `KeepHistory = true` 会记录 `uninstalled` revision，而不是清除 release 历史。
+`UninstallAsync` 会按清单逆序删除 release 资源，对直接删除请求遵守 `helm.sh/resource-policy: keep`，并在 `Wait = true` 时通过 `KubernetesResourceWaiter.WaitForDeletedAsync` 持续轮询，直到每个已删除资源均已消失。请显式设置正整数 `TimeoutSeconds`（或保留 `null` 让 hook 与删除等待回退到 `HelmExecutionOptions.TimeoutSeconds`；在 `Wait = true` 下传入非正数会在删除资源后抛出 `ArgumentOutOfRangeException`）。设置 `KeepHistory = true` 会记录 `uninstalled` revision，而不是清除 release 历史。
 
 完整的逐类型就绪谓词、hook 等待与清理边界以及测试证据见 [Kubernetes 兼容性契约](../helm-compatibility.md#kubernetes-就绪、等待、超时与取消契约)、[Action API](../api/generated/action.md) 与 [Kube API](../api/generated/kube.md)。

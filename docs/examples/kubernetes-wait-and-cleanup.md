@@ -22,6 +22,6 @@ Use public `HelmExecutionOptions`, `HelmUpgradeInstallRequest`, and `HelmUninsta
 
 <<< @/snippets/HelmSharp.DocsSnippets/Snippets.cs#kubernetes-safe-cleanup{csharp}
 
-`UninstallAsync` deletes release resources in reverse manifest order, honors `helm.sh/resource-policy: keep` for direct delete requests, and with `Wait = true` polls through `KubernetesResourceWaiter.WaitForDeletedAsync` until every deleted resource is observed absent. Setting `KeepHistory = true` records an `uninstalled` revision instead of purging release history.
+`UninstallAsync` deletes release resources in reverse manifest order, honors `helm.sh/resource-policy: keep` for direct delete requests, and with `Wait = true` polls through `KubernetesResourceWaiter.WaitForDeletedAsync` until every deleted resource is observed absent. Specify a positive `TimeoutSeconds` (or leave it `null` to fall back to `HelmExecutionOptions.TimeoutSeconds` for hooks and deletion waiting; a non-positive value throws `ArgumentOutOfRangeException` when `Wait = true` runs after deletion). Setting `KeepHistory = true` records an `uninstalled` revision instead of purging release history.
 
 For the full per-kind readiness predicates, hook wait and cleanup bounds, and test evidence, see the [Kubernetes compatibility contract](../helm-compatibility.md#kubernetes-readiness-wait-timeout-and-cancellation-contract), the [Action API](../api/generated/action.md), and the [Kube API](../api/generated/kube.md).

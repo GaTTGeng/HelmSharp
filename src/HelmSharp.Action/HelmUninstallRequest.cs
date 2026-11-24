@@ -27,9 +27,14 @@ public class HelmUninstallRequest
     public bool Wait { get; set; }
 
     /// <summary>
-    /// Gets or sets the optional operation timeout in seconds. When omitted or non-positive,
-    /// uninstall skips the operation-wide timeout token while hooks and <see cref="Wait"/> fall back
-    /// to <see cref="HelmExecutionOptions.TimeoutSeconds"/>.
+    /// Gets or sets the optional operation timeout in seconds. Must be greater than zero when
+    /// specified with <see cref="Wait"/>. When omitted (<see langword="null"/>), uninstall skips
+    /// the operation-wide timeout token while hooks and <see cref="Wait"/> fall back to
+    /// <see cref="HelmExecutionOptions.TimeoutSeconds"/>. Non-positive values also skip the
+    /// operation-wide token and fall back for hooks, but reach
+    /// <see cref="HelmSharp.Kube.KubernetesResourceWaiter"/> when <see cref="Wait"/> is
+    /// <see langword="true"/> and throw <see cref="ArgumentOutOfRangeException"/> after deletion
+    /// (before release-history persistence).
     /// </summary>
     public int? TimeoutSeconds { get; set; }
 
