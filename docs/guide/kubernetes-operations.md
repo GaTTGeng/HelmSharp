@@ -55,8 +55,8 @@ The direct applier deletes every valid resource document it receives. It does no
 
 ## Wait only for the readiness you need
 
-`KubernetesResourceWaiter` observes common workload kinds: Deployments, StatefulSets, DaemonSets, ReplicaSets, Jobs, Pods, PVCs, Endpoints, and v2 HPAs. Jobs are only waited on when the caller requests it. Objects outside this set are accepted as applied; they are not proof that an operator-managed resource is ready.
+`KubernetesResourceWaiter` observes 12 resource kinds: Deployments, StatefulSets, DaemonSets, ReplicaSets, ReplicationControllers, Jobs (only when `waitForJobs` is `true`), Pods, PVCs, Services, Endpoints, `apiextensions.k8s.io/v1` and `v1beta1` CRDs, and `autoscaling/v2` HPAs. Objects outside this set (including `autoscaling/v1` HPAs and custom resource instances) are accepted as applied without readiness polling; they are not proof that an operator-managed resource is ready.
 
 A Pod in `CrashLoopBackOff` remains pending while the waiter polls for its Ready condition. If it does not recover by the deadline, the waiter reports a timeout with the last observed status; a Pod in the Failed phase is reported as a terminal failure.
 
-For a full Helm-style lifecycle, including hooks and stored revisions, use [Install and upgrade releases](release-workflows.md). Keep direct delete operations behind the same authorization and approval path as apply.
+For per-kind predicates, timeout and cancellation behavior, and test evidence, see the [Kubernetes readiness and wait contract](../helm-compatibility.md#kubernetes-readiness-wait-timeout-and-cancellation-contract) and the [wait, Job, and cleanup example](../examples/kubernetes-wait-and-cleanup.md). For a full Helm-style lifecycle, including hooks and stored revisions, use [Install and upgrade releases](release-workflows.md). Keep direct delete operations behind the same authorization and approval path as apply.

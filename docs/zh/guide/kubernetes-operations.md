@@ -55,8 +55,8 @@ await foreach (var resource in applier.DeleteAsync(
 
 ## 只等待你真正需要的就绪状态
 
-`KubernetesResourceWaiter` 会观察常见工作负载：Deployment、StatefulSet、DaemonSet、ReplicaSet、Job、Pod、PVC、Endpoints 和 v2 HPA。仅在调用方明确请求时才等待 Job。这个集合之外的对象只表示已被接受，不能证明 operator 管理的资源已经就绪。
+`KubernetesResourceWaiter` 会观察 12 种资源类型：Deployment、StatefulSet、DaemonSet、ReplicaSet、ReplicationController、Job（仅在 `waitForJobs` 为 `true` 时等待）、Pod、PVC、Service、Endpoints、`apiextensions.k8s.io/v1` 和 `v1beta1` CRD，以及 `autoscaling/v2` HPA。这个集合之外的对象（包括 `autoscaling/v1` HPA 和自定义资源实例）提交后直接视为就绪而不轮询，不能证明 operator 管理的资源已经就绪。
 
 处于 `CrashLoopBackOff` 的 Pod 会继续等待 Ready 状态；如果在截止时间前未恢复，等待器会报告超时和最后观察到的状态。处于 Failed 阶段的 Pod 则报告为终止失败。
 
-如需完整的 Helm 风格生命周期，包括 hook 和持久化 revision，请使用[安装和升级 Release](release-workflows.md)。直接删除也应放在和提交相同的授权、审批路径之后。
+逐类型就绪谓词、超时与取消行为以及测试证据见 [Kubernetes 就绪与等待契约](../helm-compatibility.md#kubernetes-就绪、等待、超时与取消契约) 和 [等待、Job 与清理示例](../examples/kubernetes-wait-and-cleanup.md)。如需完整的 Helm 风格生命周期，包括 hook 和持久化 revision，请使用[安装和升级 Release](release-workflows.md)。直接删除也应放在和提交相同的授权、审批路径之后。

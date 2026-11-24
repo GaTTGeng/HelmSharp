@@ -14,6 +14,7 @@ public sealed class HelmRollbackRequest
     /// </summary>
     public int Revision { get; set; }
 
+    /// <summary>Target Kubernetes namespace; defaults to the configured default namespace.</summary>
     public string? Namespace { get; set; }
 
     /// <summary>
@@ -43,8 +44,10 @@ public sealed class HelmRollbackRequest
     /// <summary>Maximum number of stored revisions to retain. Zero means no limit.</summary>
     public int? MaxHistory { get; set; }
 
+    /// <summary>Optional path to a kubeconfig file for this rollback call.</summary>
     public string? KubeConfigPath { get; set; }
 
+    /// <summary>Optional raw kubeconfig content used instead of <see cref="KubeConfigPath"/>.</summary>
     public string? KubeConfigContent { get; set; }
 }
 // ReSharper restore UnusedAutoPropertyAccessor.Global

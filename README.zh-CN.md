@@ -9,9 +9,9 @@
 
 HelmSharp 是一个面向 .NET 的托管 Helm 风格库，用于在不调用 `helm` 可执行文件的情况下渲染 Helm 风格 Chart 并驱动 Kubernetes Release 工作流。它适合需要在 .NET 进程内完成模板渲染、values 合并、Chart 打包、仓库操作和 Kubernetes 发布生命周期管理的应用。
 
-项目仍在积极开发中。M1（Helm 模板对齐）、M2（Chart 打包和仓库对齐）以及 M3（发布生命周期对齐）均已完成。渲染器和发布生命周期会持续通过聚焦测试用 Chart、受控 Kubernetes 依赖以及选定公开 Helm Chart 校验；后续里程碑将扩展 Kubernetes 语义和兼容性覆盖。
+项目仍在积极开发中。M1（Helm 模板对齐）、M2（Chart 打包和仓库对齐）、M3（发布生命周期对齐）以及 M4（Kubernetes 提交、等待和清理语义）均已通过聚焦测试用 Chart、受控 Kubernetes API 测试、一次性 kind 生命周期通道以及选定公开 Helm Chart 校验；后续里程碑将扩展 OCI 注册表、公共 SDK 加固以及 Sprig 与渲染兼容性覆盖。
 
-最新发布版本是 **2.0.1**。下文以及所链接指南中的 M2 Chart 分发和 M3 发布生命周期能力已包含在 2.0.1 NuGet 包中。
+最新发布版本是 **2.0.1**。下文以及所链接指南中的 M2 Chart 分发、M3 发布生命周期以及 M4 Kubernetes 提交/等待/清理运行时能力已包含在 2.0.1 NuGet 包中。
 
 文档站点：[https://gattgeng.github.io/HelmSharp/](https://gattgeng.github.io/HelmSharp/)
 

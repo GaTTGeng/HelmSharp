@@ -6,11 +6,11 @@
 
 ## 当前重点
 
-**M1：Helm 模板对齐** 已在 1.1.0 完成，**M2：Chart 打包和仓库对齐** 已在 1.2.0 完成，**M3：发布生命周期对齐** 已在 1.3.0 完成。当前重点转向 Kubernetes 操作、OCI/来源证明、公共 SDK 加固，以及来自真实用户 Chart 的兼容性扩展。
+**M1：Helm 模板对齐** 已在 1.1.0 完成，**M2：Chart 打包和仓库对齐** 已在 1.2.0 完成，**M3：发布生命周期对齐** 已在 1.3.0 完成，**M4：Kubernetes 提交和等待语义** 运行时行为已在 2.0.0 发布，其兼容性契约、可编译 SDK 示例与 [Kind 生命周期测试通道](testing-kind-lifecycle.md) 已在 `master` 上验证。当前重点转向 OCI/来源证明、公共 SDK 加固，以及来自真实用户 Chart 的模板与 Sprig 兼容性扩展。
 
-最新发布版本是 2.0.1。M2 Chart 分发和 M3 发布生命周期文档描述的是 2.0.1 NuGet 包中可用的 API。
+最新发布版本是 2.0.1。M2 Chart 分发、M3 发布生命周期以及 M4 Kubernetes 提交/等待/清理运行时能力均已包含在 2.0.1 NuGet 包中。
 
-当前渲染覆盖范围见 [兼容性页面](helm-compatibility.md)，M2 工作流见 [Chart 分发指南](guide/chart-distribution.md)；发布生命周期、Kubernetes 语义、OCI 和公共 SDK 加固可继续跟踪 GitHub 上的后续 milestones。
+当前渲染范围与 [Kubernetes 提交/等待/清理契约](helm-compatibility.md#kubernetes-提交与清理契约) 见 [兼容性页面](helm-compatibility.md)，M4 配置示例见 [配置等待、Job 与清理](examples/kubernetes-wait-and-cleanup.md)，M2 工作流见 [Chart 分发指南](guide/chart-distribution.md)；OCI、公共 SDK 加固和渲染对齐可继续跟踪 GitHub 上的后续 milestones。
 
 ## 交付原则
 
@@ -27,8 +27,8 @@
 | [M1：Helm 模板对齐](https://github.com/GaTTGeng/HelmSharp/milestone/1) | 1.1.0 已完成 | 从 .NET 渲染常见 Chart，输出具备可预期的 Helm 兼容性。 |
 | [M2：Chart 打包和仓库对齐](https://github.com/GaTTGeng/HelmSharp/milestone/2) | 已在 1.2.0 完成 | 不交给 CLI 也能打包、生成索引、拉取和处理依赖。 |
 | [M3：发布生命周期对齐](https://github.com/GaTTGeng/HelmSharp/milestone/6) | 已在 1.3.0 完成 | 安装、升级、回滚、卸载、状态、历史和 hook 均具备可持久化的 revision 状态转换。 |
-| [M4：Kubernetes 提交和等待语义](https://github.com/GaTTGeng/HelmSharp/milestone/5) | 计划中 | 资源身份、命名空间、就绪、Jobs、删除和 hook 清理更完整。 |
-| [M5：OCI 和来源证明](https://github.com/GaTTGeng/HelmSharp/milestone/4) | 计划中 | 注册表认证、Chart 拉取/推送、签名和校验。 |
+| [M4：Kubernetes 提交和等待语义](https://github.com/GaTTGeng/HelmSharp/milestone/4) | 已完成（契约已在 `master` 验证） | 已验证的 [提交与清理契约](helm-compatibility.md#kubernetes-提交与清理契约) 与 [就绪、等待、超时与取消契约](helm-compatibility.md#kubernetes-就绪、等待、超时与取消契约)、[可编译 SDK 示例](examples/kubernetes-wait-and-cleanup.md)、API 测试与 [Kind 生命周期测试证据](testing-kind-lifecycle.md)。 |
+| [M5：OCI 和来源证明](https://github.com/GaTTGeng/HelmSharp/milestone/5) | 计划中 | 注册表认证、Chart 拉取/推送、签名和校验。 |
 | [M6：公共 SDK 加固](https://github.com/GaTTGeng/HelmSharp/milestone/3) | 进行中 | 文档、示例、nullable 正确性、包质量和 API 细节更稳。 |
 | [M7：兼容性扩展研究](https://github.com/GaTTGeng/HelmSharp/milestone/7) | 研究中 | 基于证据决定 `netstandard`、.NET Framework 和长期目标框架支持。 |
 

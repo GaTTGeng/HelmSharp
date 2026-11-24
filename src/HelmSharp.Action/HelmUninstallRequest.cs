@@ -21,13 +21,21 @@ public class HelmUninstallRequest
     public bool DisableHooks { get; set; }
 
     /// <summary>
-    /// Gets or sets whether the operation waits for Kubernetes delete requests to complete.
-    /// Kubernetes API delete calls are awaited in either case; this option is retained for
-    /// compatibility with the Helm request surface.
+    /// Gets or sets whether the operation polls via <see cref="HelmSharp.Kube.KubernetesResourceWaiter.WaitForDeletedAsync"/>
+    /// until every deleted release resource is observed absent (or the timeout expires).
     /// </summary>
     public bool Wait { get; set; }
 
-    /// <summary>Gets or sets the optional operation timeout in seconds.</summary>
+    /// <summary>
+    /// Gets or sets the optional operation timeout in seconds. Must be greater than zero when
+    /// specified with <see cref="Wait"/>. When omitted (<see langword="null"/>), uninstall skips
+    /// the operation-wide timeout token while hooks and <see cref="Wait"/> fall back to
+    /// <see cref="HelmExecutionOptions.TimeoutSeconds"/>. Non-positive values also skip the
+    /// operation-wide token and fall back for hooks, but reach
+    /// <see cref="HelmSharp.Kube.KubernetesResourceWaiter"/> when <see cref="Wait"/> is
+    /// <see langword="true"/> and throw <see cref="ArgumentOutOfRangeException"/> after deletion
+    /// (before release-history persistence).
+    /// </summary>
     public int? TimeoutSeconds { get; set; }
 
     /// <summary>
@@ -36,8 +44,10 @@ public class HelmUninstallRequest
     /// </summary>
     public HelmDeletionPropagation DeletionPropagation { get; set; } = HelmDeletionPropagation.Background;
 
+    /// <summary>Gets or sets an optional path to a kubeconfig file for this uninstall call.</summary>
     public string? KubeConfigPath { get; set; }
 
+    /// <summary>Gets or sets optional raw kubeconfig content used instead of <see cref="KubeConfigPath"/>.</summary>
     public string? KubeConfigContent { get; set; }
 }
 // ReSharper restore PropertyCanBeMadeInitOnly.Global, UnusedMember.Global
