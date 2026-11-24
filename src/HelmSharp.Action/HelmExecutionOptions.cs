@@ -14,13 +14,19 @@ public class HelmExecutionOptions
     /// <summary>Optional raw kubeconfig YAML content used instead of <see cref="KubeConfigPath"/>.</summary>
     public string? KubeConfigContent { get; set; }
 
-    /// <summary>Optional kubeconfig context name to select when creating the Kubernetes client.</summary>
+    /// <summary>
+    /// Reserved kubeconfig context name. Currently ignored: <see cref="HelmClient"/> loads
+    /// kubeconfig using its active current-context without applying a context override.
+    /// </summary>
     public string? KubernetesContext { get; set; }
 
     /// <summary>Default target Kubernetes namespace used when a request omits an explicit namespace.</summary>
     public string? DefaultNamespace { get; set; }
 
-    /// <summary>Optional working directory used to resolve relative chart and values paths.</summary>
+    /// <summary>
+    /// Reserved working directory option. Currently ignored: relative chart and values paths
+    /// resolve against the current process working directory.
+    /// </summary>
     public string? WorkingDirectory { get; set; }
 
     /// <summary>
