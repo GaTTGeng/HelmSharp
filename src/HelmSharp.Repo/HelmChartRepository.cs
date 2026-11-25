@@ -9,6 +9,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using HelmSharp.Chart;
+using HelmSharp.Registry;
 
 namespace HelmSharp.Repo;
 
@@ -837,19 +838,16 @@ public sealed class HelmChartRepository : IDisposable
         string? version,
         CancellationToken cancellationToken)
     {
-        // Parse OCI reference: oci://registry/repo/chart:tag
-        var withoutScheme = ociRef["oci://".Length..];
-        var parts = withoutScheme.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length < 2)
-            throw new ArgumentException($"Invalid OCI reference: {ociRef}");
-
-        var registry = parts[0];
-        var repository = string.Join("/", parts.Skip(1));
-
-        // Remove tag if present
-        var tagParts = repository.Split(':');
-        var repo = tagParts[0];
-        var tag = tagParts.Length > 1 ? tagParts[1] : (version ?? "latest");
+        var reference = OciChartReference.Parse(ociRef);
+        var versionTag = version is null ? null : OciChartReference.NormalizeVersion(version);
+        if (reference.Digest is not null)
+            throw new NotSupportedException("OCI digest pulls require artifact validation, which is not yet supported.");
+        // Helm compares the literal version and tag before normalizing build metadata.
+        if (version is not null && reference.Tag is not null && !string.Equals(version, reference.Tag, StringComparison.Ordinal))
+            throw new ArgumentException("OCI chart reference and version specify different tags.");
+        var registry = reference.Registry;
+        var repo = reference.Repository;
+        var tag = reference.Tag ?? versionTag ?? "latest";
 
         var manifestUrl = $"https://{registry}/v2/{repo}/manifests/{tag}";
         var request = new HttpRequestMessage(HttpMethod.Get, manifestUrl);

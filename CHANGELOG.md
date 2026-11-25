@@ -8,6 +8,7 @@ This project follows semantic versioning once stable releases begin.
 
 ### Added
 
+- Validate OCI chart references before registry requests, including tags, digests, and version build metadata (#319).
 - Documented the Kubernetes readiness, Job, hook wait, timeout, and caller cancellation compatibility contract in English and Chinese with a compiled SDK example and reconciled M4 roadmap links (#315).
 
 ## [2.0.1] - 2026-11-18
