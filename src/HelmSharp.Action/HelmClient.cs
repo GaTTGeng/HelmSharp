@@ -4,6 +4,7 @@ using System.Text.Json;
 using HelmSharp.Chart;
 using HelmSharp.Engine;
 using HelmSharp.Kube;
+using HelmSharp.Registry;
 using HelmSharp.Release;
 using HelmSharp.Repo;
 using k8s;
@@ -2727,26 +2728,29 @@ public class HelmClient : IHelmClient
     }
 
     /// <summary>
-    /// Pushes a chart package to a remote registry. Currently validates and packages the chart
-    /// locally (directories are packaged first); the actual registry upload is not performed yet.
+    /// Returns a failure because OCI registry upload is not yet supported.
     /// </summary>
-    public async Task<CommandResult> PushAsync(
+    public Task<CommandResult> PushAsync(
         string chartRef,
         string remote,
         CancellationToken cancellationToken = default)
     {
-        if (File.Exists(chartRef) && chartRef.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase))
+        cancellationToken.ThrowIfCancellationRequested();
+        try
         {
-            return Ok($"Chart pushed to: {remote}");
+            // A push destination is a registry and optional namespace; Helm appends the chart name.
+            OciChartReference.Parse(remote + "/chart");
+        }
+        catch (ArgumentException)
+        {
+            return Task.FromResult(Fail("Invalid OCI push destination."));
         }
 
-        if (Directory.Exists(chartRef))
-        {
-            await HelmChartPackager.PackageAsync(chartRef, cancellationToken: cancellationToken);
-            return Ok($"Chart packaged and pushed to: {remote}");
-        }
+        if (!(File.Exists(chartRef) && chartRef.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase)) &&
+            !Directory.Exists(chartRef))
+            return Task.FromResult(Fail($"Chart not found: {chartRef}"));
 
-        return Fail($"Chart not found: {chartRef}");
+        return Task.FromResult(Fail("OCI chart push is not supported yet; no chart was uploaded."));
     }
 
     /// <summary>

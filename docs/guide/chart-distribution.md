@@ -4,6 +4,8 @@ HelmSharp supports the traditional HTTP chart-repository workflow in managed cod
 
 ::: warning Scope of this guide
 OCI authentication and push/pull parity are not part of this workflow. For chart signing and signature verification, see [Chart provenance and signing](chart-provenance.md). See [Compatibility](../helm-compatibility.md) before building a production repository service around unsupported capabilities.
+
+`PushAsync` returns a failure until OCI upload is supported; it does not package or upload the chart.
 :::
 
 ## Package a chart

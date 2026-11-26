@@ -200,6 +200,7 @@ public interface IHelmClient
         HelmDependencyUpdateRequest request,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Returns a failure because OCI registry upload is not yet supported.</summary>
     Task<CommandResult> PushAsync(
         string chartRef,
         string remote,
