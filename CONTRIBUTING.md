@@ -19,7 +19,7 @@ dotnet test HelmSharp.sln --configuration Release --no-build --no-restore
 - Do not commit `bin/`, `obj/`, IDE metadata, generated packages, or local secrets.
 - When adding Helm compatibility, include a chart or template test that captures the behavior.
 - When adding Kubernetes resource support, include parsing/apply identity coverage where possible.
-- Keep public API changes deliberate and document them in the README or XML comments when useful.
+- Assess public API, behavior, and storage changes against the [versioning policy](docs/versioning.md); document observable changes and migrations.
 
 ## Commit and Branch Names
 

@@ -2,6 +2,8 @@
 
 Choose packages by the operation your application needs to perform. Rendering loads chart content and values, then returns manifest text. Release operations also require Kubernetes credentials and maintain lifecycle history.
 
+HelmSharp 2.x public APIs follow the [versioning and compatibility policy](versioning.md).
+
 ## Choose by task
 | Goal | Start with | Main types | Do not choose it when… |
 | --- | --- | --- | --- |
