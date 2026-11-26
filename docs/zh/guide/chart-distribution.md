@@ -4,6 +4,8 @@ HelmSharp 以托管代码支持传统 HTTP Chart 仓库工作流：打包 Chart�
 
 ::: warning 本文范围
 OCI 认证和推拉对齐不属于本文工作流。Chart 签名与签名验证请参见 [Chart 溯源与签名](chart-provenance.md)。在此基础上建设生产 Chart 仓库服务前，请先查看[兼容性](../helm-compatibility.md)。
+
+在支持 OCI 上传之前，`PushAsync` 会返回失败，不会打包或上传 Chart。
 :::
 
 ## 打包 Chart
