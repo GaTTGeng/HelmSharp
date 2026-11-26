@@ -168,6 +168,7 @@ HelmSharp 不是完整的 Helm CLI 克隆。尚未实现的模板函数会产生
 - [包指南：HelmSharp.Action](docs/packages/action.md)
 - [生成 API 参考](docs/api/index.md)
 - [API 概览](docs/api-overview.md)
+- [版本与兼容性策略](docs/versioning.md)（英文）
 - [Helm 兼容性与验证](docs/helm-compatibility.md)
 - [路线图](docs/roadmap.md)
 - [支持政策](SUPPORT.md)

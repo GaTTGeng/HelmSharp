@@ -168,6 +168,7 @@ HelmSharp is not a full Helm CLI clone. An unimplemented template function produ
 - [Package guide: HelmSharp.Action](docs/packages/action.md)
 - [Generated API reference](docs/api/index.md)
 - [API overview](docs/api-overview.md)
+- [Versioning and compatibility policy](docs/versioning.md)
 - [Helm compatibility and validation](docs/helm-compatibility.md)
 - [Roadmap](docs/roadmap.md)
 - [Support](SUPPORT.md)

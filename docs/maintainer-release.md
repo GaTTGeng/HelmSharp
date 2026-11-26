@@ -24,6 +24,10 @@ For branch protection, require the `CI / Build, test, and pack` status check bef
 
 For Actions hardening, prefer allowing only GitHub-owned and verified Marketplace actions. If stricter supply-chain controls are required, pin third-party actions by full commit SHA and enable SHA pinning at the repository or organization level.
 
+## Compatibility review
+
+Before release, assess public API, behavior, Helm parity, and persisted-format changes against the [versioning policy](versioning.md). Check deprecation windows and release-record interoperability, and describe observable changes, security exceptions, and migrations in the changelog and release notes.
+
 ## Release a version
 
 Use NuGet SemVer tags without a leading `v`:
