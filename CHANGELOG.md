@@ -8,6 +8,7 @@ HelmSharp 2.x follows the [versioning and compatibility policy](docs/versioning.
 
 ### Added
 
+- Resolve registry credentials by source priority and normalized host and port (#316).
 - Define the 2.x compatibility, deprecation, and release interoperability policy (#292).
 - Add bounded Helm OCI manifest and content validation groundwork for registry pulls (#321).
 - Validate OCI chart references before registry requests, including tags, digests, and version build metadata (#319).

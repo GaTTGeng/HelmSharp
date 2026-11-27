@@ -11,3 +11,31 @@ Use this page as a member index. Start with the package guide for usage recommen
 | --- | --- |
 | Kind | `interface` |
 | Source | `src/HelmSharp.Registry/IOciRegistryClient.cs` |
+
+## IRegistryCredentialProvider
+
+| Field | Value |
+| --- | --- |
+| Kind | `interface` |
+| Source | `src/HelmSharp.Registry/IRegistryCredentialProvider.cs` |
+
+## RegistryCredential
+
+| Field | Value |
+| --- | --- |
+| Kind | `class` |
+| Source | `src/HelmSharp.Registry/RegistryCredential.cs` |
+
+### Properties
+- `Password`
+- `Username`
+
+## RegistryCredentialResolver
+
+| Field | Value |
+| --- | --- |
+| Kind | `class` |
+| Source | `src/HelmSharp.Registry/RegistryCredentialResolver.cs` |
+
+### Methods
+- `ResolveAsync(...)`
