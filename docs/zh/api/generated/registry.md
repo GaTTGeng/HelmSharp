@@ -11,3 +11,31 @@
 | --- | --- |
 | 类型类别 | `interface` |
 | 源文件 | `src/HelmSharp.Registry/IOciRegistryClient.cs` |
+
+## IRegistryCredentialProvider
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `interface` |
+| 源文件 | `src/HelmSharp.Registry/IRegistryCredentialProvider.cs` |
+
+## RegistryCredential
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `class` |
+| 源文件 | `src/HelmSharp.Registry/RegistryCredential.cs` |
+
+### 属性
+- `Password`
+- `Username`
+
+## RegistryCredentialResolver
+
+| 字段 | 值 |
+| --- | --- |
+| 类型类别 | `class` |
+| 源文件 | `src/HelmSharp.Registry/RegistryCredentialResolver.cs` |
+
+### 方法
+- `ResolveAsync(...)`
